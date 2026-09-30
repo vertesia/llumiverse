@@ -1,7 +1,14 @@
 import {
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    type NativeStreamPosition,
+} from '@llumiverse/conversation';
+import {
     type AIModel,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -14,6 +21,7 @@ import {
     type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     FallbackCanonicalExecutionStream,
     getConversationMeta,
     incrementConversationTurn,
@@ -41,6 +49,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
+import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
 import {
     type CanonicalFinalizingDriverStream,
     canonicalExecutionStreamFromDriver,
@@ -278,6 +287,67 @@ function getOptionalString(value: object, key: string): string | null | undefine
 type StreamChunk = string | Uint8Array;
 type ReadableAsyncStream = AsyncIterable<StreamChunk>;
 type StreamingOpenAIToolUse = ToolUse<unknown> & { _actual_id?: string };
+
+interface OpenAIChatCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call';
+    tool_index?: number;
+}
+
+function openAIChatStreamPosition(path: Array<string | number>): NativeStreamPosition {
+    return { protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, path };
+}
+
+async function* openAIChatNativeSSE(stream: ReadableStream): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
+    for await (const event of stream as unknown as AsyncIterable<{ type: string; data?: string }>) {
+        if (event.type !== 'event' || event.data === undefined || event.data === '[DONE]') continue;
+        yield JSON.parse(event.data) as OpenAIChatCompletionsStreamResponse;
+    }
+}
+
+function openAIChatSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('OpenAI Chat stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+async function finalizeOpenAIChatStreamResponse(input: {
+    response: OpenAIChatCompletionsResponse;
+    prepared: PreparedOpenAIChatConversation;
+    finish_reason: string;
+    options: ExecutionOptions;
+    include_thoughts: boolean;
+}) {
+    const message = input.response.choices[0]?.message;
+    if (message === undefined) throw new Error('Chat Completions stream has no terminal assistant message');
+    const results = extractOpenAIChatCompletionsResults(message, input.include_thoughts);
+    const hasTools = (message.tool_calls?.length ?? 0) > 0;
+    const normalized =
+        !hasTools && input.options.result_schema
+            ? normalizeCompletionResult(results, input.options.result_schema)
+            : undefined;
+    const rawDecoded = await decodeOpenAIChatCanonicalResponse(input.response, input.prepared, input.finish_reason);
+    let decoded =
+        normalized?.status === 'valid'
+            ? await decodeOpenAIChatCanonicalResponse(
+                  input.response,
+                  input.prepared,
+                  input.finish_reason,
+                  normalized.structured_output,
+              )
+            : rawDecoded;
+    if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+    const document = appendOpenAIChatCanonicalResponse(input.prepared, decoded);
+    return {
+        raw_decoded: rawDecoded,
+        decoded,
+        normalized,
+        response: createCanonicalExecutionResponse(document, input.prepared.runtime.response_operation_id, {
+            ...(input.response.service_tier == null ? {} : { service_tier: input.response.service_tier }),
+        }),
+    };
+}
 
 async function streamToString(stream: ReadableAsyncStream): Promise<string> {
     const chunks: Buffer[] = [];
@@ -1466,24 +1536,15 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                         : { system_fingerprint: responseSystemFingerprint }),
                     ...(responseUsage === undefined ? {} : { usage: responseUsage }),
                 };
-                const finalResults = extractOpenAIChatCompletionsResults(assistantMessage, includeThoughts);
-                const normalized =
-                    nativeToolCalls.size === 0 && options.result_schema
-                        ? normalizeCompletionResult(finalResults, options.result_schema)
-                        : undefined;
-                let decoded = await decodeOpenAIChatCanonicalResponse(
-                    response,
-                    prepared,
-                    responseFinishReason,
-                    normalized?.status === 'valid' ? normalized.structured_output : undefined,
-                );
-                if (normalized?.status === 'invalid') {
-                    decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-                }
-                const document = appendOpenAIChatCanonicalResponse(prepared, decoded);
-                return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
-                    ...(responseServiceTier == null ? {} : { service_tier: responseServiceTier }),
-                });
+                return (
+                    await finalizeOpenAIChatStreamResponse({
+                        response,
+                        prepared,
+                        finish_reason: responseFinishReason,
+                        options,
+                        include_thoughts: includeThoughts,
+                    })
+                ).response;
             })();
             return canonicalCompletion;
         };
@@ -1524,6 +1585,385 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             abort: () => abortController.abort(),
             close: () => signal?.removeEventListener('abort', forwardAbort),
         });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        driver: DriverT,
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider,
+        });
+        const includeThoughts =
+            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, true, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            providerJsonValue(payload),
+        );
+        const acceptedResponse = canonicalState.accepted_response;
+        const identity = {
+            request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: acceptedResponse?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: acceptedResponse?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: acceptedResponse?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (canonicalState.accepted_response !== undefined) {
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () => recoverCanonicalExecutionResponse(canonicalState, options),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+        );
+
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        let nativeContent = '';
+        let contentDraft: OpenAIChatCanonicalDraft | undefined;
+        let nativeReasoningContent: string | undefined;
+        let reasoningContentDraft: OpenAIChatCanonicalDraft | undefined;
+        let nativeReasoning: string | undefined;
+        let reasoningDraft: OpenAIChatCanonicalDraft | undefined;
+        let responseId: string | undefined;
+        let responseObject: string | undefined;
+        let responseCreated: number | undefined;
+        let responseModel: string | undefined;
+        let responseServiceTier: OpenAIChatServiceTier | undefined;
+        let responseSystemFingerprint: string | undefined;
+        let responseUsage: OpenAIChatCompletionsUsage | undefined;
+        let responseFinishReason: string | undefined;
+        const nativeToolCalls = new Map<
+            number,
+            {
+                id: string;
+                type: 'function';
+                function: { name: string; arguments: string };
+                draft: OpenAIChatCanonicalDraft;
+            }
+        >();
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            openSource: async () => {
+                const stream = await this.postChatCompletionStream(driver, payload, options, abortController.signal);
+                return openAIChatNativeSSE(stream);
+            },
+            map: async (json, writer) => {
+                const choice = json.choices?.[0];
+                const delta = choice?.delta;
+                responseId = json.id;
+                responseObject = json.object;
+                responseCreated = json.created;
+                responseModel = json.model;
+                responseServiceTier = json.service_tier;
+                if (typeof json.system_fingerprint === 'string') responseSystemFingerprint = json.system_fingerprint;
+                if (json.usage != null) responseUsage = json.usage;
+                if (typeof choice?.finish_reason === 'string') responseFinishReason = choice.finish_reason;
+
+                const content = extractOpenAIChatCompletionsContentText(delta?.content);
+                if (content) {
+                    contentDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:text`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'content']),
+                        kind: 'text',
+                    };
+                    if (nativeContent.length === 0) {
+                        await writer.startBlock({
+                            draft_block_id: contentDraft.draft_block_id,
+                            native_position: contentDraft.native_position,
+                            block: { type: 'text' },
+                        });
+                    }
+                    nativeContent += content;
+                    await writer.text({
+                        draft_block_id: contentDraft.draft_block_id,
+                        native_position: contentDraft.native_position,
+                        text: content,
+                    });
+                }
+
+                if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+                    reasoningContentDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:reasoning-content`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'reasoning_content']),
+                        kind: 'reasoning',
+                    };
+                    if (nativeReasoningContent === undefined) {
+                        await writer.startBlock({
+                            draft_block_id: reasoningContentDraft.draft_block_id,
+                            native_position: reasoningContentDraft.native_position,
+                            block: { type: 'reasoning', visibility: 'display' },
+                        });
+                    }
+                    nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
+                    await writer.reasoning({
+                        draft_block_id: reasoningContentDraft.draft_block_id,
+                        native_position: reasoningContentDraft.native_position,
+                        text: delta.reasoning_content,
+                    });
+                }
+                if (typeof delta?.reasoning === 'string' && delta.reasoning.length > 0) {
+                    reasoningDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:reasoning`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'reasoning']),
+                        kind: 'reasoning',
+                    };
+                    if (nativeReasoning === undefined) {
+                        await writer.startBlock({
+                            draft_block_id: reasoningDraft.draft_block_id,
+                            native_position: reasoningDraft.native_position,
+                            block: { type: 'reasoning', visibility: 'display' },
+                        });
+                    }
+                    nativeReasoning = (nativeReasoning ?? '') + delta.reasoning;
+                    await writer.reasoning({
+                        draft_block_id: reasoningDraft.draft_block_id,
+                        native_position: reasoningDraft.native_position,
+                        text: delta.reasoning,
+                    });
+                }
+
+                for (const toolCall of delta?.tool_calls ?? []) {
+                    const index = toolCall.index ?? 0;
+                    let native = nativeToolCalls.get(index);
+                    if (native === undefined) {
+                        const draft: OpenAIChatCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:chat:tool:${index}`,
+                            native_position: openAIChatStreamPosition(['choices', 0, 'message', 'tool_calls', index]),
+                            kind: 'tool_call',
+                            tool_index: index,
+                        };
+                        native = {
+                            id: toolCall.id ?? '',
+                            type: 'function',
+                            function: {
+                                name: toolCall.function?.name ?? '',
+                                arguments: '',
+                            },
+                            draft,
+                        };
+                        nativeToolCalls.set(index, native);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: draft.native_position,
+                            block: {
+                                type: 'tool_call',
+                                executor: 'application',
+                                ...(native.id.length === 0 ? {} : { call_id: native.id }),
+                                ...(native.function.name.length === 0 ? {} : { tool_name: native.function.name }),
+                            },
+                        });
+                    } else {
+                        const priorId = native.id;
+                        const priorName = native.function.name;
+                        if (toolCall.id) native.id = toolCall.id;
+                        if (toolCall.function?.name) native.function.name += toolCall.function.name;
+                        if (native.id !== priorId || native.function.name !== priorName) {
+                            await writer.toolIdentity({
+                                draft_block_id: native.draft.draft_block_id,
+                                native_position: native.draft.native_position,
+                                ...(native.id === priorId ? {} : { call_id: native.id }),
+                                ...(native.function.name === priorName ? {} : { tool_name: native.function.name }),
+                            });
+                        }
+                    }
+                    const argumentsFragment = toolCall.function?.arguments;
+                    if (typeof argumentsFragment === 'string' && argumentsFragment.length > 0) {
+                        native.function.arguments += argumentsFragment;
+                        await writer.toolArgumentsFragment({
+                            draft_block_id: native.draft.draft_block_id,
+                            native_position: native.draft.native_position,
+                            fragment: argumentsFragment,
+                        });
+                    }
+                }
+            },
+            finalize: async () => {
+                if (
+                    responseId === undefined ||
+                    responseObject === undefined ||
+                    responseCreated === undefined ||
+                    responseModel === undefined
+                ) {
+                    throw new Error('Chat Completions stream ended without a complete native response identity');
+                }
+                if (responseFinishReason === undefined) {
+                    throw new Error('Chat Completions stream ended without a terminal finish reason');
+                }
+                const assistantMessage = {
+                    role: 'assistant' as const,
+                    content: nativeContent || null,
+                    ...(nativeReasoningContent === undefined ? {} : { reasoning_content: nativeReasoningContent }),
+                    ...(nativeReasoning === undefined ? {} : { reasoning: nativeReasoning }),
+                    ...(nativeToolCalls.size === 0
+                        ? {}
+                        : {
+                              tool_calls: [...nativeToolCalls.entries()]
+                                  .sort(([left], [right]) => left - right)
+                                  .map(([, toolCall]) => ({
+                                      id: toolCall.id,
+                                      type: toolCall.type,
+                                      function: toolCall.function,
+                                  })),
+                          }),
+                };
+                const response: OpenAIChatCompletionsResponse = {
+                    id: responseId,
+                    object: responseObject as OpenAI.Chat.ChatCompletion['object'],
+                    created: responseCreated,
+                    model: responseModel,
+                    choices: [{ index: 0, message: assistantMessage, finish_reason: responseFinishReason }],
+                    ...(responseServiceTier === undefined ? {} : { service_tier: responseServiceTier }),
+                    ...(responseSystemFingerprint === undefined
+                        ? {}
+                        : { system_fingerprint: responseSystemFingerprint }),
+                    ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+                };
+                const finalized = await finalizeOpenAIChatStreamResponse({
+                    response,
+                    prepared,
+                    finish_reason: responseFinishReason,
+                    options,
+                    include_thoughts: includeThoughts,
+                });
+                return {
+                    decoded: finalized.decoded,
+                    response: finalized.response,
+                    prepare_reconciliation: async () => {
+                        const { raw_decoded: rawDecoded, normalized } = finalized;
+                        let { decoded } = finalized;
+                        const drafts = [
+                            ...(contentDraft === undefined ? [] : [contentDraft]),
+                            ...(reasoningContentDraft === undefined ? [] : [reasoningContentDraft]),
+                            ...(reasoningDraft === undefined ? [] : [reasoningDraft]),
+                            ...[...nativeToolCalls.values()]
+                                .sort((left, right) => (left.draft.tool_index ?? 0) - (right.draft.tool_index ?? 0))
+                                .map((toolCall) => toolCall.draft),
+                        ];
+                        const rawBlocks = openAIChatSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== drafts.length) {
+                            throw new Error('OpenAI Chat stream drafts do not match its terminal native response');
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const draft = drafts[index];
+                            if (draft === undefined) return [];
+                            return [
+                                {
+                                    canonical_id: block.id,
+                                    native_position: draft.native_position,
+                                    kind: 'block' as const,
+                                },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: draft.native_position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = openAIChatSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error(
+                                    'OpenAI Chat structured stream decode is missing source or result blocks',
+                                );
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && drafts[index] !== undefined ? [drafts[index]] : [],
+                            );
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                                native_positions: sourceDrafts.map((draft) => draft.native_position),
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            const draft = drafts[index];
+                            if (draft === undefined || (normalized?.status === 'valid' && block.type === 'text')) {
+                                continue;
+                            }
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        decoded = { ...decoded, stream_evidence: { item_mappings: itemMappings, transformations } };
+                        return {
+                            decoded,
+                            reconciliations,
+                            deliver_final_events: async (finalWriter) => {
+                                if (decoded.generation.usage !== undefined) {
+                                    await finalWriter.usage(decoded.generation.usage);
+                                }
+                                for (const [index, block] of rawBlocks.entries()) {
+                                    const draft = drafts[index];
+                                    if (draft === undefined) continue;
+                                    await finalWriter.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : responseFinishReason === 'length'
+                                                  ? 'interrupted'
+                                                  : 'native_complete',
+                                    });
+                                }
+                                await finalWriter.finish({
+                                    outcome: responseFinishReason === 'length' ? 'interrupted' : 'completed',
+                                    finish_reason: responseFinishReason,
+                                    ...(typeof responseServiceTier === 'string'
+                                        ? { service_tier: responseServiceTier }
+                                        : {}),
+                                });
+                            },
+                        };
+                    },
+                    ...(finalized.normalized?.status === 'valid' && options.result_schema !== undefined
+                        ? { result_schema: options.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
+        });
+        await publishCanonicalPreparedRequest(prepared, options);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
     }
 
     protected buildPayload(
@@ -1882,6 +2322,21 @@ export abstract class OpenAIChatCompletionsDriverBase<
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         return this.chatCompletionsProtocol.requestCanonicalTextCompletionStream(this, prompt, options, signal);
+    }
+
+    requestCanonicalTextCompletionEventStream(
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.requestCanonicalTextCompletionEventStream(
+            this,
+            prompt,
+            options,
+            signal,
+            open,
+        );
     }
 
     buildStreamingConversation(

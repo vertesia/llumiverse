@@ -1,11 +1,12 @@
 import {
     appendConversationRecords,
+    type ConversationStreamEvent,
     createConversationDocument,
     createTextBlock,
     createUserTurn,
     parseConversationDocument,
 } from '@llumiverse/conversation';
-import { type ExecutionOptions, PromptRole, Providers } from '@llumiverse/core';
+import { type ExecutionOptions, legacyCompletionFromCanonicalExecution, PromptRole, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -172,7 +173,437 @@ async function consume(stream: AsyncIterable<string>): Promise<string> {
     return text;
 }
 
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
+
+function acceptedOutputWithoutProviderTimestamps(value: unknown): unknown {
+    return JSON.parse(JSON.stringify(value), (key, item) =>
+        key === 'recorded_at' || key === 'completed_at' ? '<provider-completed-at>' : item,
+    );
+}
+
 describe('OpenAI Responses canonical lifecycle', () => {
+    it('emits native-positioned structured-output events with the same accepted output as the legacy stream boundary', async () => {
+        const final = response({
+            id: 'response:typed-parity',
+            output: [messageItem('message:typed-parity', '{"answer":"Tokyo"}')],
+        });
+        const create = vi.fn(async () =>
+            (async function* () {
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: 'message:typed-parity',
+                    output_index: 0,
+                    content_index: 0,
+                    sequence_number: 1,
+                    delta: '{"answer":',
+                    logprobs: [],
+                };
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: 'message:typed-parity',
+                    output_index: 0,
+                    content_index: 0,
+                    sequence_number: 2,
+                    delta: '"Tokyo"}',
+                    logprobs: [],
+                };
+                yield { type: 'response.completed' as const, sequence_number: 3, response: final };
+            })(),
+        );
+        const executionOptions: ExecutionOptions = {
+            ...runtimeOptions({
+                flow: 'typed-parity',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        };
+        const typedDriver = new TestOpenAIResponsesDriver(create);
+        const typed = await typedDriver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Return JSON.' }],
+            executionOptions,
+            undefined,
+            { stream_id: 'stream:responses:typed-parity' },
+        );
+        const events = await collectCanonicalEvents(typed);
+        const acceptedEvent = events.find((event) => event.type === 'response_accepted');
+
+        expect(events.filter((event) => event.type === 'draft_text_delta')).toMatchObject([
+            {
+                text: '{"answer":',
+                native_position: {
+                    protocol: 'openai.responses',
+                    path: ['output', 0, 'content', 0],
+                    native_item_id: 'message:typed-parity',
+                },
+            },
+            { text: '"Tokyo"}' },
+        ]);
+        expect(acceptedEvent).toMatchObject({
+            reconciliations: [
+                {
+                    disposition: 'structured_output',
+                    committed_block_ids: [typed.completion?.accepted_output.turn.blocks[0]?.id],
+                },
+            ],
+        });
+        expect(typed.completion?.accepted_output.turn.blocks).toMatchObject([
+            { type: 'json', value: { answer: 'Tokyo' } },
+        ]);
+
+        const legacyDriver = new TestOpenAIResponsesDriver(create);
+        const legacy = await legacyDriver.streamCanonical(
+            [{ role: PromptRole.user, content: 'Return JSON.' }],
+            executionOptions,
+        );
+        await consume(legacy);
+        expect(acceptedOutputWithoutProviderTimestamps(typed.completion?.accepted_output)).toEqual(
+            acceptedOutputWithoutProviderTimestamps(legacy.completion?.accepted_output),
+        );
+    });
+
+    it('recovers an accepted typed stream as one terminal event without publishing or calling transport again', async () => {
+        const final = response({
+            id: 'response:typed-recovery',
+            output: [messageItem('message:typed-recovery', 'Accepted once.')],
+        });
+        const create = vi.fn(async () =>
+            (async function* () {
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: 'message:typed-recovery',
+                    output_index: 0,
+                    content_index: 0,
+                    sequence_number: 1,
+                    delta: 'Accepted once.',
+                    logprobs: [],
+                };
+                yield { type: 'response.completed' as const, sequence_number: 2, response: final };
+            })(),
+        );
+        const publish = vi.fn(async () => undefined);
+        const firstOptions: ExecutionOptions = {
+            ...runtimeOptions({
+                flow: 'typed-recovery',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+            on_canonical_request_prepared: publish,
+        };
+        const driver = new TestOpenAIResponsesDriver(create);
+        const first = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer once.' }],
+            firstOptions,
+            undefined,
+            { stream_id: 'stream:responses:typed-recovery:first' },
+        );
+        await collectCanonicalEvents(first);
+        if (first.completion === undefined) throw new Error('Expected initial typed completion');
+
+        const recovered = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer once.' }],
+            {
+                ...runtimeOptions({
+                    flow: 'typed-recovery',
+                    operation: 'generate',
+                    attempt: 'retry',
+                    recordedAt: '2026-09-12T01:01:00.000Z',
+                    conversation: JSON.parse(JSON.stringify(first.completion.conversation)),
+                }),
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:responses:typed-recovery:delivery-2' },
+        );
+        const recoveredEvents = await collectCanonicalEvents(recovered);
+
+        expect(recoveredEvents).toHaveLength(1);
+        expect(recoveredEvents[0]).toMatchObject({
+            type: 'response_accepted',
+            origin: 'accepted_recovery',
+            stream_id: 'stream:responses:typed-recovery:delivery-2',
+            sequence: 0,
+        });
+        expect(recovered.completion?.accepted_output).toEqual(first.completion.accepted_output);
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('retains the authoritative accepted response when bounded final-event delivery fails', async () => {
+        const final = response({
+            id: 'response:typed-delivery-bound',
+            output: [messageItem('message:typed-delivery-bound', 'Accepted despite delivery failure.')],
+        });
+        const driver = new TestOpenAIResponsesDriver(
+            vi.fn(async () =>
+                (async function* () {
+                    yield {
+                        type: 'response.output_text.delta' as const,
+                        item_id: 'message:typed-delivery-bound',
+                        output_index: 0,
+                        content_index: 0,
+                        sequence_number: 1,
+                        delta: 'Accepted despite delivery failure.',
+                        logprobs: [],
+                    };
+                    yield { type: 'response.completed' as const, sequence_number: 2, response: final };
+                })(),
+            ),
+        );
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({
+                flow: 'typed-delivery-bound',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+            undefined,
+            { stream_id: 'stream:responses:typed-delivery-bound', max_events: 5 },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'CANONICAL_EVENT_DELIVERY_FAILED' },
+        });
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Accepted despite delivery failure.' }),
+        );
+        expect(stream.completion?.accepted_output.generation.status).toBe('completed');
+    });
+
+    it('retains authoritative terminal text while rejecting divergent preview reconciliation', async () => {
+        const final = response({
+            id: 'response:typed-divergent-preview',
+            output: [messageItem('message:typed-divergent-preview', 'Authoritative terminal text.')],
+        });
+        const driver = new TestOpenAIResponsesDriver(
+            vi.fn(async () =>
+                (async function* () {
+                    yield {
+                        type: 'response.output_text.delta' as const,
+                        item_id: 'message:typed-divergent-preview',
+                        output_index: 0,
+                        content_index: 0,
+                        sequence_number: 1,
+                        delta: 'Different preview text.',
+                        logprobs: [],
+                    };
+                    yield { type: 'response.completed' as const, sequence_number: 2, response: final };
+                })(),
+            ),
+        );
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({
+                flow: 'typed-divergent-preview',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+            undefined,
+            { stream_id: 'stream:responses:typed-divergent-preview' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'CANONICAL_EVENT_DELIVERY_FAILED' },
+        });
+        expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Authoritative terminal text.' }),
+        );
+    });
+
+    it('retains a terminal-only accepted response when bounded draft synthesis cannot be delivered', async () => {
+        const final = response({
+            id: 'response:typed-terminal-only-bound',
+            output: [messageItem('message:typed-terminal-only-bound', 'Terminal only.')],
+        });
+        const driver = new TestOpenAIResponsesDriver(
+            vi.fn(async () =>
+                (async function* () {
+                    yield { type: 'response.completed' as const, sequence_number: 1, response: final };
+                })(),
+            ),
+        );
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({
+                flow: 'typed-terminal-only-bound',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+            undefined,
+            { stream_id: 'stream:responses:typed-terminal-only-bound', max_events: 2 },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events).toHaveLength(2);
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'CANONICAL_EVENT_DELIVERY_FAILED' },
+        });
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Terminal only.' }),
+        );
+    });
+
+    it('fails the typed prepared-request barrier before opening the provider stream', async () => {
+        const create = vi.fn(async () => {
+            throw new Error('transport must not be called');
+        });
+        const driver = new TestOpenAIResponsesDriver(create);
+
+        await expect(
+            driver.streamCanonicalEvents(
+                [{ role: PromptRole.user, content: 'Answer.' }],
+                {
+                    ...runtimeOptions({
+                        flow: 'typed-barrier',
+                        operation: 'generate',
+                        attempt: 'first',
+                        recordedAt: '2026-09-12T01:00:00.000Z',
+                    }),
+                    on_canonical_request_prepared: async () => {
+                        throw new Error('durability barrier failed');
+                    },
+                },
+                undefined,
+                { stream_id: 'stream:responses:typed-barrier' },
+            ),
+        ).rejects.toThrow('durability barrier failed');
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['zero event budget', { max_events: 0 }],
+        ['zero delivery buffer', { max_buffered_events: 0 }],
+        [
+            'fresh resume cursor',
+            { resume_after: { stream_id: 'stream:prior', event_id: 'stream:prior#0', sequence: 0 } },
+        ],
+    ] as const)(
+        'rejects %s before publication, abort-listener registration, or transport',
+        async (_label, invalidOpen) => {
+            const create = vi.fn(async () => {
+                throw new Error('transport must not be called');
+            });
+            const publish = vi.fn(async () => undefined);
+            const controller = new AbortController();
+            const addAbortListener = vi.spyOn(controller.signal, 'addEventListener');
+            const removeAbortListener = vi.spyOn(controller.signal, 'removeEventListener');
+            const driver = new TestOpenAIResponsesDriver(create);
+
+            await expect(
+                driver.streamCanonicalEvents(
+                    [{ role: PromptRole.user, content: 'Answer.' }],
+                    {
+                        ...runtimeOptions({
+                            flow: `typed-invalid-open-${_label}`,
+                            operation: 'generate',
+                            attempt: 'first',
+                            recordedAt: '2026-09-12T01:00:00.000Z',
+                        }),
+                        on_canonical_request_prepared: publish,
+                    },
+                    controller.signal,
+                    { stream_id: `stream:responses:typed-invalid-open:${_label}`, ...invalidOpen },
+                ),
+            ).rejects.toThrow();
+            expect(publish).not.toHaveBeenCalled();
+            expect(create).not.toHaveBeenCalled();
+            expect(addAbortListener).not.toHaveBeenCalled();
+            expect(removeAbortListener).not.toHaveBeenCalled();
+        },
+    );
+
+    it('emits display reasoning while keeping encrypted provider replay out of typed events', async () => {
+        const reasoningItem = {
+            type: 'reasoning' as const,
+            id: 'reasoning:typed-protected',
+            summary: [{ type: 'summary_text' as const, text: 'Visible summary.' }],
+            encrypted_content: 'opaque-protected-replay-payload',
+            status: 'completed' as const,
+        };
+        const final = response({
+            id: 'response:typed-protected',
+            output: [reasoningItem, messageItem('message:typed-protected', 'Answer.')],
+            reasoningTokens: 4,
+        });
+        const create = vi.fn(async () =>
+            (async function* () {
+                yield {
+                    type: 'response.reasoning_summary_text.delta' as const,
+                    item_id: reasoningItem.id,
+                    output_index: 0,
+                    summary_index: 0,
+                    sequence_number: 1,
+                    delta: 'Visible summary.',
+                };
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: 'message:typed-protected',
+                    output_index: 1,
+                    content_index: 0,
+                    sequence_number: 2,
+                    delta: 'Answer.',
+                    logprobs: [],
+                };
+                yield { type: 'response.completed' as const, sequence_number: 3, response: final };
+            })(),
+        );
+        const driver = new TestOpenAIResponsesDriver(create);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Explain.' }],
+            {
+                ...runtimeOptions({
+                    flow: 'typed-protected',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-09-12T01:00:00.000Z',
+                }),
+                model_options: { _option_id: 'openai-thinking', include_thoughts: false },
+            },
+            undefined,
+            { stream_id: 'stream:responses:typed-protected' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events).toContainEqual(
+            expect.objectContaining({ type: 'draft_reasoning_delta', text: 'Visible summary.' }),
+        );
+        expect(JSON.stringify(events)).not.toContain(reasoningItem.encrypted_content);
+        expect(stream.completion?.accepted_output.turn.blocks).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ type: 'reasoning', text: 'Visible summary.' }),
+                expect.objectContaining({ type: 'text', text: 'Answer.' }),
+            ]),
+        );
+        if (stream.completion === undefined) throw new Error('Expected protected-reasoning typed completion');
+        expect(legacyCompletionFromCanonicalExecution(stream.completion, { include_reasoning: false }).result).toEqual([
+            { type: 'text', value: 'Answer.' },
+        ]);
+    });
     it('recovers a saved response against its older materialized-input proof without another transport call', async () => {
         const create = vi.fn(async () =>
             response({

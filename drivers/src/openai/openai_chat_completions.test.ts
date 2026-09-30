@@ -1,6 +1,7 @@
 import {
     type ContentBlock,
     type ConversationDocument,
+    type ConversationStreamEvent,
     createConversationDocument,
     externalizeToolCallArguments,
     parseConversationDocument,
@@ -121,6 +122,20 @@ async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Prom
     return chunks;
 }
 
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
+
+function acceptedOutputWithoutProviderTimestamps(value: unknown): unknown {
+    return JSON.parse(JSON.stringify(value), (key, item) =>
+        key === 'recorded_at' || key === 'completed_at' ? '<provider-completed-at>' : item,
+    );
+}
+
 function latestGeneratedText(value: unknown): string | undefined {
     const document = parseConversationDocument(value);
     for (let index = document.turns.length - 1; index >= 0; index -= 1) {
@@ -197,7 +212,11 @@ class TestOpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase {
         return this.response;
     }
 
-    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        _options?: ExecutionOptions,
+        _signal?: AbortSignal,
+    ): Promise<ReadableStream> {
         this.payloads.push(payload);
         if (this.responseStream === undefined) throw new Error('Missing test stream');
         return this.responseStream;
@@ -247,6 +266,220 @@ function canonicalOptions(attempt: string, recordedAt: string, conversation?: un
 }
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('emits native-positioned canonical events with the same accepted output as the legacy stream boundary', async () => {
+        const nativeEvents: ServerSentEvent[] = [
+            {
+                type: 'event',
+                data: JSON.stringify({
+                    id: 'chatcmpl-typed-parity',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'test/model',
+                    choices: [{ index: 0, delta: { content: 'Hel' }, finish_reason: null }],
+                }),
+            },
+            {
+                type: 'event',
+                data: JSON.stringify({
+                    id: 'chatcmpl-typed-parity',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'test/model',
+                    service_tier: 'priority',
+                    choices: [{ index: 0, delta: { content: 'lo' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+                }),
+            },
+        ];
+        const executionOptions = canonicalOptions('attempt:typed-parity', '2026-09-11T00:00:00.000Z');
+        const typedDriver = new TestOpenAIChatCompletionsDriver(undefined, createSSEStream(nativeEvents));
+        const typed = await typedDriver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Say hello.' }],
+            executionOptions,
+            undefined,
+            { stream_id: 'stream:chat:typed-parity' },
+        );
+        const events = await collectCanonicalEvents(typed);
+
+        expect(events.map((event) => event.type)).toEqual([
+            'draft_started',
+            'draft_block_started',
+            'draft_text_delta',
+            'draft_text_delta',
+            'usage_snapshot',
+            'draft_block_finished',
+            'draft_finished',
+            'response_accepted',
+        ]);
+        expect(events.filter((event) => event.type === 'draft_text_delta')).toMatchObject([
+            {
+                text: 'Hel',
+                native_position: { protocol: 'openai.chat.completions', path: ['choices', 0, 'message', 'content'] },
+            },
+            {
+                text: 'lo',
+                native_position: { protocol: 'openai.chat.completions', path: ['choices', 0, 'message', 'content'] },
+            },
+        ]);
+        expect(typed.completion?.service_tier).toBe('priority');
+
+        const legacyDriver = new TestOpenAIChatCompletionsDriver(undefined, createSSEStream(nativeEvents));
+        const legacy = await legacyDriver.streamCanonical(
+            [{ role: PromptRole.user, content: 'Say hello.' }],
+            executionOptions,
+        );
+        for await (const _chunk of legacy) {
+            // Drain the explicit legacy string projection.
+        }
+        expect(acceptedOutputWithoutProviderTimestamps(typed.completion?.accepted_output)).toEqual(
+            acceptedOutputWithoutProviderTimestamps(legacy.completion?.accepted_output),
+        );
+    });
+
+    it('keeps parallel same-name calls distinct and reconciles malformed retained arguments as non-executable', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-typed-tools',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: 'call-a',
+                                            type: 'function',
+                                            function: { name: 'lookup', arguments: '{"city":' },
+                                        },
+                                        {
+                                            index: 1,
+                                            id: 'call-b',
+                                            type: 'function',
+                                            function: { name: 'lookup', arguments: '{"city":' },
+                                        },
+                                    ],
+                                },
+                                finish_reason: null,
+                            },
+                        ],
+                    }),
+                },
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-typed-tools',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { tool_calls: [{ index: 0, function: { arguments: '"Tokyo"}' } }] },
+                                finish_reason: 'tool_calls',
+                            },
+                        ],
+                    }),
+                },
+            ]),
+        );
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Look up both cities.' }],
+            {
+                ...canonicalOptions('attempt:typed-tools', '2026-09-11T00:00:00.000Z'),
+                tools: [
+                    {
+                        name: 'lookup',
+                        input_schema: {
+                            type: 'object',
+                            properties: { city: { type: 'string' } },
+                            required: ['city'],
+                        },
+                    },
+                ],
+            },
+            undefined,
+            { stream_id: 'stream:chat:typed-tools' },
+        );
+        const events = await collectCanonicalEvents(stream);
+        const accepted = stream.completion?.accepted_output.turn.blocks.filter((block) => block.type === 'tool_call');
+
+        expect(accepted).toMatchObject([
+            { call_id: 'call-a', tool_name: 'lookup', arguments: { type: 'json', value: { city: 'Tokyo' } } },
+            { call_id: 'call-b', tool_name: 'lookup', arguments: { type: 'invalid', raw: '{"city":' } },
+        ]);
+        expect(events.filter((event) => event.type === 'draft_tool_call_identity')).toEqual([]);
+        const acceptedEvent = events.find((event) => event.type === 'response_accepted');
+        expect(acceptedEvent).toMatchObject({
+            reconciliations: [
+                { disposition: 'direct', committed_block_ids: [accepted?.[0]?.id] },
+                { disposition: 'direct', committed_block_ids: [accepted?.[1]?.id] },
+            ],
+        });
+        expect(events).toContainEqual(expect.objectContaining({ type: 'draft_block_finished', outcome: 'malformed' }));
+    });
+
+    it('aborts the pending native Chat read before delivering one cancellation terminal', async () => {
+        let nativeController: ReadableStreamDefaultController<ServerSentEvent> | undefined;
+        const observedAbort = vi.fn();
+        const native = new ReadableStream<ServerSentEvent>({
+            start(controller) {
+                nativeController = controller;
+                controller.enqueue({
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-typed-cancel',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: 'started' }, finish_reason: null }],
+                    }),
+                });
+            },
+        });
+        class CancellingChatDriver extends TestOpenAIChatCompletionsDriver {
+            override async _postChatCompletionStream(
+                _payload: OpenAIChatCompletionsPayload,
+                _options?: ExecutionOptions,
+                signal?: AbortSignal,
+            ): Promise<ReadableStream> {
+                signal?.addEventListener(
+                    'abort',
+                    () => {
+                        observedAbort();
+                        nativeController?.close();
+                    },
+                    { once: true },
+                );
+                return native;
+            }
+        }
+        const driver = new CancellingChatDriver();
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Start.' }],
+            canonicalOptions('attempt:typed-cancel', '2026-09-11T00:00:00.000Z'),
+            undefined,
+            { stream_id: 'stream:chat:typed-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_block_started' }, done: false });
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_text_delta' }, done: false });
+
+        const terminal = await stream.cancel();
+
+        expect(observedAbort).toHaveBeenCalledOnce();
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(iterator.next()).resolves.toMatchObject({ value: terminal, done: false });
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+        expect(stream.completion).toBeUndefined();
+    });
     it('stores Chat input audio as a durable canonical asset and replays exact bytes after JSON persistence', async () => {
         const audio = { type: 'input_audio' as const, input_audio: { data: 'UklGRg==', format: 'wav' as const } };
         const state = await prepareOpenAIChatCanonicalState({

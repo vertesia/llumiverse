@@ -32,12 +32,24 @@ type WithoutEnvelope<Event> = Event extends ConversationStreamEvent
     : never;
 type ConversationStreamEventInput = WithoutEnvelope<ConversationStreamEvent>;
 
+interface CanonicalNativeStreamPreparedReconciliation {
+    decoded: DecodedConversationResponse;
+    reconciliations: ConversationStreamReconciliation[];
+    deliver_final_events?(writer: CanonicalNativeStreamWriter): Promise<void>;
+}
+
 export interface CanonicalNativeStreamFinalization {
     decoded: DecodedConversationResponse;
     response: CanonicalExecutionResponse;
-    reconciliations: ConversationStreamReconciliation[];
+    reconciliations?: ConversationStreamReconciliation[];
     result_schema?: object;
+    deliver_final_events?(writer: CanonicalNativeStreamWriter): Promise<void>;
+    prepare_reconciliation?(writer: CanonicalNativeStreamWriter): Promise<CanonicalNativeStreamPreparedReconciliation>;
 }
+
+type ReconciledCanonicalNativeStreamFinalization = CanonicalNativeStreamFinalization & {
+    reconciliations: ConversationStreamReconciliation[];
+};
 
 export interface CanonicalNativeEventStreamOptions<NativeEvent> {
     identity: Omit<ConversationStreamIdentity, 'stream_id'>;
@@ -286,10 +298,18 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
                 await this.options.map(next.value, this.writer);
             }
             if (this.settled) return;
-            const finalized = await this.options.finalize(this.writer);
-            this.completion = finalized.response;
+            const accepted = await this.options.finalize(this.writer);
+            this.completion = accepted.response;
             if (this.settled) return;
-            await this.beginAcceptance(finalized);
+            const prepared = await accepted.prepare_reconciliation?.(this.writer);
+            const finalized = prepared === undefined ? accepted : { ...accepted, ...prepared };
+            const reconciliations = finalized.reconciliations;
+            if (reconciliations === undefined) {
+                throw new Error('Canonical native stream finalization has no reconciliations');
+            }
+            await finalized.deliver_final_events?.(this.writer);
+            if (this.settled) return;
+            await this.beginAcceptance({ ...finalized, reconciliations });
         } catch (error: unknown) {
             if (this.settlement === undefined) {
                 try {
@@ -302,7 +322,9 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         }
     }
 
-    private beginAcceptance(finalized: CanonicalNativeStreamFinalization): Promise<CanonicalStreamTerminalEvent> {
+    private beginAcceptance(
+        finalized: ReconciledCanonicalNativeStreamFinalization,
+    ): Promise<CanonicalStreamTerminalEvent> {
         if (this.settlement !== undefined) return this.settlement;
         this.settled = true;
         let resolve!: (terminal: CanonicalStreamTerminalEvent) => void;
@@ -316,7 +338,9 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         return settlement;
     }
 
-    private async acceptInternal(finalized: CanonicalNativeStreamFinalization): Promise<CanonicalStreamTerminalEvent> {
+    private async acceptInternal(
+        finalized: ReconciledCanonicalNativeStreamFinalization,
+    ): Promise<CanonicalStreamTerminalEvent> {
         try {
             await this.closeOnce();
             const accepted = await finalizeCanonicalExecutionStreamResponse({
