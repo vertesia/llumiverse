@@ -115,6 +115,11 @@ import {
     supportsConverseOutputConfig,
 } from './converse.js';
 import { generateBedrockEmbeddings } from './embeddings.js';
+import {
+    executeNovaCanvasCanonical,
+    type NovaCanvasPayload,
+    validateNovaCanvasCanonicalInput,
+} from './nova-image-canonical.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
 import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
@@ -768,7 +773,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected override supportsCanonicalConversation(options: ExecutionOptions): boolean {
-        return !options.model.includes('canvas') && !options.model.includes('twelvelabs.pegasus');
+        if (this.isImageModel(options.model)) return this.supportsCanonicalImageGeneration(options);
+        return !options.model.includes('twelvelabs.pegasus');
+    }
+
+    protected override supportsCanonicalImageGeneration(options: ExecutionOptions): boolean {
+        return this.isImageModel(options.model);
+    }
+
+    protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
+        validateNovaCanvasCanonicalInput(segments, options);
     }
 
     /**
@@ -2525,34 +2539,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return model.includes('nova-canvas');
     }
 
-    async requestImageGeneration(
-        prompt: NovaMessagesPrompt,
+    private async invokeNovaCanvas(
+        payload: NovaCanvasPayload,
         options: ExecutionOptions,
         signal?: AbortSignal,
-    ): Promise<Completion> {
-        if (
-            options.model_options?._option_id !== undefined &&
-            options.model_options?._option_id !== 'bedrock-nova-canvas'
-        ) {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
-        }
-        const model_options = options.model_options as NovaCanvasOptions;
-
-        const taskType = model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
-
-        this.logger.info(`Task type: ${taskType}`);
-
-        if (typeof prompt === 'string') {
-            throw new Error('Bad prompt format');
-        }
-
-        const payload = await formatNovaImageGenerationPayload(taskType, prompt, options);
+    ): Promise<InvokeModelCommandOutput> {
         const executorScope = this.getScopedExecutor(options);
-
-        let res: InvokeModelCommandOutput;
         try {
             const requestTimeout = this.getDriverRequestTimeoutMs(options.httpTimeout);
-            res = await executorScope.executor.invokeModel(
+            return await executorScope.executor.invokeModel(
                 {
                     modelId: options.model,
                     contentType: 'application/json',
@@ -2567,6 +2562,47 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } finally {
             executorScope.close();
         }
+    }
+
+    override async requestCanonicalImageGeneration(
+        prompt: NovaMessagesPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeNovaCanvasCanonical({
+            provider: this.provider,
+            region: this.options.region,
+            prompt,
+            options,
+            signal,
+            invoke: (payload, invokeOptions, invokeSignal) =>
+                this.invokeNovaCanvas(payload, invokeOptions, invokeSignal),
+        });
+    }
+
+    async requestImageGeneration(
+        prompt: NovaMessagesPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'bedrock-nova-canvas'
+        ) {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
+        }
+        const model_options = options.model_options as NovaCanvasOptions | undefined;
+
+        const taskType = model_options?.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
+
+        this.logger.info(`Task type: ${taskType}`);
+
+        if (typeof prompt === 'string') {
+            throw new Error('Bad prompt format');
+        }
+
+        const payload = await formatNovaImageGenerationPayload(taskType, prompt, options);
+        const res = await this.invokeNovaCanvas(payload, options, signal);
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
