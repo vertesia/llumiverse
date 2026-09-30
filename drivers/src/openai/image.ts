@@ -36,10 +36,9 @@ import {
     resolveConversationRuntime,
 } from '../conversation/canonical-runtime.js';
 import {
-    detectGeneratedImageMimeType,
-    generatedImageContentHash,
     generatedImageStorage,
     maximumGeneratedImageOutputBytes,
+    readBoundedGeneratedImageResponse,
     verifiedBase64GeneratedImage,
 } from '../shared/generated-image.js';
 
@@ -47,8 +46,6 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 const OPENAI_IMAGES_PROTOCOL = 'openai.images.generate';
 const OPENAI_IMAGES_ADAPTER_VERSION = '2026-09-30.canonical.1';
-const MAX_GENERATED_IMAGE_CHUNKS = 8_192;
-const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 interface DecodedImage {
     bytes: Uint8Array;
@@ -139,62 +136,6 @@ function effectiveImageOptions(request: OpenAI.Images.ImageGenerateParamsNonStre
     return providerJsonValue(options) as JsonObject;
 }
 
-async function readBoundedImageResponse(response: Response, maximumBytes: number, signal?: AbortSignal) {
-    if (!response.ok) throw new Error(`OpenAI generated image download failed with status ${response.status}`);
-    const mimeType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
-    if (mimeType === undefined || !SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
-        throw new Error(`OpenAI generated image has unsupported MIME type ${mimeType ?? 'missing'}`);
-    }
-    const declaredLength = response.headers.get('content-length');
-    if (declaredLength !== null) {
-        const parsed = Number(declaredLength);
-        if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximumBytes) {
-            throw new Error(`OpenAI generated image exceeds the ${maximumBytes} byte limit`);
-        }
-    }
-    if (response.body === null) throw new Error('OpenAI generated image response has no body');
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let byteLength = 0;
-    let chunkCount = 0;
-    let completed = false;
-    try {
-        while (true) {
-            signal?.throwIfAborted();
-            const item = await reader.read();
-            if (item.done) {
-                completed = true;
-                break;
-            }
-            chunkCount += 1;
-            if (chunkCount > MAX_GENERATED_IMAGE_CHUNKS) {
-                throw new Error('OpenAI generated image response contains too many chunks');
-            }
-            if (item.value.byteLength === 0) continue;
-            byteLength += item.value.byteLength;
-            if (byteLength > maximumBytes) {
-                throw new Error(`OpenAI generated image exceeds the ${maximumBytes} byte limit`);
-            }
-            chunks.push(item.value.slice());
-        }
-    } finally {
-        if (!completed) await reader.cancel().catch(() => undefined);
-        reader.releaseLock();
-    }
-    if (byteLength === 0) throw new Error('OpenAI generated image is empty');
-    const bytes = new Uint8Array(byteLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    const detectedMimeType = detectGeneratedImageMimeType(bytes, 'OpenAI');
-    if (detectedMimeType !== mimeType) {
-        throw new Error(`OpenAI generated image MIME type ${mimeType} does not match its bytes`);
-    }
-    return { bytes, mime_type: detectedMimeType };
-}
-
 async function decodeImage(
     image: OpenAI.Images.Image,
     fetchImage: typeof fetch,
@@ -214,10 +155,15 @@ async function decodeImage(
         if (url.protocol !== 'https:' && url.protocol !== 'http:') {
             throw new Error('OpenAI generated image URL must use HTTP or HTTPS');
         }
-        const decoded = await readBoundedImageResponse(await fetchImage(url, { signal }), maximumBytes, signal);
+        const decoded = await readBoundedGeneratedImageResponse(
+            await fetchImage(url, { signal }),
+            maximumBytes,
+            'OpenAI',
+            signal,
+        );
         bytes = decoded.bytes;
         mimeType = decoded.mime_type;
-        contentHash = await generatedImageContentHash(bytes);
+        contentHash = decoded.content_hash;
     } else {
         throw new Error('OpenAI image response item contains neither base64 data nor a URL');
     }
