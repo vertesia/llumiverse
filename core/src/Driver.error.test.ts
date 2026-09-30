@@ -58,6 +58,43 @@ describe('AbstractDriver Error Formatting', () => {
         driver = new TestDriver({});
     });
 
+    it('does not repair malformed JSON when the provider reports token exhaustion', () => {
+        const completion: Completion = {
+            result: [{ type: 'text', value: '{"items":[{"id":"a"},]}' }],
+            finish_reason: 'length',
+        };
+
+        driver.validateResult(completion, {
+            model: 'test-model',
+            result_schema: {
+                type: 'object',
+                required: ['items'],
+                properties: { items: { type: 'array', items: { type: 'object', required: ['id'] } } },
+            },
+        } as ExecutionOptions);
+
+        expect(completion.error).toMatchObject({ code: 'json_error' });
+    });
+
+    it('still repairs complete malformed JSON when generation stopped normally', () => {
+        const completion: Completion = {
+            result: [{ type: 'text', value: '{"items":[{"id":"a"},]}' }],
+            finish_reason: 'stop',
+        };
+
+        driver.validateResult(completion, {
+            model: 'test-model',
+            result_schema: {
+                type: 'object',
+                required: ['items'],
+                properties: { items: { type: 'array', items: { type: 'object', required: ['id'] } } },
+            },
+        } as ExecutionOptions);
+
+        expect(completion.error).toBeUndefined();
+        expect(completion.result).toEqual([{ type: 'json', value: { items: [{ id: 'a' }] } }]);
+    });
+
     describe('isRetryableError', () => {
         describe('HTTP status codes', () => {
             it('should mark 429 as retryable (rate limit)', () => {

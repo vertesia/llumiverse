@@ -60,25 +60,22 @@ export class ValidationError extends Error implements ResultValidationError {
     }
 }
 
-function parseCompletionAsJson(data: CompletionResult[]) {
-    let lastError: ValidationError | undefined;
-    for (const part of data) {
-        if (part.type === 'text') {
-            const text = part.value.trim();
-            try {
-                return extractAndParseJSON(text);
-            } catch (error: unknown) {
-                lastError = new ValidationError('json_error', errorMessage(error));
-            }
-        }
+function parseCompletionAsJson(data: CompletionResult[], allowRepair: boolean) {
+    const text = data
+        .filter((part): part is Extract<CompletionResult, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.value)
+        .join('');
+    if (!text.trim()) {
+        throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
     }
-    if (!lastError) {
-        lastError = new ValidationError('json_error', 'No JSON compatible response found in completion result');
+    try {
+        return extractAndParseJSON(text, allowRepair);
+    } catch (error: unknown) {
+        throw new ValidationError('json_error', errorMessage(error));
     }
-    throw lastError;
 }
 
-export function validateResult(data: CompletionResult[], schema: object): CompletionResult[] {
+export function validateResult(data: CompletionResult[], schema: object, allowRepair = true): CompletionResult[] {
     let json: JSONValue;
     if (Array.isArray(data)) {
         const jsonResults = data.filter((r) => r.type === 'json');
@@ -86,7 +83,7 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
             json = jsonResults[0].value;
         } else {
             try {
-                json = parseCompletionAsJson(data);
+                json = parseCompletionAsJson(data, allowRepair);
             } catch (error: unknown) {
                 throw new ValidationError('json_error', errorMessage(error));
             }

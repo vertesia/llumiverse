@@ -309,7 +309,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     validateResult(result: Completion, options: ExecutionOptions) {
         if (!result.tool_use && !result.error && options.result_schema) {
             try {
-                result.result = validateResult(result.result, options.result_schema);
+                result.result = validateResult(result.result, options.result_schema, result.finish_reason !== 'length');
             } catch (error: unknown) {
                 const validationError = error instanceof Error ? error : new Error(String(error));
                 const rawCode = getObjectProperty(error, 'code');

@@ -11,6 +11,22 @@ describe('Core Utilities', () => {
         expect(r).toEqual({ a: 1, b: 2 });
     });
 
+    test('extracts arrays and primitive JSON values', () => {
+        expect(extractAndParseJSON('[1, 2]')).toEqual([1, 2]);
+        expect(extractAndParseJSON('42')).toBe(42);
+        expect(extractAndParseJSON('true')).toBe(true);
+        expect(extractAndParseJSON('```json\n[1, 2]\n```')).toEqual([1, 2]);
+    });
+
+    test('finds the JSON value without treating braces inside strings as delimiters', () => {
+        expect(extractAndParseJSON('Answer: {"text":"keep {this}"} done')).toEqual({ text: 'keep {this}' });
+    });
+
+    test('rejects incomplete structured output instead of repairing it into a plausible result', () => {
+        expect(() => extractAndParseJSON('{"lessons":[')).toThrow('Unexpected end of JSON input');
+        expect(() => extractAndParseJSON('{"items":[{"id":"a"}')).toThrow('Unexpected end of JSON input');
+    });
+
     test('parseJSON', () => {
         const url = new URL('./json.txt', import.meta.url);
         const text = readFileSync(url, 'utf8');

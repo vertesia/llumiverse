@@ -17,6 +17,17 @@ describe('validateResult', () => {
         ]);
     });
 
+    it('parses JSON split across multiple text parts as one response', () => {
+        const result: CompletionResult[] = [
+            { type: 'text', value: '{"answer":' },
+            { type: 'text', value: '"ok"}' },
+        ];
+
+        expect(validateResult(result, { type: 'object', required: ['answer'] })).toEqual([
+            { type: 'json', value: { answer: 'ok' } },
+        ]);
+    });
+
     // A stored result schema is deserialized into a new object on every execution, so an `$id` that
     // is already in the shared Ajv registry used to throw `schema with key or id "..." already
     // exists` from the second execution onward.
