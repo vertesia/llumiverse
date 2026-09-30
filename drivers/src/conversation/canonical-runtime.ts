@@ -395,6 +395,28 @@ export async function canonicalToolDefinitions(
     return definitions;
 }
 
+/**
+ * Resolve the effective canonical tool catalog for one request.
+ *
+ * An explicit legacy tool array remains an exact replacement, including an empty array that clears the active set.
+ * When the caller omits that compatibility input, an existing canonical document is authoritative and its active
+ * definitions retain their exact identities, capabilities, and order.
+ */
+export async function resolveCanonicalToolDefinitions(
+    document: ConversationDocument | undefined,
+    tools: readonly LegacyToolDefinition[] | undefined,
+): Promise<ToolDefinition[]> {
+    if (tools !== undefined) return canonicalToolDefinitions(tools);
+    if (document === undefined) return [];
+    return document.context.active_tool_definition_ids.map((id) => {
+        const definition = Object.hasOwn(document.tool_definitions, id) ? document.tool_definitions[id] : undefined;
+        if (definition === undefined) {
+            throw new Error(`Active canonical tool definition ${id} is missing`);
+        }
+        return structuredClone(definition);
+    });
+}
+
 async function retainedToolDefinitionsMatch(
     document: ConversationDocument,
     toolDefinitions: readonly ToolDefinition[],
@@ -546,7 +568,7 @@ export async function appendCanonicalPrompt(
     tools: readonly LegacyToolDefinition[] | undefined,
     semanticPayload: JsonValue,
 ): Promise<{ document: ConversationDocument; tool_definitions: ToolDefinition[] }> {
-    const toolDefinitions = await canonicalToolDefinitions(tools);
+    const toolDefinitions = await resolveCanonicalToolDefinitions(document, tools);
     if (runtime.materialized_input !== undefined) {
         const suppliedRecords = [
             ...records.turns,

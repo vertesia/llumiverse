@@ -2,6 +2,8 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js';
 import type { ExecutionOptions } from '@llumiverse/common';
 import {
     type Asset,
+    appendConversationRecords,
+    type ConversationDocument,
     createConversationDocument,
     createToolTurn,
     externalizeToolCallArguments,
@@ -12,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
     compileBedrockConverseConversation,
     importBedrockConverseConversation,
+    prepareBedrockConverseCanonicalState,
 } from '../bedrock/bedrock-converse-conversation-adapter.js';
 import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import {
@@ -49,6 +52,38 @@ function executionOptions(model: string, conversationId: string): ExecutionOptio
             recorded_at: recordedAt,
         },
     };
+}
+
+function canonicalToolDocument(): ConversationDocument {
+    const initial = createConversationDocument({ id: 'canonical-tool-precedence', created_at: recordedAt });
+    return appendConversationRecords(
+        initial,
+        {
+            tool_definitions: [
+                {
+                    id: 'tool-definition:lookup:v1',
+                    name: 'lookup',
+                    version: 'v1',
+                    input_schema: { type: 'object' },
+                    result_capabilities: ['json'],
+                },
+                {
+                    id: 'tool-definition:write:v2',
+                    name: 'write',
+                    version: 'v2',
+                    input_schema: { type: 'object' },
+                    result_capabilities: ['text', 'document'],
+                },
+            ],
+            active_tool_definition_ids: ['tool-definition:write:v2', 'tool-definition:lookup:v1'],
+        },
+        {
+            expected_revision: initial.revision,
+            operation_id: 'operation:canonical-tool-precedence',
+            payload_fingerprint: 'sha256:canonical-tool-precedence',
+            recorded_at: recordedAt,
+        },
+    ).document;
 }
 
 async function importOpenAI(history: OpenAIChatCompletionsPrompt, conversationId: string) {
@@ -89,6 +124,65 @@ function durableAsset(input: {
 }
 
 describe('canonical native adapter conformance', () => {
+    it('uses the exact ordered canonical active catalog across conversational adapters', async () => {
+        const document = canonicalToolDocument();
+        const options = (suffix: string, model: string): ExecutionOptions => ({
+            model,
+            conversation_runtime: {
+                conversation_id: document.id,
+                request_id: `request:${suffix}`,
+                attempt_id: `attempt:${suffix}`,
+                input_operation_id: `input:${suffix}`,
+                response_operation_id: `response:${suffix}`,
+                recorded_at: recordedAt,
+            },
+        });
+        const states = [
+            await prepareOpenAIChatCanonicalState({
+                conversation: structuredClone(document),
+                prompt: { _is_openai_chat_completions: true, messages: [] },
+                options: options('openai-chat-tools', 'gpt-test'),
+                provider: 'openai',
+            }),
+            await prepareOpenAIResponsesCanonicalState({
+                conversation: structuredClone(document),
+                prompt: [],
+                options: options('openai-responses-tools', 'gpt-test'),
+                provider: 'openai',
+            }),
+            await prepareClaudeCanonicalState({
+                conversation: structuredClone(document),
+                prompt: { messages: [] },
+                options: options('claude-tools', 'claude-test'),
+                provider: 'anthropic',
+            }),
+            await prepareGeminiCanonicalState({
+                conversation: structuredClone(document),
+                prompt: { contents: [] },
+                options: options('gemini-tools', 'gemini-test'),
+                provider: 'google',
+            }),
+            await prepareBedrockConverseCanonicalState({
+                conversation: structuredClone(document),
+                prompt: { modelId: 'bedrock-test', messages: [] },
+                options: options('bedrock-tools', 'bedrock-test'),
+                provider: 'bedrock',
+            }),
+        ];
+        const expected = [
+            document.tool_definitions['tool-definition:write:v2'],
+            document.tool_definitions['tool-definition:lookup:v1'],
+        ];
+
+        for (const state of states) {
+            expect(state.tool_definitions).toEqual(expected);
+            expect(state.document.context.active_tool_definition_ids).toEqual([
+                'tool-definition:write:v2',
+                'tool-definition:lookup:v1',
+            ]);
+        }
+    });
+
     it('compiles a checkpoint summary followed by a preserved tool exchange across supported protocols', () => {
         const document = createConversationDocument({ id: 'checkpoint-sequence', created_at: recordedAt });
         document.turns.push(

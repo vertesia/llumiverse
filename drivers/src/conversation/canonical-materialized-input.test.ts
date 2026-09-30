@@ -69,6 +69,109 @@ function materializedDocument(): ConversationDocument {
     ).document;
 }
 
+function activeToolDocument(): ConversationDocument {
+    const initial = createConversationDocument({ id: 'conversation:active-tools', created_at: RECORDED_AT });
+    return appendConversationRecords(
+        initial,
+        {
+            tool_definitions: [
+                {
+                    id: 'tool-definition:lookup:v1',
+                    name: 'lookup',
+                    version: 'v1',
+                    input_schema: { type: 'object' },
+                    result_capabilities: ['json'],
+                },
+                {
+                    id: 'tool-definition:write:v2',
+                    name: 'write',
+                    version: 'v2',
+                    input_schema: { type: 'object' },
+                    result_capabilities: ['text', 'document'],
+                },
+            ],
+            active_tool_definition_ids: ['tool-definition:write:v2', 'tool-definition:lookup:v1'],
+        },
+        {
+            expected_revision: initial.revision,
+            operation_id: 'operation:active-tools',
+            payload_fingerprint: 'sha256:active-tools',
+            recorded_at: RECORDED_AT,
+        },
+    ).document;
+}
+
+function freshRuntime(document: ConversationDocument, suffix: string): ResolvedConversationRuntimeContext {
+    return {
+        conversation_id: document.id,
+        request_id: `request:${suffix}`,
+        attempt_id: `attempt:${suffix}`,
+        input_operation_id: `operation:${suffix}`,
+        response_operation_id: `response:${suffix}`,
+        recorded_at: RECORDED_AT,
+        purpose: 'interaction',
+    };
+}
+
+describe('canonical active tool precedence', () => {
+    it('preserves the exact ordered canonical catalog when legacy tools are omitted', async () => {
+        const document = activeToolDocument();
+        const appended = await appendCanonicalPrompt(
+            document,
+            emptyRecords(),
+            freshRuntime(document, 'preserve-tools'),
+            undefined,
+            null,
+        );
+
+        expect(appended.tool_definitions).toEqual([
+            document.tool_definitions['tool-definition:write:v2'],
+            document.tool_definitions['tool-definition:lookup:v1'],
+        ]);
+        expect(appended.document.context.active_tool_definition_ids).toEqual([
+            'tool-definition:write:v2',
+            'tool-definition:lookup:v1',
+        ]);
+        expect(appended.tool_definitions[0]).not.toBe(document.tool_definitions['tool-definition:write:v2']);
+    });
+
+    it('keeps explicit legacy arrays as exact replacement and clear operations', async () => {
+        const document = activeToolDocument();
+        const replacement = [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const } }];
+        const replacementDefinitions = await canonicalToolDefinitions(replacement);
+        const replaced = await appendCanonicalPrompt(
+            document,
+            emptyRecords(),
+            freshRuntime(document, 'replace-tools'),
+            replacement,
+            null,
+        );
+        expect(replaced.tool_definitions).toEqual(replacementDefinitions);
+        expect(replaced.document.context.active_tool_definition_ids).toEqual(
+            replacementDefinitions.map((definition) => definition.id),
+        );
+
+        const cleared = await appendCanonicalPrompt(
+            document,
+            emptyRecords(),
+            freshRuntime(document, 'clear-tools'),
+            [],
+            null,
+        );
+        expect(cleared.tool_definitions).toEqual([]);
+        expect(cleared.document.context.active_tool_definition_ids).toEqual([]);
+    });
+
+    it('rejects an active identity whose canonical definition is unavailable', async () => {
+        const document = activeToolDocument();
+        delete document.tool_definitions['tool-definition:write:v2'];
+
+        await expect(
+            appendCanonicalPrompt(document, emptyRecords(), freshRuntime(document, 'missing-tool'), undefined, null),
+        ).rejects.toThrow('Active canonical tool definition tool-definition:write:v2 is missing');
+    });
+});
+
 describe('materialized canonical input proof', () => {
     it('reuses an exactly accepted current-head input without appending it again', async () => {
         const document = materializedDocument();
@@ -155,5 +258,15 @@ describe('materialized canonical input proof', () => {
         const retried = await appendCanonicalPrompt(first.document, emptyRecords(), proof, tools, null);
         expect(retried.document).toEqual(first.document);
         expect(retried.document.revision).toBe(first.document.revision);
+
+        const omittedCompatibilityTools = await appendCanonicalPrompt(
+            first.document,
+            emptyRecords(),
+            proof,
+            undefined,
+            null,
+        );
+        expect(omittedCompatibilityTools.document).toEqual(first.document);
+        expect(omittedCompatibilityTools.tool_definitions).toEqual(definitions);
     });
 });

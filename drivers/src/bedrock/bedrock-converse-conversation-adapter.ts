@@ -49,11 +49,11 @@ import {
     appendCanonicalPrompt,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
-    canonicalToolDefinitions,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
     parseCanonicalConversation,
+    resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
@@ -1715,7 +1715,7 @@ export async function prepareBedrockConverseCanonicalState(input: {
 }): Promise<Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
-    const toolDefinitions = await canonicalToolDefinitions(input.options.tools);
+    const toolDefinitions = await resolveCanonicalToolDefinitions(document, input.options.tools);
     if (document === undefined) {
         document = newCanonicalConversation(runtime);
         if (input.conversation !== undefined && input.conversation !== null) {
