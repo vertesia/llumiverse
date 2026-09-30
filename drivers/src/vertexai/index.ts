@@ -954,11 +954,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Get the model definition for this request
         const modelDef = getModelDefinition(context.model);
+        let formatted: LlumiverseError | undefined;
 
         // If the model definition provides custom error handling, use it
         if (modelDef.formatLlumiverseError) {
             try {
-                return modelDef.formatLlumiverseError(this, error, context);
+                formatted = modelDef.formatLlumiverseError(this, error, context);
             } catch {
                 // If model-specific handler throws, fall through to default handling
                 // This allows model handlers to explicitly opt out for certain errors
@@ -966,7 +967,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         // Fall back to default AbstractDriver error handling
-        return super.formatLlumiverseError(error, context);
+        formatted ??= super.formatLlumiverseError(error, context);
+        if (formatted.code === 403 && /storage\.(objects|buckets)\.|cloud storage|gs:\/\//i.test(formatted.message)) {
+            formatted.message +=
+                ' Ask your project administrator to verify bucket permissions for the Vertex AI service agent' +
+                ' or configured storage principal.';
+        }
+        return formatted;
     }
 }
 
