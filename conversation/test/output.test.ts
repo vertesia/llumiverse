@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { createConversationDocument } from '../src/builders.js';
 import {
     ConversationOutputProjectionError,
+    type ConversationOutputReceipt,
     createAcceptedOutputFragment,
     parseAcceptedOutputFragment,
     validateAcceptedOutputFragment,
 } from '../src/output.js';
-import { cloneSemanticallyValidAcceptedOutputFragment } from '../src/output-runtime.js';
+import {
+    cloneSemanticallyValidAcceptedOutputFragment,
+    conversationOutputReceiptsEqual,
+} from '../src/output-runtime.js';
 import { appendConversationRecords } from '../src/runtime.js';
 import { externalizeToolCallArguments, prepareToolArgumentExternalization } from '../src/tool-arguments.js';
 import type { AgentContentBlock, Asset } from '../src/types.js';
@@ -140,6 +144,33 @@ function acceptedDocument(options: { assetId?: string; receivedMedia?: boolean }
 }
 
 describe('accepted conversation output projection', () => {
+    it('compares every accepted-output receipt field independently of object key order', () => {
+        const receipt = createAcceptedOutputFragment(acceptedDocument(), 'response:1').receipt;
+        const reordered = {
+            accepted_asset_ids: receipt.accepted_asset_ids,
+            accepted_generation_ids: receipt.accepted_generation_ids,
+            accepted_turn_ids: receipt.accepted_turn_ids,
+            recorded_at: receipt.recorded_at,
+            result_revision: receipt.result_revision,
+            base_revision: receipt.base_revision,
+            conversation_id: receipt.conversation_id,
+            id: receipt.id,
+        } satisfies ConversationOutputReceipt;
+        expect(conversationOutputReceiptsEqual(receipt, reordered)).toBe(true);
+
+        const changed: ConversationOutputReceipt[] = [
+            { ...receipt, id: 'response:other' },
+            { ...receipt, conversation_id: 'conversation:other' },
+            { ...receipt, base_revision: receipt.base_revision + 1 },
+            { ...receipt, result_revision: receipt.result_revision + 1 },
+            { ...receipt, recorded_at: '2026-09-30T00:00:01.000Z' },
+            { ...receipt, accepted_turn_ids: ['turn:other'] },
+            { ...receipt, accepted_generation_ids: ['generation:other'] },
+            { ...receipt, accepted_asset_ids: ['asset:other'] },
+        ];
+        expect(changed.every((candidate) => !conversationOutputReceiptsEqual(receipt, candidate))).toBe(true);
+    });
+
     it('omits provider-only usage while preserving its full-document evidence', () => {
         const document = acceptedDocument();
         const generation = document.generations['generation:1'];

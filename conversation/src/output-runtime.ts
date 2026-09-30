@@ -1,4 +1,9 @@
-import type { ConversationAcceptedOutputFragment, ConversationOutputBlock } from './output.js';
+import { canonicalJsonContentString } from './json-content-runtime.js';
+import type {
+    ConversationAcceptedOutputFragment,
+    ConversationOutputBlock,
+    ConversationOutputReceipt,
+} from './output.js';
 import {
     CONVERSATION_EXPERIMENTAL_REVISION,
     CONVERSATION_FORMAT,
@@ -23,6 +28,14 @@ export class ConversationOutputProjectionError extends Error {
         super(message);
         this.name = 'ConversationOutputProjectionError';
     }
+}
+
+/** Compare complete accepted-output receipts without schema imports or object key-order sensitivity. */
+export function conversationOutputReceiptsEqual(
+    first: ConversationOutputReceipt,
+    second: ConversationOutputReceipt,
+): boolean {
+    return canonicalJsonContentString(first) === canonicalJsonContentString(second);
 }
 
 function ownRecordValue<T>(record: Record<string, T>, id: string): T | undefined {

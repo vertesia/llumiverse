@@ -19,6 +19,7 @@ assert.equal(jsonSchemas.ConversationStreamEventJsonSchema.$schema, 'https://jso
 assert.equal(jsonSchemas.ConversationStreamCursorJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(jsonSchemas.ConversationStreamIdentityJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(typeof outputRuntime.cloneSemanticallyValidAcceptedOutputFragment, 'function');
+assert.equal(typeof outputRuntime.conversationOutputReceiptsEqual, 'function');
 assert.equal(typeof streamingRuntime.ConversationStreamAccumulatorRuntime, 'function');
 assert.equal(typeof streamingRuntime.preflightJsonInput, 'function');
 
