@@ -1,12 +1,20 @@
 import {
+    type AssetStorage,
     type ConversationDocument,
     createConversationDocument,
     externalizeToolCallArguments,
+    inlineAssetContentIntegrity,
     type NativeItemMapping,
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
-import { describe, expect, it } from 'vitest';
-import { createRequestReceipt, type ResolvedConversationRuntimeContext } from './canonical-runtime.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+    acceptedCanonicalRequestDocument,
+    type CanonicalPreparedState,
+    createExecutedGeneration,
+    createRequestReceipt,
+    type ResolvedConversationRuntimeContext,
+} from './canonical-runtime.js';
 
 const now = '2026-09-30T00:00:00.000Z';
 const runtime: ResolvedConversationRuntimeContext = {
@@ -99,6 +107,91 @@ describe('canonical request receipt binding', () => {
             locator: { url: 'https://example.com/changed.png' },
         };
         expect((await receipt(after)).context_fingerprint).not.toBe((await receipt(before)).context_fingerprint);
+    });
+
+    it.each([
+        { type: 'inline_base64', data: 'YWJj' },
+        { type: 'inline_text', text: 'abc 😀' },
+        { type: 'inline_json', value: { z: '😀', a: [1, true, null] } },
+    ] satisfies AssetStorage[])(
+        'verifies selected $type bytes before preparing or recovering a request',
+        async (storage) => {
+            const doc = document();
+            const actual = await inlineAssetContentIntegrity(storage);
+            if (actual === undefined) throw new Error('Expected inline integrity');
+            doc.assets.asset = { ...doc.assets.asset, storage, ...actual };
+            const bound = await receipt(doc, [{ canonical_id: 'user', kind: 'turn', native_id: 'messages/0' }]);
+            expect(bound.asset_versions).toEqual([{ asset_id: 'asset', content_hash: actual.content_hash }]);
+            const accepted: NonNullable<CanonicalPreparedState<unknown>['accepted_response']> = {
+                generation: await createExecutedGeneration({
+                    id: 'accepted-generation',
+                    runtime,
+                    receipt: bound,
+                    ...target,
+                    requested_model: target.model,
+                }),
+                turn: {
+                    id: 'accepted-turn',
+                    kind: 'agent',
+                    authority: 'ordinary',
+                    model_visibility: 'include',
+                    status: 'completed',
+                    provenance: { type: 'generated' },
+                    timestamps: { recorded_at: now },
+                    generation_id: 'accepted-generation',
+                    blocks: [{ id: 'accepted-text', type: 'text', format: 'plain', text: 'answer' }],
+                },
+            };
+            await expect(acceptedCanonicalRequestDocument(doc, accepted)).resolves.toMatchObject({ id: doc.id });
+            for (const tamper of [
+                { content_hash: `sha256:${'0'.repeat(64)}` },
+                { byte_length: actual.byte_length + 1 },
+            ]) {
+                const changed = structuredClone(doc);
+                Object.assign(changed.assets.asset, tamper);
+                await expect(receipt(changed)).rejects.toThrow(
+                    /Selected inline asset asset .* does not match its bytes/,
+                );
+                await expect(acceptedCanonicalRequestDocument(changed, accepted)).rejects.toThrow(
+                    /Selected inline asset asset .* does not match its bytes/,
+                );
+            }
+        },
+    );
+
+    it('does not hash unselected or model-excluded inline content and never fetches external locators', async () => {
+        const doc = document();
+        doc.assets.asset.storage = { type: 'inline_text', text: 'actual' };
+        doc.assets.asset.content_hash = `sha256:${'0'.repeat(64)}`;
+        const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected asset fetch'));
+        try {
+            doc.context.entries[0].block_ids = ['text'];
+            await expect(receipt(doc)).resolves.toMatchObject({ asset_versions: [] });
+            delete doc.context.entries[0].block_ids;
+            doc.turns[0].model_visibility = 'exclude';
+            await expect(receipt(doc)).resolves.toMatchObject({ asset_versions: [] });
+            doc.turns[0].model_visibility = 'include';
+            doc.assets.asset.storage = {
+                type: 'external',
+                resolver: 'url',
+                locator: { url: 'https://example.test/asset' },
+            };
+            await expect(receipt(doc)).resolves.toMatchObject({
+                asset_versions: [{ asset_id: 'asset', content_hash: doc.assets.asset.content_hash }],
+            });
+            expect(fetch).not.toHaveBeenCalled();
+        } finally {
+            fetch.mockRestore();
+        }
+    });
+
+    it('rejects lossy inline UTF-8 and mismatched byte lengths without requiring a declared hash', async () => {
+        const doc = document();
+        doc.assets.asset.storage = { type: 'inline_text', text: '\ud800' };
+        await expect(receipt(doc)).rejects.toThrow(/unpaired surrogate/);
+        doc.assets.asset.storage = { type: 'inline_text', text: '😀' };
+        doc.assets.asset.byte_length = 2;
+        await expect(receipt(doc)).rejects.toThrow(/byte length does not match/);
     });
 
     it('rejects absent, misclassified, and unselected mapping IDs before transport', async () => {

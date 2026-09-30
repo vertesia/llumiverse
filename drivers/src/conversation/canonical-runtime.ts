@@ -14,6 +14,7 @@ import {
     fingerprintJson,
     type GeneratedAgentTurn,
     type GenerationUsage,
+    inlineAssetContentIntegrity,
     isConversationDocumentFormat,
     isGeneratedAgentTurn,
     type JsonObject,
@@ -81,6 +82,19 @@ async function requestContextFingerprint(
         if (asset === undefined) throw new Error(`Selected context references missing asset ${id}`);
         return asset;
     });
+    // A caller may supply a persisted document directly, so declared integrity is not proof
+    // of the selected inline bytes. Check both new requests and accepted-response recovery.
+    // External assets are the host resolver's responsibility; this boundary performs no I/O.
+    for (const asset of assets) {
+        const actual = await inlineAssetContentIntegrity(asset.storage);
+        if (actual === undefined) continue;
+        if (asset.content_hash !== undefined && asset.content_hash !== actual.content_hash) {
+            throw new Error(`Selected inline asset ${asset.id} content hash does not match its bytes`);
+        }
+        if (asset.byte_length !== undefined && asset.byte_length !== actual.byte_length) {
+            throw new Error(`Selected inline asset ${asset.id} byte length does not match its bytes`);
+        }
+    }
     return {
         fingerprint: await fingerprintJson({ turns: selected, assets }),
         assets,
