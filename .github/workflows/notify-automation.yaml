@@ -12,7 +12,7 @@ on:
     # CI, and the post-merge cherry-pick runs on a closed PR the notifier cannot resolve.
     workflows: ["(test) Build and test", "(lint) Lint codebase", "(security) Zizmor"]
     types: [completed]
-    branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "release/**"]
+    branches: ["backport-*", "main", "release/**"]
   workflow_call:
     secrets:
       APP_VERTESIA_SUBMODULE_SYNC_PEM:
