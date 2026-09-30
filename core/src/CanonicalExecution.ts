@@ -20,8 +20,12 @@ import {
 } from '@llumiverse/conversation';
 import { MalformedStreamingToolArgumentsError } from './stream-errors.js';
 
+/** Runtime-only provenance. Symbol keys survive internal object spreads but are never serialized on the wire. */
+export const CANONICAL_ACCEPTED_RECOVERY = Symbol('llumiverse.canonical-accepted-recovery');
+
 /** Direct canonical provider result. The complete document is authoritative; accepted_output is its safe projection. */
 export interface CanonicalExecutionResponse {
+    readonly [CANONICAL_ACCEPTED_RECOVERY]?: true;
     conversation: ConversationDocument;
     accepted_output: ConversationAcceptedOutputFragment;
     execution_time?: number;
@@ -29,6 +33,20 @@ export interface CanonicalExecutionResponse {
     service_tier?: string;
     prompt_cache_diagnostic?: PromptCacheDiagnostic;
     original_response?: unknown;
+}
+
+export function markCanonicalAcceptedRecovery<T extends object>(value: T): T & { [CANONICAL_ACCEPTED_RECOVERY]: true } {
+    Object.defineProperty(value, CANONICAL_ACCEPTED_RECOVERY, {
+        configurable: false,
+        enumerable: true,
+        value: true,
+        writable: false,
+    });
+    return value as T & { [CANONICAL_ACCEPTED_RECOVERY]: true };
+}
+
+export function isCanonicalAcceptedRecovery(value: unknown): boolean {
+    return typeof value === 'object' && value !== null && CANONICAL_ACCEPTED_RECOVERY in value;
 }
 
 /**
@@ -473,7 +491,7 @@ export function legacyCompletionFromCanonicalExecution(
     const { token_usage: _projectedTokenUsage, error: _projectedError, ...base } = projected;
     const tokenUsage = legacyUsage(response.accepted_output, response);
     const error = canonicalExecutionFailure(response);
-    return {
+    const completion: Completion = {
         ...base,
         ...(tokenUsage === undefined ? {} : { token_usage: tokenUsage }),
         ...(error === undefined ? {} : { error }),
@@ -486,4 +504,5 @@ export function legacyCompletionFromCanonicalExecution(
         conversation: response.conversation,
         ...(response.original_response === undefined ? {} : { original_response: response.original_response }),
     };
+    return isCanonicalAcceptedRecovery(response) ? markCanonicalAcceptedRecovery(completion) : completion;
 }

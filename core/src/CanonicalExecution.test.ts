@@ -16,8 +16,10 @@ import {
     type CanonicalExecutionResponse,
     createCanonicalExecutionResponse,
     FallbackCanonicalExecutionStream,
+    isCanonicalAcceptedRecovery,
     legacyCompletionFromAcceptedOutput,
     legacyCompletionFromCanonicalExecution,
+    markCanonicalAcceptedRecovery,
 } from './CanonicalExecution.js';
 import {
     CanonicalStreamEventChannel,
@@ -135,6 +137,18 @@ function acceptedDocument() {
 }
 
 describe('canonical execution response', () => {
+    it('preserves accepted-recovery provenance through compatibility projection without serializing it', () => {
+        const response = markCanonicalAcceptedRecovery(
+            createCanonicalExecutionResponse(acceptedDocument(), 'response-operation'),
+        );
+        const projected = legacyCompletionFromCanonicalExecution(response);
+
+        expect(isCanonicalAcceptedRecovery(response)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(projected)).toBe(true);
+        expect(JSON.stringify(response)).not.toContain('canonical-accepted-recovery');
+        expect(JSON.stringify(projected)).not.toContain('canonical-accepted-recovery');
+    });
+
     it('keeps the complete document authoritative and projects legacy completion only at its boundary', () => {
         const document = acceptedDocument();
         const response = createCanonicalExecutionResponse(document, 'response-operation', { execution_time: 12 });
@@ -439,6 +453,7 @@ describe('canonical typed execution stream', () => {
         ]);
         expect(stream.completion).toBe(response);
         expect(stream.terminal_event).toEqual(events[0]);
+        expect(stream.execution_started).toBe(true);
     });
 
     it('propagates accepted recovery without synthesizing a failed terminal', async () => {
@@ -461,6 +476,7 @@ describe('canonical typed execution stream', () => {
         await expect(stream.closed).resolves.toBeUndefined();
         expect(events).toEqual([]);
         expect(stream.terminal_event).toBeUndefined();
+        expect(stream.execution_started).toBe(true);
     });
 
     it('uses a distinct delivery stream for accepted-response recovery', async () => {
@@ -479,6 +495,8 @@ describe('canonical typed execution stream', () => {
         for await (const event of recovered) events.push(event);
 
         expect(live.terminal_event?.stream_id).toBe('stream-live-delivery');
+        expect(live.execution_started).toBe(true);
+        expect(recovered.execution_started).toBe(false);
         expect(events).toEqual([
             expect.objectContaining({
                 type: 'response_accepted',
@@ -567,6 +585,7 @@ describe('canonical typed execution stream', () => {
         const iterator = stream[Symbol.asyncIterator]();
         const pending = iterator.next();
         await started;
+        expect(stream.execution_started).toBe(true);
 
         const terminal = await stream.cancel();
         await expect(pending).resolves.toEqual({ value: terminal, done: false });

@@ -11,7 +11,12 @@ import {
     type ToolUse,
 } from '@llumiverse/common';
 import type { ConversationStreamEvent } from '@llumiverse/conversation';
-import type { CanonicalExecutionResponse, CanonicalExecutionStream } from './CanonicalExecution.js';
+import {
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
+    isCanonicalAcceptedRecovery,
+    markCanonicalAcceptedRecovery,
+} from './CanonicalExecution.js';
 import type { CanonicalExecutionEventStream, CanonicalStreamTerminalEvent } from './CanonicalStreaming.js';
 import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
 import type { AbstractDriver } from './Driver.js';
@@ -342,6 +347,10 @@ class LeasedCanonicalExecutionEventStream implements CanonicalExecutionEventStre
 
     get terminal_event(): CanonicalStreamTerminalEvent | undefined {
         return this.source.terminal_event;
+    }
+
+    get execution_started(): boolean {
+        return this.source.execution_started;
     }
 
     get closed(): Promise<void> {
@@ -748,6 +757,15 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             prompt_cache_diagnostic: stream?.finalizePromptCacheDiagnostic?.(),
         });
 
+        const canonicalFinalizer = (
+            stream as
+                | (DriverCompletionStream & {
+                      finalizeCanonicalExecution?: () => Promise<CanonicalExecutionResponse>;
+                  })
+                | undefined
+        )?.finalizeCanonicalExecution;
+        const canonical = canonicalFinalizer === undefined ? undefined : await canonicalFinalizer.call(stream);
+
         // Build conversation context for multi-turn support
         const conversation = stream?.finalizeConversation
             ? await stream.finalizeConversation()
@@ -755,6 +773,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         if (conversation !== undefined) {
             this.completion.conversation = stripAudioPayloads(conversation);
         }
+        if (isCanonicalAcceptedRecovery(canonical)) markCanonicalAcceptedRecovery(this.completion);
 
         try {
             if (this.completion) {

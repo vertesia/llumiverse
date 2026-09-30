@@ -230,6 +230,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     private iterator: AsyncIterator<NativeEvent> | undefined;
     private iteratorCleanup: Promise<void> | undefined;
     private runCompletion: Promise<void> | undefined;
+    private executionStarted = false;
     private started = false;
     private settled = false;
     private settlement: Promise<CanonicalStreamTerminalEvent> | undefined;
@@ -276,6 +277,10 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         return terminal?.type === 'response_accepted' || terminal?.type === 'stream_terminated' ? terminal : undefined;
     }
 
+    get execution_started(): boolean {
+        return this.executionStarted;
+    }
+
     cancel(): Promise<CanonicalStreamTerminalEvent> {
         return this.beginTermination('cancelled');
     }
@@ -302,6 +307,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             if (this.settled) return;
             this.opening = Promise.resolve().then(async () => {
                 if (this.settled) return undefined;
+                this.executionStarted = true;
                 return this.options.openSource();
             });
             const source = await this.opening;

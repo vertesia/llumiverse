@@ -42,6 +42,11 @@ export interface CanonicalStreamOpenOptions
 export interface CanonicalExecutionEventStream extends AsyncIterable<ConversationStreamEvent> {
     readonly completion: CanonicalExecutionResponse | undefined;
     readonly terminal_event: CanonicalStreamTerminalEvent | undefined;
+    /**
+     * True once execution may have performed provider work: the finite execute callback or native openSource was
+     * entered. Retained replay, explicit accepted recovery, and failure before execution leave this false.
+     */
+    readonly execution_started: boolean;
     /** Fulfills after provider execution and owned transport cleanup have finished. */
     readonly closed: Promise<void>;
     cancel(): Promise<CanonicalStreamTerminalEvent>;
@@ -513,6 +518,7 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
     private readonly closeDeferred = deferred<void>();
     private readonly replayEvents: readonly ConversationStreamEvent[];
     private readonly retainedDelivery: boolean;
+    private executionStarted = false;
     private started = false;
     private settled = false;
 
@@ -566,6 +572,10 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
         return event?.type === 'response_accepted' || event?.type === 'stream_terminated' ? event : undefined;
     }
 
+    get execution_started(): boolean {
+        return this.executionStarted;
+    }
+
     async cancel(): Promise<CanonicalStreamTerminalEvent> {
         const terminal = this.terminal_event;
         if (terminal !== undefined) {
@@ -606,6 +616,7 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
                 return;
             }
             if (this.abortController.signal.aborted) return;
+            if (this.options.origin !== 'accepted_recovery') this.executionStarted = true;
             const response = await this.execute(this.abortController.signal);
             if (this.abortController.signal.aborted || this.settled) {
                 this.completion = response;

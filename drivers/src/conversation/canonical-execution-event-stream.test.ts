@@ -284,6 +284,7 @@ describe('canonical native execution event stream', () => {
 
         await expect(stream.cancel()).resolves.toMatchObject({ outcome: 'cancelled' });
         expect(openSource).not.toHaveBeenCalled();
+        expect(stream.execution_started).toBe(false);
         await expect(iterator.next()).resolves.toMatchObject({
             value: { type: 'stream_terminated', outcome: 'cancelled' },
             done: false,
@@ -321,6 +322,7 @@ describe('canonical native execution event stream', () => {
         const iterator = stream[Symbol.asyncIterator]();
         await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
         await started;
+        expect(stream.execution_started).toBe(true);
 
         const terminalRead = iterator.next();
         const cancellation = stream.cancel();

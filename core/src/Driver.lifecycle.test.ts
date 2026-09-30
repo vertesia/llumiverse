@@ -218,6 +218,7 @@ class OverriddenCanonicalEventStreamDriver extends CanonicalLifecycleTestDriver 
         return {
             completion: undefined,
             terminal_event: undefined,
+            execution_started: false,
             closed,
             cancel: this.cancelEventStream,
             [Symbol.asyncIterator]() {
@@ -374,6 +375,7 @@ describe('AbstractDriver lifecycle', () => {
         });
         const recoveredEvents = [];
         for await (const event of recovered) recoveredEvents.push(event);
+        expect(recovered.execution_started).toBe(false);
         expect(recoveredEvents).toEqual([
             expect.objectContaining({
                 type: 'response_accepted',

@@ -13,6 +13,7 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
     legacyCompletionFromCanonicalExecution,
     type ModelSearchPayload,
     PromptRole,
@@ -1888,6 +1889,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             result_schema: resultSchema,
         });
         expect(retry.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
         expect(driver.payloads).toHaveLength(1);
     });
 
@@ -2291,6 +2293,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         }
         expect(recovered.completion?.result).toEqual(stream.completion?.result);
         expect(recovered.completion?.conversation).toEqual(stream.completion?.conversation);
+        expect(isCanonicalAcceptedRecovery(recovered.completion)).toBe(true);
         expect(driver.payloads).toHaveLength(1);
     });
 

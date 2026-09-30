@@ -31,6 +31,7 @@ import {
     CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
     createCanonicalExecutionResponse,
+    markCanonicalAcceptedRecovery,
 } from '@llumiverse/core';
 
 export type { ResolvedConversationRuntimeContext } from '@llumiverse/conversation';
@@ -214,11 +215,13 @@ export async function recoverCanonicalExecutionResponse(
         conversation_id: state.document.id,
         response_operation_id: state.runtime.response_operation_id,
     });
-    return createCanonicalExecutionResponse(
-        state.document,
-        state.runtime.response_operation_id,
-        metadata,
-        canonicalRecoveredOutputFragment(recoveredOutput),
+    return markCanonicalAcceptedRecovery(
+        createCanonicalExecutionResponse(
+            state.document,
+            state.runtime.response_operation_id,
+            metadata,
+            canonicalRecoveredOutputFragment(recoveredOutput),
+        ),
     );
 }
 
