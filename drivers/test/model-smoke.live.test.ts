@@ -36,7 +36,6 @@ import {
 import { retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 60 * 1000;
-const QWEN_SMOKE_MODEL = 'qwen/qwen3.8-flash';
 
 interface TestDriver {
     driver: AbstractDriver;
@@ -180,7 +179,8 @@ if (process.env.OPENROUTER_API_KEY) {
         driver: new OpenRouterDriver({
             apiKey: process.env.OPENROUTER_API_KEY,
         }),
-        models: ['moonshotai/kimi-k2.5', QWEN_SMOKE_MODEL, 'minimax/minimax-m2.5', 'google/gemini-3.1-flash-lite'],
+        // qwen/qwen3.8-flash was dropped: its upstream on OpenRouter answered 429 on most runs, outlasting the backoff.
+        models: ['moonshotai/kimi-k2.5', 'minimax/minimax-m2.5', 'google/gemini-3.1-flash-lite'],
     });
 } else {
     console.warn('OpenRouter tests are skipped: OPENROUTER_API_KEY environment variable is not set');
@@ -203,13 +203,6 @@ const selectedDrivers = selectLiveTestDrivers(drivers, {
     models: process.env.LLUMIVERSE_LIVE_MODELS,
 });
 
-function getSmokeModelOptions(model: string) {
-    // Keep the Qwen smoke focused on final output rather than spending its budget on reasoning.
-    return model === QWEN_SMOKE_MODEL
-        ? { _option_id: 'openrouter-text' as const, effort: 'none' as const }
-        : { _option_id: 'text-fallback' as const };
-}
-
 function getTestOptions(model: string): ExecutionOptions {
     if (model === 'o1-mini' || model === 'o3-mini') {
         return {
@@ -227,10 +220,10 @@ function getTestOptions(model: string): ExecutionOptions {
     return {
         model: model,
         model_options: {
-            ...getSmokeModelOptions(model),
+            _option_id: 'text-fallback',
             max_tokens: 512,
             temperature: 0.3,
-            ...(model === QWEN_SMOKE_MODEL ? {} : { top_k: 40 }),
+            top_k: 40,
             top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
             ...(isGemini35FlashLite
@@ -321,7 +314,7 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
                 driver.execute(shortPrompt, {
                     model,
                     model_options: {
-                        ...getSmokeModelOptions(model),
+                        _option_id: 'text-fallback',
                         max_tokens: limit,
                         temperature: 0,
                     },
@@ -350,7 +343,7 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
                 driver.execute(testPrompt_describeImage, {
                     model: model,
                     model_options: {
-                        ...getSmokeModelOptions(model),
+                        _option_id: 'text-fallback',
                         temperature: 0.5,
                         max_tokens: 1024,
                     },
