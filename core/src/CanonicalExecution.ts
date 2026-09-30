@@ -89,7 +89,7 @@ function recoveredAcceptedOutput(
     return fragment;
 }
 
-function canonicalPreview(response: CanonicalExecutionResponse, includeReasoning: boolean): string {
+export function canonicalExecutionPreview(response: CanonicalExecutionResponse, includeReasoning: boolean): string {
     return response.accepted_output.turn.blocks
         .flatMap((block): string[] => {
             switch (block.type) {
@@ -141,7 +141,7 @@ export class FallbackCanonicalExecutionStream implements CanonicalExecutionStrea
             const completion = await self.execute(self.abortController.signal);
             if (self.abortController.signal.aborted) return;
             self.completion = completion;
-            const preview = canonicalPreview(completion, self.includeReasoning);
+            const preview = canonicalExecutionPreview(completion, self.includeReasoning);
             if (preview.length > 0) yield preview;
         })();
     }

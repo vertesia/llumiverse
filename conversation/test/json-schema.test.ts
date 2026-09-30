@@ -1,13 +1,24 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import formatsPlugin from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
-import { ConversationDocumentSchema, validateConversationDocument } from '../src/index.js';
+import {
+    CONVERSATION_EXPERIMENTAL_REVISION,
+    CONVERSATION_FORMAT,
+    CONVERSATION_SCHEMA_VERSION,
+    ConversationDocumentSchema,
+    ConversationStreamEventSchema,
+    validateConversationDocument,
+} from '../src/index.js';
 import {
     ConversationContentBlockJsonSchema,
     ConversationDiagnosticJsonSchema,
     ConversationDocumentJsonSchema,
     ConversationGenerationJsonSchema,
     ConversationInspectionJsonSchema,
+    ConversationStreamCursorJsonSchema,
+    ConversationStreamEventBatchJsonSchema,
+    ConversationStreamEventJsonSchema,
+    ConversationStreamIdentityJsonSchema,
     ConversationToolExecutionRequestJsonSchema,
     ConversationToolExecutionResultJsonSchema,
     ConversationTurnJsonSchema,
@@ -54,6 +65,10 @@ describe('generated JSON Schema', () => {
             ConversationGenerationJsonSchema,
             ConversationDiagnosticJsonSchema,
             ConversationInspectionJsonSchema,
+            ConversationStreamCursorJsonSchema,
+            ConversationStreamEventJsonSchema,
+            ConversationStreamEventBatchJsonSchema,
+            ConversationStreamIdentityJsonSchema,
             ConversationToolExecutionRequestJsonSchema,
             ConversationToolExecutionResultJsonSchema,
         ]) {
@@ -66,6 +81,32 @@ describe('generated JSON Schema', () => {
     it('compiles in strict Ajv 2020 mode with formats', () => {
         const validate = compileDocumentSchema();
         expect(validate(emptyDocument())).toBe(true);
+    });
+
+    it('keeps stream event Zod and JSON Schema validation in parity', () => {
+        const ajv = new Ajv2020({ allErrors: true, strict: true });
+        formatsPlugin.default(ajv);
+        const validate = ajv.compile(ConversationStreamEventJsonSchema);
+        const valid = {
+            format: CONVERSATION_FORMAT,
+            schema_version: CONVERSATION_SCHEMA_VERSION,
+            experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+            stream_id: 'stream-1',
+            event_id: 'stream-1#0',
+            sequence: 0,
+            request_id: 'request-1',
+            attempt_id: 'attempt-1',
+            response_operation_id: 'response-1',
+            generation_id: 'generation-1',
+            draft_turn_id: 'draft-1',
+            type: 'draft_started',
+            origin: 'live_transport',
+        };
+        for (const fixture of [valid, { ...valid, surprise: true }, { ...valid, sequence: -1 }]) {
+            expect(validate(fixture), JSON.stringify(validate.errors)).toBe(
+                ConversationStreamEventSchema.safeParse(fixture).success,
+            );
+        }
     });
 
     it('matches Zod on positive and adversarial shape fixtures', () => {

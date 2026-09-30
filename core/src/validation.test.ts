@@ -66,6 +66,31 @@ describe('validateResult', () => {
     });
 
     it.each([
+        ['json language tag', '```json\n{"answer":"ok"}\n```'],
+        ['case-insensitive language tag', '```JSON   {"answer":"ok"}   ```'],
+        ['untagged fence', '```\n{"answer":"ok"}\n```'],
+    ])('parses a fenced structured output with a %s', (_label, value) => {
+        expect(validateResult([{ type: 'text', value }], { type: 'object' })).toEqual([
+            { type: 'json', value: { answer: 'ok' } },
+        ]);
+    });
+
+    it('parses a fenced structured output surrounded by a large whitespace run in linear time', () => {
+        const whitespace = ' '.repeat(500_000);
+        const value = `\`\`\`json${whitespace}{"answer":"ok"}${whitespace}\`\`\``;
+
+        expect(validateResult([{ type: 'text', value }], { type: 'object' })).toEqual([
+            { type: 'json', value: { answer: 'ok' } },
+        ]);
+    });
+
+    it('rejects an unclosed fence followed by a large whitespace run without regexp backtracking', () => {
+        const value = `\`\`\`json${' '.repeat(500_000)}!`;
+
+        expect(() => validateResult([{ type: 'text', value }], { type: 'object' })).toThrow();
+    });
+
+    it.each([
         ['array', '[1,null,true]', { type: 'array' }, [1, null, true]],
         ['null', 'null', { type: 'null' }, null],
         ['string', '"value"', { type: 'string' }, 'value'],

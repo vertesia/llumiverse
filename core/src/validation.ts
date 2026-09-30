@@ -148,12 +148,22 @@ function parseCompletionAsJson(data: CompletionResult[]): CanonicalStructuredOut
     throw lastError;
 }
 
+function fencedStructuredOutputBody(text: string): string | undefined {
+    if (!text.startsWith('```') || !text.endsWith('```') || text.length < 6) return undefined;
+    let start = 3;
+    let end = text.length - 3;
+    if (text.slice(start, start + 4).toLowerCase() === 'json') start += 4;
+    while (start < end && text[start]?.trim() === '') start += 1;
+    while (end > start && text[end - 1]?.trim() === '') end -= 1;
+    return text.slice(start, end);
+}
+
 function parseStructuredOutputText(text: string): JSONValue {
     try {
         return JSON.parse(text) as JSONValue;
     } catch (exactError: unknown) {
-        const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
-        if (fenced !== null) return parseJSON(fenced[1]);
+        const fenced = fencedStructuredOutputBody(text);
+        if (fenced !== undefined) return parseJSON(fenced);
         try {
             return extractAndParseJSON(text);
         } catch {

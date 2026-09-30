@@ -38,6 +38,16 @@ import type {
     ConversationRecordBatchSchema,
     ConversationRefSchema,
     ConversationRuntimeContextSchema,
+    ConversationStreamCursorSchema,
+    ConversationStreamDecodeEvidenceSchema,
+    ConversationStreamDraftBlockSchema,
+    ConversationStreamEventBatchSchema,
+    ConversationStreamEventSchema,
+    ConversationStreamFailureDiagnosticSchema,
+    ConversationStreamIdentitySchema,
+    ConversationStreamReconciliationSchema,
+    ConversationStreamResponseMappingSchema,
+    ConversationStreamTransformationProofSchema,
     ConversationToolExecutionRequestSchema,
     ConversationToolExecutionResultSchema,
     ConversationTurnSchema,
@@ -58,6 +68,7 @@ import type {
     GeneratedTurnProvenanceSchema,
     GenerationCostSchema,
     GenerationSchema,
+    GenerationStatusSchema,
     GenerationTimestampsSchema,
     GenerationUsageSchema,
     ImageBlockSchema,
@@ -84,6 +95,8 @@ import type {
     NativeIdentitySchema,
     NativeItemMappingSchema,
     NativeReplayBlockSchema,
+    NativeStreamPathSegmentSchema,
+    NativeStreamPositionSchema,
     NestedToolResultContentBlockSchema,
     NonGeneratedTurnProvenanceSchema,
     NongeneratedAgentTurnSchema,
@@ -145,6 +158,18 @@ export type ConversationRecordBatch = z.infer<typeof ConversationRecordBatchSche
 export type AppendConversationRecordsOptions = z.infer<typeof AppendConversationRecordsOptionsSchema>;
 export type AppendConversationRecordsResult = z.infer<typeof AppendConversationRecordsResultSchema>;
 export type DecodedConversationResponse = z.infer<typeof DecodedConversationResponseSchema>;
+export type NativeStreamPathSegment = z.infer<typeof NativeStreamPathSegmentSchema>;
+export type NativeStreamPosition = z.infer<typeof NativeStreamPositionSchema>;
+export type ConversationStreamDraftBlock = z.infer<typeof ConversationStreamDraftBlockSchema>;
+export type ConversationStreamFailureDiagnostic = z.infer<typeof ConversationStreamFailureDiagnosticSchema>;
+export type ConversationStreamReconciliation = z.infer<typeof ConversationStreamReconciliationSchema>;
+export type ConversationStreamTransformationProof = z.infer<typeof ConversationStreamTransformationProofSchema>;
+export type ConversationStreamResponseMapping = z.infer<typeof ConversationStreamResponseMappingSchema>;
+export type ConversationStreamDecodeEvidence = z.infer<typeof ConversationStreamDecodeEvidenceSchema>;
+export type ConversationStreamCursor = z.infer<typeof ConversationStreamCursorSchema>;
+export type ConversationStreamIdentity = z.infer<typeof ConversationStreamIdentitySchema>;
+export type ConversationStreamEvent = z.infer<typeof ConversationStreamEventSchema>;
+export type ConversationStreamEventBatch = z.infer<typeof ConversationStreamEventBatchSchema>;
 
 export type NativeIdentity = z.infer<typeof NativeIdentitySchema>;
 export type ImageRegion = z.infer<typeof ImageRegionSchema>;
@@ -234,6 +259,7 @@ export type ConversationPreparedRequestRecord = z.infer<typeof ConversationPrepa
 export type ConversationPreparedRequest = z.infer<typeof ConversationPreparedRequestSchema>;
 export type GenerationCost = z.infer<typeof GenerationCostSchema>;
 export type GenerationUsage = z.infer<typeof GenerationUsageSchema>;
+export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
 export type ContextMeasurement = z.infer<typeof ContextMeasurementSchema>;
 export type ModelTarget = z.infer<typeof ModelTargetSchema>;
 export type AssetVersionBinding = z.infer<typeof AssetVersionBindingSchema>;

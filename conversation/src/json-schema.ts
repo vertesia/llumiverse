@@ -8,6 +8,10 @@ import {
     ConversationDocumentSchema,
     ConversationInspectionSchema,
     ConversationRecordBatchSchema,
+    ConversationStreamCursorSchema,
+    ConversationStreamEventBatchSchema,
+    ConversationStreamEventSchema,
+    ConversationStreamIdentitySchema,
     ConversationToolExecutionRequestSchema,
     ConversationToolExecutionResultSchema,
     ConversationTurnSchema,
@@ -72,6 +76,13 @@ export const ConversationAcceptedOutputFragmentJsonSchema = emitJsonSchema(
     ConversationAcceptedOutputFragmentSchema,
     'accepted-output-fragment',
 );
+export const ConversationStreamEventJsonSchema = emitJsonSchema(ConversationStreamEventSchema, 'stream-event');
+export const ConversationStreamEventBatchJsonSchema = emitJsonSchema(
+    ConversationStreamEventBatchSchema,
+    'stream-event-batch',
+);
+export const ConversationStreamCursorJsonSchema = emitJsonSchema(ConversationStreamCursorSchema, 'stream-cursor');
+export const ConversationStreamIdentityJsonSchema = emitJsonSchema(ConversationStreamIdentitySchema, 'stream-identity');
 export const ConversationToolExecutionRequestJsonSchema = emitJsonSchema(
     ConversationToolExecutionRequestSchema,
     'tool-execution-request',
@@ -104,6 +115,10 @@ export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
     generation: ConversationGenerationJsonSchema,
     inspection: ConversationInspectionJsonSchema,
     record_batch: ConversationRecordBatchJsonSchema,
+    stream_cursor: ConversationStreamCursorJsonSchema,
+    stream_event: ConversationStreamEventJsonSchema,
+    stream_event_batch: ConversationStreamEventBatchJsonSchema,
+    stream_identity: ConversationStreamIdentityJsonSchema,
     tool_execution_request: ConversationToolExecutionRequestJsonSchema,
     tool_execution_result: ConversationToolExecutionResultJsonSchema,
     turn: ConversationTurnJsonSchema,

@@ -7,4 +7,5 @@ export * from './inspection.js';
 export * from './output.js';
 export * from './prepared-request.js';
 export * from './primitives.js';
+export * from './streaming.js';
 export * from './tool-execution.js';

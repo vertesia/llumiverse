@@ -13,6 +13,7 @@ export * from './schemas/index.js';
 export * from './scope.js';
 export * from './semantic-validation.js';
 export * from './serialization.js';
+export * from './streaming.js';
 export * from './tool-arguments.js';
 export * from './tool-execution.js';
 export type * from './types.js';

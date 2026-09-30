@@ -167,6 +167,10 @@ export const GenerationTimestampsSchema = z
     })
     .meta({ id: 'ConversationGenerationTimestamps' });
 
+export const GenerationStatusSchema = z
+    .enum(['completed', 'failed', 'cancelled'])
+    .meta({ id: 'ConversationGenerationStatus' });
+
 const commonGenerationShape = {
     id: IdentifierSchema,
     request_id: IdentifierSchema,
@@ -179,7 +183,7 @@ const commonGenerationShape = {
     protocol: IdentifierSchema,
     model_options: JsonObjectSchema.optional(),
     adapter_version: IdentifierSchema,
-    status: z.enum(['completed', 'failed', 'cancelled']),
+    status: GenerationStatusSchema,
     finish_reason: z.string().optional(),
     timestamps: GenerationTimestampsSchema,
     source: ConversationRefSchema,
@@ -211,7 +215,7 @@ export const ImportedGenerationSchema = z
         protocol: IdentifierSchema.optional(),
         model_options: JsonObjectSchema.optional(),
         adapter_version: IdentifierSchema.optional(),
-        status: z.enum(['completed', 'failed', 'cancelled']),
+        status: GenerationStatusSchema,
         finish_reason: z.string().optional(),
         timestamps: GenerationTimestampsSchema,
         source: ConversationRefSchema,

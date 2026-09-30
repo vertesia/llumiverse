@@ -36,6 +36,14 @@ privacy-safe request evidence. The full prepared document is not a bounded fragm
 when the run retention policy excludes input history. Accepted responses can be checked against the
 retained record with `assertAcceptedResponseMatchesPreparedRecord()`.
 
+Canonical streaming schemas describe bounded, request-scoped draft events with native positions,
+request/attempt/stream identity, monotonic sequencing, terminal status, and explicit reconciliation from
+draft block identities to accepted canonical records. The package includes a bounded accumulator for
+validating retained event logs and final decode evidence. `@llumiverse/core` provides a finite-response
+fallback and an explicit legacy string projection. Provider transports do not emit these typed events yet;
+that adoption remains a separate compatibility step, and the contracts do not by themselves provide a
+durable host event log or reconnect service.
+
 ```ts
 import {
     conversationDocumentFromJson,
@@ -83,7 +91,7 @@ Processing configurations and compaction records are inert persisted data in thi
 not imply that a processor ran or that a document is ready for another request. The exported
 `CONVERSATION_FOUNDATION_LIMITATIONS` lists unavailable contract areas. This revision does not implement
 manifests and segmented storage, general history fragments, partial working-set validation, mutation
-operations, processing jobs and readiness, delivery streams, adapters for the remaining protocols, or
+operations, processing jobs and readiness, durable or reconnectable delivery streams, adapters for the remaining protocols, or
 persisted legacy-document migrations. It does not satisfy the stable schema-version-1, core-preview,
 full runtime retirement, migration, or npm publication gates.
 

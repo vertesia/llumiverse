@@ -1,6 +1,12 @@
 import {
     appendConversationRecords,
+    CONVERSATION_EXPERIMENTAL_REVISION,
+    CONVERSATION_FORMAT,
+    CONVERSATION_SCHEMA_VERSION,
+    ConversationStreamAccumulator,
+    type ConversationStreamEvent,
     createConversationDocument,
+    createStructuredOutputTransformationProof,
     externalizeToolCallArguments,
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
@@ -10,9 +16,38 @@ import {
     FallbackCanonicalExecutionStream,
     legacyCompletionFromCanonicalExecution,
 } from './CanonicalExecution.js';
+import {
+    CanonicalStreamEventChannel,
+    FallbackCanonicalExecutionEventStream,
+    finalizeCanonicalExecutionStreamResponse,
+    LegacyCanonicalExecutionEventProjection,
+} from './CanonicalStreaming.js';
 import { MalformedStreamingToolArgumentsError } from './CompletionStream.js';
 
 const RECORDED_AT = '2026-09-30T00:00:00Z';
+
+function streamEvent(
+    sequence: number,
+    body:
+        | { type: 'draft_started'; origin: 'live_transport' }
+        | { type: 'usage_snapshot'; usage: { input_tokens: number } }
+        | { type: 'stream_terminated'; outcome: 'cancelled' | 'failed' },
+): ConversationStreamEvent {
+    return {
+        format: CONVERSATION_FORMAT,
+        schema_version: CONVERSATION_SCHEMA_VERSION,
+        experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+        stream_id: 'stream-channel',
+        event_id: `stream-channel#${sequence}`,
+        sequence,
+        request_id: 'request',
+        attempt_id: 'attempt',
+        response_operation_id: 'response-operation',
+        generation_id: 'generation',
+        draft_turn_id: 'agent-turn',
+        ...body,
+    } as ConversationStreamEvent;
+}
 
 function acceptedDocument() {
     const initial = createConversationDocument({ id: 'conversation', created_at: RECORDED_AT });
@@ -336,5 +371,544 @@ describe('canonical execution response', () => {
         let visiblePreview = '';
         for await (const chunk of visible) visiblePreview += chunk;
         expect(visiblePreview).toBe('answerwhy{"ok":true}');
+    });
+});
+
+describe('canonical typed execution stream', () => {
+    const identity = {
+        request_id: 'request',
+        attempt_id: 'attempt',
+        response_operation_id: 'response-operation',
+        generation_id: 'generation',
+        draft_turn_id: 'agent-turn',
+    };
+
+    it('delivers one finite response_accepted event without fabricating native drafts', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const stream = new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+            stream_id: 'stream-finite',
+        });
+
+        const events: ConversationStreamEvent[] = [];
+        for await (const event of stream) events.push(event);
+
+        expect(events).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'live_transport',
+                stream_id: 'stream-finite',
+                sequence: 0,
+                event_id: 'stream-finite#0',
+                operation_receipt_id: 'response-operation',
+                committed_turn_id: 'agent-turn',
+                committed_block_ids: ['text', 'reasoning', 'json', 'call-block'],
+            }),
+        ]);
+        expect(stream.completion).toBe(response);
+        expect(stream.terminal_event).toEqual(events[0]);
+    });
+
+    it('uses a distinct delivery stream for accepted-response recovery', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const live = new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+            stream_id: 'stream-live-delivery',
+        });
+        for await (const _event of live) {
+            // Drain the original delivery.
+        }
+        const recovered = new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+            stream_id: 'stream-recovered-delivery',
+            origin: 'accepted_recovery',
+        });
+        const events: ConversationStreamEvent[] = [];
+        for await (const event of recovered) events.push(event);
+
+        expect(live.terminal_event?.stream_id).toBe('stream-live-delivery');
+        expect(events).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'accepted_recovery',
+                stream_id: 'stream-recovered-delivery',
+                request_id: 'request',
+                attempt_id: 'attempt',
+            }),
+        ]);
+    });
+
+    it('projects finite canonical output only at the explicit legacy string boundary', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const typed = new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+            stream_id: 'stream-projection',
+        });
+        const projected = new LegacyCanonicalExecutionEventProjection(typed);
+        let preview = '';
+        for await (const chunk of projected) preview += chunk;
+
+        expect(preview).toBe('answer{"ok":true}');
+        expect(projected.completion).toBe(response);
+    });
+
+    it('cancels a pending fallback once and exposes its terminal even after iterator return', async () => {
+        let calls = 0;
+        const stream = new FallbackCanonicalExecutionEventStream(
+            identity,
+            async (signal) => {
+                calls += 1;
+                await new Promise<void>((_resolve, reject) => {
+                    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+                });
+                throw new Error('unreachable');
+            },
+            { stream_id: 'stream-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        const pending = iterator.next();
+        await iterator.return?.();
+        const terminal = await stream.cancel();
+
+        expect(await pending).toEqual({ value: expect.objectContaining({ type: 'stream_terminated' }), done: false });
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled', sequence: 0 });
+        expect(stream.terminal_event).toEqual(terminal);
+        expect(calls).toBe(1);
+    });
+
+    it('settles cancellation without waiting for a transport that ignores abort', async () => {
+        const stream = new FallbackCanonicalExecutionEventStream(
+            identity,
+            async () => new Promise<never>(() => undefined),
+            { stream_id: 'stream-ignores-abort' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        const pending = iterator.next();
+
+        const terminal = await stream.cancel();
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(pending).resolves.toEqual({ value: terminal, done: false });
+    });
+
+    it('rejects impossible terminal budgets before execution and fails bounded oversized acceptance', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        expect(
+            () =>
+                new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+                    stream_id: 'stream-tiny-event',
+                    max_event_bytes: 1,
+                }),
+        ).toThrow('cannot hold a canonical stream terminal event');
+        expect(
+            () =>
+                new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+                    stream_id: 'stream-tiny-total',
+                    max_total_bytes: 1,
+                }),
+        ).toThrow('cannot hold a canonical stream terminal event');
+
+        response.accepted_output.turn.blocks[0].id = 'oversized-'.repeat(1_000);
+        const bounded = new FallbackCanonicalExecutionEventStream(identity, async () => response, {
+            stream_id: 'stream-bounded-failure',
+            max_event_bytes: 1_024,
+            max_total_bytes: 1_024,
+        });
+        const events: ConversationStreamEvent[] = [];
+        for await (const event of bounded) events.push(event);
+        expect(events).toEqual([
+            expect.objectContaining({
+                type: 'stream_terminated',
+                outcome: 'failed',
+                sequence: 0,
+                diagnostic: {
+                    code: 'CANONICAL_EVENT_DELIVERY_FAILED',
+                    message: 'Canonical event delivery failed',
+                },
+            }),
+        ]);
+        expect(bounded.completion).toBe(response);
+    });
+
+    it('does not let an unread full buffer delay or follow the terminal event', async () => {
+        const channel = new CanonicalStreamEventChannel(1);
+        const first = streamEvent(0, { type: 'draft_started', origin: 'live_transport' });
+        const blockedEvent = streamEvent(1, { type: 'draft_started', origin: 'live_transport' });
+        const terminal = streamEvent(2, { type: 'stream_terminated', outcome: 'cancelled' });
+        await channel.emit(first);
+        const blocked = channel.emit(blockedEvent);
+        const blockedAssertion = expect(blocked).rejects.toThrow('terminated');
+
+        await channel.terminate(terminal as Extract<ConversationStreamEvent, { type: 'stream_terminated' }>);
+        await blockedAssertion;
+        const received: ConversationStreamEvent[] = [];
+        for await (const event of channel) received.push(event);
+
+        expect(received).toEqual([first, terminal]);
+        await expect(channel.emit(blockedEvent)).rejects.toThrow('terminated');
+    });
+
+    it('abandons a cancelled retained replay without emitting its terminal after a skipped prefix', async () => {
+        const retained = [
+            streamEvent(0, { type: 'draft_started', origin: 'live_transport' }),
+            streamEvent(1, { type: 'usage_snapshot', usage: { input_tokens: 1 } }),
+            streamEvent(2, { type: 'usage_snapshot', usage: { input_tokens: 2 } }),
+            streamEvent(3, { type: 'stream_terminated', outcome: 'cancelled' }),
+        ];
+        const stream = new FallbackCanonicalExecutionEventStream(
+            identity,
+            async () => {
+                throw new Error('Retained replay must not execute transport');
+            },
+            {
+                stream_id: 'stream-channel',
+                retained_events: retained,
+                max_buffered_events: 1,
+            },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toEqual({ value: retained[0], done: false });
+        await iterator.return?.();
+
+        expect(stream.terminal_event).toEqual(retained[3]);
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+    });
+
+    it('rejects a response that does not match the prepared request identity', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const stream = new FallbackCanonicalExecutionEventStream(
+            { ...identity, request_id: 'different-request' },
+            async () => response,
+            { stream_id: 'stream-mismatch' },
+        );
+        const events: ConversationStreamEvent[] = [];
+        for await (const event of stream) events.push(event);
+
+        expect(events).toEqual([
+            expect.objectContaining({
+                type: 'stream_terminated',
+                outcome: 'failed',
+                diagnostic: {
+                    code: 'CANONICAL_EXECUTION_FAILED',
+                    message: 'Canonical execution failed',
+                },
+            }),
+        ]);
+        expect(stream.completion).toBeUndefined();
+    });
+
+    it('finalizes structured reconciliation from actual decode blocks through the shared normalizer', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        response.accepted_output.turn.blocks = [{ id: 'json', type: 'json', value: { emoji: '😀', ok: true } }];
+        const sourceBlocks = [
+            { id: 'source-1', type: 'text' as const, text: '{"emoji":"😀","ok":', format: 'plain' as const },
+            { id: 'source-2', type: 'text' as const, text: 'true}', format: 'plain' as const },
+        ];
+        const resultBlock = { id: 'json', type: 'json' as const, value: { emoji: '😀', ok: true } };
+        const proof = await createStructuredOutputTransformationProof({
+            id: 'transform-1',
+            source_blocks: sourceBlocks,
+            result_block: resultBlock,
+        });
+        const decoded = {
+            turns: [{ id: 'agent-turn', status: 'completed', blocks: [resultBlock] }],
+            generation: { id: 'generation', request_id: 'request', attempt_id: 'attempt', status: 'completed' },
+            stream_evidence: {
+                item_mappings: sourceBlocks.map((block, index) => ({
+                    canonical_id: block.id,
+                    native_position: { protocol: 'test.protocol', path: ['output', index] },
+                    kind: 'block' as const,
+                })),
+                transformations: [proof],
+            },
+        } as unknown as Parameters<typeof finalizeCanonicalExecutionStreamResponse>[0]['decoded'];
+        const streamIdentity = { ...identity, stream_id: 'stream-structured' };
+        const envelope = (sequence: number) => ({
+            format: CONVERSATION_FORMAT,
+            schema_version: CONVERSATION_SCHEMA_VERSION,
+            experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+            ...streamIdentity,
+            sequence,
+            event_id: `stream-structured#${sequence}`,
+        });
+        const buildAccumulator = (options: { wrong_content?: boolean; wrong_kind?: boolean } = {}) => {
+            const candidate = new ConversationStreamAccumulator(streamIdentity);
+            let sequence = 0;
+            candidate.append({ ...envelope(sequence++), type: 'draft_started', origin: 'live_transport' });
+            for (const [index, block] of sourceBlocks.entries()) {
+                const nativePosition = { protocol: 'test.protocol', path: ['output', index] };
+                const wrongKind = options.wrong_kind === true && index === 0;
+                candidate.append({
+                    ...envelope(sequence++),
+                    type: 'draft_block_started',
+                    draft_block_id: `draft-${index}`,
+                    native_position: nativePosition,
+                    block: wrongKind ? { type: 'tool_call', executor: 'application' } : { type: 'text' },
+                });
+                if (!wrongKind) {
+                    const fragments =
+                        index === 0
+                            ? options.wrong_content
+                                ? ['{"emoji":"wrong","ok":']
+                                : ['{"emoji":"\ud83d', '\ude00","ok":']
+                            : [block.text];
+                    for (const text of fragments) {
+                        candidate.append({
+                            ...envelope(sequence++),
+                            type: 'draft_text_delta',
+                            draft_block_id: `draft-${index}`,
+                            native_position: nativePosition,
+                            text,
+                        });
+                    }
+                }
+                candidate.append({
+                    ...envelope(sequence++),
+                    type: 'draft_block_finished',
+                    draft_block_id: `draft-${index}`,
+                    native_position: nativePosition,
+                    outcome: 'native_complete',
+                });
+            }
+            candidate.append({ ...envelope(sequence), type: 'draft_finished', outcome: 'completed' });
+            return candidate;
+        };
+        const accumulator = buildAccumulator();
+        const reconciliations = [
+            {
+                draft_block_ids: ['draft-0', 'draft-1'],
+                native_positions: sourceBlocks.map((_block, index) => ({
+                    protocol: 'test.protocol',
+                    path: ['output', index],
+                })),
+                committed_block_ids: ['json'],
+                disposition: 'structured_output' as const,
+                transformation_id: 'transform-1',
+            },
+        ];
+
+        const accepted = await finalizeCanonicalExecutionStreamResponse({
+            accumulator,
+            decoded,
+            response,
+            result_schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+            reconciliations,
+        });
+        expect(accepted).toMatchObject({ type: 'response_accepted', committed_block_ids: ['json'] });
+        const structuredReconciliation = accepted.reconciliations[0];
+        if (structuredReconciliation === undefined) throw new Error('Expected structured reconciliation');
+        expect(accumulator.draft_snapshot()[0]).toMatchObject({ text: '{"emoji":"😀","ok":' });
+
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: buildAccumulator({ wrong_content: true }),
+                decoded,
+                response,
+                result_schema: { type: 'object' },
+                reconciliations,
+            }),
+        ).rejects.toThrow('source text differs');
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: buildAccumulator({ wrong_kind: true }),
+                decoded,
+                response,
+                result_schema: { type: 'object' },
+                reconciliations,
+            }),
+        ).rejects.toThrow('not bound to a text draft');
+
+        const wrongResultAccumulator = new ConversationStreamAccumulator(streamIdentity);
+        for (const event of accumulator.retained_events.slice(0, -1)) wrongResultAccumulator.append(event);
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: wrongResultAccumulator,
+                decoded,
+                response,
+                result_schema: { type: 'object' },
+                reconciliations: [
+                    {
+                        ...structuredReconciliation,
+                        committed_block_ids: ['other-json'],
+                    },
+                ],
+            }),
+        ).rejects.toThrow('proof result does not match');
+
+        const changedResponse = structuredClone(response);
+        const acceptedJson = changedResponse.accepted_output.turn.blocks[0];
+        if (acceptedJson?.type !== 'json') throw new Error('Expected accepted JSON block');
+        acceptedJson.value = { ok: false };
+        const mismatchedAccumulator = new ConversationStreamAccumulator(streamIdentity);
+        for (const event of accumulator.retained_events.slice(0, -1)) mismatchedAccumulator.append(event);
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: mismatchedAccumulator,
+                decoded,
+                response: changedResponse,
+                result_schema: { type: 'object' },
+                reconciliations: accepted.reconciliations,
+            }),
+        ).rejects.toThrow('differs from decoded block');
+
+        const changed = structuredClone(decoded);
+        const transformation = changed.stream_evidence?.transformations[0];
+        if (transformation === undefined) throw new Error('Expected transformation');
+        transformation.source_texts[0] = '{"ok":false';
+        const rejectedAccumulator = new ConversationStreamAccumulator(streamIdentity);
+        for (const event of accumulator.retained_events.slice(0, -1)) rejectedAccumulator.append(event);
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: rejectedAccumulator,
+                decoded: changed,
+                response,
+                result_schema: { type: 'object' },
+                reconciliations: accepted.reconciliations,
+            }),
+        ).rejects.toThrow();
+    });
+
+    it('rejects final tool identity or executor changes from the cumulative native draft', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const acceptedCall = response.accepted_output.turn.blocks.find((block) => block.id === 'call-block');
+        if (acceptedCall?.type !== 'tool_call') throw new Error('Expected accepted tool call');
+        response.accepted_output.turn.blocks = [acceptedCall];
+        const streamIdentity = { ...identity, stream_id: 'stream-tool-binding' };
+        const accumulator = new ConversationStreamAccumulator(streamIdentity);
+        const envelope = (sequence: number) => ({
+            format: CONVERSATION_FORMAT,
+            schema_version: CONVERSATION_SCHEMA_VERSION,
+            experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+            ...streamIdentity,
+            sequence,
+            event_id: `stream-tool-binding#${sequence}`,
+        });
+        const nativePosition = { protocol: 'test.protocol', path: ['output', 0] };
+        accumulator.append({ ...envelope(0), type: 'draft_started', origin: 'live_transport' });
+        accumulator.append({
+            ...envelope(1),
+            type: 'draft_block_started',
+            draft_block_id: 'tool-draft',
+            native_position: nativePosition,
+            block: { type: 'tool_call', executor: 'provider', call_id: 'call-1', tool_name: 'lookup' },
+        });
+        accumulator.append({
+            ...envelope(2),
+            type: 'draft_block_finished',
+            draft_block_id: 'tool-draft',
+            native_position: nativePosition,
+            outcome: 'native_complete',
+        });
+        accumulator.append({ ...envelope(3), type: 'draft_finished', outcome: 'completed' });
+        const decoded = {
+            turns: [
+                {
+                    id: 'agent-turn',
+                    status: 'completed',
+                    blocks: [structuredClone(acceptedCall)],
+                },
+            ],
+            generation: { id: 'generation', request_id: 'request', attempt_id: 'attempt', status: 'completed' },
+            stream_evidence: {
+                item_mappings: [
+                    {
+                        canonical_id: 'call-block',
+                        native_position: nativePosition,
+                        kind: 'block',
+                    },
+                ],
+                transformations: [],
+            },
+        } as unknown as Parameters<typeof finalizeCanonicalExecutionStreamResponse>[0]['decoded'];
+
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator,
+                decoded,
+                response,
+                reconciliations: [
+                    {
+                        draft_block_ids: ['tool-draft'],
+                        native_positions: [nativePosition],
+                        committed_block_ids: ['call-block'],
+                        disposition: 'direct',
+                    },
+                ],
+            }),
+        ).rejects.toThrow('changes identity or executor');
+    });
+
+    it('rejects swapped native positions across same-type direct text blocks', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        response.accepted_output.turn.blocks = [
+            { id: 'text-1', type: 'text', text: 'first', format: 'plain' },
+            { id: 'text-2', type: 'text', text: 'second', format: 'plain' },
+        ];
+        const streamIdentity = { ...identity, stream_id: 'stream-swapped-text' };
+        const accumulator = new ConversationStreamAccumulator(streamIdentity);
+        const envelope = (sequence: number) => ({
+            format: CONVERSATION_FORMAT,
+            schema_version: CONVERSATION_SCHEMA_VERSION,
+            experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+            ...streamIdentity,
+            sequence,
+            event_id: `stream-swapped-text#${sequence}`,
+        });
+        const positions = [
+            { protocol: 'test.protocol', path: ['output', 0] },
+            { protocol: 'test.protocol', path: ['output', 1] },
+        ];
+        let sequence = 0;
+        accumulator.append({ ...envelope(sequence++), type: 'draft_started', origin: 'live_transport' });
+        for (const [index, position] of positions.entries()) {
+            accumulator.append({
+                ...envelope(sequence++),
+                type: 'draft_block_started',
+                draft_block_id: `draft-${index}`,
+                native_position: position,
+                block: { type: 'text' },
+            });
+            accumulator.append({
+                ...envelope(sequence++),
+                type: 'draft_text_delta',
+                draft_block_id: `draft-${index}`,
+                native_position: position,
+                text: index === 0 ? 'first' : 'second',
+            });
+            accumulator.append({
+                ...envelope(sequence++),
+                type: 'draft_block_finished',
+                draft_block_id: `draft-${index}`,
+                native_position: position,
+                outcome: 'native_complete',
+            });
+        }
+        accumulator.append({ ...envelope(sequence), type: 'draft_finished', outcome: 'completed' });
+        const decoded = {
+            turns: [
+                {
+                    id: 'agent-turn',
+                    status: 'completed',
+                    blocks: structuredClone(response.accepted_output.turn.blocks),
+                },
+            ],
+            generation: { id: 'generation', request_id: 'request', attempt_id: 'attempt', status: 'completed' },
+            stream_evidence: {
+                item_mappings: [
+                    { canonical_id: 'text-1', native_position: positions[1], kind: 'block' },
+                    { canonical_id: 'text-2', native_position: positions[0], kind: 'block' },
+                ],
+                transformations: [],
+            },
+        } as unknown as Parameters<typeof finalizeCanonicalExecutionStreamResponse>[0]['decoded'];
+
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator,
+                decoded,
+                response,
+                reconciliations: positions.map((position, index) => ({
+                    draft_block_ids: [`draft-${index}`],
+                    native_positions: [position],
+                    committed_block_ids: [`text-${index + 1}`],
+                    disposition: 'direct',
+                })),
+            }),
+        ).rejects.toThrow('changes native position');
     });
 });

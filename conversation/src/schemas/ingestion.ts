@@ -4,6 +4,7 @@ import { ConversationDiagnosticSchema } from './diagnostics.js';
 import { ContextEntrySchema, ConversationDocumentSchema } from './document.js';
 import { ExecutedGenerationSchema, ExecutionReceiptSchema, GenerationSchema } from './execution.js';
 import { ContentHashSchema, IdentifierSchema, NonnegativeSafeIntegerSchema, TimestampSchema } from './primitives.js';
+import { ConversationStreamDecodeEvidenceSchema } from './streaming.js';
 
 /** Concrete JSON additions; cross-record integrity is checked against the resulting document. */
 export const ConversationRecordBatchSchema = z
@@ -45,5 +46,6 @@ export const DecodedConversationResponseSchema = z
         execution_receipts: z.array(ExecutionReceiptSchema).readonly().optional(),
         diagnostics: z.array(ConversationDiagnosticSchema),
         payload_fingerprint: ContentHashSchema,
+        stream_evidence: ConversationStreamDecodeEvidenceSchema.optional(),
     })
     .meta({ id: 'DecodedConversationResponse' });

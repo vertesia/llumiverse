@@ -1,5 +1,6 @@
 export * from '@llumiverse/common';
 export * from './CanonicalExecution.js';
+export * from './CanonicalStreaming.js';
 export * from './conversation-utils.js';
 export type { AbstractDriver, Driver } from './Driver.js';
 export type * from './embedding-batch.js';

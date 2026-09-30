@@ -13,6 +13,7 @@ export const CONVERSATION_FOUNDATION_SCOPE = Object.freeze({
         'idempotent_materialized_record_ingestion',
         'accepted_output_fragments',
         'prepared_request_records',
+        'bounded_stream_event_contracts_and_reconciliation',
     ]),
 });
 
@@ -43,7 +44,7 @@ export const CONVERSATION_FOUNDATION_LIMITATIONS = Object.freeze([
         code: 'UNIMPLEMENTED_SCOPE',
         feature: 'remaining_delivery_adapters_and_migrations',
         message:
-            'Chat Completions, Responses, Claude Messages, Gemini GenerateContent, and Bedrock Converse have adapters; remaining modalities, delivery contracts, and migrations are not implemented.',
+            'Chat Completions, Responses, Claude Messages, Gemini GenerateContent, and Bedrock Converse have adapters; remaining modalities, provider typed-event production, durable delivery services, and migrations are not implemented.',
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',
