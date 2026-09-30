@@ -1,6 +1,6 @@
 import { FinishReason, GenerateContentResponse, GoogleGenAI } from '@google/genai';
 import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
-import { type DataSource, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { type DataSource, type ExecutionOptions, isCanonicalAcceptedRecovery, PromptRole } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { AnthropicDriver } from '../anthropic/index.js';
@@ -164,6 +164,7 @@ describe('primary provider file audio', () => {
                 stream_id: 'stream:foundry:speech:first',
             }),
         ]);
+        expect(isCanonicalAcceptedRecovery(typed.completion)).toBe(false);
         const retry = await driver.streamCanonicalEvents(
             prompt,
             {
@@ -188,6 +189,8 @@ describe('primary provider file audio', () => {
             }),
         ]);
         expect(retry.completion?.accepted_output).toEqual(typed.completion?.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry.completion)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(JSON.parse(JSON.stringify(retry.completion)))).toBe(false);
         expect(publish).toHaveBeenCalledOnce();
         const mismatched = await driver.streamCanonicalEvents(
             prompt,
@@ -483,6 +486,7 @@ describe('primary provider file audio', () => {
                 [{ role: PromptRole.user, content: 'Describe', files: [file()] }],
                 { model: 'gpt-audio', store_audio: store, conversation_runtime: runtime },
             );
+            expect(isCanonicalAcceptedRecovery(first)).toBe(false);
             const document = parseConversationDocument(first.conversation);
             expect(Object.values(document.assets)).toEqual(
                 expect.arrayContaining([
@@ -545,6 +549,7 @@ describe('primary provider file audio', () => {
                 },
             );
             expect(retry.accepted_output).toEqual(first.accepted_output);
+            expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
             expect(create).toHaveBeenCalledOnce();
 
             await expect(
@@ -815,6 +820,7 @@ describe('primary provider file audio', () => {
                 store_audio: store,
                 conversation_runtime: runtime,
             });
+            expect(isCanonicalAcceptedRecovery(first)).toBe(false);
             const audioBlock = first.accepted_output.turn.blocks.find((block) => block.type === 'audio');
             if (audioBlock?.type !== 'audio') throw new Error('Expected canonical audio block');
             expect(first.accepted_output.assets[audioBlock.asset_id]).toMatchObject({
@@ -861,6 +867,7 @@ describe('primary provider file audio', () => {
                 },
             });
             expect(retry.accepted_output).toEqual(first.accepted_output);
+            expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
             expect(generate).toHaveBeenCalledOnce();
 
             await expect(

@@ -4,6 +4,7 @@ import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
     type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
     PromptRole,
 } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -125,6 +126,7 @@ describe('Vertex Imagen canonical lifecycle', () => {
             [{ role: PromptRole.user, content: 'A fox under the moon.' }],
             options,
         );
+        expect(isCanonicalAcceptedRecovery(first)).toBe(false);
 
         expect(publish).toHaveBeenCalledOnce();
         expect(predict).toHaveBeenCalledOnce();
@@ -166,6 +168,8 @@ describe('Vertex Imagen canonical lifecycle', () => {
             conversation_runtime: retryRuntime(options, 'attempt:imagen:sync:retry'),
         });
         expect(recovered.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(recovered)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(JSON.parse(JSON.stringify(recovered)))).toBe(false);
         expect(predict).toHaveBeenCalledOnce();
         expect(publish).toHaveBeenCalledOnce();
         expect(store).toHaveBeenCalledTimes(2);
@@ -305,6 +309,7 @@ describe('Vertex Imagen canonical lifecycle', () => {
         expect(await collect(recovered)).toEqual([
             expect.objectContaining({ type: 'response_accepted', sequence: 0, origin: 'accepted_recovery' }),
         ]);
+        expect(isCanonicalAcceptedRecovery(recovered.completion)).toBe(true);
         expect(predict).toHaveBeenCalledOnce();
     });
 

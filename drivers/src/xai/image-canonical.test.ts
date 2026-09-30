@@ -7,6 +7,7 @@ import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
     type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
     PromptRole,
     type XAIGrokImageOptions,
 } from '@llumiverse/core';
@@ -129,6 +130,7 @@ describe('xAI canonical image lifecycle', () => {
             [{ role: PromptRole.user, content: 'A lighthouse in a storm.' }],
             options,
         );
+        expect(isCanonicalAcceptedRecovery(first)).toBe(false);
 
         expect(publish).toHaveBeenCalledOnce();
         expect(post).toHaveBeenCalledOnce();
@@ -200,6 +202,8 @@ describe('xAI canonical image lifecycle', () => {
             expect.objectContaining({ type: 'response_accepted', sequence: 0, origin: 'accepted_recovery' }),
         ]);
         expect(retry.completion?.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry.completion)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(JSON.parse(JSON.stringify(retry.completion)))).toBe(false);
         expect(retryPublishCount).toBe(0);
         expect(post).toHaveBeenCalledOnce();
         expect(store).toHaveBeenCalledTimes(2);

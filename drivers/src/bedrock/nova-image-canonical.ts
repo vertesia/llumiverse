@@ -27,13 +27,13 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     assertAcceptedCanonicalRequest,
-    canonicalRecoveredOutputFragment,
     canonicalResponseIdentities,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
     providerJsonValue,
     publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
     resolveConversationRuntime,
 } from '../conversation/canonical-runtime.js';
 import {
@@ -425,17 +425,7 @@ export async function executeNovaCanvasCanonical(input: {
         if (input.options.include_original_response) {
             throw new Error('An idempotently recovered Nova Canvas response cannot reconstruct original_response');
         }
-        return createCanonicalExecutionResponse(
-            document,
-            runtime.response_operation_id,
-            {},
-            canonicalRecoveredOutputFragment(
-                await input.options.load_recovered_canonical_output?.({
-                    conversation_id: document.id,
-                    response_operation_id: runtime.response_operation_id,
-                }),
-            ),
-        );
+        return recoverCanonicalExecutionResponse({ document, runtime, accepted_response: accepted }, input.options);
     }
     const receipt = await createRequestReceipt(
         document,

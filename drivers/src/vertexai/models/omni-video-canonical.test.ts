@@ -7,6 +7,7 @@ import {
     type CanonicalExecutionEventStream,
     type DataSource,
     type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
     PromptRole,
 } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -114,6 +115,7 @@ describe('Gemini Omni canonical video lifecycle', () => {
                 },
             },
         );
+        expect(isCanonicalAcceptedRecovery(first)).toBe(false);
 
         expect(await driver.supportsCanonicalExecution(options)).toBe(true);
         expect(publishCount).toBe(1);
@@ -210,6 +212,8 @@ describe('Gemini Omni canonical video lifecycle', () => {
             },
         );
         expect(retry.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(JSON.parse(JSON.stringify(retry)))).toBe(false);
         expect(post).toHaveBeenCalledOnce();
         expect(publishCount).toBe(1);
     });
@@ -379,6 +383,7 @@ describe('Gemini Omni canonical video lifecycle', () => {
             expect.objectContaining({ type: 'response_accepted', sequence: 0, origin: 'accepted_recovery' }),
         ]);
         expect(recovered.completion?.accepted_output).toEqual(first.completion.accepted_output);
+        expect(isCanonicalAcceptedRecovery(recovered.completion)).toBe(true);
         expect(post).toHaveBeenCalledOnce();
     });
 

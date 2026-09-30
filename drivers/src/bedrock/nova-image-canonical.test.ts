@@ -8,6 +8,7 @@ import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
     type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
     type NovaCanvasOptions,
     PromptRole,
 } from '@llumiverse/core';
@@ -137,6 +138,7 @@ describe('Bedrock Nova Canvas canonical lifecycle', () => {
             [{ role: PromptRole.user, content: 'A fox under the moon.' }],
             options,
         );
+        expect(isCanonicalAcceptedRecovery(first)).toBe(false);
 
         expect(publish).toHaveBeenCalledOnce();
         expect(invokeModel).toHaveBeenCalledOnce();
@@ -204,6 +206,8 @@ describe('Bedrock Nova Canvas canonical lifecycle', () => {
             expect.objectContaining({ type: 'response_accepted', sequence: 0, origin: 'accepted_recovery' }),
         ]);
         expect(retry.completion?.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry.completion)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(JSON.parse(JSON.stringify(retry.completion)))).toBe(false);
         expect(retryPublishCount).toBe(0);
         expect(invokeModel).toHaveBeenCalledOnce();
         expect(store).toHaveBeenCalledTimes(2);

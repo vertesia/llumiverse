@@ -75,7 +75,6 @@ import {
     acceptedCanonicalResponse,
     assertAcceptedCanonicalRequest,
     canonicalConversationTurnNumber,
-    canonicalRecoveredOutputFragment,
     providerJsonValue,
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
@@ -1164,16 +1163,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             if (requestedOptions.include_original_response) {
                 throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
             }
-            return createCanonicalExecutionResponse(
-                document,
-                runtime.response_operation_id,
-                {},
-                canonicalRecoveredOutputFragment(
-                    await requestedOptions.load_recovered_canonical_output?.({
-                        conversation_id: document.id,
-                        response_operation_id: runtime.response_operation_id,
-                    }),
-                ),
+            return recoverCanonicalExecutionResponse(
+                { document, runtime, accepted_response: accepted },
+                requestedOptions,
             );
         }
         const canonicalState = await prepareGeminiCanonicalState({

@@ -5,7 +5,13 @@ import {
     createUserTurn,
     parseConversationDocument,
 } from '@llumiverse/conversation';
-import { Base64DataSource, type ExecutionOptions, PromptRole, Providers } from '@llumiverse/core';
+import {
+    Base64DataSource,
+    type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
+    PromptRole,
+    Providers,
+} from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -103,6 +109,7 @@ describe('OpenAI standalone image canonical lifecycle', () => {
         };
 
         const first = await driver.executeCanonical(segments, options);
+        expect(isCanonicalAcceptedRecovery(first)).toBe(false);
         expect(first.accepted_output.turn.blocks).toEqual([
             expect.objectContaining({ type: 'image', caption: 'First revised prompt' }),
             expect.objectContaining({ type: 'image', caption: 'Second revised prompt' }),
@@ -139,6 +146,35 @@ describe('OpenAI standalone image canonical lifecycle', () => {
             conversation: JSON.parse(JSON.stringify(first.conversation)),
         });
         expect(retry.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
+        expect(isCanonicalAcceptedRecovery(JSON.parse(JSON.stringify(retry)))).toBe(false);
+        const legacyRetry = await driver.execute(segments, {
+            ...options,
+            conversation: JSON.parse(JSON.stringify(first.conversation)),
+        });
+        expect(legacyRetry.result).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'image' })]));
+        expect(isCanonicalAcceptedRecovery(legacyRetry)).toBe(true);
+        const firstRuntime = options.conversation_runtime;
+        if (firstRuntime === undefined) throw new Error('Expected canonical image runtime');
+        const typedRetry = await driver.streamCanonicalEvents(
+            segments,
+            {
+                ...options,
+                conversation: JSON.parse(JSON.stringify(first.conversation)),
+                conversation_runtime: {
+                    ...firstRuntime,
+                    attempt_id: 'attempt:multiple:typed-retry',
+                },
+            },
+            undefined,
+            { stream_id: 'stream:openai-image:typed-retry' },
+        );
+        const typedEvents = [];
+        for await (const event of typedRetry) typedEvents.push(event);
+        expect(typedEvents).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'accepted_recovery' }),
+        ]);
+        expect(isCanonicalAcceptedRecovery(typedRetry.completion)).toBe(true);
         expect(generate).toHaveBeenCalledOnce();
         expect(publish).toHaveBeenCalledOnce();
 

@@ -44,13 +44,13 @@ import { toStreamingFile } from 'openai';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
-    canonicalRecoveredOutputFragment,
     canonicalResponseIdentities,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
     providerJsonValue,
     publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
     resolveConversationRuntime,
 } from '../conversation/canonical-runtime.js';
 
@@ -602,16 +602,9 @@ export async function executeOpenAIAudioCanonical(input: {
         if (input.options.include_original_response) {
             throw new Error('An idempotently recovered audio response cannot reconstruct original_response');
         }
-        return createCanonicalExecutionResponse(
-            appended.document,
-            runtime.response_operation_id,
-            {},
-            canonicalRecoveredOutputFragment(
-                await input.options.load_recovered_canonical_output?.({
-                    conversation_id: appended.document.id,
-                    response_operation_id: runtime.response_operation_id,
-                }),
-            ),
+        return recoverCanonicalExecutionResponse(
+            { document: appended.document, runtime, accepted_response: accepted },
+            input.options,
         );
     }
     if (retainedDocument !== undefined)
