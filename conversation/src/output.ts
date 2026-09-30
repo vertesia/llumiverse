@@ -166,7 +166,7 @@ function projectGeneration(generation: ReturnType<typeof resolveAcceptedRecords>
     const safeUsage = (() => {
         if (usage === undefined) return undefined;
         const { reported_usage: _reportedUsage, ...normalizedUsage } = usage;
-        return normalizedUsage;
+        return Object.keys(normalizedUsage).length === 0 ? undefined : normalizedUsage;
     })();
     return ConversationOutputGenerationSchema.parse({ ...projected, ...(safeUsage ? { usage: safeUsage } : {}) });
 }

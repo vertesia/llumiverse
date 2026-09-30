@@ -140,6 +140,63 @@ function acceptedDocument(options: { assetId?: string; receivedMedia?: boolean }
 }
 
 describe('accepted conversation output projection', () => {
+    it('omits provider-only usage while preserving its full-document evidence', () => {
+        const document = acceptedDocument();
+        const generation = document.generations['generation:1'];
+        if (generation === undefined) throw new Error('Missing fixture generation');
+        generation.usage = {
+            reported_usage: [
+                {
+                    source: 'provider',
+                    protocol: 'provider.protocol',
+                    accounting_basis: 'provider_seconds',
+                    payload: { predict_time: 0.7, total_time: 0.9 },
+                },
+            ],
+        };
+        const originalEvidence = structuredClone(generation.usage);
+
+        const fragment = parseAcceptedOutputFragment(
+            JSON.parse(JSON.stringify(createAcceptedOutputFragment(document, 'response:1'))),
+        );
+
+        expect(fragment.generation.usage).toBeUndefined();
+        expect(document.generations['generation:1']?.usage).toEqual(originalEvidence);
+    });
+
+    it('retains normalized zero usage while omitting provider payloads', () => {
+        const document = acceptedDocument();
+        const generation = document.generations['generation:1'];
+        if (generation === undefined) throw new Error('Missing fixture generation');
+        generation.usage = {
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            accounting_provenance: {
+                input_tokens: { method: 'reported', accounting_basis: 'provider_tokens' },
+                output_tokens: { method: 'reported', accounting_basis: 'provider_tokens' },
+                total_tokens: { method: 'derived', accounting_basis: 'provider_tokens' },
+            },
+            reported_usage: [{ source: 'provider', payload: { opaque: true } }],
+        };
+
+        const fragment = createAcceptedOutputFragment(document, 'response:1');
+
+        expect(fragment.generation.usage).toEqual({
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            accounting_provenance: {
+                input_tokens: { method: 'reported', accounting_basis: 'provider_tokens' },
+                output_tokens: { method: 'reported', accounting_basis: 'provider_tokens' },
+                total_tokens: { method: 'derived', accounting_basis: 'provider_tokens' },
+            },
+        });
+        expect(document.generations['generation:1']?.usage?.reported_usage).toEqual([
+            { source: 'provider', payload: { opaque: true } },
+        ]);
+    });
+
     it('retains typed PCM format metadata through JSON persistence and the accepted output projection', () => {
         const document = acceptedDocument();
         const asset = document.assets['asset:image'];
