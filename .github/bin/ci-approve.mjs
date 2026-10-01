@@ -6,6 +6,8 @@ import { main as verifyCi } from './automerge-ci.mjs';
 export const CONTEXT = 'PR approval gate';
 export const MARKER = '<!-- vertesia-ci-approval:v1 -->';
 export const APP_LOGIN = 'vertesia-automerge[bot]';
+export const CI_SETTLE_TIMEOUT_MS = 180_000;
+export const CI_SETTLE_POLL_MS = 10_000;
 
 export function supportedBase(ref) {
     return ref === 'main' || /^release\/\d+\.\d+$/.test(ref);
@@ -55,9 +57,38 @@ function sameRevision(a, b) {
     return a.head.sha === b.head.sha && a.base.sha === b.base.sha && a.base.ref === b.base.ref;
 }
 
-export async function reconcile(api, number, ci, { pushed = false } = {}) {
+const sleepAsync = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function waitForCiToSettle(
+    api,
+    number,
+    expected,
+    ci,
+    {
+        timeoutMs = CI_SETTLE_TIMEOUT_MS,
+        pollMs = CI_SETTLE_POLL_MS,
+        sleep = sleepAsync,
+        now = () => performance.now(),
+    } = {},
+) {
+    const deadline = now() + timeoutMs;
+    let current = expected;
+    for (;;) {
+        const passed = await ci(current);
+        current = await api.pr(number);
+        if (!sameRevision(expected, current)) return { passed: false, changed: true };
+        const remaining = deadline - now();
+        if (passed || remaining <= 0) return { passed, changed: false, pr: current };
+        await sleep(Math.min(pollMs, remaining));
+    }
+}
+
+export async function reconcile(api, number, ci, { pushed = false, settle = false, settleOptions, branch } = {}) {
     // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
+    if (branch && pr.head.ref !== branch) {
+        return { reason: 'PR head branch changed; waiting for another event with its branch lock.' };
+    }
     // Only the marked reviews from this App are ever candidates for dismissal.
     let standing = [];
     async function withdraw(reason, all = true) {
@@ -68,13 +99,33 @@ export async function reconcile(api, number, ci, { pushed = false } = {}) {
     }
     try {
         standing = (await api.reviews(number)).filter(ownsReview);
+        let settled;
+        if (settle && !pushed) {
+            settled = await waitForCiToSettle(api, number, pr, ci, settleOptions);
+            if (settled.changed) {
+                return {
+                    state: 'pending',
+                    approve: false,
+                    reason: 'PR changed while waiting for CI data; waiting for another completion event.',
+                };
+            }
+            pr = settled.pr;
+        }
         // Withdraw old-head approvals before spending time inspecting CI.
         await withdraw('The PR head changed; waiting for checks on the new commit.', false);
         if (pushed) {
             // A delayed push event must preserve a newer approval and its successful status.
             return { reason: 'Removed old-commit approvals; CI completion handles approval.' };
         }
-        let result = await evaluate(api, pr, ci);
+        let firstEvaluation = true;
+        const evaluateCi = (current) => {
+            if (firstEvaluation && settled) {
+                firstEvaluation = false;
+                return settled.passed;
+            }
+            return ci(current);
+        };
+        let result = await evaluate(api, pr, evaluateCi);
         if (!result.approve) await withdraw(result.reason);
         if (result.approve) {
             const fresh = await api.pr(number);
@@ -223,7 +274,7 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
     };
 }
 
-export async function targets(api, event, eventName) {
+export async function targets(api, event, eventName, branch) {
     if (event.pull_request) return [event.pull_request.number];
     if (eventName === 'workflow_dispatch' && event.inputs?.pr_number) {
         const number = Number(event.inputs.pr_number);
@@ -238,9 +289,22 @@ export async function targets(api, event, eventName) {
             .filter((pr) => pr.head.repo?.full_name === api.repo && pr.head.ref === run.head_branch)
             .map((pr) => pr.number);
     }
-    return (await api.open())
+    return (await api.open(branch))
         .filter((pr) => pr.head.repo?.full_name === api.repo && supportedBase(pr.base.ref))
         .map((pr) => pr.number);
+}
+
+export async function targetBranches(api, event, eventName) {
+    if (event.pull_request) return [event.pull_request.head.ref];
+    if (event.workflow_run) {
+        return event.workflow_run.head_repository?.full_name === api.repo ? [event.workflow_run.head_branch] : [];
+    }
+    const branches = [];
+    for (const number of await targets(api, event, eventName)) {
+        const pr = await api.pr(number);
+        if (pr.head.repo?.full_name === api.repo) branches.push(pr.head.ref);
+    }
+    return [...new Set(branches)];
 }
 
 export function verifyPrCi(api, pr, workflows) {
@@ -259,16 +323,23 @@ export function verifyPrCi(api, pr, workflows) {
     );
 }
 
-export async function main(env) {
+export async function main(env, { discover = false } = {}) {
     const api = githubApi(env);
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
+    if (discover) {
+        const branches = await targetBranches(api, event, env.GITHUB_EVENT_NAME);
+        appendFileSync(env.GITHUB_OUTPUT, `branches=${JSON.stringify(branches)}\n`);
+        return;
+    }
     const policy = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
     const ci = (pr) => verifyPrCi(api, pr, Object.keys(policy));
     const errors = [];
-    for (const number of await targets(api, event, env.GITHUB_EVENT_NAME)) {
+    for (const number of await targets(api, event, env.GITHUB_EVENT_NAME, env.CI_APPROVAL_BRANCH)) {
         try {
             const result = await reconcile(api, number, ci, {
                 pushed: env.GITHUB_EVENT_NAME === 'pull_request_target' && event.action === 'synchronize',
+                settle: env.GITHUB_EVENT_NAME === 'workflow_run',
+                branch: env.CI_APPROVAL_BRANCH,
             });
             const summary = `PR #${number}: ${result.reason}`;
             console.log(summary);
@@ -281,5 +352,5 @@ export async function main(env) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-    await main(process.env);
+    await main(process.env, { discover: process.argv.includes('--discover') });
 }
