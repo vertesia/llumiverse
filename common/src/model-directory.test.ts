@@ -333,3 +333,18 @@ describe('central model directory', () => {
         ]);
     });
 });
+
+describe('Foundry Claude source capabilities', () => {
+    it.each(['claude-opus-5-5', 'claude-sonnet-5-5-20260901', 'claude-opus-6'])(
+        'matches Anthropic controls and capabilities for %s',
+        (model) => {
+            const foundry = resolveModelProfile(`opaque::${model}`, Providers.azure_foundry);
+            expect(foundry.capabilities).toEqual(resolveModelProfile(model, Providers.anthropic).capabilities);
+            expect(foundry.capabilities.input.image).toBe(true);
+            expect(foundry.capabilities.tool_support).toBe(true);
+            expect(getOptions(`opaque::${model}`, Providers.azure_foundry)).toEqual(
+                getOptions(model, Providers.anthropic),
+            );
+        },
+    );
+});

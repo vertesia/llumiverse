@@ -9,6 +9,7 @@ import {
     Providers,
     SharedOptions,
 } from '../types.js';
+import { getAnthropicOptions } from './anthropic.js';
 import { getMaxOutputTokens } from './context-windows.js';
 import { getOpenAiOptions } from './openai.js';
 import { isOpenAIGptVersionGTE } from './version-parsing.js';
@@ -132,6 +133,7 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
     const modelLower = baseModel.toLowerCase();
     const max_tokens_limit = getMaxTokensLimitAzureFoundry(model);
     const profile = resolveModelProfile(model, Providers.azure_foundry);
+    if (profile.family === 'claude') return getAnthropicOptions(baseModel, _option);
     if (modelLower.includes('gpt-') || modelLower.includes('dall-e') || /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)) {
         return getOpenAiOptions(baseModel, _option, profile);
     }
