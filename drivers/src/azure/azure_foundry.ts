@@ -44,6 +44,13 @@ import {
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+
+function resourceInferenceURL(baseURL: string): string {
+    const url = new URL(baseURL);
+    // Images and embeddings use the resource endpoint, rather than the project proxy.
+    url.pathname = url.pathname.replace(/\/api\/projects\/[^/]+\/openai\/v1\/?$/, '/openai/v1');
+    return url.toString();
+}
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
@@ -60,7 +67,7 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
 
     getImageService(): OpenAI {
         this.imageService ??= this.service.withOptions({
-            defaultQuery: { 'api-version': this.foundryOptions.apiVersion ?? 'preview' },
+            baseURL: resourceInferenceURL(this.service.baseURL),
             fetch: this.getDriverFetch(),
             maxRetries: 0,
         });
@@ -158,6 +165,7 @@ export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenA
 export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
     service: AIProjectClient;
     private inferenceClient?: OpenAI;
+    private resourceClient?: OpenAI;
     private inferenceProtocolDriver?: AzureFoundryInferenceProtocolDriver;
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
@@ -249,6 +257,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             });
         }
         return this.inferenceClient;
+    }
+
+    private getResourceClient(): OpenAI {
+        const inference = this.getInferenceClient();
+        this.resourceClient ??= inference.withOptions({ baseURL: resourceInferenceURL(inference.baseURL) });
+        return this.resourceClient;
     }
 
     private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
@@ -453,7 +467,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private async callAzureEmbeddings(input: string[], model: string, kind: 'text' | 'image'): Promise<number[][]> {
         const { deploymentName } = parseAzureFoundryModelId(model);
         try {
-            const response = await this.getInferenceClient().embeddings.create(
+            const response = await this.getResourceClient().embeddings.create(
                 { input, model: deploymentName, encoding_format: 'float' },
                 { timeout: this.getDriverRequestTimeoutMs() },
             );
@@ -621,7 +635,7 @@ function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
     // These source families use dedicated endpoint contracts, not Foundry chat or Responses inference.
     if (
         ['embedding', 'image', 'transcription', 'speech', 'realtime', 'video', 'moderation'].includes(profile.family) ||
-        /(?:^|[-_.:/])(?:embed|embeddings?|whisper|transcribe|tts|realtime|moderation|sora)(?:[-_.:/]|$)/.test(
+        /(?:^|[-_.:/])(?:embed|embeddings?|flux|whisper|transcribe|tts|realtime|moderation|sora)(?:[-_.:/]|$)/.test(
             sourceModel,
         )
     ) {

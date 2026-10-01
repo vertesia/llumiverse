@@ -12,6 +12,7 @@ const credential: TokenCredential = {
 type FoundryInternals = {
     getDriverFetch: () => typeof fetch;
     getInferenceClient: () => OpenAI;
+    getResourceClient: () => OpenAI;
     getInferenceProtocolDriver: () => { service: OpenAI };
 };
 
@@ -30,6 +31,8 @@ describe('AzureFoundryDriver protocol composition', () => {
             modelDeployment('explicit-chat', 'Llama-5', { chat_completion: 'true' }),
             modelDeployment('not-chat', 'Llama-4', { chat_completion: 'false' }),
             modelDeployment('embedding', 'text-embedding-4', { chat_completion: 'true' }),
+            modelDeployment('flux', 'FLUX.1-Kontext-pro', {}),
+            modelDeployment('future-flux', 'FLUX-9-pro', { chat_completion: 'true' }),
             modelDeployment('speech', 'gpt-4o-mini-tts', { chat_completion: 'true' }),
             {
                 ...modelDeployment('image', 'gpt-image-2.5-flare', { chat_completion: 'false' }),
@@ -332,7 +335,7 @@ describe('AzureFoundryDriver protocol composition', () => {
             'Temporarily unavailable',
             new Headers(),
         );
-        vi.spyOn(exposePrivate<FoundryInternals>(driver).getInferenceClient().embeddings, 'create').mockRejectedValue(
+        vi.spyOn(exposePrivate<FoundryInternals>(driver).getResourceClient().embeddings, 'create').mockRejectedValue(
             error,
         );
 

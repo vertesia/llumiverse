@@ -90,6 +90,33 @@ describe('Foundry OpenAI v1 transport', () => {
         }
     });
 
+    it('preserves injected resource endpoints for images and embeddings', async () => {
+        const { driver, internals, fetch, respond, requests } = setup();
+        vi.spyOn(driver.service, 'getOpenAIClient').mockReturnValue({
+            baseURL: 'https://gateway.example.test/custom/openai/v1',
+        } as ReturnType<typeof driver.service.getOpenAIClient>);
+        vi.spyOn(internals.getOpenAIProtocolDriver(), 'getDriverFetch').mockReturnValue(fetch);
+        respond.mockImplementation(
+            ({ input }) =>
+                new Response(
+                    JSON.stringify(input ? { data: [{ index: 0, embedding: [1] }] } : { data: [{ b64_json: 'YQ==' }] }),
+                    {
+                        headers: { 'content-type': 'application/json' },
+                    },
+                ),
+        );
+        try {
+            await driver.execute([{ role: PromptRole.user, content: 'A garden' }], { model: 'garden::gpt-image-2' });
+            await driver.generateEmbeddings({ model: 'embedding', inputs: [{ type: 'text', text: 'Hello' }] });
+            expect(requests.map((request) => request.url)).toEqual([
+                'https://gateway.example.test/custom/openai/v1/images/generations',
+                'https://gateway.example.test/custom/openai/v1/embeddings',
+            ]);
+        } finally {
+            driver.destroy();
+        }
+    });
+
     it('streams non-OpenAI text and cancels the SDK stream on early exit', async () => {
         const { driver, internals, respond, requests } = setup();
         vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
@@ -210,33 +237,37 @@ describe('Foundry OpenAI v1 transport', () => {
         }
     });
 
-    it('uses the same native SDK authentication for image generation', async () => {
-        const { driver, internals, fetch, respond, requests } = setup();
-        vi.spyOn(internals.getOpenAIProtocolDriver(), 'getDriverFetch').mockReturnValue(fetch);
-        respond.mockImplementation(() => {
-            return new Response(JSON.stringify({ data: [{ b64_json: 'YQ==' }], output_format: 'webp' }), {
-                headers: { 'content-type': 'application/json' },
+    it.each([undefined, 'explicit-version'])(
+        'uses native image authentication and preserves only explicit API version %s',
+        async (apiVersion) => {
+            const { driver, internals, fetch, respond, requests } = setup(apiVersion);
+            vi.spyOn(internals.getOpenAIProtocolDriver(), 'getDriverFetch').mockReturnValue(fetch);
+            respond.mockImplementation(() => {
+                return new Response(JSON.stringify({ data: [{ b64_json: 'YQ==' }], output_format: 'webp' }), {
+                    headers: { 'content-type': 'application/json' },
+                });
             });
-        });
-        try {
-            const result = await driver.execute([{ role: PromptRole.user, content: 'A garden' }], {
-                model: 'garden::gpt-image-2.5-flare',
-                model_options: {
-                    _option_id: 'openai-gpt-image',
-                    width: 2048,
-                    height: 1024,
-                    image_quality: 'max',
-                    output_format: 'webp',
-                },
-            });
-            expect(requests[0].url).toBe(
-                'https://foundry.example.test/api/projects/project/openai/v1/images/generations?api-version=preview',
-            );
-            expect(requests[0].body).toMatchObject({ model: 'garden', size: '2048x1024', quality: 'max' });
-            expect(requests[0].headers.get('authorization')).toBe('Bearer test-token');
-            expect(result.result).toEqual([{ type: 'image', value: 'data:image/webp;base64,YQ==' }]);
-        } finally {
-            driver.destroy();
-        }
-    });
+            try {
+                const result = await driver.execute([{ role: PromptRole.user, content: 'A garden' }], {
+                    model: 'garden::gpt-image-2.5-flare',
+                    model_options: {
+                        _option_id: 'openai-gpt-image',
+                        width: 2048,
+                        height: 1024,
+                        image_quality: 'max',
+                        output_format: 'webp',
+                    },
+                });
+                expect(requests[0].url).toBe(
+                    'https://foundry.example.test/openai/v1/images/generations' +
+                        (apiVersion ? `?api-version=${apiVersion}` : ''),
+                );
+                expect(requests[0].body).toMatchObject({ model: 'garden', size: '2048x1024', quality: 'max' });
+                expect(requests[0].headers.get('authorization')).toBe('Bearer test-token');
+                expect(result.result).toEqual([{ type: 'image', value: 'data:image/webp;base64,YQ==' }]);
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
 });
