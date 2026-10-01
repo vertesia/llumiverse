@@ -11,13 +11,21 @@ export function imageDataUrl(data: string, returned?: string | null, requested?:
     return data.startsWith('data:') ? data : `data:image/${returned ?? requested ?? 'png'};base64,${data}`;
 }
 
-async function imageFile(image: ImageInput, service: OpenAI, signal?: AbortSignal) {
+async function imageFile(
+    image: ImageInput,
+    service: OpenAI,
+    requestOptions: OpenAI.RequestOptions,
+    fetcher: typeof fetch,
+) {
+    const deadline = requestOptions.timeout === undefined ? undefined : AbortSignal.timeout(requestOptions.timeout);
+    const signals = [requestOptions.signal, deadline].filter((signal): signal is AbortSignal => !!signal);
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
     if (image.file_id) {
-        const response = await service.files.content(image.file_id, { signal });
+        const response = await service.files.content(image.file_id, { ...requestOptions, signal });
         return toFile(await response.blob(), `${image.file_id}.png`);
     }
     if (!image.image_url) throw new Error('Image input requires a URL or file ID');
-    const response = await fetch(image.image_url, { signal });
+    const response = await fetcher(image.image_url, { signal });
     if (!response.ok) throw new Error(`Could not read image input: HTTP ${response.status}`);
     const blob = await response.blob();
     return toFile(blob, `image.${blob.type.split('/')[1] || 'png'}`, { type: blob.type });
@@ -30,7 +38,8 @@ export async function imageRequest(
     model: string,
     options: ImageOptions | undefined,
     sourceModel: string,
-    signal?: AbortSignal,
+    requestOptions: OpenAI.RequestOptions = {},
+    fetcher: typeof fetch = fetch,
 ): Promise<
     | { generate: OpenAI.Images.ImageGenerateParamsNonStreaming; edit?: never }
     | { edit: OpenAI.Images.ImageEditParamsNonStreaming; generate?: never }
@@ -85,8 +94,8 @@ export async function imageRequest(
     const edit: OpenAI.Images.ImageEditParamsNonStreaming = {
         ...editCommon,
         quality: common.quality === 'hd' ? 'standard' : common.quality,
-        image: await Promise.all(images.map((image) => imageFile(image, service, signal))),
-        mask: masks[0] ? await imageFile(masks[0], service, signal) : undefined,
+        image: await Promise.all(images.map((image) => imageFile(image, service, requestOptions, fetcher))),
+        mask: masks[0] ? await imageFile(masks[0], service, requestOptions, fetcher) : undefined,
         input_fidelity:
             isOpenAIImageVersionGTE(sourceModel, 2) && !isOpenAIImageVersionGTE(sourceModel, 2, 5)
                 ? undefined

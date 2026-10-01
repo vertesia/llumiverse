@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Base64DataSource, type ExecutionOptions, type OpenAiGptImageOptions, PromptRole } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
@@ -54,6 +56,83 @@ describe('image requests', () => {
         });
         expect(result.result).toEqual([{ type: 'image', value: 'data:image/jpeg;base64,YWJj' }]);
         expect(result.token_usage).toEqual({ prompt: 2, result: 3, total: 5 });
+    });
+
+    it.each([
+        ['url', false],
+        ['url', true],
+        ['file', false],
+        ['file', true],
+    ] as const)('bounds %s downloads before image requests (stream=%s)', async (kind, streaming) => {
+        const server = createServer((_request, response) => {
+            setTimeout(() => {
+                response.writeHead(200, { 'content-type': 'image/png' });
+                response.end('image');
+            }, 120);
+        });
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        driver.service = driver.service.withOptions({ baseURL: url });
+        const edit = vi.spyOn(driver.service.images, 'edit');
+        const prompt: OpenAI.Responses.ResponseInputItem[] = [
+            {
+                role: 'user',
+                content: [
+                    { type: 'input_text', text: 'Edit' },
+                    {
+                        type: 'input_image',
+                        detail: 'auto',
+                        ...(kind === 'url' ? { image_url: url } : { file_id: 'file-ref' }),
+                    },
+                ],
+            },
+        ];
+        const execution = { ...options, httpTimeout: { headersTimeout: 20, bodyTimeout: 20 } };
+        try {
+            await expect(
+                streaming
+                    ? driver.requestImageStream(prompt, execution)
+                    : driver.requestImageGeneration(prompt, execution),
+            ).rejects.toThrow();
+            expect(edit).not.toHaveBeenCalled();
+        } finally {
+            await driver.destroy();
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+        }
+    });
+
+    it('passes request options to file downloads and cancellation to reference loading', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const content = vi.spyOn(driver.service.files, 'content').mockResolvedValue(new Response('reference'));
+        const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response('reference'));
+        const controller = new AbortController();
+        const prompt: OpenAI.Responses.ResponseInputItem[] = [
+            {
+                role: 'user',
+                content: [
+                    { type: 'input_image', file_id: 'file-ref', detail: 'auto' },
+                    { type: 'input_image', image_url: 'https://example.com/image.png', detail: 'auto' },
+                ],
+            },
+        ];
+        await imageRequest(
+            driver.service,
+            prompt,
+            options.model,
+            undefined,
+            options.model,
+            { signal: controller.signal, timeout: 2000 },
+            fetcher,
+        );
+        expect(content.mock.calls[0][1]?.timeout).toBe(2000);
+        const fileSignal = content.mock.calls[0][1]?.signal;
+        const urlSignal = fetcher.mock.calls[0][1]?.signal;
+        controller.abort();
+        expect(fileSignal?.aborted).toBe(true);
+        expect(urlSignal?.aborted).toBe(true);
+        await driver.destroy();
     });
 
     it('retains ordered references and applies masks separately', async () => {

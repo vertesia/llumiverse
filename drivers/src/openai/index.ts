@@ -799,15 +799,16 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        const requestOptions = this.getDriverRequestOptions(options, signal);
         const request = await imageRequest(
             this.getImageService(),
             prompt,
             this.getResponsesRequestModel(options.model),
             options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
             this.getImageSourceModel(options.model),
-            signal,
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
         );
-        const requestOptions = this.getDriverRequestOptions(options, signal);
         const response = request.edit
             ? await this.getImageService().images.edit(request.edit, requestOptions)
             : await this.getImageService().images.generate(request.generate, requestOptions);
@@ -845,15 +846,16 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        const requestOptions = this.getDriverRequestOptions(options, signal);
         const request = await imageRequest(
             this.getImageService(),
             prompt,
             this.getResponsesRequestModel(options.model),
             options.model_options as OpenAiGptImageOptions | undefined,
             this.getImageSourceModel(options.model),
-            signal,
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
         );
-        const requestOptions = this.getDriverRequestOptions(options, signal);
         const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
         const stream = request.edit
             ? await this.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
