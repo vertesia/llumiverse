@@ -55,7 +55,22 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 ## Requirements
 
 * Node.js 24.x
+* The OpenAI driver uses OpenAI SDK 7.25.0, whose minimum supported Node.js version is 22.
 * Bun 1.0+ (experimental support)
+
+## Azure Foundry SDKs
+
+Foundry uses `@azure/ai-projects` for project/deployment discovery, OpenAI SDK 7 for OpenAI-compatible
+inference, and `@anthropic-ai/foundry-sdk` for Anthropic deployments. Claude Messages requests use the
+resource `/anthropic/v1/messages` endpoint and the existing Entra credential. Claude source model IDs
+select the shared Anthropic options and behavior; the deployment name is sent in the API request.
+Chat Completions, Responses, embeddings, and image requests use the OpenAI v1 endpoint resolved by
+Projects. Projects retains its own declared OpenAI dependency; no dependency override is required.
+The retired Azure AI Inference beta transport is no longer used. Deployments must support OpenAI v1
+and the requested modality; image embedding availability remains deployment-specific.
+Azure Responses image tools use v1 requests and a blocking streaming fallback. Microsoft currently
+[documents image streaming and multi-turn image editing as unsupported](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses).
+These callable paths do not establish Azure parity with OpenAI iterative image editing.
 
 ## Installation
 
