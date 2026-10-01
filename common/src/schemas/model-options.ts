@@ -332,9 +332,34 @@ export const BedrockMantleClaudeOptionsSchema = z
 
 // ===== openai =====
 
+export const OpenAiImageGenerationMaskSchema = z
+    .strictObject({
+        file_id: z.string().optional(),
+        image_url: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiImageGenerationMask' });
+
+export const OpenAiImageGenerationOptionsSchema = z
+    .strictObject({
+        model: z.string(),
+        force: z.boolean().optional(),
+        action: z.enum(['auto', 'generate', 'edit']).optional(),
+        size: z.string().optional(),
+        quality: z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        background: z.enum(['auto', 'opaque', 'transparent']).optional(),
+        output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+        output_compression: z.number().int().min(0).max(100).optional(),
+        moderation: z.enum(['auto', 'low']).optional(),
+        input_fidelity: z.enum(['low', 'high']).optional(),
+        partial_images: z.number().optional(),
+        input_image_mask: OpenAiImageGenerationMaskSchema.optional(),
+    })
+    .meta({ id: 'OpenAiImageGenerationOptions' });
+
 export const OpenAiThinkingOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-thinking').optional(),
+        image_generation: OpenAiImageGenerationOptionsSchema.optional(),
         max_tokens: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: ReasoningEffortSchema.optional(),
@@ -350,6 +375,7 @@ export const OpenAiThinkingOptionsSchema = z
 export const OpenAiTextOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-text').optional(),
+        image_generation: OpenAiImageGenerationOptionsSchema.optional(),
         max_tokens: z.number().optional(),
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
@@ -379,10 +405,17 @@ export const OpenAiDalleOptionsSchema = z
 export const OpenAiGptImageOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-gpt-image').optional(),
-        size: z.enum(['1024x1024', '1024x1536', '1536x1024', 'auto']).optional(),
-        image_quality: z.enum(['low', 'medium', 'high', 'auto']).optional(),
+        size: z.string().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        image_quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'auto']).optional(),
         background: z.enum(['transparent', 'opaque', 'auto']).optional(),
         output_format: z.enum(['png', 'webp', 'jpeg']).optional(),
+        n: z.number().optional(),
+        output_compression: z.number().int().min(0).max(100).optional(),
+        moderation: z.enum(['auto', 'low']).optional(),
+        input_fidelity: z.enum(['low', 'high']).optional(),
+        partial_images: z.number().optional(),
     })
     .meta({ id: 'OpenAiGptImageOptions' });
 
