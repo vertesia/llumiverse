@@ -357,8 +357,8 @@ export class OpenAIResponsesProtocol {
         );
         const requestOptions = this.getRequestOptions(driver, options, signal);
         const stream = requestOptions
-            ? await driver.service.responses.create(request, requestOptions)
-            : await driver.service.responses.create(request);
+            ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+            : await driver.getResponsesService(options).responses.create(request);
 
         return mapResponseStream(
             stream,
@@ -460,8 +460,8 @@ export class OpenAIResponsesProtocol {
         );
         const requestOptions = this.getRequestOptions(driver, options, signal);
         const res = requestOptions
-            ? await driver.service.responses.create(request, requestOptions)
-            : await driver.service.responses.create(request);
+            ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+            : await driver.getResponsesService(options).responses.create(request);
 
         const completion = driver.extractDataFromResponse(options, res);
         if (options.include_original_response) {
@@ -833,6 +833,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     getImageService(): OpenAI {
+        return this.service;
+    }
+
+    getResponsesService(_options: ExecutionOptions): OpenAI {
         return this.service;
     }
 

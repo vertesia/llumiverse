@@ -65,6 +65,9 @@ Chat Completions, Responses, embeddings, and image requests use the OpenAI v1 en
 Projects. Projects retains its own declared OpenAI dependency; no dependency override is required.
 The retired Azure AI Inference beta transport is no longer used. Deployments must support OpenAI v1
 and the requested modality; image embedding availability remains deployment-specific.
+Azure Responses image tools use v1 requests and a blocking streaming fallback. Microsoft currently
+[documents image streaming and multi-turn image editing as unsupported](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses).
+These callable paths do not establish Azure parity with OpenAI iterative image editing.
 
 ## Installation
 

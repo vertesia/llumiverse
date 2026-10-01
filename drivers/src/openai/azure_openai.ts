@@ -96,6 +96,11 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
         return this.imageService ?? this.service;
     }
 
+    getResponsesService(options: ExecutionOptions): OpenAI {
+        const imageTool = (options.model_options as { image_generation?: unknown } | undefined)?.image_generation;
+        return imageTool ? this.getImageService() : this.service;
+    }
+
     /**
      * Get default authentication for Azure Cognitive Services API
      */
