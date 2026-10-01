@@ -7,7 +7,11 @@
         "build": "pnpm exec turbo run build ${TURBO_CACHE_OPTS:---cache=local:rw,remote:r}",
         "check": "pnpm exec biome check .",
         "check:write": "pnpm exec biome check --write .",
+<<<<<<< HEAD
         "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test:unit",
+=======
+        "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test",
+>>>>>>> 4196d67 (fix: pin renovate validator (#727))
         "ci:renovate": "npx --yes --package renovate@44.131.0 -- renovate-config-validator --strict",
         "clean:outputs": "pnpm -r exec rimraf ./lib ./dist ./.next ./tsconfig.tsbuildinfo ./.tsbuildinfo",
         "format": "pnpm exec biome format --write .",
