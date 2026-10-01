@@ -32,6 +32,10 @@ describe('AzureFoundryDriver protocol composition', () => {
             modelDeployment('not-chat', 'Llama-4', { chat_completion: 'false' }),
             modelDeployment('embedding', 'text-embedding-4', { chat_completion: 'true' }),
             modelDeployment('speech', 'gpt-4o-mini-tts', { chat_completion: 'true' }),
+            {
+                ...modelDeployment('image', 'gpt-image-2.5-flare', { chat_completion: 'false' }),
+                modelPublisher: 'OpenAI',
+            },
         ];
         driver.service = {
             deployments: {
@@ -46,6 +50,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect((await driver.listModels()).map((model) => model.id)).toEqual([
             'explicit-chat::Llama-5',
             'future-chat::Future-Chat-7',
+            'image::gpt-image-2.5-flare',
         ]);
     });
 

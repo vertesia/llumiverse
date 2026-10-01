@@ -24,6 +24,7 @@ import {
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
+    ModelType,
     normalizeEmbeddingsOptions,
     Providers,
     resolveModelProfile,
@@ -69,9 +70,28 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
 
-    constructor(service: OpenAI, options: DriverOptions) {
-        super(options);
+    constructor(
+        service: OpenAI,
+        private readonly foundryOptions: AzureFoundryDriverOptions,
+    ) {
+        super(foundryOptions);
         this.service = service;
+    }
+
+    private imageService?: OpenAI;
+
+    getImageService(): OpenAI {
+        this.imageService ??= this.service.withOptions({
+            defaultQuery: { 'api-version': this.foundryOptions.apiVersion ?? 'preview' },
+            fetch: this.getDriverFetch(),
+            maxRetries: 0,
+        });
+        return this.imageService;
+    }
+
+    getImageSourceModel(model: string): string {
+        if (model.includes('::') || resolveModelProfile(model, this.provider).family !== 'generic') return model;
+        return this.foundryOptions.sourceModel ?? model;
     }
 
     async listModels(): Promise<AIModel[]> {
@@ -164,6 +184,8 @@ export interface AzureFoundryDriverOptions extends DriverOptions {
     endpoint?: string;
 
     apiVersion?: string;
+
+    sourceModel?: string;
 }
 
 export interface AzureFoundryInferencePrompt {
@@ -190,7 +212,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
 
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+        this.formatPrompt = (segments, options) =>
+            formatOpenAILikeMultimodalPrompt(segments, {
+                ...options,
+                imageGeneration: this.isImageModel(options.model),
+                result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
+            });
 
         if (!opts.endpoint) {
             throw new Error('Azure AI Foundry endpoint is required');
@@ -249,7 +276,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        return Promise.resolve(true);
+        return Promise.resolve(
+            !(_options.model_options as { image_generation?: unknown } | undefined)?.image_generation,
+        );
     }
 
     private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
@@ -267,11 +296,26 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return formatOpenAIDebugPrompt(prompt);
     }
 
+    protected isImageModel(model: string): boolean {
+        const family = resolveModelProfile(model, this.provider).family;
+        const source = model.includes('::') || family !== 'generic' ? model : (this.options.sourceModel ?? model);
+        return resolveModelProfile(source, this.provider).family === 'image';
+    }
+
+    requestImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return this.getOpenAIProtocolDriver().requestImageGeneration(prompt, options, signal);
+    }
+
     async requestTextCompletion(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (this.isImageModel(options.model)) return this.requestImageGeneration(prompt, options, signal);
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
 
@@ -291,6 +335,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (this.isImageModel(options.model)) {
+            return this.getOpenAIProtocolDriver().requestImageStream(prompt, options, signal);
+        }
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
 
@@ -344,7 +391,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         const { deploymentName } = parseAzureFoundryModelId(context.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
-        if (protocol === 'responses' && this.openAIProtocolDriver) {
+        if ((protocol === 'responses' || this.isImageModel(context.model)) && this.openAIProtocolDriver) {
             return this.openAIProtocolDriver.formatLlumiverseError(error, context);
         }
         if (protocol === 'chat_completions') {
@@ -505,6 +552,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     version: model.modelVersion,
                     provider: this.provider,
                     owner: model.modelPublisher,
+                    type:
+                        resolveModelProfile(model.modelName, this.provider).family === 'image'
+                            ? ModelType.Image
+                            : ModelType.Text,
                     ...modelMetadata,
                 } satisfies AIModel;
             })
@@ -628,6 +679,8 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
+    if (sourceModel.includes('dall-e')) return false;
+    if (profile.family === 'image' && deployment.modelPublisher.toLowerCase() === 'openai') return true;
     // These source families use dedicated endpoint contracts, not Foundry chat or Responses inference.
     if (
         ['embedding', 'image', 'transcription', 'speech', 'realtime', 'video', 'moderation'].includes(profile.family) ||
