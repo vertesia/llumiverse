@@ -45,6 +45,12 @@ class TestGeminiDriver extends VertexAIDriver {
     }
 }
 
+class TestFiniteGeminiDriver extends TestGeminiDriver {
+    protected override canStream(_options: ExecutionOptions): Promise<boolean> {
+        return Promise.resolve(false);
+    }
+}
+
 function runtimeOptions(input: {
     flow: string;
     operation: string;
@@ -109,6 +115,10 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
     }
 }
 
+async function* nativeSource<T>(...values: T[]): AsyncIterable<T> {
+    yield* values;
+}
+
 async function collectCanonicalEvents(
     stream: AsyncIterable<ConversationStreamEvent>,
 ): Promise<ConversationStreamEvent[]> {
@@ -134,6 +144,132 @@ function latestGeneratedJson(value: unknown): unknown {
 }
 
 describe('Gemini canonical lifecycle', () => {
+    it('enforces bound tool selection before sync and typed canonical acceptance', async () => {
+        const textResponse = response({
+            id: 'response-selection-text',
+            content: { role: 'model', parts: [{ text: 'No tool call.' }] },
+        });
+        const toolResponse = response({
+            id: 'response-selection-tool',
+            content: { role: 'model', parts: [{ functionCall: { name: 'lookup', args: { city: 'Tokyo' } } }] },
+        });
+        const segments = [{ role: PromptRole.user, content: 'Look up Tokyo.' }];
+        const requiredOptions = (flow: string, conversation?: unknown): ExecutionOptions => ({
+            ...runtimeOptions({
+                flow,
+                operation: 'generate',
+                attempt: conversation === undefined ? 'first' : 'retry',
+                recorded_at: '2026-10-01T00:00:00.000Z',
+                ...(conversation === undefined ? {} : { conversation }),
+            }),
+            tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+            model_options: {
+                _option_id: 'vertexai-gemini',
+                tool_choice: 'required',
+                required_tool_name: 'lookup',
+            } as ExecutionOptions['model_options'] & { required_tool_name: string },
+        });
+
+        const invalidSyncTransport = vi.fn<Generate>(async () => textResponse);
+        await expect(
+            new TestGeminiDriver(invalidSyncTransport).executeCanonical(
+                segments,
+                requiredOptions('selection-invalid-sync'),
+            ),
+        ).rejects.toThrow('violated the requested tool-selection policy');
+        expect(invalidSyncTransport).toHaveBeenCalledOnce();
+
+        const finiteTransport = vi.fn<Generate>(async () => textResponse);
+        const finiteStream = await new TestFiniteGeminiDriver(finiteTransport).streamCanonicalEvents(
+            segments,
+            requiredOptions('selection-invalid-finite-stream'),
+            undefined,
+            { stream_id: 'stream:gemini:selection-invalid-finite' },
+        );
+        const finiteEvents = await collectCanonicalEvents(finiteStream);
+        expect(finiteEvents.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'CANONICAL_EXECUTION_FAILED' },
+        });
+        expect(finiteEvents.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(finiteStream.completion).toBeUndefined();
+        expect(finiteTransport).toHaveBeenCalledOnce();
+
+        const invalidStreamTransport = vi.fn<GenerateStream>(async () => nativeSource(textResponse));
+        const invalidStream = await new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, invalidStreamTransport).streamCanonicalEvents(
+            segments,
+            requiredOptions('selection-invalid-stream'),
+            undefined,
+            {
+                stream_id: 'stream:gemini:selection-invalid',
+            },
+        );
+        const invalidEvents = await collectCanonicalEvents(invalidStream);
+        expect(invalidEvents.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: false },
+        });
+        expect(invalidEvents.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(invalidStream.completion).toBeUndefined();
+
+        const validTransport = vi.fn<Generate>(async () => toolResponse);
+        const driver = new TestGeminiDriver(validTransport);
+        const first = await driver.executeCanonical(segments, requiredOptions('selection-recovery'));
+        const firstGeneration = Object.values(first.conversation.generations).find(
+            (candidate) => candidate.id === first.accepted_output.generation.id,
+        );
+        if (firstGeneration?.request_receipt === undefined) throw new Error('Expected retained request receipt');
+        expect(firstGeneration.request_receipt.target.options).toEqual({
+            canonical_tool_selection: { mode: 'required', tool_name: 'lookup' },
+        });
+        const persisted = JSON.parse(JSON.stringify(first.conversation));
+        const recovered = await driver.executeCanonical(segments, requiredOptions('selection-recovery', persisted));
+        expect(recovered.accepted_output).toEqual(first.accepted_output);
+        expect(validTransport).toHaveBeenCalledOnce();
+
+        await expect(
+            driver.executeCanonical(segments, {
+                ...requiredOptions('selection-recovery', persisted),
+                model_options: {
+                    _option_id: 'vertexai-gemini',
+                    tool_choice: 'none',
+                } as ExecutionOptions['model_options'] & { tool_choice: 'none' },
+            }),
+        ).rejects.toThrow('incompatible canonical tool-selection policy');
+        expect(validTransport).toHaveBeenCalledOnce();
+
+        const malformed = JSON.parse(JSON.stringify(first.conversation));
+        const generation = Object.values(parseConversationDocument(malformed).generations).find(
+            (candidate) => candidate.record_source === 'executed',
+        );
+        if (generation === undefined) throw new Error('Expected executed generation');
+        const mutableGeneration = (malformed.generations as Record<string, typeof generation>)[generation.id];
+        if (mutableGeneration === undefined) throw new Error('Expected mutable executed generation');
+        mutableGeneration.request_receipt.target.options = {
+            canonical_tool_selection: { mode: 'required', extra: true },
+        };
+        await expect(
+            driver.executeCanonical(segments, requiredOptions('selection-recovery', malformed)),
+        ).rejects.toThrow('unknown field');
+        expect(validTransport).toHaveBeenCalledOnce();
+
+        const legacy = JSON.parse(JSON.stringify(first.conversation));
+        const legacyGeneration = Object.values(parseConversationDocument(legacy).generations).find(
+            (candidate) => candidate.record_source === 'executed',
+        );
+        if (legacyGeneration === undefined) throw new Error('Expected legacy executed generation');
+        delete (legacy.generations as Record<string, typeof legacyGeneration>)[legacyGeneration.id]?.request_receipt
+            .target.options;
+        await expect(
+            driver.executeCanonical(segments, requiredOptions('selection-recovery', legacy)),
+        ).resolves.toMatchObject({ accepted_output: first.accepted_output });
+        expect(validTransport).toHaveBeenCalledOnce();
+    });
+
     it('validates structured sync output, preserves usage, and durably recovers an accepted response', async () => {
         const raw = '{ "answer" : "Tokyo", "note" : null }';
         const nativeResponse = response({

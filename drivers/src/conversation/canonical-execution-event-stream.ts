@@ -1,3 +1,4 @@
+import { LlumiverseError } from '@llumiverse/common';
 import {
     CONVERSATION_EXPERIMENTAL_REVISION,
     CONVERSATION_FORMAT,
@@ -419,6 +420,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     }
 
     private safeFailureClassification(error: unknown): boolean | undefined {
+        if (LlumiverseError.isLlumiverseError(error)) return error.retryable;
         try {
             return this.options.classifyFailure?.(error);
         } catch {

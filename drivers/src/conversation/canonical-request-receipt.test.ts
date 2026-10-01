@@ -5,13 +5,16 @@ import {
     deriveConversationId,
     externalizeToolCallArguments,
     inlineAssetContentIntegrity,
+    type JsonValue,
     type NativeItemMapping,
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
 import {
     acceptedCanonicalRequestDocument,
+    assertAcceptedCanonicalRequest,
     type CanonicalPreparedState,
+    canonicalToolSelectionTargetOptions,
     createExecutedGeneration,
     createRequestReceipt,
     publishCanonicalPreparedRequest,
@@ -76,6 +79,86 @@ async function receipt(doc: ConversationDocument, mappings: NativeItemMapping[] 
 }
 
 describe('canonical request receipt binding', () => {
+    async function acceptedState(options?: {
+        marker?: JsonValue;
+        response_selection_policy?: CanonicalPreparedState<unknown>['response_selection_policy'];
+    }): Promise<Pick<CanonicalPreparedState<unknown>, 'accepted_response' | 'response_selection_policy' | 'runtime'>> {
+        const doc = document();
+        const nativePayload = { messages: [] };
+        const requestReceipt = await createRequestReceipt(
+            doc,
+            runtime,
+            {
+                ...target,
+                ...(options?.marker !== undefined ? { options: { canonical_tool_selection: options.marker } } : {}),
+            },
+            nativePayload,
+            [],
+            [],
+        );
+        const generation = await createExecutedGeneration({
+            id: 'accepted-generation',
+            runtime,
+            receipt: requestReceipt,
+            ...target,
+            requested_model: target.model,
+        });
+        return {
+            runtime,
+            ...(options?.response_selection_policy === undefined
+                ? {}
+                : { response_selection_policy: options.response_selection_policy }),
+            accepted_response: {
+                generation,
+                turn: {
+                    id: 'accepted-turn',
+                    kind: 'agent',
+                    authority: 'ordinary',
+                    model_visibility: 'include',
+                    status: 'completed',
+                    provenance: { type: 'generated' },
+                    timestamps: { recorded_at: now },
+                    generation_id: generation.id,
+                    blocks: [{ id: 'accepted-text', type: 'text', format: 'plain', text: 'answer' }],
+                },
+            },
+        };
+    }
+
+    it('binds explicit tool selection while retaining legacy marker-free accepted recovery', async () => {
+        const nativePayload = { messages: [] };
+        const exact = await acceptedState({
+            marker: { mode: 'required', tool_name: 'lookup' },
+            response_selection_policy: { mode: 'required', tool_name: 'lookup' },
+        });
+        await expect(assertAcceptedCanonicalRequest(exact, target, nativePayload)).resolves.toBeUndefined();
+        await expect(
+            assertAcceptedCanonicalRequest(
+                { ...exact, response_selection_policy: { mode: 'none' } },
+                target,
+                nativePayload,
+            ),
+        ).rejects.toThrow('incompatible canonical tool-selection policy');
+        await expect(
+            assertAcceptedCanonicalRequest({ ...exact, response_selection_policy: undefined }, target, nativePayload),
+        ).rejects.toThrow('incompatible canonical tool-selection policy');
+        const malformed = await acceptedState({
+            marker: { mode: 'required', unexpected: true },
+            response_selection_policy: { mode: 'required' },
+        });
+        await expect(assertAcceptedCanonicalRequest(malformed, target, nativePayload)).rejects.toThrow('unknown field');
+
+        const legacy = await acceptedState({ response_selection_policy: { mode: 'none' } });
+        await expect(assertAcceptedCanonicalRequest(legacy, target, nativePayload)).resolves.toBeUndefined();
+        expect(canonicalToolSelectionTargetOptions({ provider_option: true }, { mode: 'none' })).toEqual({
+            provider_option: true,
+            canonical_tool_selection: { mode: 'none' },
+        });
+        expect(() =>
+            canonicalToolSelectionTargetOptions({ canonical_tool_selection: { mode: 'auto' } }, { mode: 'required' }),
+        ).toThrow('reserve');
+    });
+
     it('checks accepted recovery only after the exact prepared request is durably published', async () => {
         const doc = document();
         const requestReceipt = await receipt(doc);

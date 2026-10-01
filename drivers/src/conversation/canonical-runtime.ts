@@ -1,7 +1,10 @@
 import type { ExecutionOptions, ToolDefinition as LegacyToolDefinition } from '@llumiverse/common';
 import {
+    type AppendConversationRecordsOptions,
+    type AppendConversationRecordsResult,
     type Asset,
     appendConversationRecords,
+    appendDecodedConversationResponse,
     type ContextEntry,
     type ConversationAcceptedOutputFragment,
     type ConversationDocument,
@@ -9,6 +12,7 @@ import {
     ConversationRuntimeContextSchema,
     type ConversationTurn,
     createConversationDocument,
+    type DecodedConversationResponse,
     deriveConversationId,
     type ExecutedGeneration,
     type ExecutionReceipt,
@@ -21,6 +25,7 @@ import {
     type JsonObject,
     type JsonValue,
     type NativeItemMapping,
+    type PreparedConversationRequest,
     parseConversationDocument,
     parseConversationPreparedRequest,
     type RequestReceipt,
@@ -28,10 +33,13 @@ import {
     type ToolDefinition,
 } from '@llumiverse/conversation';
 import {
+    assertDecodedCanonicalToolSelection,
     CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
+    type CanonicalToolSelectionPolicy,
     createCanonicalExecutionResponse,
     markCanonicalAcceptedRecovery,
+    parseCanonicalToolSelectionPolicy,
 } from '@llumiverse/core';
 
 export type { ResolvedConversationRuntimeContext } from '@llumiverse/conversation';
@@ -61,10 +69,47 @@ export interface CanonicalPreparedState<NativeConversation> {
     generation_id: string;
     response_turn_id: string;
     tool_definitions: ToolDefinition[];
+    response_selection_policy?: CanonicalToolSelectionPolicy;
     accepted_response?: {
         turn: GeneratedAgentTurn;
         generation: ExecutedGeneration;
     };
+}
+
+export const CANONICAL_TOOL_SELECTION_TARGET_OPTION = 'canonical_tool_selection';
+
+/** Add the reserved response-selection marker without overwriting provider-specific target options. */
+export function canonicalToolSelectionTargetOptions(
+    targetOptions: JsonObject | undefined,
+    policy: CanonicalToolSelectionPolicy | undefined,
+): JsonObject | undefined {
+    if (policy === undefined) return targetOptions;
+    if (targetOptions !== undefined && Object.hasOwn(targetOptions, CANONICAL_TOOL_SELECTION_TARGET_OPTION)) {
+        throw new TypeError(`Target options reserve ${CANONICAL_TOOL_SELECTION_TARGET_OPTION}`);
+    }
+    return {
+        ...targetOptions,
+        [CANONICAL_TOOL_SELECTION_TARGET_OPTION]: policy,
+    };
+}
+
+function sameToolSelectionPolicy(first: CanonicalToolSelectionPolicy, second: CanonicalToolSelectionPolicy): boolean {
+    return (
+        first.mode === second.mode &&
+        (first.mode !== 'required' || second.mode !== 'required' || first.tool_name === second.tool_name)
+    );
+}
+
+function assertAcceptedToolSelectionPolicy(
+    receipt: RequestReceipt,
+    current: CanonicalToolSelectionPolicy | undefined,
+): void {
+    const targetOptions = receipt.target.options;
+    if (targetOptions === undefined || !Object.hasOwn(targetOptions, CANONICAL_TOOL_SELECTION_TARGET_OPTION)) return;
+    const retained = parseCanonicalToolSelectionPolicy(targetOptions[CANONICAL_TOOL_SELECTION_TARGET_OPTION]);
+    if (current === undefined || !sameToolSelectionPolicy(retained, current)) {
+        throw new Error('Accepted response operation has incompatible canonical tool-selection policy');
+    }
 }
 
 type AcceptedCanonicalResponse = NonNullable<CanonicalPreparedState<unknown>['accepted_response']>;
@@ -151,7 +196,7 @@ export async function acceptedCanonicalRequestDocument(
 
 /** Verify a rebuilt native request before returning an accepted response without provider transport. */
 export async function assertAcceptedCanonicalRequest(
-    state: Pick<CanonicalPreparedState<unknown>, 'accepted_response' | 'runtime'>,
+    state: Pick<CanonicalPreparedState<unknown>, 'accepted_response' | 'response_selection_policy' | 'runtime'>,
     target: { provider: string; protocol: string; model: string },
     nativePayload: JsonValue,
 ): Promise<void> {
@@ -159,6 +204,7 @@ export async function assertAcceptedCanonicalRequest(
     if (accepted === undefined) return;
     const generation = accepted.generation;
     const receipt = generation.request_receipt;
+    assertAcceptedToolSelectionPolicy(receipt, state.response_selection_policy);
     if (
         generation.request_id !== state.runtime.request_id ||
         generation.provider !== target.provider ||
@@ -173,6 +219,17 @@ export async function assertAcceptedCanonicalRequest(
             `Accepted response operation ${state.runtime.response_operation_id} has incompatible request identity`,
         );
     }
+}
+
+/** Validate response selection before appending any canonical response records or acceptance receipt. */
+export function appendCanonicalDecodedResponse<NativePayload>(
+    prepared: PreparedConversationRequest<NativePayload> &
+        Pick<CanonicalPreparedState<unknown>, 'response_selection_policy'>,
+    decoded: DecodedConversationResponse,
+    options: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
+): AppendConversationRecordsResult {
+    assertDecodedCanonicalToolSelection(decoded, prepared.response_selection_policy);
+    return appendDecodedConversationResponse(prepared, decoded, options);
 }
 
 /** Await the host durability barrier for an exact finalized provider request. */

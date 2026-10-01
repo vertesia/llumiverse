@@ -17,7 +17,6 @@ import {
     type AgentContentBlock,
     type Asset,
     appendConversationRecords,
-    appendDecodedConversationResponse,
     type ContextEntry,
     type ConversationDocument,
     type ConversationTurn,
@@ -42,13 +41,15 @@ import {
     toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
-import type { CanonicalStructuredOutput } from '@llumiverse/core';
+import { type CanonicalStructuredOutput, canonicalToolSelectionPolicy } from '@llumiverse/core';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
+    appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
+    canonicalToolSelectionTargetOptions,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
@@ -1821,6 +1822,7 @@ export async function prepareBedrockConverseCanonicalState(input: {
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
             : { generation_id: acceptedResponse.generation.id, response_turn_id: acceptedResponse.turn.id };
+    const responseSelectionPolicy = canonicalToolSelectionPolicy(input.options);
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
@@ -1828,6 +1830,7 @@ export async function prepareBedrockConverseCanonicalState(input: {
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
         tool_definitions: appended.tool_definitions,
+        ...(responseSelectionPolicy === undefined ? {} : { response_selection_policy: responseSelectionPolicy }),
         provider: input.provider,
         requested_model: input.options.model,
         prior_native_message_count: priorNativeMessageCount,
@@ -1844,6 +1847,7 @@ export async function finalizeBedrockConversePreparedRequest(
         provider: state.provider,
         model: state.requested_model,
     });
+    const targetOptions = canonicalToolSelectionTargetOptions(undefined, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
         state.runtime,
@@ -1852,6 +1856,7 @@ export async function finalizeBedrockConversePreparedRequest(
             protocol: BEDROCK_CONVERSE_PROTOCOL,
             model: state.requested_model,
             adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
+            ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
         bedrockConverseJsonValue(payload),
         compiled.mappings,
@@ -2114,7 +2119,7 @@ export function appendBedrockConverseCanonicalResponse(
     prepared: PreparedBedrockConverseConversation,
     decoded: DecodedConversationResponse,
 ): ConversationDocument {
-    return appendDecodedConversationResponse(prepared, decoded, {
+    return appendCanonicalDecodedResponse(prepared, decoded, {
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;

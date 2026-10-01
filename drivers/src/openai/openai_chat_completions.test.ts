@@ -728,8 +728,14 @@ describe('OpenAIChatCompletionsProtocol', () => {
             choices: [
                 {
                     index: 0,
-                    message: { role: 'assistant', content: 'ok' },
-                    finish_reason: 'stop',
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            { id: 'call-think', type: 'function', function: { name: 'think', arguments: '{}' } },
+                        ],
+                    },
+                    finish_reason: 'tool_calls',
                     logprobs: null,
                 },
             ],
@@ -750,7 +756,23 @@ describe('OpenAIChatCompletionsProtocol', () => {
             object: 'chat.completion',
             created: 1,
             model: 'test/model',
-            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call-write',
+                                type: 'function',
+                                function: { name: 'write_artifact', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    finish_reason: 'tool_calls',
+                },
+            ],
         });
 
         await model.requestTextCompletion(undefined, prompt, {

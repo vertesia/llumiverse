@@ -3,7 +3,6 @@ import {
     type AgentContentBlock,
     type Asset,
     appendConversationRecords,
-    appendDecodedConversationResponse,
     type ContentBlock,
     type ConversationDocument,
     type ConversationTurn,
@@ -28,14 +27,16 @@ import {
     toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
-import type { CanonicalStructuredOutput } from '@llumiverse/core';
+import { type CanonicalStructuredOutput, canonicalToolSelectionPolicy } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
+    appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
+    canonicalToolSelectionTargetOptions,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
@@ -1426,6 +1427,7 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
             : { generation_id: acceptedResponse.generation.id, response_turn_id: acceptedResponse.turn.id };
+    const responseSelectionPolicy = canonicalToolSelectionPolicy(input.options);
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
@@ -1433,6 +1435,7 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
         tool_definitions: appended.tool_definitions,
+        ...(responseSelectionPolicy === undefined ? {} : { response_selection_policy: responseSelectionPolicy }),
         provider: input.provider,
         requested_model: input.options.model,
         prior_native_item_count: priorNativeItemCount,
@@ -1446,6 +1449,7 @@ export async function finalizeOpenAIResponsesPreparedRequest(
 ): Promise<PreparedOpenAIResponsesConversation> {
     const model = state.requested_model;
     const compiled = compileOpenAIResponsesConversation(state.document, { provider: state.provider, model });
+    const targetOptions = canonicalToolSelectionTargetOptions(undefined, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
         state.runtime,
@@ -1454,6 +1458,7 @@ export async function finalizeOpenAIResponsesPreparedRequest(
             protocol: OPENAI_RESPONSES_PROTOCOL,
             model,
             adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+            ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
         providerJsonValue(payload),
         compiled.mappings,
@@ -1687,7 +1692,7 @@ export function appendOpenAIResponsesCanonicalResponse(
     prepared: PreparedOpenAIResponsesConversation,
     decoded: DecodedConversationResponse,
 ): ConversationDocument {
-    return appendDecodedConversationResponse(prepared, decoded, {
+    return appendCanonicalDecodedResponse(prepared, decoded, {
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;

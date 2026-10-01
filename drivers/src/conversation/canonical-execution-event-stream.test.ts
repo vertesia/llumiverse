@@ -10,6 +10,7 @@ import {
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
     type CanonicalStreamTerminalEvent,
+    CanonicalToolSelectionViolationError,
     createCanonicalExecutionResponse,
 } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -685,6 +686,31 @@ describe('canonical native execution event stream', () => {
         });
         expect((events.at(-1) as { diagnostic?: object }).diagnostic).not.toHaveProperty('retryable');
         expect(JSON.stringify(events)).not.toContain('private');
+    });
+
+    it('classifies a pre-ingestion selection violation as permanent without exposing an accepted completion', async () => {
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:selection-violation' },
+            openSource: () => nativeSource('terminal'),
+            map: vi.fn(),
+            finalize: async () => {
+                throw new CanonicalToolSelectionViolationError(decoded());
+            },
+            classifyFailure: () => true,
+            abort: vi.fn(),
+            close: vi.fn(),
+        });
+        const events: ConversationStreamEvent[] = [];
+        for await (const event of stream) events.push(event);
+
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: false },
+        });
+        expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(stream.completion).toBeUndefined();
     });
 
     it('delivers cancellation after throwing abort, iterator return, and close cleanup', async () => {

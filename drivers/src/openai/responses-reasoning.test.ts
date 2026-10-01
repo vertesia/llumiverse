@@ -55,6 +55,23 @@ function response() {
     } as unknown as OpenAI.Responses.Response;
 }
 
+function toolResponse(name: string): OpenAI.Responses.Response {
+    return {
+        ...response(),
+        output: [
+            {
+                type: 'function_call',
+                id: 'item-tool-call',
+                call_id: 'call-tool-call',
+                name,
+                arguments: '{}',
+                status: 'completed',
+            },
+        ],
+        output_text: '',
+    } as OpenAI.Responses.Response;
+}
+
 describe('OpenAI Responses reasoning', () => {
     it('uses prompt-schema fallback for GLM 5.3 on OpenAI-compatible Responses', async () => {
         const create = vi.fn(async () => ({
@@ -89,7 +106,7 @@ describe('OpenAI Responses reasoning', () => {
         ['required', 'required'],
         ['any', 'required'],
     ] as const)('forwards explicit %s tool choice as %s', async (configured, expected) => {
-        const create = vi.fn(async (_request: unknown) => response());
+        const create = vi.fn(async (_request: unknown) => toolResponse('think'));
         const driver = new TestResponsesDriver(create);
 
         await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
@@ -102,7 +119,7 @@ describe('OpenAI Responses reasoning', () => {
     });
 
     it('forces one named tool without changing the visible tool definitions', async () => {
-        const create = vi.fn(async (_request: unknown) => response());
+        const create = vi.fn(async (_request: unknown) => toolResponse('write_artifact'));
         const driver = new TestResponsesDriver(create);
 
         await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
