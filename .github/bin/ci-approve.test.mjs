@@ -15,6 +15,7 @@ import {
     READ_RETRY_DELAYS_MS,
     reconcile,
     requiresHuman,
+    targetBranches,
     targets,
     verifyPrCi,
     waitForCiToSettle,
@@ -121,7 +122,12 @@ test('workflow completion waits for temporarily incomplete CI without publishing
     const sleeps = [];
     const result = await reconcile(api, 12, () => verdicts.shift(), {
         settle: true,
-        settleOptions: { timeoutMs: 20, pollMs: 10, sleep: async (ms) => sleeps.push(ms) },
+        settleOptions: {
+            timeoutMs: 20,
+            pollMs: 10,
+            now: () => sleeps.length * 10,
+            sleep: async (ms) => sleeps.push(ms),
+        },
     });
     assert.equal(result.approve, true);
     assert.deepEqual(sleeps, [10, 10]);
@@ -136,7 +142,12 @@ test('workflow completion publishes pending only after the CI settle deadline', 
     const sleeps = [];
     const result = await reconcile(api, 12, () => false, {
         settle: true,
-        settleOptions: { timeoutMs: 20, pollMs: 10, sleep: async (ms) => sleeps.push(ms) },
+        settleOptions: {
+            timeoutMs: 20,
+            pollMs: 10,
+            now: () => sleeps.length * 10,
+            sleep: async (ms) => sleeps.push(ms),
+        },
     });
     assert.equal(result.approve, false);
     assert.deepEqual(sleeps, [10, 10]);
@@ -416,8 +427,10 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.doesNotMatch(workflow, /permission-contents: write|pull_request_review|checkout.*head|npm install/);
     assert.match(workflow, /cancel-in-progress: false/);
     assert.match(workflow, /queue: max/);
-    assert.match(workflow, /github\.event\.workflow_run\.head_branch/);
-    assert.match(workflow, /github\.event\.pull_request\.head\.ref/);
+    assert.match(workflow, /matrix\.branch/);
+    assert.match(workflow, /CI_APPROVAL_BRANCH:/);
+    assert.match(workflow, /ci-approve\.mjs --discover/);
+    assert.doesNotMatch(workflow, /github\.ref_name/);
 });
 
 test('additive ruleset requires CI without changing human review or thread rules', () => {
@@ -479,6 +492,125 @@ test('a delayed push preserves an approval already granted for the current head'
 });
 
 const ciPolicies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+for (const failure of ['verification', 'polling read']) {
+    test(`settle ${failure} failures publish an error and withdraw owned approvals`, async () => {
+        const api = fixture({ reviews: [approval] });
+        const error = new Error('settle read failed');
+        let reads = 0;
+        const readPr = api.pr;
+        api.pr = async () => {
+            if (++reads > 1 && failure === 'polling read') throw error;
+            return readPr();
+        };
+        await assert.rejects(
+            reconcile(
+                api,
+                12,
+                () => {
+                    assert.deepEqual(api.writes, []);
+                    if (failure === 'verification') throw error;
+                    return false;
+                },
+                { settle: true },
+            ),
+            (caught) => caught === error,
+        );
+        assert.deepEqual(
+            api.writes.map(([kind]) => kind),
+            ['status', 'dismiss'],
+        );
+        assert.equal(api.writes[0][2], 'error');
+    });
+}
+
+for (const passed of [false, true]) {
+    test(`revision movement during terminal CI verdict ${passed} prevents every write`, async () => {
+        const api = fixture({ reviews: [approval] });
+        let moved = false;
+        api.pr = async () => (moved ? { ...pr, base: { ...pr.base, sha: 'moved' } } : pr);
+        const result = await reconcile(
+            api,
+            12,
+            () => {
+                moved = true;
+                return passed;
+            },
+            { settle: true, settleOptions: { timeoutMs: 0 } },
+        );
+        assert.match(result.reason, /changed while waiting/);
+        assert.deepEqual(api.writes, []);
+    });
+}
+
+test('settle deadline includes verification and PR read time and caps the last sleep', async () => {
+    let elapsed = 0;
+    const sleeps = [];
+    let checks = 0;
+    const api = fixture();
+    api.pr = async () => {
+        elapsed += 3;
+        return pr;
+    };
+    const result = await waitForCiToSettle(
+        api,
+        12,
+        pr,
+        () => {
+            elapsed += 6;
+            checks++;
+            return false;
+        },
+        {
+            timeoutMs: 20,
+            pollMs: 10,
+            now: () => elapsed,
+            sleep: async (ms) => {
+                sleeps.push(ms);
+                elapsed += ms;
+            },
+        },
+    );
+    assert.equal(result.passed, false);
+    assert.deepEqual(sleeps, [10]);
+    assert.equal(checks, 2);
+    assert.equal(elapsed, 28);
+});
+
+test('settle caps a sleep at the remaining deadline', async () => {
+    let elapsed = 0;
+    const sleeps = [];
+    const result = await waitForCiToSettle(fixture(), 12, pr, () => false, {
+        timeoutMs: 15,
+        pollMs: 10,
+        now: () => elapsed,
+        sleep: async (ms) => {
+            sleeps.push(ms);
+            elapsed += ms;
+        },
+    });
+    assert.equal(result.passed, false);
+    assert.deepEqual(sleeps, [10, 5]);
+});
+
+test('manual dispatch resolves a selected PR to its actual branch', async () => {
+    assert.deepEqual(await targetBranches(fixture(), { inputs: { pr_number: '12' } }, 'workflow_dispatch'), [
+        'feature',
+    ]);
+});
+
+test('bulk manual dispatch deduplicates branch jobs and scopes discovery to the locked branch', async () => {
+    const api = fixture({ pulls: [pr, { ...pr, number: 13 }] });
+    assert.deepEqual(await targetBranches(api, {}, 'workflow_dispatch'), ['feature']);
+    await targets(api, {}, 'workflow_dispatch', 'feature');
+    assert.equal(api.opened.at(-1), 'feature');
+});
+
+test('a branch job cannot write to a PR outside its lock', async () => {
+    const api = fixture({ reviews: [approval] });
+    await reconcile(api, 12, () => assert.fail('must not inspect CI'), { branch: 'other' });
+    assert.deepEqual(api.writes, []);
+});
+
 const ciWorkflow = Object.keys(ciPolicies)[0];
 function ciApi(runs) {
     return {
