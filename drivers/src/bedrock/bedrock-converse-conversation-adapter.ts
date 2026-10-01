@@ -20,6 +20,7 @@ import {
     type ContextEntry,
     type ConversationDocument,
     type ConversationTurn,
+    copyNativeConversationByteView,
     createConversationDocument,
     type DecodedConversationResponse,
     deriveConversationId,
@@ -47,6 +48,7 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
+    assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     canonicalToolSelectionTargetOptions,
@@ -58,6 +60,16 @@ import {
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    assertNativeImportInputBounds,
+    fingerprintNativeConversationImport,
+    guardNativeConversationImport,
+    type NativeConversationImportOptions,
+    type NativeConversationImportResult,
+    nativeConversationImportResult,
+    newNativeImportDocument,
+    snapshotNativeConversationImportOptions,
+} from '../conversation/native-import.js';
 import {
     assertStructuredOutputEvidence,
     type CanonicalStructuredOutputEvidence,
@@ -226,7 +238,7 @@ function bedrockToolUseType(value: object, path: string): 'tool_use' | 'server_t
 
 /** Clone an AWS document value without interpreting any user-owned key names. */
 export function bedrockConverseJsonValue(value: unknown): JsonValue {
-    if (value instanceof Uint8Array) return { _llumiverse_bedrock_bytes: Buffer.from(value).toString('base64') };
+    if (value instanceof Uint8Array) return { _llumiverse_bedrock_bytes: bytesToBase64(value) };
     if (Array.isArray(value)) return value.map(bedrockConverseJsonValue);
     if (typeof value === 'object' && value !== null) {
         const converted = Object.fromEntries(
@@ -251,7 +263,8 @@ function exactJsonValue(value: unknown, label: string): JsonValue {
 }
 
 function bytesToBase64(value: Uint8Array): string {
-    return Buffer.from(value).toString('base64');
+    assertNativeImportInputBounds(value, [Uint8Array.prototype, Buffer.prototype]);
+    return Buffer.from(copyNativeConversationByteView(value)).toString('base64');
 }
 
 function base64ToBytes(value: string): Uint8Array {
@@ -937,7 +950,7 @@ async function messageRecords(input: {
                 adapter: BEDROCK_CONVERSE_ADAPTER_VERSION,
                 protocol: BEDROCK_CONVERSE_PROTOCOL,
                 compatibility_scope: {
-                    provider: input.options.provider ?? 'bedrock',
+                    provider: requireBedrockReplayProvider(input.options.provider),
                     protocol: BEDROCK_CONVERSE_PROTOCOL,
                     ...(input.options.model === undefined ? {} : { model: input.options.model }),
                     adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
@@ -1061,6 +1074,11 @@ async function messageRecords(input: {
     return { turns, assets, mappings, execution_receipts: executionReceipts };
 }
 
+function requireBedrockReplayProvider(provider: string | undefined): string {
+    if (!provider) throw new TypeError('Protected Bedrock replay requires recorded provider provenance');
+    return provider;
+}
+
 async function importRecords(
     history: BedrockConverseConversation,
     options: ImportBedrockConverseConversationOptions,
@@ -1157,13 +1175,61 @@ async function importRecords(
     };
 }
 
+/** Historical document-only compatibility API; new archive imports use the report-returning entry point. */
 export async function importBedrockConverseConversation(
     historyInput: unknown,
     options: ImportBedrockConverseConversationOptions,
 ): Promise<ConversationDocument> {
+    return importBedrockHistoryDocument(historyInput, options);
+}
+
+/** Pure import with declared origin evidence and explicit completeness/readiness diagnostics. */
+export async function importBedrockConverseHistory(
+    historyInput: unknown,
+    options: NativeConversationImportOptions,
+): Promise<NativeConversationImportResult> {
+    return guardNativeConversationImport(async () => {
+        options = snapshotNativeConversationImportOptions(options);
+        newNativeImportDocument(options);
+        assertNativeImportInputBounds(historyInput, [Uint8Array.prototype, Buffer.prototype]);
+        const historySnapshot = structuredClone(historyInput);
+        const importFingerprint = await fingerprintNativeConversationImport(
+            bedrockConverseJsonValue(historySnapshot),
+            options,
+            BEDROCK_CONVERSE_PROTOCOL,
+            BEDROCK_CONVERSE_ADAPTER_VERSION,
+        );
+        const document = await importBedrockHistoryDocument(historySnapshot, options, true, importFingerprint);
+        return nativeConversationImportResult(
+            document,
+            options,
+            BEDROCK_CONVERSE_PROTOCOL,
+            BEDROCK_CONVERSE_ADAPTER_VERSION,
+            [
+                {
+                    code: 'IMPORT_BYTE_VIEW_PROPERTIES_EXCLUDED',
+                    message:
+                        'Native byte-view values preserve intrinsic bytes only; own JavaScript annotations are outside imported protocol data.',
+                },
+            ],
+        );
+    });
+}
+
+async function importBedrockHistoryDocument(
+    historyInput: unknown,
+    options: ImportBedrockConverseConversationOptions,
+    preparationIdentity = false,
+    importPayloadFingerprint?: string,
+): Promise<ConversationDocument> {
     assertBedrockHistory(historyInput);
-    const history = structuredClone(historyInput);
-    const records = await importRecords(history, options);
+    const history = preparationIdentity ? historyInput : structuredClone(historyInput);
+    const records = await importRecords(
+        history,
+        options,
+        'imported',
+        preparationIdentity ? `${options.conversation_id}:legacy` : undefined,
+    );
     const document = createConversationDocument({ id: options.conversation_id, created_at: options.recorded_at });
     return appendConversationRecords(
         document,
@@ -1177,13 +1243,10 @@ export async function importBedrockConverseConversation(
         },
         {
             expected_revision: document.revision,
-            operation_id: await deriveConversationId(
-                'operation',
-                options.conversation_id,
-                BEDROCK_CONVERSE_PROTOCOL,
-                'import',
-            ),
-            payload_fingerprint: await fingerprintJson(bedrockConverseJsonValue(history)),
+            operation_id: preparationIdentity
+                ? await entityId('import', options.conversation_id, BEDROCK_CONVERSE_PROTOCOL)
+                : await deriveConversationId('operation', options.conversation_id, BEDROCK_CONVERSE_PROTOCOL, 'import'),
+            payload_fingerprint: importPayloadFingerprint ?? (await fingerprintJson(bedrockConverseJsonValue(history))),
             recorded_at: options.recorded_at,
         },
     ).document;
@@ -1207,7 +1270,7 @@ function bedrockReplay(
     for (const replay of matching) {
         if (
             replay.adapter !== BEDROCK_CONVERSE_ADAPTER_VERSION ||
-            replay.compatibility_scope.provider !== (target?.provider ?? 'bedrock') ||
+            (target?.provider !== undefined && replay.compatibility_scope.provider !== target.provider) ||
             replay.compatibility_scope.protocol !== BEDROCK_CONVERSE_PROTOCOL ||
             replay.compatibility_scope.adapter_version !== BEDROCK_CONVERSE_ADAPTER_VERSION ||
             (target?.model !== undefined &&
@@ -1538,6 +1601,14 @@ function compileAgentContent(
 export function compileBedrockConverseConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+): ReturnType<typeof projectBedrockConverseConversation> {
+    return projectBedrockConverseConversation(document, target);
+}
+
+function projectBedrockConverseConversation(
+    document: ConversationDocument,
+    target?: { provider?: string; model?: string },
+    readOnlyCompatibilityProjection = false,
 ): CompiledBedrockConversation {
     const system: SystemContentBlock[] = [];
     const messages: Message[] = [];
@@ -1546,10 +1617,15 @@ export function compileBedrockConverseConversation(
     const calls = new Set<string>();
     const results = new Set<string>();
 
-    for (const turn of selectedCanonicalTurns(document, {
+    const selectedTurns = selectedCanonicalTurns(document, {
         allow_interrupted_with_replay_protocol: BEDROCK_CONVERSE_PROTOCOL,
         allow_interrupted_with_complete_tool_calls: true,
-    })) {
+    });
+    for (const turn of selectedTurns) {
+        if (!readOnlyCompatibilityProjection)
+            assertProtectedReplayCompatibility(document, turn, BEDROCK_CONVERSE_PROTOCOL, target);
+    }
+    for (const turn of selectedTurns) {
         const replay = bedrockReplay(turn, target);
         if (turn.kind === 'program') {
             if (replay !== undefined)
@@ -1725,34 +1801,13 @@ export async function prepareBedrockConverseCanonicalState(input: {
             if (!isBedrockConverseHistory(legacy, BEDROCK_CONVERSE_PROTOCOL)) {
                 throw new TypeError('Conversation is neither canonical nor registered Bedrock Converse history');
             }
-            const imported = await importRecords(
-                structuredClone(legacy),
-                {
+            document = (
+                await importBedrockConverseHistory(legacy, {
                     conversation_id: runtime.conversation_id,
                     recorded_at: runtime.recorded_at,
-                    tool_definitions: toolDefinitions,
                     provider: input.provider,
-                    model: input.options.model,
-                },
-                'imported',
-                `${runtime.conversation_id}:legacy`,
-            );
-            document = appendConversationRecords(
-                document,
-                {
-                    turns: imported.turns,
-                    assets: imported.assets,
-                    context_entries: imported.context_entries,
-                    execution_receipts: imported.execution_receipts,
                     tool_definitions: toolDefinitions,
-                    active_tool_definition_ids: toolDefinitions.map((tool) => tool.id),
-                },
-                {
-                    expected_revision: document.revision,
-                    operation_id: await entityId('import', runtime.conversation_id, BEDROCK_CONVERSE_PROTOCOL),
-                    payload_fingerprint: await fingerprintJson(bedrockConverseJsonValue(legacy)),
-                    recorded_at: runtime.recorded_at,
-                },
+                })
             ).document;
         }
     } else if (
@@ -2009,7 +2064,6 @@ export async function decodeBedrockConverseCanonicalResponse(
             protocol: BEDROCK_CONVERSE_PROTOCOL,
             adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
             requested_model: prepared.requested_model,
-            resolved_model: prepared.payload.modelId ?? prepared.requested_model,
             provider_response_id: (response as ConverseResponse & { $metadata?: { requestId?: string } }).$metadata
                 ?.requestId,
             finish_reason: response.stopReason,
@@ -2129,5 +2183,5 @@ export function exportLegacyBedrockConverseConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
 ): BedrockConverseConversation {
-    return compileBedrockConverseConversation(parseConversationDocument(document), target).conversation;
+    return projectBedrockConverseConversation(parseConversationDocument(document), target, true).conversation;
 }

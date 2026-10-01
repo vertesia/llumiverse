@@ -43,6 +43,7 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
+    assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     canonicalToolSelectionTargetOptions,
@@ -51,11 +52,21 @@ import {
     newCanonicalConversation,
     parseCanonicalConversation,
     providerJsonValue,
-    type ResolvedConversationRuntimeContext,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    fingerprintNativeConversationImport,
+    guardNativeConversationImport,
+    type NativeConversationImportContext,
+    type NativeConversationImportOptions,
+    type NativeConversationImportResult,
+    nativeConversationImportContext,
+    nativeConversationImportResult,
+    newNativeImportDocument,
+    snapshotNativeConversationImportOptions,
+} from '../conversation/native-import.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -300,7 +311,7 @@ async function canonicalBlock(input: {
     scope: string;
     native_path: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     tool_definitions: readonly ToolDefinition[];
     provider: string;
 }): Promise<{ block?: AgentContentBlock; asset?: Asset; replay_entry?: ClaudeReplayEntry }> {
@@ -372,7 +383,7 @@ async function toolResultRecord(input: {
     scope: string;
     native_path: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     tool_definitions: readonly ToolDefinition[];
     provider: string;
     provenance: ConversationTurn['provenance'];
@@ -474,9 +485,10 @@ async function assistantMessageRecords(input: {
     message_index: number;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     tool_definitions: readonly ToolDefinition[];
     provider: string;
+    model?: string;
     source_history_turn_number?: number;
     preserve_content_order?: boolean;
 }): Promise<MessageRecords> {
@@ -532,6 +544,7 @@ async function assistantMessageRecords(input: {
             protocol: CLAUDE_MESSAGES_PROTOCOL,
             compatibility_scope: {
                 provider: input.provider,
+                ...(protectedReplay && input.model !== undefined ? { model: input.model } : {}),
                 protocol: CLAUDE_MESSAGES_PROTOCOL,
                 adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
             },
@@ -578,7 +591,7 @@ async function nonAssistantMessageRecords(input: {
     native_path?: string;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     tool_definitions: readonly ToolDefinition[];
     provider: string;
     source_history_turn_number?: number;
@@ -688,9 +701,10 @@ async function messageRecords(input: {
     native_path?: string;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     tool_definitions: readonly ToolDefinition[];
     provider: string;
+    model?: string;
     source_history_turn_number?: number;
     preserve_content_order?: boolean;
 }): Promise<MessageRecords> {
@@ -701,9 +715,10 @@ async function promptRecords(input: {
     prompt: ClaudePrompt;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     tool_definitions: readonly ToolDefinition[];
     provider: string;
+    model?: string;
     source_history_turn_number?: number;
 }): Promise<MessageRecords> {
     const records: MessageRecords = { turns: [], assets: [], mappings: [], execution_receipts: [] };
@@ -726,6 +741,7 @@ async function promptRecords(input: {
                 runtime: input.runtime,
                 tool_definitions: input.tool_definitions,
                 provider: input.provider,
+                ...(input.model === undefined ? {} : { model: input.model }),
                 ...(input.source_history_turn_number === undefined
                     ? {}
                     : { source_history_turn_number: input.source_history_turn_number }),
@@ -742,6 +758,7 @@ async function promptRecords(input: {
                 runtime: input.runtime,
                 tool_definitions: input.tool_definitions,
                 provider: input.provider,
+                ...(input.model === undefined ? {} : { model: input.model }),
                 ...(input.source_history_turn_number === undefined
                     ? {}
                     : { source_history_turn_number: input.source_history_turn_number }),
@@ -973,6 +990,14 @@ function appendClaudeMessage(messages: MessageParam[], message: MessageParam): v
 export function compileClaudeMessagesConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+): ReturnType<typeof projectClaudeMessagesConversation> {
+    return projectClaudeMessagesConversation(document, target);
+}
+
+function projectClaudeMessagesConversation(
+    document: ConversationDocument,
+    target?: { provider?: string; model?: string },
+    readOnlyCompatibilityProjection = false,
 ): {
     conversation: ClaudePrompt;
     mappings: NativeItemMapping[];
@@ -980,7 +1005,12 @@ export function compileClaudeMessagesConversation(
     const system: TextBlockParam[] = [];
     const messages: MessageParam[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
+    const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    for (const turn of selectedTurns) {
+        if (!readOnlyCompatibilityProjection)
+            assertProtectedReplayCompatibility(document, turn, CLAUDE_MESSAGES_PROTOCOL, target);
+    }
+    for (const turn of selectedTurns) {
         if (turn.kind === 'program' && (turn.authority === 'system' || turn.authority === 'developer')) {
             const nativeBlocks = ordinaryContent(turn, document);
             for (const block of nativeBlocks) {
@@ -1014,6 +1044,69 @@ export function compileClaudeMessagesConversation(
     };
 }
 
+/** Pure registered-protocol import. The report explicitly leaves continuation readiness unvalidated. */
+export async function importClaudeMessagesHistory(
+    historyInput: unknown,
+    options: NativeConversationImportOptions,
+): Promise<NativeConversationImportResult> {
+    return guardNativeConversationImport(async () => {
+        options = snapshotNativeConversationImportOptions(options);
+        const runtime = nativeConversationImportContext(options);
+        const toolDefinitions = [...(options.tool_definitions ?? [])];
+        let document = newNativeImportDocument(options);
+        if (!isClaudeMessagesHistory(historyInput, CLAUDE_MESSAGES_PROTOCOL)) {
+            throw new TypeError('Conversation is neither canonical nor registered Claude Messages history');
+        }
+        const historySnapshot = structuredClone(historyInput);
+        const history: ClaudePrompt = Array.isArray(historySnapshot) ? { messages: historySnapshot } : historySnapshot;
+        const imported = await promptRecords({
+            prompt: history,
+            scope: `${runtime.conversation_id}:legacy`,
+            source: 'imported',
+            runtime,
+            tool_definitions: toolDefinitions,
+            provider: options.provider,
+            ...(options.model === undefined ? {} : { model: options.model }),
+            ...(sourceHistoryTurnNumber(history) === undefined
+                ? {}
+                : { source_history_turn_number: sourceHistoryTurnNumber(history) }),
+        });
+        const contextEntries = await Promise.all(
+            imported.turns.map(async (turn, index) => ({
+                id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
+                type: 'source_turn' as const,
+                turn_id: turn.id,
+            })),
+        );
+        document = appendConversationRecords(
+            document,
+            {
+                turns: imported.turns,
+                assets: imported.assets,
+                tool_definitions: toolDefinitions,
+                context_entries: contextEntries,
+            },
+            {
+                expected_revision: document.revision,
+                operation_id: await entityId('import', runtime.conversation_id, CLAUDE_MESSAGES_PROTOCOL),
+                payload_fingerprint: await fingerprintNativeConversationImport(
+                    providerJsonValue(history),
+                    options,
+                    CLAUDE_MESSAGES_PROTOCOL,
+                    CLAUDE_MESSAGES_ADAPTER_VERSION,
+                ),
+                recorded_at: runtime.recorded_at,
+            },
+        ).document;
+        return nativeConversationImportResult(
+            document,
+            options,
+            CLAUDE_MESSAGES_PROTOCOL,
+            CLAUDE_MESSAGES_ADAPTER_VERSION,
+        );
+    });
+}
+
 export async function prepareClaudeCanonicalState(input: {
     conversation: unknown;
     prompt: ClaudePrompt;
@@ -1027,42 +1120,14 @@ export async function prepareClaudeCanonicalState(input: {
     if (document === undefined) {
         document = newCanonicalConversation(runtime);
         if (input.conversation !== undefined && input.conversation !== null) {
-            if (!isClaudeMessagesHistory(input.conversation)) {
-                throw new TypeError('Conversation is neither canonical nor registered Claude Messages history');
-            }
-            const history = input.conversation as ClaudePrompt;
-            const imported = await promptRecords({
-                prompt: history,
-                scope: `${runtime.conversation_id}:legacy`,
-                source: 'imported',
-                runtime,
-                tool_definitions: toolDefinitions,
-                provider: input.provider,
-                ...(sourceHistoryTurnNumber(history) === undefined
-                    ? {}
-                    : { source_history_turn_number: sourceHistoryTurnNumber(history) }),
-            });
-            const contextEntries = await Promise.all(
-                imported.turns.map(async (turn, index) => ({
-                    id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
-                    type: 'source_turn' as const,
-                    turn_id: turn.id,
-                })),
-            );
-            document = appendConversationRecords(
-                document,
-                {
-                    turns: imported.turns,
-                    assets: imported.assets,
-                    tool_definitions: toolDefinitions,
-                    context_entries: contextEntries,
-                },
-                {
-                    expected_revision: document.revision,
-                    operation_id: await entityId('import', runtime.conversation_id, CLAUDE_MESSAGES_PROTOCOL),
-                    payload_fingerprint: await fingerprintJson(providerJsonValue(history)),
+            document = (
+                await importClaudeMessagesHistory(input.conversation, {
+                    conversation_id: runtime.conversation_id,
                     recorded_at: runtime.recorded_at,
-                },
+                    source_request_id: runtime.request_id,
+                    provider: input.provider,
+                    tool_definitions: toolDefinitions,
+                })
             ).document;
         }
     } else if (
@@ -1229,6 +1294,7 @@ export async function decodeClaudeCanonicalResponse(
         runtime,
         tool_definitions: prepared.tool_definitions,
         provider: prepared.provider,
+        model: prepared.requested_model,
         preserve_content_order: structuredOutput !== undefined,
     });
     const received = records.turns[0];
@@ -1356,5 +1422,5 @@ export function appendClaudeCanonicalResponse(
 
 /** Read-only compatibility projection for versioned legacy API responses. */
 export function exportLegacyClaudeMessagesConversation(document: ConversationDocument): ClaudePrompt {
-    return compileClaudeMessagesConversation(parseConversationDocument(document)).conversation;
+    return projectClaudeMessagesConversation(parseConversationDocument(document), undefined, true).conversation;
 }

@@ -48,6 +48,7 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
+    assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     canonicalToolSelectionTargetOptions,
@@ -56,11 +57,21 @@ import {
     newCanonicalConversation,
     parseCanonicalConversation,
     providerJsonValue,
-    type ResolvedConversationRuntimeContext,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../../conversation/canonical-runtime.js';
+import {
+    fingerprintNativeConversationImport,
+    guardNativeConversationImport,
+    type NativeConversationImportContext,
+    type NativeConversationImportOptions,
+    type NativeConversationImportResult,
+    nativeConversationImportContext,
+    nativeConversationImportResult,
+    newNativeImportDocument,
+    snapshotNativeConversationImportOptions,
+} from '../../conversation/native-import.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -396,7 +407,7 @@ async function replayBlock(input: {
     scope: string;
     native_path: string;
     provider: string;
-    model: string;
+    model?: string;
 }): Promise<NativeReplayBlock> {
     const protectedReplay = contentHasProtectedReplay(input.content);
     const payload: GeminiReplayPayload = {
@@ -412,7 +423,7 @@ async function replayBlock(input: {
         compatibility_scope: {
             provider: input.provider,
             protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
-            ...(protectedReplay ? { model: input.model } : {}),
+            ...(protectedReplay && input.model !== undefined ? { model: input.model } : {}),
             adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
         },
         payload: providerJsonValue(payload),
@@ -508,9 +519,9 @@ async function contentRecords(input: {
     content_index: number;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
-    model: string;
+    model?: string;
     tool_definitions: readonly ToolDefinition[];
     calls: Map<string, PendingCall>;
     unmatched_by_name: Map<string, PendingCall[]>;
@@ -918,9 +929,9 @@ async function contentsToRecords(input: {
     system?: Content;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
-    model: string;
+    model?: string;
     tool_definitions: readonly ToolDefinition[];
     existing_calls?: Map<string, PendingCall>;
     source_history_turn_number?: number;
@@ -1426,11 +1437,24 @@ function compiledBlockMappings(turn: ConversationTurn, nativeBase: string, partO
 export function compileGeminiConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+): ReturnType<typeof projectGeminiConversation> {
+    return projectGeminiConversation(document, target);
+}
+
+function projectGeminiConversation(
+    document: ConversationDocument,
+    target?: { provider?: string; model?: string },
+    readOnlyCompatibilityProjection = false,
 ): { conversation: GenerateContentPrompt; mappings: NativeItemMapping[] } {
     const contents: Content[] = [];
     const systemParts: Part[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
+    const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    for (const turn of selectedTurns) {
+        if (!readOnlyCompatibilityProjection)
+            assertProtectedReplayCompatibility(document, turn, GEMINI_GENERATE_CONTENT_PROTOCOL, target);
+    }
+    for (const turn of selectedTurns) {
         if (turn.kind === 'program' && turn.authority === 'developer') {
             throw new TypeError('Gemini cannot project developer program authority');
         }
@@ -1480,6 +1504,72 @@ export function compileGeminiConversation(
     };
 }
 
+/** Pure registered-protocol import. The report explicitly leaves continuation readiness unvalidated. */
+export async function importGeminiGenerateContentHistory(
+    historyInput: unknown,
+    options: NativeConversationImportOptions,
+): Promise<NativeConversationImportResult> {
+    return guardNativeConversationImport(async () => {
+        options = snapshotNativeConversationImportOptions(options);
+        const runtime = nativeConversationImportContext(options);
+        const toolDefinitions = [...(options.tool_definitions ?? [])];
+        let document = newNativeImportDocument(options);
+        if (!isGeminiGenerateContentHistory(historyInput, GEMINI_GENERATE_CONTENT_PROTOCOL)) {
+            throw new TypeError('Conversation is neither canonical nor registered Gemini GenerateContent history');
+        }
+        const historySnapshot = structuredClone(historyInput);
+        const legacyContents = historyContents(historySnapshot);
+        if (legacyContents === undefined) throw new TypeError('Gemini history has no content array');
+        const imported = await contentsToRecords({
+            contents: legacyContents,
+            ...(historySystem(historySnapshot) === undefined ? {} : { system: historySystem(historySnapshot) }),
+            scope: `${runtime.conversation_id}:legacy`,
+            source: 'imported',
+            runtime,
+            provider: options.provider,
+            model: options.model,
+            tool_definitions: toolDefinitions,
+            ...(sourceHistoryTurnNumber(historySnapshot) === undefined
+                ? {}
+                : { source_history_turn_number: sourceHistoryTurnNumber(historySnapshot) }),
+        });
+        const contextEntries = await Promise.all(
+            imported.turns.map(async (turn, index) => ({
+                id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
+                type: 'source_turn' as const,
+                turn_id: turn.id,
+            })),
+        );
+        document = appendConversationRecords(
+            document,
+            {
+                turns: imported.turns,
+                assets: imported.assets,
+                tool_definitions: toolDefinitions,
+                context_entries: contextEntries,
+                execution_receipts: imported.execution_receipts,
+            },
+            {
+                expected_revision: document.revision,
+                operation_id: await entityId('import', runtime.conversation_id, GEMINI_GENERATE_CONTENT_PROTOCOL),
+                payload_fingerprint: await fingerprintNativeConversationImport(
+                    providerJsonValue(historySnapshot),
+                    options,
+                    GEMINI_GENERATE_CONTENT_PROTOCOL,
+                    GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
+                ),
+                recorded_at: runtime.recorded_at,
+            },
+        ).document;
+        return nativeConversationImportResult(
+            document,
+            options,
+            GEMINI_GENERATE_CONTENT_PROTOCOL,
+            GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
+        );
+    });
+}
+
 export async function prepareGeminiCanonicalState(input: {
     conversation: unknown;
     prompt: GenerateContentPrompt;
@@ -1492,48 +1582,14 @@ export async function prepareGeminiCanonicalState(input: {
     if (document === undefined) {
         document = newCanonicalConversation(runtime);
         if (input.conversation !== undefined && input.conversation !== null) {
-            if (!isGeminiGenerateContentHistory(input.conversation, GEMINI_GENERATE_CONTENT_PROTOCOL)) {
-                throw new TypeError('Conversation is neither canonical nor registered Gemini GenerateContent history');
-            }
-            const legacyContents = historyContents(input.conversation);
-            if (legacyContents === undefined) throw new TypeError('Gemini history has no content array');
-            const imported = await contentsToRecords({
-                contents: legacyContents,
-                ...(historySystem(input.conversation) === undefined
-                    ? {}
-                    : { system: historySystem(input.conversation) }),
-                scope: `${runtime.conversation_id}:legacy`,
-                source: 'imported',
-                runtime,
-                provider: input.provider,
-                model: input.options.model,
-                tool_definitions: toolDefinitions,
-                ...(sourceHistoryTurnNumber(input.conversation) === undefined
-                    ? {}
-                    : { source_history_turn_number: sourceHistoryTurnNumber(input.conversation) }),
-            });
-            const contextEntries = await Promise.all(
-                imported.turns.map(async (turn, index) => ({
-                    id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
-                    type: 'source_turn' as const,
-                    turn_id: turn.id,
-                })),
-            );
-            document = appendConversationRecords(
-                document,
-                {
-                    turns: imported.turns,
-                    assets: imported.assets,
-                    tool_definitions: toolDefinitions,
-                    context_entries: contextEntries,
-                    execution_receipts: imported.execution_receipts,
-                },
-                {
-                    expected_revision: document.revision,
-                    operation_id: await entityId('import', runtime.conversation_id, GEMINI_GENERATE_CONTENT_PROTOCOL),
-                    payload_fingerprint: await fingerprintJson(providerJsonValue(input.conversation)),
+            document = (
+                await importGeminiGenerateContentHistory(input.conversation, {
+                    conversation_id: runtime.conversation_id,
                     recorded_at: runtime.recorded_at,
-                },
+                    source_request_id: runtime.request_id,
+                    provider: input.provider,
+                    tool_definitions: toolDefinitions,
+                })
             ).document;
         }
     } else if (
@@ -1837,7 +1893,7 @@ export async function decodeGeminiCanonicalResponse(input: {
             protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
             adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
             requested_model: input.prepared.requested_model,
-            resolved_model: input.response.modelVersion ?? input.prepared.payload.model,
+            resolved_model: input.response.modelVersion,
             provider_response_id: input.response.responseId,
             finish_reason: effectiveFinishReason,
             usage: geminiGenerationUsage(input.response.usageMetadata),
@@ -1898,7 +1954,7 @@ export function appendGeminiCanonicalResponse(
 
 export function exportLegacyGeminiConversation(document: ConversationDocument): LegacyGeminiConversation {
     const parsed = parseConversationDocument(document);
-    const compiled = compileGeminiConversation(parsed).conversation;
+    const compiled = projectGeminiConversation(parsed, undefined, true).conversation;
     return {
         _arrayConversation: compiled.contents,
         _llumiverse_meta: {

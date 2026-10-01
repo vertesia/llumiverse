@@ -19,6 +19,10 @@ import {
     ConversationTurnSchema,
     DecodedConversationResponseSchema,
     GenerationSchema,
+    NativeConversationImportDiagnosticSchema,
+    NativeConversationImportOptionsSchema,
+    NativeConversationImportReportSchema,
+    NativeConversationImportResultSchema,
 } from './schemas/index.js';
 import { CONVERSATION_EXPERIMENTAL_REVISION } from './schemas/primitives.js';
 
@@ -114,7 +118,28 @@ export const DecodedConversationResponseJsonSchema = emitJsonSchema(
     'decoded-response',
 );
 
+export const NativeConversationImportOptionsJsonSchema = emitJsonSchema(
+    NativeConversationImportOptionsSchema,
+    'native-import-options',
+);
+export const NativeConversationImportDiagnosticJsonSchema = emitJsonSchema(
+    NativeConversationImportDiagnosticSchema,
+    'native-import-diagnostic',
+);
+export const NativeConversationImportReportJsonSchema = emitJsonSchema(
+    NativeConversationImportReportSchema,
+    'native-import-report',
+);
+export const NativeConversationImportResultJsonSchema = emitJsonSchema(
+    NativeConversationImportResultSchema,
+    'native-import-result',
+);
+
 export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
+    native_import_options: NativeConversationImportOptionsJsonSchema,
+    native_import_diagnostic: NativeConversationImportDiagnosticJsonSchema,
+    native_import_report: NativeConversationImportReportJsonSchema,
+    native_import_result: NativeConversationImportResultJsonSchema,
     accepted_output_fragment: ConversationAcceptedOutputFragmentJsonSchema,
     append_options: AppendConversationRecordsOptionsJsonSchema,
     append_result: AppendConversationRecordsResultJsonSchema,

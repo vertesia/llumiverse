@@ -1,24 +1,35 @@
-import { type ConversationDocument, parseConversationDocument } from '@llumiverse/conversation';
+import {
+    type ConversationDocument,
+    ConversationValidationError,
+    parseConversationDocument,
+    preflightJsonInput,
+} from '@llumiverse/conversation';
 import {
     BEDROCK_CONVERSE_PROTOCOL,
     exportLegacyBedrockConverseConversation,
+    importBedrockConverseHistory,
 } from '../bedrock/bedrock-converse-conversation-adapter.js';
 import {
     exportLegacyOpenAIChatCompletionsConversation,
+    importOpenAIChatCompletionsHistory,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
 } from '../openai/openai-chat-conversation-adapter.js';
 import {
     exportLegacyOpenAIResponsesConversation,
+    importOpenAIResponsesHistory,
     OPENAI_RESPONSES_PROTOCOL,
 } from '../openai/openai-responses-conversation-adapter.js';
 import {
     CLAUDE_MESSAGES_PROTOCOL,
     exportLegacyClaudeMessagesConversation,
+    importClaudeMessagesHistory,
 } from '../shared/claude-messages-conversation-adapter.js';
 import {
     exportLegacyGeminiConversation,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
+    importGeminiGenerateContentHistory,
 } from '../vertexai/models/gemini-conversation-adapter.js';
+import { NativeConversationImportError } from './native-import.js';
 
 export type {
     BedrockConverseConversation,
@@ -32,16 +43,19 @@ export {
     decodeBedrockConverseCanonicalResponse,
     exportLegacyBedrockConverseConversation,
     finalizeBedrockConversePreparedRequest,
+    importBedrockConverseHistory,
     prepareBedrockConverseCanonicalState,
 } from '../bedrock/bedrock-converse-conversation-adapter.js';
 
 export {
     exportLegacyOpenAIChatCompletionsConversation,
+    importOpenAIChatCompletionsHistory,
     OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
 } from '../openai/openai-chat-conversation-adapter.js';
 export {
     exportLegacyOpenAIResponsesConversation,
+    importOpenAIResponsesHistory,
     OPENAI_RESPONSES_ADAPTER_VERSION,
     OPENAI_RESPONSES_PROTOCOL,
 } from '../openai/openai-responses-conversation-adapter.js';
@@ -49,6 +63,7 @@ export {
     CLAUDE_MESSAGES_ADAPTER_VERSION,
     CLAUDE_MESSAGES_PROTOCOL,
     exportLegacyClaudeMessagesConversation,
+    importClaudeMessagesHistory,
 } from '../shared/claude-messages-conversation-adapter.js';
 export type {
     LegacyGeminiConversation,
@@ -64,6 +79,7 @@ export {
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     geminiGenerationUsage,
     geminiToolUsesFromContent,
+    importGeminiGenerateContentHistory,
     isGeminiGenerateContentHistory,
     prepareGeminiCanonicalState,
 } from '../vertexai/models/gemini-conversation-adapter.js';
@@ -146,4 +162,48 @@ export function exportLegacyConversation(
         return exportLegacyBedrockConverseConversation(document);
     }
     throw new TypeError('Canonical conversation has no supported native protocol provenance; provide a protocol');
+}
+
+export type {
+    NativeConversationImportDiagnostic,
+    NativeConversationImportDiagnosticCode,
+    NativeConversationImportFailureCode,
+    NativeConversationImportOptions,
+    NativeConversationImportReport,
+    NativeConversationImportResult,
+} from './native-import.js';
+export { NativeConversationImportError } from './native-import.js';
+
+/** Protocol selection is explicit: generic text arrays cannot establish protocol or hosting provenance. */
+export async function importNativeConversationHistory(
+    history: unknown,
+    options: import('./native-import.js').NativeConversationImportOptions & {
+        protocol: CanonicalNativeConversationProtocol;
+    },
+): Promise<import('./native-import.js').NativeConversationImportResult> {
+    const preflight = preflightJsonInput(options);
+    if (!preflight.success)
+        throw new NativeConversationImportError(
+            'IMPORT_INVALID_OPTIONS',
+            'Native import options failed bounded preflight',
+            new ConversationValidationError('Invalid options', preflight.diagnostics),
+        );
+    const { protocol, ...origin } = options;
+    switch (protocol) {
+        case OPENAI_CHAT_COMPLETIONS_PROTOCOL:
+            return importOpenAIChatCompletionsHistory(history, origin);
+        case OPENAI_RESPONSES_PROTOCOL:
+            return importOpenAIResponsesHistory(history, origin);
+        case CLAUDE_MESSAGES_PROTOCOL:
+            return importClaudeMessagesHistory(history, origin);
+        case GEMINI_GENERATE_CONTENT_PROTOCOL:
+            return importGeminiGenerateContentHistory(history, origin);
+        case BEDROCK_CONVERSE_PROTOCOL:
+            return importBedrockConverseHistory(history, origin);
+        default:
+            throw new NativeConversationImportError(
+                'IMPORT_PROTOCOL_REQUIRED',
+                'Native conversation import requires a supported explicit protocol',
+            );
+    }
 }

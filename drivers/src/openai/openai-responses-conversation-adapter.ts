@@ -34,6 +34,7 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
+    assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     canonicalToolSelectionTargetOptions,
@@ -42,11 +43,21 @@ import {
     newCanonicalConversation,
     parseCanonicalConversation,
     providerJsonValue,
-    type ResolvedConversationRuntimeContext,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    fingerprintNativeConversationImport,
+    guardNativeConversationImport,
+    type NativeConversationImportContext,
+    type NativeConversationImportOptions,
+    type NativeConversationImportResult,
+    nativeConversationImportContext,
+    nativeConversationImportResult,
+    newNativeImportDocument,
+    snapshotNativeConversationImportOptions,
+} from '../conversation/native-import.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -380,7 +391,7 @@ async function ordinaryMessageRecords(input: {
     item_index: number;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
     source_history_turn_number?: number;
 }): Promise<ConvertedRecords> {
@@ -433,9 +444,9 @@ async function assistantItemsRecords(input: {
     first_item_index: number;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
-    model: string;
+    model?: string;
     tool_definitions: readonly ToolDefinition[];
     source_history_turn_number?: number;
 }): Promise<ConvertedRecords> {
@@ -604,7 +615,7 @@ async function assistantItemsRecords(input: {
             compatibility_scope: {
                 provider: input.provider,
                 protocol: OPENAI_RESPONSES_PROTOCOL,
-                ...(protectedReplay ? { model: input.model } : {}),
+                ...(protectedReplay && input.model !== undefined ? { model: input.model } : {}),
                 adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
             },
             payload: {
@@ -654,7 +665,7 @@ async function toolResultRecords(input: {
     item_index: number;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
     source_history_turn_number?: number;
 }): Promise<ConvertedRecords> {
@@ -757,9 +768,9 @@ async function itemsToRecords(input: {
     items: readonly OpenAIResponsesInputItem[];
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
-    model: string;
+    model?: string;
     tool_definitions: readonly ToolDefinition[];
     source_history_turn_number?: number;
 }): Promise<ConvertedRecords> {
@@ -1297,13 +1308,26 @@ function compileOrdinaryTurn(
 export function compileOpenAIResponsesConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+): ReturnType<typeof projectOpenAIResponsesConversation> {
+    return projectOpenAIResponsesConversation(document, target);
+}
+
+function projectOpenAIResponsesConversation(
+    document: ConversationDocument,
+    target?: { provider?: string; model?: string },
+    readOnlyCompatibilityProjection = false,
 ): { conversation: OpenAIResponsesInputItem[]; mappings: NativeItemMapping[] } {
     const conversation: OpenAIResponsesInputItem[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document, {
+    const selectedTurns = selectedCanonicalTurns(document, {
         allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
         allow_interrupted_with_complete_tool_calls: true,
-    })) {
+    });
+    for (const turn of selectedTurns) {
+        if (!readOnlyCompatibilityProjection)
+            assertProtectedReplayCompatibility(document, turn, OPENAI_RESPONSES_PROTOCOL, target);
+    }
+    for (const turn of selectedTurns) {
         const items = replayItems(turn, document, target) ?? compileOrdinaryTurn(turn, document, target);
         const itemIndex = conversation.length;
         conversation.push(...items);
@@ -1323,6 +1347,69 @@ export function compileOpenAIResponsesConversation(
     return { conversation, mappings };
 }
 
+/** Pure registered-protocol import. The report explicitly leaves continuation readiness unvalidated. */
+export async function importOpenAIResponsesHistory(
+    historyInput: unknown,
+    options: NativeConversationImportOptions,
+): Promise<NativeConversationImportResult> {
+    return guardNativeConversationImport(async () => {
+        options = snapshotNativeConversationImportOptions(options);
+        const runtime = nativeConversationImportContext(options);
+        const toolDefinitions = [...(options.tool_definitions ?? [])];
+        let document = newNativeImportDocument(options);
+        if (!isOpenAIResponsesHistory(historyInput, OPENAI_RESPONSES_PROTOCOL)) {
+            throw new TypeError('Conversation is neither canonical nor registered OpenAI Responses history');
+        }
+        const historySnapshot = structuredClone(historyInput);
+        const imported = await itemsToRecords({
+            items: wrappedHistoryItems(historySnapshot) ?? [],
+            scope: `${runtime.conversation_id}:legacy`,
+            source: 'imported',
+            runtime,
+            provider: options.provider,
+            model: options.model,
+            tool_definitions: toolDefinitions,
+            ...(sourceHistoryTurnNumber(historySnapshot) === undefined
+                ? {}
+                : { source_history_turn_number: sourceHistoryTurnNumber(historySnapshot) }),
+        });
+        const contextEntries = await Promise.all(
+            imported.turns.map(async (turn, index) => ({
+                id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
+                type: 'source_turn' as const,
+                turn_id: turn.id,
+            })),
+        );
+        document = appendConversationRecords(
+            document,
+            {
+                turns: imported.turns,
+                assets: imported.assets,
+                tool_definitions: toolDefinitions,
+                context_entries: contextEntries,
+                execution_receipts: imported.execution_receipts,
+            },
+            {
+                expected_revision: document.revision,
+                operation_id: await entityId('import', runtime.conversation_id, OPENAI_RESPONSES_PROTOCOL),
+                payload_fingerprint: await fingerprintNativeConversationImport(
+                    providerJsonValue(historySnapshot),
+                    options,
+                    OPENAI_RESPONSES_PROTOCOL,
+                    OPENAI_RESPONSES_ADAPTER_VERSION,
+                ),
+                recorded_at: runtime.recorded_at,
+            },
+        ).document;
+        return nativeConversationImportResult(
+            document,
+            options,
+            OPENAI_RESPONSES_PROTOCOL,
+            OPENAI_RESPONSES_ADAPTER_VERSION,
+        );
+    });
+}
+
 export async function prepareOpenAIResponsesCanonicalState(input: {
     conversation: unknown;
     prompt: OpenAIResponsesInputItem[];
@@ -1335,43 +1422,14 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
     if (document === undefined) {
         document = newCanonicalConversation(runtime);
         if (input.conversation !== undefined && input.conversation !== null) {
-            if (!isOpenAIResponsesHistory(input.conversation, OPENAI_RESPONSES_PROTOCOL)) {
-                throw new TypeError('Conversation is neither canonical nor registered OpenAI Responses history');
-            }
-            const imported = await itemsToRecords({
-                items: wrappedHistoryItems(input.conversation) ?? [],
-                scope: `${runtime.conversation_id}:legacy`,
-                source: 'imported',
-                runtime,
-                provider: input.provider,
-                model: input.options.model,
-                tool_definitions: toolDefinitions,
-                ...(sourceHistoryTurnNumber(input.conversation) === undefined
-                    ? {}
-                    : { source_history_turn_number: sourceHistoryTurnNumber(input.conversation) }),
-            });
-            const contextEntries = await Promise.all(
-                imported.turns.map(async (turn, index) => ({
-                    id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
-                    type: 'source_turn' as const,
-                    turn_id: turn.id,
-                })),
-            );
-            document = appendConversationRecords(
-                document,
-                {
-                    turns: imported.turns,
-                    assets: imported.assets,
-                    tool_definitions: toolDefinitions,
-                    context_entries: contextEntries,
-                    execution_receipts: imported.execution_receipts,
-                },
-                {
-                    expected_revision: document.revision,
-                    operation_id: await entityId('import', runtime.conversation_id, OPENAI_RESPONSES_PROTOCOL),
-                    payload_fingerprint: await fingerprintJson(providerJsonValue(input.conversation)),
+            document = (
+                await importOpenAIResponsesHistory(input.conversation, {
+                    conversation_id: runtime.conversation_id,
                     recorded_at: runtime.recorded_at,
-                },
+                    source_request_id: runtime.request_id,
+                    provider: input.provider,
+                    tool_definitions: toolDefinitions,
+                })
             ).document;
         }
     } else if (
@@ -1700,5 +1758,5 @@ export function appendOpenAIResponsesCanonicalResponse(
 
 /** Read-only compatibility projection for versioned legacy API responses. */
 export function exportLegacyOpenAIResponsesConversation(document: ConversationDocument): OpenAIResponsesInputItem[] {
-    return compileOpenAIResponsesConversation(parseConversationDocument(document)).conversation;
+    return projectOpenAIResponsesConversation(parseConversationDocument(document), undefined, true).conversation;
 }

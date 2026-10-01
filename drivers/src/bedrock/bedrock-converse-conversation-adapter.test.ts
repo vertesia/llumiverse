@@ -129,7 +129,11 @@ describe('Bedrock Converse canonical adapter', () => {
             },
         ]);
         const document = parseConversationDocument(
-            JSON.parse(JSON.stringify(await importHistory(native, 'typed-bedrock-tool-use'))),
+            JSON.parse(
+                JSON.stringify(
+                    await importHistory(native, 'typed-bedrock-tool-use', 'anthropic.claude-3-5-sonnet-20241022-v2:0'),
+                ),
+            ),
         );
         const calls = document.turns.flatMap((turn) =>
             turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block] : [])),
@@ -166,9 +170,12 @@ describe('Bedrock Converse canonical adapter', () => {
             throw new Error('Expected provider tool call');
         }
         providerCall.arguments.value = { query: 'different' };
-        expect(() => compileBedrockConverseConversation(changedProviderCall)).toThrow(
-            /no longer matches protected content block/,
-        );
+        expect(() =>
+            compileBedrockConverseConversation(changedProviderCall, {
+                provider: 'bedrock',
+                model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+            }),
+        ).toThrow(/no longer matches protected content block/);
 
         for (const [callId, executor] of [
             ['server-search', 'application'],
@@ -180,9 +187,12 @@ describe('Bedrock Converse canonical adapter', () => {
                 .find((block) => block.type === 'tool_call' && block.call_id === callId);
             if (call?.type !== 'tool_call') throw new Error(`Expected tool call ${callId}`);
             call.executor = executor;
-            expect(() => compileBedrockConverseConversation(changedOwnership)).toThrow(
-                /no longer matches protected tool execution ownership/,
-            );
+            expect(() =>
+                compileBedrockConverseConversation(changedOwnership, {
+                    provider: 'bedrock',
+                    model: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+                }),
+            ).toThrow(/no longer matches protected tool execution ownership/);
         }
 
         const discardableServerReplay = structuredClone(document);

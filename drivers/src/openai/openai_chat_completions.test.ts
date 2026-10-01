@@ -35,7 +35,9 @@ import {
     prepareOpenAIChatCompletionsConversation,
 } from './openai_chat_completions.js';
 import {
+    compileOpenAIChatCompletionsConversation,
     exportLegacyOpenAIChatCompletionsConversation,
+    importOpenAIChatCompletionsHistory,
     prepareOpenAIChatCanonicalState,
 } from './openai-chat-conversation-adapter.js';
 
@@ -2356,5 +2358,71 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(recovered.error).toEqual(completion.error);
         expect(recovered.conversation).toEqual(completion.conversation);
         expect(driver.payloads).toHaveLength(1);
+    });
+});
+
+describe('protected Chat replay origin at the provider boundary', () => {
+    const recordedAt = '2026-09-11T00:00:00.000Z';
+    const segments = [{ role: PromptRole.user, content: 'continue' }];
+    const history: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: [{ role: 'assistant', content: 'answer', reasoning_content: 'protected reasoning' }],
+    };
+    const response: OpenAIChatCompletionsResponse = {
+        id: 'response:origin',
+        object: 'chat.completion',
+        created: 1,
+        model: 'provider-resolved-version',
+        choices: [
+            {
+                index: 0,
+                message: { role: 'assistant', content: 'answer', reasoning_content: 'new protected reasoning' },
+                finish_reason: 'stop',
+                logprobs: null,
+            },
+        ],
+    };
+
+    it('rejects unknown and changed origins before sending a provider request, retaining exact known origins', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver(response);
+        await expect(driver.execute(segments, canonicalOptions('unknown', recordedAt, history))).rejects.toThrow(
+            /unknown recorded model origin/,
+        );
+        expect(driver.payloads).toHaveLength(0);
+        const imported = await importOpenAIChatCompletionsHistory(history, {
+            conversation_id: 'conversation:structured-output',
+            recorded_at: recordedAt,
+            provider: driver.provider,
+            model: 'test/model',
+        });
+        await expect(
+            driver.execute(segments, {
+                ...canonicalOptions('changed', recordedAt, imported.document),
+                model: 'different/model',
+            }),
+        ).rejects.toThrow(/compatibility scope/);
+        expect(driver.payloads).toHaveLength(0);
+        const result = await driver.execute(segments, canonicalOptions('known', recordedAt, imported.document));
+        expect(driver.payloads).toHaveLength(1);
+        expect(driver.payloads[0].messages[0]).toMatchObject({ reasoning_content: 'protected reasoning' });
+        const document = parseConversationDocument(result.conversation);
+        const generation = Object.values(document.generations).find((entry) => entry.record_source === 'executed');
+        expect(generation).toMatchObject({
+            requested_model: 'test/model',
+            resolved_model: 'provider-resolved-version',
+        });
+        const generated = document.turns.find((turn) => turn.kind === 'agent' && turn.provenance.type === 'generated');
+        const replay = generated?.blocks.find((block) => block.type === 'native_replay');
+        expect(replay).toMatchObject({ compatibility_scope: { model: 'test/model' } });
+        // Existing generated archives can establish origin from their exact executed receipt.
+        if (replay?.type !== 'native_replay') throw new Error('Expected generated protected replay');
+        delete replay.compatibility_scope.model;
+        expect(() =>
+            compileOpenAIChatCompletionsConversation(document, { provider: driver.provider, model: 'test/model' }),
+        ).not.toThrow();
+        replay.dependencies.request_ids = [];
+        expect(() =>
+            compileOpenAIChatCompletionsConversation(document, { provider: driver.provider, model: 'test/model' }),
+        ).toThrow(/unknown recorded model origin/);
     });
 });

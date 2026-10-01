@@ -1076,7 +1076,10 @@ function recoverOpenAICompletion(
     if (options.include_original_response) {
         throw new Error('An idempotently recovered Chat Completions response cannot reconstruct original_response');
     }
-    const projection = compileOpenAIChatCompletionsConversation(prepared.document);
+    const projection = compileOpenAIChatCompletionsConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
     const mapping = projection.mappings.find(
         (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
     );

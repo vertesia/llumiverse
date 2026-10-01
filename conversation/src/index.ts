@@ -4,6 +4,7 @@ export { ConversationValidationError } from './diagnostics.js';
 export * from './guards.js';
 export * from './inspection.js';
 export * from './json-preflight.js';
+export * from './native-import.js';
 export * from './output.js';
 export * from './pending-tool-calls.js';
 export * from './prepared-request.js';

@@ -836,3 +836,56 @@ export function providerJsonValue(value: unknown): JsonValue {
     if (text === undefined) throw new TypeError('Provider payload has no JSON representation');
     return JSON.parse(text) as JsonValue;
 }
+
+/** Protected native state requires recorded invocation evidence, never the newly requested target. */
+export function assertProtectedReplayCompatibility(
+    document: ConversationDocument,
+    turn: ConversationTurn,
+    protocol: string,
+    target?: { provider?: string; model?: string },
+): void {
+    for (const block of turn.blocks) {
+        if (
+            block.type !== 'native_replay' ||
+            block.protocol !== protocol ||
+            block.dependency_policy === 'discard_on_dependency_change'
+        )
+            continue;
+        const scope = block.compatibility_scope;
+        let originModel = scope.model;
+        // Previously persisted generated turns may omit the replay model but retain the exact executed receipt.
+        if (originModel === undefined && isGeneratedAgentTurn(turn)) {
+            const generation = document.generations[turn.generation_id];
+            if (generation?.record_source === 'executed') {
+                const receipt = generation.request_receipt;
+                if (
+                    generation.provider === scope.provider &&
+                    generation.protocol === scope.protocol &&
+                    generation.adapter_version === scope.adapter_version &&
+                    receipt.target.provider === scope.provider &&
+                    receipt.target.protocol === scope.protocol &&
+                    receipt.target.adapter_version === scope.adapter_version &&
+                    receipt.target.model === generation.requested_model &&
+                    receipt.request_id === generation.request_id &&
+                    block.dependencies.request_ids.includes(receipt.request_id)
+                )
+                    originModel = receipt.target.model;
+            }
+        }
+        if (originModel === undefined) {
+            throw new TypeError(
+                `Protected replay block ${block.id} has unknown recorded model origin; an explicit checkpoint is required`,
+            );
+        }
+        if (
+            target?.provider === undefined ||
+            target.model === undefined ||
+            scope.provider !== target.provider ||
+            originModel !== target.model
+        ) {
+            throw new TypeError(
+                `Protected replay block ${block.id} is outside its compatibility scope; an explicit checkpoint is required`,
+            );
+        }
+    }
+}

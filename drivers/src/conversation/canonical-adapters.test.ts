@@ -20,22 +20,26 @@ import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completi
 import {
     compileOpenAIChatCompletionsConversation,
     exportLegacyOpenAIChatCompletionsConversation,
-    prepareOpenAIChatCanonicalState,
+    importOpenAIChatCompletionsHistory,
+    prepareOpenAIChatCanonicalState as prepareOpenAIChatWithTarget,
 } from '../openai/openai-chat-conversation-adapter.js';
 import {
     compileOpenAIResponsesConversation,
-    prepareOpenAIResponsesCanonicalState,
+    importOpenAIResponsesHistory,
+    prepareOpenAIResponsesCanonicalState as prepareOpenAIResponsesWithTarget,
 } from '../openai/openai-responses-conversation-adapter.js';
 import type { ClaudePrompt } from '../shared/claude-messages.js';
 import {
     compileClaudeMessagesConversation,
     exportLegacyClaudeMessagesConversation,
-    prepareClaudeCanonicalState,
+    importClaudeMessagesHistory,
+    prepareClaudeCanonicalState as prepareClaudeWithTarget,
 } from '../shared/claude-messages-conversation-adapter.js';
 import {
     compileGeminiConversation,
     prepareGeminiCanonicalState,
 } from '../vertexai/models/gemini-conversation-adapter.js';
+import { canonicalToolDefinitions, parseCanonicalConversation } from './canonical-runtime.js';
 import { exportLegacyConversation } from './index.js';
 
 const recordedAt = '2026-09-11T00:00:00.000Z';
@@ -575,9 +579,13 @@ describe('canonical native adapter conformance', () => {
         const replay = protectedDocument.turns[0]?.blocks.find((block) => block.type === 'native_replay');
         if (replay?.type !== 'native_replay') throw new Error('Expected raw argument replay');
         delete replay.dependency_policy;
-        expect(() => compileOpenAIChatCompletionsConversation(parseConversationDocument(protectedDocument))).toThrow(
-            'no longer matches canonical call call-weather',
-        );
+        replay.compatibility_scope.model = 'gpt-test';
+        expect(() =>
+            compileOpenAIChatCompletionsConversation(parseConversationDocument(protectedDocument), {
+                provider: 'openai',
+                model: 'gpt-test',
+            }),
+        ).toThrow('no longer matches canonical call call-weather');
     });
 
     it('omits foreign discardable lexical replay while projecting the portable tool call', async () => {
@@ -717,7 +725,9 @@ describe('canonical native adapter conformance', () => {
         await expect(
             prepareToolArgumentExternalization(state.document, 'call-protected-write', ['content']),
         ).rejects.toThrow(/Tool call call-protected-write is protected by native replay .* and cannot be externalized/);
-        expect(compileOpenAIResponsesConversation(state.document).conversation).toEqual(
+        expect(
+            compileOpenAIResponsesConversation(state.document, { provider: 'openai', model: 'gpt-test' }).conversation,
+        ).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ type: 'reasoning', encrypted_content: 'encrypted-replay-state' }),
             ]),
@@ -802,3 +812,57 @@ describe('canonical native adapter conformance', () => {
         );
     });
 });
+
+/** This fixture archive declares its original invocation route; target options are not origin evidence. */
+async function prepareOpenAIChatCanonicalState(input: Parameters<typeof prepareOpenAIChatWithTarget>[0]) {
+    const conversation =
+        input.conversation == null || parseCanonicalConversation(input.conversation) !== undefined
+            ? input.conversation
+            : (
+                  await importOpenAIChatCompletionsHistory(input.conversation, {
+                      conversation_id: input.options.conversation_runtime?.conversation_id ?? 'fixture-history',
+                      recorded_at: input.options.conversation_runtime?.recorded_at ?? '2026-09-30T00:00:00.000Z',
+                      provider: 'openai',
+                      model: 'gpt-test',
+                      source_request_id: input.options.conversation_runtime?.request_id,
+                      tool_definitions: await canonicalToolDefinitions(input.options.tools),
+                  })
+              ).document;
+    return prepareOpenAIChatWithTarget({ ...input, conversation });
+}
+
+/** This fixture archive declares its original invocation route; target options are not origin evidence. */
+async function prepareClaudeCanonicalState(input: Parameters<typeof prepareClaudeWithTarget>[0]) {
+    const conversation =
+        input.conversation == null || parseCanonicalConversation(input.conversation) !== undefined
+            ? input.conversation
+            : (
+                  await importClaudeMessagesHistory(input.conversation, {
+                      conversation_id: input.options.conversation_runtime?.conversation_id ?? 'fixture-history',
+                      recorded_at: input.options.conversation_runtime?.recorded_at ?? '2026-09-30T00:00:00.000Z',
+                      provider: 'anthropic',
+                      model: 'claude-test',
+                      source_request_id: input.options.conversation_runtime?.request_id,
+                      tool_definitions: await canonicalToolDefinitions(input.options.tools),
+                  })
+              ).document;
+    return prepareClaudeWithTarget({ ...input, conversation });
+}
+
+/** This fixture archive declares its original invocation route; target options are not origin evidence. */
+async function prepareOpenAIResponsesCanonicalState(input: Parameters<typeof prepareOpenAIResponsesWithTarget>[0]) {
+    const conversation =
+        input.conversation == null || parseCanonicalConversation(input.conversation) !== undefined
+            ? input.conversation
+            : (
+                  await importOpenAIResponsesHistory(input.conversation, {
+                      conversation_id: input.options.conversation_runtime?.conversation_id ?? 'fixture-history',
+                      recorded_at: input.options.conversation_runtime?.recorded_at ?? '2026-09-30T00:00:00.000Z',
+                      provider: 'openai',
+                      model: 'gpt-test',
+                      source_request_id: input.options.conversation_runtime?.request_id,
+                      tool_definitions: await canonicalToolDefinitions(input.options.tools),
+                  })
+              ).document;
+    return prepareOpenAIResponsesWithTarget({ ...input, conversation });
+}

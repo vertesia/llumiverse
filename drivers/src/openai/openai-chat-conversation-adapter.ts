@@ -33,6 +33,7 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
     appendCanonicalPrompt,
+    assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     canonicalToolSelectionTargetOptions,
@@ -41,11 +42,21 @@ import {
     newCanonicalConversation,
     parseCanonicalConversation,
     providerJsonValue,
-    type ResolvedConversationRuntimeContext,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    fingerprintNativeConversationImport,
+    guardNativeConversationImport,
+    type NativeConversationImportContext,
+    type NativeConversationImportOptions,
+    type NativeConversationImportResult,
+    nativeConversationImportContext,
+    nativeConversationImportResult,
+    newNativeImportDocument,
+    snapshotNativeConversationImportOptions,
+} from '../conversation/native-import.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -349,8 +360,9 @@ async function messageRecords(input: {
     message_index: number;
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
+    model?: string;
     tool_definitions: readonly ToolDefinition[];
     source_history_turn_number?: number;
 }): Promise<{
@@ -483,6 +495,7 @@ async function messageRecords(input: {
                 protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
                 compatibility_scope: {
                     provider: input.provider,
+                    ...(input.model === undefined ? {} : { model: input.model }),
                     protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
                     adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
                 },
@@ -629,8 +642,9 @@ async function messagesToRecords(input: {
     messages: readonly OpenAIChatCompletionsMessage[];
     scope: string;
     source: SourceKind;
-    runtime: ResolvedConversationRuntimeContext;
+    runtime: NativeConversationImportContext;
     provider: string;
+    model?: string;
     tool_definitions: readonly ToolDefinition[];
     source_history_turn_number?: number;
 }): Promise<{
@@ -651,6 +665,7 @@ async function messagesToRecords(input: {
             source: input.source,
             runtime: input.runtime,
             provider: input.provider,
+            ...(input.model === undefined ? {} : { model: input.model }),
             tool_definitions: input.tool_definitions,
             ...(input.source_history_turn_number === undefined
                 ? {}
@@ -933,13 +948,26 @@ function compileTurn(
 export function compileOpenAIChatCompletionsConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+): ReturnType<typeof projectOpenAIChatCompletionsConversation> {
+    return projectOpenAIChatCompletionsConversation(document, target);
+}
+
+function projectOpenAIChatCompletionsConversation(
+    document: ConversationDocument,
+    target?: { provider?: string; model?: string },
+    readOnlyCompatibilityProjection = false,
 ): {
     conversation: OpenAIChatCompletionsPrompt;
     mappings: NativeItemMapping[];
 } {
     const messages: OpenAIChatCompletionsMessage[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
+    const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    for (const turn of selectedTurns) {
+        if (!readOnlyCompatibilityProjection)
+            assertProtectedReplayCompatibility(document, turn, OPENAI_CHAT_COMPLETIONS_PROTOCOL, target);
+    }
+    for (const turn of selectedTurns) {
         const compiled = compileTurn(turn, document, target);
         const messageIndex = messages.length;
         messages.push(...compiled);
@@ -958,6 +986,69 @@ export function compileOpenAIChatCompletionsConversation(
     return { conversation: { _is_openai_chat_completions: true, messages }, mappings };
 }
 
+/** Pure registered-protocol import. The report explicitly leaves continuation readiness unvalidated. */
+export async function importOpenAIChatCompletionsHistory(
+    historyInput: unknown,
+    options: NativeConversationImportOptions,
+): Promise<NativeConversationImportResult> {
+    return guardNativeConversationImport(async () => {
+        options = snapshotNativeConversationImportOptions(options);
+        const runtime = nativeConversationImportContext(options);
+        const toolDefinitions = [...(options.tool_definitions ?? [])];
+        let document = newNativeImportDocument(options);
+        if (!isOpenAIChatCompletionsHistory(historyInput, OPENAI_CHAT_COMPLETIONS_PROTOCOL)) {
+            throw new TypeError('Conversation is neither canonical nor registered OpenAI Chat Completions history');
+        }
+        const historySnapshot = structuredClone(historyInput);
+        const imported = await messagesToRecords({
+            messages: historyMessages(historySnapshot),
+            scope: `${runtime.conversation_id}:legacy`,
+            source: 'imported',
+            runtime,
+            provider: options.provider,
+            ...(options.model === undefined ? {} : { model: options.model }),
+            tool_definitions: toolDefinitions,
+            ...(sourceHistoryTurnNumber(historySnapshot) === undefined
+                ? {}
+                : { source_history_turn_number: sourceHistoryTurnNumber(historySnapshot) }),
+        });
+        const importedEntries = await Promise.all(
+            imported.turns.map(async (turn, index) => ({
+                id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
+                type: 'source_turn' as const,
+                turn_id: turn.id,
+            })),
+        );
+        const importedFingerprint = await fingerprintNativeConversationImport(
+            providerJsonValue(historySnapshot),
+            options,
+            OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+        );
+        document = appendConversationRecords(
+            document,
+            {
+                turns: imported.turns,
+                assets: imported.assets,
+                tool_definitions: toolDefinitions,
+                context_entries: importedEntries,
+            },
+            {
+                expected_revision: document.revision,
+                operation_id: await entityId('import', runtime.conversation_id, OPENAI_CHAT_COMPLETIONS_PROTOCOL),
+                payload_fingerprint: importedFingerprint,
+                recorded_at: runtime.recorded_at,
+            },
+        ).document;
+        return nativeConversationImportResult(
+            document,
+            options,
+            OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+        );
+    });
+}
+
 export async function prepareOpenAIChatCanonicalState(input: {
     conversation: unknown;
     prompt: OpenAIChatCompletionsPrompt;
@@ -967,48 +1058,18 @@ export async function prepareOpenAIChatCanonicalState(input: {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
     const toolDefinitions = await resolveCanonicalToolDefinitions(document, input.options.tools);
-    const importedMappings: NativeItemMapping[] = [];
     if (document === undefined) {
         document = newCanonicalConversation(runtime);
         if (input.conversation !== undefined && input.conversation !== null) {
-            if (!isOpenAIChatCompletionsHistory(input.conversation, OPENAI_CHAT_COMPLETIONS_PROTOCOL)) {
-                throw new TypeError('Conversation is neither canonical nor registered OpenAI Chat Completions history');
-            }
-            const imported = await messagesToRecords({
-                messages: historyMessages(input.conversation),
-                scope: `${runtime.conversation_id}:legacy`,
-                source: 'imported',
-                runtime,
-                provider: input.provider,
-                tool_definitions: toolDefinitions,
-                ...(sourceHistoryTurnNumber(input.conversation) === undefined
-                    ? {}
-                    : { source_history_turn_number: sourceHistoryTurnNumber(input.conversation) }),
-            });
-            const importedEntries = await Promise.all(
-                imported.turns.map(async (turn, index) => ({
-                    id: await entityId('context', `${runtime.conversation_id}:legacy`, index),
-                    type: 'source_turn' as const,
-                    turn_id: turn.id,
-                })),
-            );
-            const importedFingerprint = await fingerprintJson(providerJsonValue(input.conversation));
-            document = appendConversationRecords(
-                document,
-                {
-                    turns: imported.turns,
-                    assets: imported.assets,
-                    tool_definitions: toolDefinitions,
-                    context_entries: importedEntries,
-                },
-                {
-                    expected_revision: document.revision,
-                    operation_id: await entityId('import', runtime.conversation_id, OPENAI_CHAT_COMPLETIONS_PROTOCOL),
-                    payload_fingerprint: importedFingerprint,
+            document = (
+                await importOpenAIChatCompletionsHistory(input.conversation, {
+                    conversation_id: runtime.conversation_id,
                     recorded_at: runtime.recorded_at,
-                },
+                    source_request_id: runtime.request_id,
+                    provider: input.provider,
+                    tool_definitions: toolDefinitions,
+                })
             ).document;
-            importedMappings.push(...imported.mappings);
         }
     } else if (
         runtime.conversation_id !== document.id &&
@@ -1194,6 +1255,7 @@ export async function decodeOpenAIChatCanonicalResponse(
         source: 'received',
         runtime,
         provider: prepared.provider,
+        model: prepared.requested_model,
         tool_definitions: prepared.tool_definitions,
     });
     const received = records.turns[0];
@@ -1264,6 +1326,7 @@ export async function decodeOpenAIChatCanonicalResponse(
                 protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
                 compatibility_scope: {
                     provider: prepared.provider,
+                    model: prepared.requested_model,
                     protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
                     adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
                 },
@@ -1306,7 +1369,7 @@ export function appendOpenAIChatCanonicalResponse(
 export function exportLegacyOpenAIChatCompletionsConversation(
     document: ConversationDocument,
 ): OpenAIChatCompletionsPrompt {
-    return compileOpenAIChatCompletionsConversation(parseConversationDocument(document)).conversation;
+    return projectOpenAIChatCompletionsConversation(parseConversationDocument(document), undefined, true).conversation;
 }
 
 export function assertCanonicalOpenAIConversation(value: unknown): ConversationDocument {

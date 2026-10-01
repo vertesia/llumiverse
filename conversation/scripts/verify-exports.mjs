@@ -30,6 +30,18 @@ assert.equal(typeof outputRuntime.conversationOutputReceiptsEqual, 'function');
 assert.equal(typeof streamingRuntime.ConversationStreamAccumulatorRuntime, 'function');
 assert.equal(typeof streamingRuntime.preflightJsonInput, 'function');
 
+for (const name of ['Options', 'Diagnostic', 'Report', 'Result']) {
+    assert.equal(typeof schemas[`NativeConversationImport${name}Schema`]?.safeParse, 'function');
+    assert.equal(
+        jsonSchemas[`NativeConversationImport${name}JsonSchema`].$schema,
+        'https://json-schema.org/draft/2020-12/schema',
+    );
+}
+assert.equal(typeof root.parseNativeConversationImportOptions, 'function');
+assert.equal(typeof root.parseNativeConversationImportReport, 'function');
+assert.equal(typeof root.parseNativeConversationImportResult, 'function');
+assert.equal(typeof root.preflightNativeConversationImportInput, 'function');
+
 const compiler = spawnSync('pnpm', ['exec', 'tsc', '-p', 'test-fixtures/tsconfig.json'], {
     cwd: new URL('..', import.meta.url),
     encoding: 'utf8',

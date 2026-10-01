@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
     compileOpenAIResponsesConversation,
     exportLegacyOpenAIResponsesConversation,
-    prepareOpenAIResponsesCanonicalState,
+    importOpenAIResponsesHistory,
+    prepareOpenAIResponsesCanonicalState as prepareOpenAIResponsesWithTarget,
 } from '../openai/openai-responses-conversation-adapter.js';
 import { compileClaudeMessagesConversation } from '../shared/claude-messages-conversation-adapter.js';
-import { selectedCanonicalTurns } from './canonical-runtime.js';
+import { canonicalToolDefinitions, parseCanonicalConversation, selectedCanonicalTurns } from './canonical-runtime.js';
 
 const recordedAt = '2026-09-12T00:00:00.000Z';
 
@@ -291,3 +292,21 @@ describe('OpenAI Responses independent canonical conformance', () => {
         expect(compileOpenAIResponsesConversation(document).conversation).toEqual(history);
     });
 });
+
+/** This fixture archive declares its original invocation route; target options are not origin evidence. */
+async function prepareOpenAIResponsesCanonicalState(input: Parameters<typeof prepareOpenAIResponsesWithTarget>[0]) {
+    const conversation =
+        input.conversation == null || parseCanonicalConversation(input.conversation) !== undefined
+            ? input.conversation
+            : (
+                  await importOpenAIResponsesHistory(input.conversation, {
+                      conversation_id: input.options.conversation_runtime?.conversation_id ?? 'fixture-history',
+                      recorded_at: input.options.conversation_runtime?.recorded_at ?? '2026-09-30T00:00:00.000Z',
+                      provider: 'openai',
+                      model: 'gpt-test',
+                      source_request_id: input.options.conversation_runtime?.request_id,
+                      tool_definitions: await canonicalToolDefinitions(input.options.tools),
+                  })
+              ).document;
+    return prepareOpenAIResponsesWithTarget({ ...input, conversation });
+}

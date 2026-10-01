@@ -92,6 +92,12 @@ import type {
     JsonValueSchema,
     MetadataSchema,
     ModelTargetSchema,
+    NativeConversationImportCompletenessSchema,
+    NativeConversationImportDiagnosticCodeSchema,
+    NativeConversationImportDiagnosticSchema,
+    NativeConversationImportOptionsSchema,
+    NativeConversationImportReportSchema,
+    NativeConversationImportResultSchema,
     NativeIdentitySchema,
     NativeItemMappingSchema,
     NativeReplayBlockSchema,
@@ -288,3 +294,10 @@ export type ProcessingState = z.infer<typeof ProcessingStateSchema>;
 export type ConversationLineageParent = z.infer<typeof ConversationLineageParentSchema>;
 export type ConversationLineage = z.infer<typeof ConversationLineageSchema>;
 export type ConversationDocument = z.infer<typeof ConversationDocumentSchema>;
+
+export type NativeConversationImportCompleteness = z.infer<typeof NativeConversationImportCompletenessSchema>;
+export type NativeConversationImportOptions = z.infer<typeof NativeConversationImportOptionsSchema>;
+export type NativeConversationImportDiagnosticCode = z.infer<typeof NativeConversationImportDiagnosticCodeSchema>;
+export type NativeConversationImportDiagnostic = z.infer<typeof NativeConversationImportDiagnosticSchema>;
+export type NativeConversationImportReport = z.infer<typeof NativeConversationImportReportSchema>;
+export type NativeConversationImportResult = z.infer<typeof NativeConversationImportResultSchema>;

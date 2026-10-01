@@ -141,6 +141,23 @@ function resolveLimits(overrides: Partial<JsonInputLimits>): JsonInputLimits {
 }
 
 export function preflightJsonInput(input: unknown, limitOverrides: Partial<JsonInputLimits> = {}): JsonPreflightResult {
+    return preflightInput(input, limitOverrides, []);
+}
+
+/** Native archive input may contain plain Uint8Array byte leaves; ordinary JSON still rejects binary. */
+export function preflightNativeConversationImportInput(
+    input: unknown,
+    limitOverrides: Partial<JsonInputLimits> = {},
+    byteViewPrototypes: readonly object[] = [Uint8Array.prototype],
+): JsonPreflightResult {
+    return preflightInput(input, limitOverrides, byteViewPrototypes);
+}
+
+function preflightInput(
+    input: unknown,
+    limitOverrides: Partial<JsonInputLimits>,
+    byteViewPrototypes: readonly object[],
+): JsonPreflightResult {
     const limits = resolveLimits(limitOverrides);
     const diagnostics: JsonPreflightDiagnostic[] = [];
     const activeObjects = new WeakMap<object, string>();
@@ -345,6 +362,48 @@ export function preflightJsonInput(input: unknown, limitOverrides: Partial<JsonI
             continue;
         }
 
+        if (byteViewPrototypes.length > 0 && value instanceof Uint8Array) {
+            // Standard Uint8Array is the default; protocol adapters explicitly register other
+            // trusted byte-view prototypes. Source-owned view fields cannot shadow conversion.
+            const prototype = Object.getPrototypeOf(value);
+            if (
+                !byteViewPrototypes.includes(prototype) ||
+                ['byteLength', 'length', 'buffer', 'byteOffset'].some((key) => Object.hasOwn(value, key))
+            ) {
+                addDiagnostic({
+                    code: 'JSON_NON_PLAIN_OBJECT',
+                    stage: 'preflight',
+                    path: pointer,
+                    message: 'Native byte leaves must use a supported prototype without shadowed byte-view fields',
+                });
+                continue;
+            }
+            const byteLengthGetter = Object.getOwnPropertyDescriptor(
+                Object.getPrototypeOf(Uint8Array.prototype),
+                'byteLength',
+            )?.get;
+            if (byteLengthGetter === undefined) throw new TypeError('Uint8Array intrinsic byte length is unavailable');
+            const byteLength = byteLengthGetter.call(value) as number;
+            const base64Bytes = 4 * Math.ceil(byteLength / 3);
+            // Count the JSON-safe adapter representation, including its byte-wrapper key and quotes.
+            const binaryBytes = base64Bytes + '{"_llumiverse_bedrock_bytes":""}'.length;
+            if (base64Bytes + 2 > limits.max_string_bytes) {
+                addDiagnostic({
+                    code: 'JSON_MAX_STRING_BYTES',
+                    stage: 'preflight',
+                    path: pointer,
+                    message: 'Native byte encoding exceeds the configured per-string limit',
+                    limit: limits.max_string_bytes,
+                    observed: base64Bytes + 2,
+                });
+            }
+            if (!addBytes(binaryBytes, path) || stopped) continue;
+            // Atomic byte-view semantics: only intrinsic bytes are native protocol content.
+            // Own JavaScript annotations (including symbols/non-enumerable fields) are outside
+            // this byte value. Do not enumerate indexed slots or invoke annotation hooks.
+            continue;
+        }
+
         const priorPath = activeObjects.get(value);
         if (priorPath !== undefined) {
             addDiagnostic({
@@ -477,4 +536,20 @@ export function preflightJsonInput(input: unknown, limitOverrides: Partial<JsonI
         return { success: true, diagnostics: [], bytes, nodes };
     }
     return { success: false, diagnostics, bytes, nodes };
+}
+
+/** Copy atomic byte content through intrinsic getters; never use caller-owned fields or iterators. */
+export function copyNativeConversationByteView(value: Uint8Array): Uint8Array {
+    const prototype = Object.getPrototypeOf(Uint8Array.prototype);
+    const bufferGetter = Object.getOwnPropertyDescriptor(prototype, 'buffer')?.get;
+    const offsetGetter = Object.getOwnPropertyDescriptor(prototype, 'byteOffset')?.get;
+    const lengthGetter = Object.getOwnPropertyDescriptor(prototype, 'byteLength')?.get;
+    if (bufferGetter === undefined || offsetGetter === undefined || lengthGetter === undefined) {
+        throw new TypeError('Uint8Array intrinsic getters are unavailable');
+    }
+    const buffer = bufferGetter.call(value) as ArrayBufferLike;
+    const offset = offsetGetter.call(value) as number;
+    const length = lengthGetter.call(value) as number;
+    // The fresh standard view has no caller-controlled iterator/constructor/properties.
+    return new Uint8Array(buffer, offset, length).slice();
 }

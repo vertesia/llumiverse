@@ -40,9 +40,10 @@ Canonical streaming schemas describe bounded, request-scoped draft events with n
 request/attempt/stream identity, monotonic sequencing, terminal status, and explicit reconciliation from
 draft block identities to accepted canonical records. The package includes a bounded accumulator for
 validating retained event logs and final decode evidence. `@llumiverse/core` provides a finite-response
-fallback and an explicit legacy string projection. Provider transports do not emit these typed events yet;
-that adoption remains a separate compatibility step, and the contracts do not by themselves provide a
-durable host event log or reconnect service.
+fallback and an explicit legacy string projection. Adopted OpenAI Chat Completions, OpenAI Responses,
+Claude Messages, Gemini GenerateContent, and Bedrock Converse paths emit typed lifecycle events and
+reconcile draft records with accepted canonical responses. This coverage depends on the driver/model
+path; the contracts do not by themselves provide a durable host event log or reconnect service.
 
 ```ts
 import {
@@ -65,6 +66,27 @@ Native execution adapters live in `@llumiverse/drivers`. OpenAI Chat Completions
 Claude Messages, Gemini GenerateContent, and Bedrock Converse import native history, render canonical
 context into provider requests, and ingest native responses into canonical records. They support
 sync/stream continuation, structured JSON output, and accepted-response recovery after persistence.
+The report-returning `importNativeConversationHistory()` and five protocol-specific history importers
+perform pure imports without compiling a prompt or calling a provider. Each import validates and owns
+its options and native history before the first asynchronous step, so subsequent caller mutation
+cannot change imported records, origin metadata, tool definitions, or receipt fingerprints. Protocol selection and recorded
+hosting provider evidence are explicit; the importer does not infer the host from a native wrapper or
+invent a model. Results retain native call identities, media content, and supported protected replay,
+and validate the canonical document before returning it. Typed failures reject unsupported shapes.
+The import report separates a caller's complete/fragment/unknown declaration from continuation readiness,
+which remains `not_validated`. Missing metadata/model evidence, remote media references, and missing
+tool definitions remain explicit diagnostics. Import does not hydrate media, validate target compatibility,
+execute processing jobs, or publish a durable imported head. Inputs and resulting documents remain
+bounded; Bedrock binary media is preserved as JSON-safe base64. Native byte views use explicit
+atomic byte semantics: only intrinsic byte content is protocol data. Own JavaScript annotations,
+including symbol and non-enumerable properties, are excluded and never accessed; the import report
+states that policy. Shadowed byte-view fields fail before conversion. Bedrock explicitly supports
+standard Uint8Array and Node Buffer views, copying intrinsic bytes without enumerating their indices
+or invoking caller iterators/accessors. This does not claim to preserve arbitrary JavaScript object
+properties attached to a byte view. The earlier document-only Bedrock
+import API remains a named compatibility boundary with its existing identity scheme; protected replay
+requires supplied provider evidence.
+
 Read-only legacy projections remain at compatibility boundaries. Unsupported model modalities and
 incompatible protected replay fail explicitly. This adapter coverage does not imply unrestricted
 model switching or adoption by every transport and model family.
@@ -98,3 +120,22 @@ full runtime retirement, migration, or npm publication gates.
 The package remains private while its experimental publication gate is reviewed. A future publication
 must freeze the intended experimental surface, verify generated-contract compatibility, and define a
 release path that does not include the package in the stable Llumiverse publication set by accident.
+
+Protected native replay can continue only with a recorded provider and invocation model identifier that exactly match
+an explicit target. `compatibility_scope.model` names that recorded invocation route; it does not imply that a model
+alias resolves to a fixed provider version. Generation `requested_model` retains the invocation identifier, while
+`resolved_model` is present only when reported by the provider response (Converse reports none). No alias or model
+family equivalence is inferred. Current generated Claude and Chat replay records the invocation model. Previously
+persisted generated replay may use its consistent executed generation/request receipt and replay request dependency
+as origin evidence. Imported history without that evidence remains inspectable with a typed unknown-origin diagnostic,
+but cannot be prepared for protected continuation. Raw legacy history cannot establish origin from the next requested
+model; hosts with recorded origin must explicitly import it before preparation. Named `exportLegacy*` helpers are
+read-only compatibility projections and establish no readiness. A host may explicitly select a validated checkpoint
+replacement; adapters do not silently discard protected state or create checkpoints.
+
+Current pure-import operation receipts bind a versioned semantic envelope containing the exact owned native JSON
+snapshot, protocol/adapter version, and validated effective import options (origin, tool schemas, completeness,
+recorded time and source request identity). Omitted defaults normalize to their effective values. The stable operation
+ID permits exact retries and rejects a different semantic fingerprint through the canonical append mechanism.
+This operation hash is not a native-artifact-only content hash; archival hosts must track that source hash separately.
+The named historical document-only Bedrock import retains its legacy operation identity and history-only hash contract.
