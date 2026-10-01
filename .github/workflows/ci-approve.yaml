@@ -18,20 +18,53 @@ on:
 permissions: {}
 
 jobs:
+  discover:
+    name: Resolve approval branches
+    # Discovery only reads metadata; publishing jobs use the actual branch lock below.
+    concurrency:
+      group: ci-approve-discovery-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.event.inputs.pr_number || 'manual' }}
+      cancel-in-progress: false
+      queue: max
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read # Read the trusted discovery script at the workflow commit.
+      pull-requests: read # Resolve manual dispatch targets to their PR head branches.
+    outputs:
+      branches: ${{ steps.branches.outputs.branches }}
+    steps:
+      - name: Checkout trusted approval policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/bin
+          persist-credentials: false
+          submodules: false
+      - name: Resolve branches
+        id: branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/bin/ci-approve.mjs --discover
   approve:
     name: Reconcile CI approvals
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.discover.outputs.branches) }}
     permissions:
       contents: read # Read the trusted approval policy at the workflow commit.
       actions: read # Inspect workflow runs, jobs and required test steps.
       pull-requests: read # Read PR metadata, changed files and existing reviews.
       statuses: write # Publish the approval gate status on the evaluated PR head.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    if: needs.discover.outputs.branches != '[]'
     runs-on: ubuntu-slim
     environment: renovate-automerge
     timeout-minutes: 15
-    # Serialize approval publishers, including pending runs.
+    # Serialize approval publishers for the same branch, including pending runs.
     concurrency:
-      group: ci-approve-${{ github.repository }}
+      group: ci-approve-${{ github.repository }}-${{ matrix.branch }}
       cancel-in-progress: false
       queue: max
     steps:
@@ -51,6 +84,7 @@ jobs:
           permission-pull-requests: write
       - name: Reconcile approvals
         env:
+          CI_APPROVAL_BRANCH: ${{ matrix.branch }}
           GH_TOKEN: ${{ github.token }}
           GH_REVIEW_TOKEN: ${{ steps.approval-token.outputs.token }}
         run: node .github/bin/ci-approve.mjs
