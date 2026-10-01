@@ -158,8 +158,8 @@ describe('Foundry OpenAI v1 transport', () => {
             expect(requests[0].body).toMatchObject({
                 model: 'chat',
                 stream: true,
-                stream_options: { include_usage: true },
             });
+            expect(requests[0].body).not.toHaveProperty('stream_options');
             await vi.waitFor(() => expect(requests[0].signal?.aborted).toBe(true));
             expect(internals.getInferenceClient().maxRetries).toBe(0);
         } finally {

@@ -177,6 +177,38 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(completion.original_response).toBe(nativeResponse);
     });
 
+    it('streams non-OpenAI inference without unsupported usage options', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Mistral AI' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const body = JSON.parse(String(init?.body));
+            expect(body).not.toHaveProperty('stream_options');
+            expect(body).toMatchObject({ model: 'chat-deployment', stream: true });
+            return new Response(
+                `data: ${JSON.stringify({
+                    id: 'chat-1',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'chat-deployment',
+                    choices: [{ index: 0, delta: { content: 'Green' }, finish_reason: null }],
+                })}\n\ndata: [DONE]\n\n`,
+                { headers: { 'content-type': 'text/event-stream' } },
+            );
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        const options = { model: 'chat-deployment::mistral' };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'What color is grass?' }], options);
+        const results = [];
+        for await (const chunk of await driver.requestTextCompletionStream(prompt, options)) {
+            results.push(...chunk.result);
+        }
+        expect(results).toContainEqual({ type: 'text', value: 'Green' });
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
     it('memoizes the OpenAI Responses adapter and deployment decision', async () => {
         const driver = createDriver();
         const deploymentGet = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
