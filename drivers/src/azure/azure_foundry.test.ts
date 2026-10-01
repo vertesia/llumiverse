@@ -1,6 +1,6 @@
 import type { TokenCredential } from '@azure/identity';
 import { PromptRole } from '@llumiverse/core';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
 import { AzureFoundryDriver } from './azure_foundry.js';
@@ -10,10 +10,9 @@ const credential: TokenCredential = {
 };
 
 type FoundryInternals = {
-    inferenceClient: object;
-    inferenceProtocolDriver: {
-        service: object;
-    };
+    getDriverFetch: () => typeof fetch;
+    getInferenceClient: () => OpenAI;
+    getInferenceProtocolDriver: () => { service: OpenAI };
 };
 
 function createDriver(): AzureFoundryDriver {
@@ -71,7 +70,10 @@ describe('AzureFoundryDriver protocol composition', () => {
     it('uses shared Chat behavior for non-OpenAI deployments and sends stream false', async () => {
         const driver = createDriver();
         const deploymentGet = vi.fn(async () => ({ modelPublisher: 'Meta' }));
-        driver.service = { deployments: { get: deploymentGet } } as unknown as AzureFoundryDriver['service'];
+        driver.service = {
+            deployments: { get: deploymentGet },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
         const nativeResponse = {
             id: 'foundry-1',
             created: 1,
@@ -95,10 +97,10 @@ describe('AzureFoundryDriver protocol composition', () => {
             ],
             usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
         };
-        const post = vi.fn(async () => ({ status: '200', body: nativeResponse }));
-        const path = vi.fn(() => ({ post }));
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path } });
+        const client = exposePrivate<FoundryInternals>(driver).getInferenceClient();
+        const post = vi
+            .spyOn(client.chat.completions, 'create')
+            .mockResolvedValue(nativeResponse as OpenAI.Chat.ChatCompletion);
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Weather?' }], {
             model: 'llama-deployment::llama',
         });
@@ -117,10 +119,8 @@ describe('AzureFoundryDriver protocol composition', () => {
             tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' } }],
         });
 
-        expect(path).toHaveBeenCalledWith('/chat/completions');
-        expect(post).toHaveBeenCalledWith({
-            timeout: 900_000,
-            body: expect.objectContaining({
+        expect(post).toHaveBeenCalledWith(
+            expect.objectContaining({
                 model: 'llama-deployment',
                 stream: false,
                 max_tokens: 16,
@@ -139,7 +139,8 @@ describe('AzureFoundryDriver protocol composition', () => {
                     },
                 ],
             }),
-        });
+            undefined,
+        );
         expect(completion.tool_use?.[0]).toEqual({
             id: 'call_1',
             tool_name: 'lookup',
@@ -178,8 +179,17 @@ describe('AzureFoundryDriver protocol composition', () => {
             top_p: 1,
             usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
         };
-        const create = vi.fn(async () => response);
-        const openAIClient = { responses: { create } } as unknown as OpenAI;
+        const requests: { body: unknown; headers: Headers; url: string }[] = [];
+        const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            requests.push({
+                body: JSON.parse(String(init?.body)),
+                headers: new Headers(init?.headers),
+                url: String(input),
+            });
+            return new Response(JSON.stringify(response), { headers: { 'content-type': 'application/json' } });
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        const openAIClient = { baseURL: 'https://foundry.example.test/openai/v1' };
         const getOpenAIClient = vi.fn(() => openAIClient);
         driver.service = {
             deployments: { get: deploymentGet },
@@ -212,18 +222,16 @@ describe('AzureFoundryDriver protocol composition', () => {
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
         expect(getOpenAIClient).toHaveBeenCalledOnce();
-        expect(getOpenAIClient).toHaveBeenCalledWith({
-            fetch: expect.any(Function),
-            timeout: 900_000,
-        });
-        expect(create).toHaveBeenCalledWith(
+        expect(requests).toHaveLength(2);
+        expect(requests[0].url).toBe('https://foundry.example.test/openai/v1/responses');
+        expect(requests[0].headers.get('authorization')).toBe('Bearer test-token');
+        expect(requests[0].headers.has('x-ms-oai-image-generation-deployment')).toBe(false);
+        expect(requests[0].body).toEqual(
             expect.objectContaining({
                 model: 'gpt-deployment',
                 stream: false,
                 reasoning: { effort: 'high', summary: 'auto' },
                 include: ['reasoning.encrypted_content'],
-                temperature: undefined,
-                top_p: undefined,
                 tools: [expect.objectContaining({ type: 'function', name: 'lookup' })],
                 text: expect.objectContaining({
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
@@ -245,6 +253,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         const driver = createDriver();
         driver.service = {
             deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
         } as unknown as AzureFoundryDriver['service'];
         const options = {
             model: 'llama-deployment::llama',
@@ -287,40 +296,45 @@ describe('AzureFoundryDriver protocol composition', () => {
         const driver = createDriver();
         driver.service = {
             deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
         } as unknown as AzureFoundryDriver['service'];
-        const post = vi.fn(async () => ({
-            status: '503',
-            body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
-        }));
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const error = new OpenAI.InternalServerError(
+            503,
+            { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
+            'Temporarily unavailable',
+            new Headers(),
+        );
+        vi.spyOn(
+            exposePrivate<FoundryInternals>(driver).getInferenceClient().chat.completions,
+            'create',
+        ).mockRejectedValue(error);
 
         await expect(
             driver.execute([{ role: PromptRole.user, content: 'Hello' }], {
                 model: 'llama-deployment::llama',
             }),
         ).rejects.toMatchObject({
-            name: 'AzureFoundryHTTPError',
+            name: 'InternalServerError',
             code: 503,
             retryable: true,
             originalError: expect.objectContaining({
                 status: 503,
-                body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+                error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
             }),
         });
     });
 
     it('preserves Azure embedding HTTP status and retryability in LlumiverseError', async () => {
         const driver = createDriver();
-        const post = vi.fn(async () => ({
-            status: '503',
-            body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
-            headers: { get: vi.fn(() => undefined) },
-            request: { url: 'https://foundry.example.test/embeddings' },
-        }));
-        Object.defineProperty(exposePrivate<FoundryInternals>(driver), 'inferenceClient', {
-            value: { path: vi.fn(() => ({ post })) },
-        });
+        const error = new OpenAI.InternalServerError(
+            503,
+            { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
+            'Temporarily unavailable',
+            new Headers(),
+        );
+        vi.spyOn(exposePrivate<FoundryInternals>(driver).getInferenceClient().embeddings, 'create').mockRejectedValue(
+            error,
+        );
 
         await expect(
             driver.generateEmbeddings({
@@ -328,7 +342,7 @@ describe('AzureFoundryDriver protocol composition', () => {
                 inputs: [{ type: 'text', text: 'Hello' }],
             }),
         ).rejects.toMatchObject({
-            name: 'AzureFoundryHTTPError',
+            name: 'InternalServerError',
             code: 503,
             retryable: true,
             context: {
@@ -338,7 +352,7 @@ describe('AzureFoundryDriver protocol composition', () => {
             },
             originalError: expect.objectContaining({
                 status: 503,
-                body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+                error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
             }),
         });
     });

@@ -1,16 +1,5 @@
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
-import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
-import type {
-    ModelClient as AzureInferenceClient,
-    ChatCompletionsOutput,
-    ChatCompletionsResponseFormat,
-    ChatCompletionsToolCall,
-    ChatCompletionsToolDefinition,
-    ChatRequestMessage,
-    GetChatCompletionsParameters,
-} from '@azure-rest/ai-inference';
-import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
     type Completion,
@@ -31,18 +20,21 @@ import {
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
+    normalizeOpenAIChatCompletionsResponse,
+    normalizeOpenAIChatCompletionsStream,
     type OpenAIChatCompletionsContentPart,
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     type OpenAIChatCompletionsResponse,
-    type OpenAIChatCompletionsStreamResponse,
     openAIChatCompletionsStreamToSSE,
     preserveOpenAIChatCompletionsOriginalResponse,
+    toOpenAINonStreamingPayload,
+    toOpenAIStreamingPayload,
 } from '../openai/openai_chat_completions.js';
 import {
     convertResponseItemsToChatMessages,
@@ -52,20 +44,6 @@ import {
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-type SSEMessage = { data?: string };
-
-class AzureFoundryHTTPError extends Error {
-    readonly status: number;
-    readonly body: unknown;
-
-    constructor(message: string, status: string, body?: unknown) {
-        super(message);
-        this.name = 'AzureFoundryHTTPError';
-        this.status = Number(status);
-        this.body = body;
-    }
-}
-
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
@@ -105,9 +83,9 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
 
 class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBase<OpenAIChatCompletionsDriverOptions> {
     readonly provider = Providers.azure_foundry;
-    readonly service: AzureInferenceClient;
+    readonly service: OpenAI;
 
-    constructor(service: AzureInferenceClient, options: DriverOptions) {
+    constructor(service: OpenAI, options: DriverOptions) {
         super({ ...options, resultSchemaMode: 'response_format', toolSchemaMode: 'compatible' });
         this.service = service;
     }
@@ -117,48 +95,27 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         _options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const response = await this.service.path('/chat/completions').post({
-            body: toAzureInferenceRequest(payload, false),
-            timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
-            ...(signal ? { abortSignal: signal } : {}),
-        });
-        if (response.status !== '200') {
-            throw new AzureFoundryHTTPError(
-                `Chat completion request failed with status ${response.status}: ${JSON.stringify(response.body)}`,
-                response.status,
-                response.body,
-            );
-        }
-        const original = response.body as ChatCompletionsOutput;
-        return preserveOpenAIChatCompletionsOriginalResponse(normalizeAzureInferenceResponse(original), original);
+        const response = await this.service.chat.completions.create(
+            toOpenAINonStreamingPayload(payload),
+            this.getDriverRequestOptions(_options, signal),
+        );
+        return preserveOpenAIChatCompletionsOriginalResponse(
+            normalizeOpenAIChatCompletionsResponse(response),
+            response,
+        );
     }
 
     async _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const response = await this.service
-            .path('/chat/completions')
-            .post({
-                body: toAzureInferenceRequest(payload, true),
-                timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
-                ...(signal ? { abortSignal: signal } : {}),
-            })
-            .asNodeStream();
-        const stream = response.body as NodeJSReadableStream;
-        if (!stream) {
-            throw new Error('The Azure Foundry response stream is undefined');
-        }
-        if (response.status !== '200') {
-            stream.destroy();
-            throw new AzureFoundryHTTPError(
-                `Failed to get chat completions, HTTP operation failed with ${response.status} code`,
-                response.status,
-            );
-        }
-        return openAIChatCompletionsStreamToSSE(normalizeAzureInferenceStream(createSseStream(stream)), () =>
-            stream.destroy(),
+        const stream = await this.service.chat.completions.create(
+            toOpenAIStreamingPayload(payload),
+            this.getDriverRequestOptions(options, signal),
+        );
+        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
+            stream.controller.abort(),
         );
     }
 
@@ -189,7 +146,7 @@ export interface AzureFoundryDriverOptions extends DriverOptions {
 }
 
 export interface AzureFoundryInferencePrompt {
-    messages: ChatRequestMessage[];
+    messages: OpenAIChatCompletionsPayload['messages'];
 }
 
 export interface AzureFoundryOpenAIPrompt {
@@ -200,14 +157,13 @@ export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenA
 
 export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
     service: AIProjectClient;
-    private readonly inferenceClient: AzureInferenceClient;
-    private readonly inferenceProtocolDriver: AzureFoundryInferenceProtocolDriver;
+    private inferenceClient?: OpenAI;
+    private inferenceProtocolDriver?: AzureFoundryInferenceProtocolDriver;
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
     readonly provider = Providers.azure_foundry;
 
     OPENAI_API_VERSION = '2025-01-01-preview';
-    INFERENCE_API_VERSION = '2024-05-01-preview';
 
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
@@ -235,15 +191,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (opts.apiVersion) {
             this.OPENAI_API_VERSION = opts.apiVersion;
-            this.INFERENCE_API_VERSION = opts.apiVersion;
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
         this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
-        this.inferenceClient = ModelClient(opts.endpoint, opts.azureADTokenProvider, {
-            apiVersion: this.INFERENCE_API_VERSION,
-        });
-        this.inferenceProtocolDriver = new AzureFoundryInferenceProtocolDriver(this.inferenceClient, opts);
     }
 
     /**
@@ -281,15 +232,41 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         );
     }
 
-    private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
-        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(
-            this.service.getOpenAIClient({
+    private getInferenceClient(): OpenAI {
+        if (!this.inferenceClient) {
+            const configured = this.service.getOpenAIClient();
+            // Projects resolves the project URL; inference uses our current SDK independently.
+            this.inferenceClient = new OpenAI({
+                baseURL: configured.baseURL,
+                apiKey: getBearerTokenProvider(
+                    this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
+                    'https://ai.azure.com/.default',
+                ),
+                defaultQuery: this.options.apiVersion ? { 'api-version': this.options.apiVersion } : undefined,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
-            }),
+                maxRetries: 0,
+            });
+        }
+        return this.inferenceClient;
+    }
+
+    private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
+        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.getInferenceClient(), this.options);
+        return this.openAIProtocolDriver;
+    }
+
+    private getInferenceProtocolDriver(): AzureFoundryInferenceProtocolDriver {
+        this.inferenceProtocolDriver ??= new AzureFoundryInferenceProtocolDriver(
+            this.getInferenceClient(),
             this.options,
         );
-        return this.openAIProtocolDriver;
+        return this.inferenceProtocolDriver;
+    }
+
+    protected destroyProviderResources(): void {
+        this.openAIProtocolDriver?.destroy();
+        this.inferenceProtocolDriver?.destroy();
     }
 
     public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
@@ -323,7 +300,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().requestTextCompletion(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
-        return this.inferenceProtocolDriver.requestTextCompletion(
+        return this.getInferenceProtocolDriver().requestTextCompletion(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
             signal,
@@ -345,7 +322,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().requestTextCompletionStream(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
-        return this.inferenceProtocolDriver.requestTextCompletionStream(
+        return this.getInferenceProtocolDriver().requestTextCompletionStream(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
             signal,
@@ -364,7 +341,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.openAIProtocolDriver.buildStreamingConversation(prompt, result, toolUse, options);
         }
         if (protocol === 'chat_completions') {
-            return this.inferenceProtocolDriver.buildStreamingConversation(
+            return this.getInferenceProtocolDriver().buildStreamingConversation(
                 toAzureFoundryChatPrompt(prompt),
                 result,
                 toolUse,
@@ -382,7 +359,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return;
         }
         if (protocol === 'chat_completions') {
-            this.inferenceProtocolDriver.validateResult(result, toAzureFoundryChatOptions(options, deploymentName));
+            this.getInferenceProtocolDriver().validateResult(
+                result,
+                toAzureFoundryChatOptions(options, deploymentName),
+            );
             return;
         }
         super.validateResult(result, options);
@@ -395,7 +375,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.openAIProtocolDriver.formatLlumiverseError(error, context);
         }
         if (protocol === 'chat_completions') {
-            return this.inferenceProtocolDriver.formatLlumiverseError(error, { ...context, model: deploymentName });
+            return this.getInferenceProtocolDriver().formatLlumiverseError(error, {
+                ...context,
+                model: deploymentName,
+            });
         }
         return super.formatLlumiverseError(error, context);
     }
@@ -470,20 +453,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private async callAzureEmbeddings(input: string[], model: string, kind: 'text' | 'image'): Promise<number[][]> {
         const { deploymentName } = parseAzureFoundryModelId(model);
         try {
-            const embeddingsClient = this.inferenceClient.path('/embeddings');
-            const response = await embeddingsClient.post({
-                body: { input, model: deploymentName },
-                timeout: this.getDriverRequestTimeoutMs(),
-            });
-            if (isUnexpected(response)) {
-                throw new AzureFoundryHTTPError(
-                    `${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`,
-                    response.status,
-                    response.body,
-                );
-            }
-
-            const data = response.body.data;
+            const response = await this.getInferenceClient().embeddings.create(
+                { input, model: deploymentName, encoding_format: 'float' },
+                { timeout: this.getDriverRequestTimeoutMs() },
+            );
+            const data = response.data;
             if (!Array.isArray(data) || data.length === 0) {
                 throw new Error(`No embeddings found in Azure Foundry ${kind} response`);
             }
@@ -500,7 +474,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;
             this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
-            throw this.formatLlumiverseError(error, {
+            throw this.getOpenAIProtocolDriver().formatLlumiverseError(error, {
                 provider: this.provider,
                 model,
                 operation: 'execute',
@@ -622,43 +596,6 @@ function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: st
     };
 }
 
-function toAzureInferenceRequest(
-    payload: OpenAIChatCompletionsPayload,
-    stream: boolean,
-): GetChatCompletionsParameters['body'] {
-    const responseFormat = payload.response_format
-        ? ({ ...payload.response_format } satisfies ChatCompletionsResponseFormat)
-        : undefined;
-    const tools = payload.tools?.flatMap((tool): ChatCompletionsToolDefinition[] =>
-        tool.type === 'function'
-            ? [
-                  {
-                      type: 'function',
-                      function: {
-                          name: tool.function.name,
-                          description: tool.function.description,
-                          parameters: tool.function.parameters,
-                      },
-                  },
-              ]
-            : [],
-    );
-    return {
-        model: payload.model,
-        messages: payload.messages.map(toAzureInferenceMessage),
-        max_tokens: payload.max_tokens ?? undefined,
-        temperature: payload.temperature ?? undefined,
-        top_p: payload.top_p ?? undefined,
-        frequency_penalty: payload.frequency_penalty ?? undefined,
-        presence_penalty: payload.presence_penalty ?? undefined,
-        stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
-        seed: payload.seed ?? undefined,
-        response_format: responseFormat,
-        tools,
-        stream,
-    } satisfies GetChatCompletionsParameters['body'];
-}
-
 function parseCapabilityFlag(value: unknown): boolean | undefined {
     if (typeof value === 'boolean') return value;
     if (typeof value !== 'string') return undefined;
@@ -694,110 +631,6 @@ function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
     // Foundry capability values are strings. Only an explicit false is deterministic enough to hide a deployment;
     // omitted and future capability values remain visible so the provider listing does not become an allow-list.
     return parseCapabilityFlag(deployment.capabilities.chat_completion) !== false;
-}
-
-function toAzureInferenceMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatRequestMessage {
-    const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
-    switch (message.role) {
-        case 'system':
-        case 'developer':
-            return { role: message.role, content: textContent ?? '' };
-        case 'assistant':
-            return {
-                role: 'assistant',
-                content: textContent ?? undefined,
-                tool_calls: message.tool_calls?.map((toolCall) => ({
-                    id: toolCall.id,
-                    type: 'function',
-                    function: {
-                        name: toolCall.function.name,
-                        arguments: toolCall.function.arguments,
-                    },
-                })),
-            };
-        case 'tool':
-            return { role: 'tool', content: textContent ?? '', tool_call_id: message.tool_call_id ?? '' };
-        default:
-            return {
-                role: 'user',
-                content:
-                    typeof message.content === 'string'
-                        ? message.content
-                        : (message.content?.map((part) =>
-                              part.type === 'text'
-                                  ? { type: 'text' as const, text: part.text }
-                                  : { type: 'image_url' as const, image_url: part.image_url },
-                          ) ?? ''),
-            };
-    }
-}
-
-function normalizeAzureInferenceResponse(response: ChatCompletionsOutput): OpenAIChatCompletionsResponse {
-    return {
-        id: response.id,
-        object: 'chat.completion',
-        created: response.created,
-        model: response.model,
-        choices: response.choices.map((choice) => ({
-            index: choice.index,
-            finish_reason: choice.finish_reason,
-            message: {
-                role: 'assistant',
-                content: choice.message.content,
-                tool_calls: choice.message.tool_calls?.map((toolCall) => ({
-                    id: toolCall.id,
-                    type: 'function',
-                    function: toolCall.function,
-                })),
-            },
-        })),
-        usage: response.usage,
-    };
-}
-
-type AzureInferenceStreamChunk = Pick<ChatCompletionsOutput, 'id' | 'created' | 'model'> & {
-    choices: Array<{
-        index: number;
-        delta: {
-            role?: string;
-            content?: string | null;
-            tool_calls?: Array<ChatCompletionsToolCall & { index?: number }>;
-        };
-        finish_reason?: string | null;
-    }>;
-    usage?: ChatCompletionsOutput['usage'];
-};
-
-async function* normalizeAzureInferenceStream(
-    stream: AsyncIterable<SSEMessage>,
-): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
-    for await (const event of stream) {
-        if (!event.data || event.data === '[DONE]') {
-            continue;
-        }
-        const chunk = JSON.parse(event.data) as AzureInferenceStreamChunk;
-        yield {
-            id: chunk.id,
-            object: 'chat.completion.chunk',
-            created: chunk.created,
-            model: chunk.model,
-            choices: chunk.choices.map((choice) => ({
-                index: choice.index,
-                finish_reason: choice.finish_reason,
-                delta: {
-                    role: choice.delta.role,
-                    content: choice.delta.content,
-                    tool_calls: choice.delta.tool_calls?.map((toolCall) => ({
-                        index: toolCall.index,
-                        id: toolCall.id,
-                        type: toolCall.type,
-                        function: toolCall.function,
-                    })),
-                },
-            })),
-            usage: chunk.usage,
-        };
-    }
 }
 
 // Helper functions to parse the composite ID

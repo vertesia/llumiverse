@@ -14,7 +14,6 @@ catalogs:
       version: 4.6.5
 
 overrides:
-  '@azure/ai-projects>openai': 7.25.0
   undici@>=7.0.0 <7.29.1: 7.29.1
   vitest@>=2.1.0 <4.1.11: 4.1.11
   google-auth-library: ^11.0.2
@@ -128,24 +127,15 @@ importers:
       '@aws/bedrock-token-generator':
         specifier: ^1.1.0
         version: 1.1.0
-      '@azure-rest/ai-inference':
-        specifier: 1.0.0-beta.6
-        version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: ^2.4.0
-        version: 2.4.0(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(undici@7.29.1)(ws@8.21.3)(zod@4.6.5)
+        specifier: ^2.7.1
+        version: 2.7.1(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(zod@4.6.5)
       '@azure/core-auth':
         specifier: ^1.11.0
         version: 1.11.0
-      '@azure/core-sse':
-        specifier: ^2.4.0
-        version: 2.4.0
       '@azure/identity':
-        specifier: ^4.13.1
-        version: 4.13.1
-      '@azure/openai':
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^4.13.3
+        version: 4.13.3
       '@google-cloud/aiplatform':
         specifier: ^7.0.0
         version: 7.1.0
@@ -370,10 +360,6 @@ packages:
     resolution: {integrity: sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ==}
     engines: {node: '>=18.0.0'}
 
-  '@azure-rest/ai-inference@1.0.0-beta.6':
-    resolution: {integrity: sha512-j5FrJDTHu2P2+zwFVe5j2edasOIhqkFj+VkDjbhGkQuOoIAByF0egRkgs0G1k03HyJ7bOOT9BkRF7MIgr/afhw==}
-    engines: {node: '>=18.0.0'}
-
   '@azure-rest/core-client@2.3.4':
     resolution: {integrity: sha512-AQXtD5VqsoOswDmxQR0YyVkYa1tZ0HyfC/fsqfntYZ7EEgaimfCGN2nAfiN3KXy1F4TfcoByhmtX2bVOO2vAEQ==}
     engines: {node: '>=18.0.0'}
@@ -382,8 +368,8 @@ packages:
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/ai-projects@2.4.0':
-    resolution: {integrity: sha512-jmBSgYmGzWt0T4QvMVbPyH26hQJFNab7tc3TN/MQCCLtx9LZFxawmUNZ/ZAzpPBKMEiFGEButa6WNxrJ9LCD9g==}
+  '@azure/ai-projects@2.7.1':
+    resolution: {integrity: sha512-Co7F0ll3bMHV9cYkRv1SgVgu+qnRu1M8Jl4JEfoxxfbF+2PTvnthKU2GQTZSPBr/lfWOcJphni63qNkV3FAauQ==}
     engines: {node: '>=22.0.0'}
 
   '@azure/core-auth@1.11.0':
@@ -410,6 +396,10 @@ packages:
     resolution: {integrity: sha512-YKWi9YuCU04B55h25cnOYZHxXYtEvQEbKST5vqRga7hWY9ydd3FZHdeQF8pyh+acWZvppw13M/LMGx0LABUVMA==}
     engines: {node: '>=18.0.0'}
 
+  '@azure/core-process@1.0.0':
+    resolution: {integrity: sha512-/shnJ+ooO8WPxDhPEeI/2oRQuubn16gZ6CvlbpWbEswZfzwI9tI/sMAHmF3x1LuQ9yZYXfLW3TjzGMLEC5blKg==}
+    engines: {node: '>=22.0.0'}
+
   '@azure/core-rest-pipeline@1.21.0':
     resolution: {integrity: sha512-a4MBwe/5WKbq9MIxikzgxLBbruC5qlkFYlBdI7Ev50Y7ib5Vo/Jvt5jnJo7NaWeJ908LCHL0S1Us4UMf1VoTfg==}
     engines: {node: '>=18.0.0'}
@@ -434,12 +424,20 @@ packages:
     resolution: {integrity: sha512-5C/2WD5Vb1lHnZS16dNQRPMjN6oV/Upba+C9nBIs15PmOi6A3ZGs4Lr2u60zw4S04gi+u3cEXiqTVP7M4Pz3kw==}
     engines: {node: '>=20.0.0'}
 
+  '@azure/identity@4.13.3':
+    resolution: {integrity: sha512-zGQPtqvXPgSA8yfV2CkIQ1qirqk0p9AIVpC5uEkdXQYcKl07QHvyaGYRnZOk0AsQUmxNb4wfkcwY5di8Z5xa9A==}
+    engines: {node: '>=22.0.0'}
+
   '@azure/logger@1.1.4':
     resolution: {integrity: sha512-4IXXzcCdLdlXuCG+8UKEwLA1T1NHqUfanhXYHiQTn+6sfWCZXduqbtXDGceg3Ce5QxTGo7EqmbV6Bi+aqKuClQ==}
     engines: {node: '>=18.0.0'}
 
   '@azure/msal-browser@5.13.0':
     resolution: {integrity: sha512-Ea23x0U8XNFY+qJ9T44zO2BbY+AHdb+WdjmYnx36OhJ/KO+PGU5pmsNHf1DCElYX+6wyVRJz1HFeCPC/cHbRug==}
+    engines: {node: '>=0.8.0'}
+
+  '@azure/msal-common@16.14.1':
+    resolution: {integrity: sha512-Or6xhPNyi4zHW25158yxBoyxuCqNSPa5YBVqfF1J5Ks4MJWBo/USXdp05DQIPu1Zli00YZu6t0+h6KvHJealxQ==}
     engines: {node: '>=0.8.0'}
 
   '@azure/msal-common@16.8.0':
@@ -450,9 +448,9 @@ packages:
     resolution: {integrity: sha512-rpBUg9dA8UpC2WiFt3KeDKVQmmmVrfxdRnW+F1ebgou/jX/0tAvYuonaq5RUo8OaqzOrj4x/HaI8DmY56RXZ2Q==}
     engines: {node: '>=20'}
 
-  '@azure/openai@2.0.0':
-    resolution: {integrity: sha512-zSNhwarYbqg3P048uKMjEjbge41OnAgmiiE1elCHVsuCCXRyz2BXnHMJkW6WR6ZKQy5NHswJNUNSWsuqancqFA==}
-    engines: {node: '>=18.0.0'}
+  '@azure/msal-node@6.0.1':
+    resolution: {integrity: sha512-ixSO1Y/kCVRthRs+hSx/5qkwaunX1/RAePhlMN0wIpIQ4WEZ6AREGGnGd1AP0qspHVsAwzWQKGubpjh50JyJIQ==}
+    engines: {node: '>=20'}
 
   '@azure/storage-blob@12.27.0':
     resolution: {integrity: sha512-IQjj9RIzAKatmNca3D6bT0qJ+Pkox1WZGOg2esJF2YLHb45pQKOwGPIAV+w3rfgkj7zV3RMxpn/c6iftzSOZJQ==}
@@ -1555,6 +1553,26 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
+  openai@6.49.0:
+    resolution: {integrity: sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg==}
+    peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
+      ws: ^8.18.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      ws:
+        optional: true
+      zod:
+        optional: true
+
   openai@7.25.0:
     resolution: {integrity: sha512-cnk0d4QT58Vq0vl2KG+DCa/C2+cXthsK2rUeaqtprq33mKv9dlX8o7fWSS283wa2IE/aVdsRyX1+Dqwz551olg==}
     engines: {node: '>=22.0.0'}
@@ -2230,19 +2248,6 @@ snapshots:
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
-  '@azure-rest/ai-inference@1.0.0-beta.6':
-    dependencies:
-      '@azure-rest/core-client': 2.3.4
-      '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.11.0
-      '@azure/core-lro': 2.7.2
-      '@azure/core-rest-pipeline': 1.21.0
-      '@azure/core-tracing': 1.2.0
-      '@azure/logger': 1.1.4
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - supports-color
-
   '@azure-rest/core-client@2.3.4':
     dependencies:
       '@azure/abort-controller': 2.1.2
@@ -2258,7 +2263,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.4.0(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(undici@7.29.1)(ws@8.21.3)(zod@4.6.5)':
+  '@azure/ai-projects@2.7.1(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(zod@4.6.5)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -2272,15 +2277,17 @@ snapshots:
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
-      openai: 7.25.0(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(undici@7.29.1)(ws@8.21.3)(zod@4.6.5)
+      https-proxy-agent: 7.0.6
+      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(ws@8.21.3)(zod@4.6.5)
       tslib: 2.8.1
+      ws: 8.21.3
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
+      - bufferutil
       - supports-color
-      - undici
-      - ws
+      - utf-8-validate
       - zod
 
   '@azure/core-auth@1.11.0':
@@ -2333,6 +2340,8 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
+  '@azure/core-process@1.0.0': {}
+
   '@azure/core-rest-pipeline@1.21.0':
     dependencies:
       '@azure/abort-controller': 2.1.2
@@ -2382,6 +2391,23 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@azure/identity@4.13.3':
+    dependencies:
+      '@azure/abort-controller': 2.1.2
+      '@azure/core-auth': 1.11.0
+      '@azure/core-client': 1.9.3
+      '@azure/core-process': 1.0.0
+      '@azure/core-rest-pipeline': 1.21.0
+      '@azure/core-tracing': 1.2.0
+      '@azure/core-util': 1.13.1
+      '@azure/logger': 1.1.4
+      '@azure/msal-browser': 5.13.0
+      '@azure/msal-node': 6.0.1
+      open: 10.1.0
+      tslib: 2.8.1
+    transitivePeerDependencies:
+      - supports-color
+
   '@azure/logger@1.1.4':
     dependencies:
       tslib: 2.8.1
@@ -2390,6 +2416,8 @@ snapshots:
     dependencies:
       '@azure/msal-common': 16.8.0
 
+  '@azure/msal-common@16.14.1': {}
+
   '@azure/msal-common@16.8.0': {}
 
   '@azure/msal-node@5.2.4':
@@ -2397,12 +2425,10 @@ snapshots:
       '@azure/msal-common': 16.8.0
       jsonwebtoken: 9.0.2
 
-  '@azure/openai@2.0.0':
+  '@azure/msal-node@6.0.1':
     dependencies:
-      '@azure-rest/core-client': 2.3.4
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - supports-color
+      '@azure/msal-common': 16.14.1
+      jsonwebtoken: 9.0.2
 
   '@azure/storage-blob@12.27.0':
     dependencies:
@@ -3434,6 +3460,14 @@ snapshots:
       define-lazy-prop: 3.0.0
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
+
+  openai@6.49.0(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(ws@8.21.3)(zod@4.6.5):
+    optionalDependencies:
+      '@aws-sdk/credential-provider-node': 3.972.80
+      '@smithy/hash-node': 4.4.6
+      '@smithy/signature-v4': 5.6.12
+      ws: 8.21.3
+      zod: 4.6.5
 
   openai@7.25.0(@aws-sdk/credential-provider-node@3.972.80)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.12)(undici@7.29.1)(ws@8.21.3)(zod@4.6.5):
     optionalDependencies:

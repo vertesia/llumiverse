@@ -30,8 +30,6 @@ catalog:
   "@types/node": "^24.13.3"
   google-auth-library: "^11.0.2"
 overrides:
-  # Align AI Projects' exposed client types with the driver SDK.
-  "@azure/ai-projects>openai": 7.25.0
   # GHSA-3wwx-pv8p-q78v: WebSocket decompression DoS; keep each consumer on its major line.
   "undici@>=7.0.0 <7.29.1": 7.29.1
   # GHSA-82fw-gwwq-j7x9: keep Vitest and its mocker on the patched release.

@@ -1346,7 +1346,7 @@ function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenA
     }
 }
 
-function toOpenAINonStreamingPayload(
+export function toOpenAINonStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
 ): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
     const { messages, stream: _stream, extra_body, ...body } = payload;
@@ -1361,7 +1361,7 @@ function toOpenAINonStreamingPayload(
     return request;
 }
 
-function toOpenAIStreamingPayload(
+export function toOpenAIStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
 ): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
     const { messages, stream: _stream, extra_body, ...body } = payload;
