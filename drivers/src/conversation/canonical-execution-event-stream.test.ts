@@ -6,6 +6,8 @@ import {
     type NativeStreamPosition,
 } from '@llumiverse/conversation';
 import {
+    CANONICAL_FORBIDDEN_TOOL_CALL,
+    CANONICAL_REQUIRED_TOOL_CALL_MISSING,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -528,7 +530,7 @@ describe('canonical native execution event stream', () => {
         expect(openSource).not.toHaveBeenCalled();
     });
 
-    it('reserves the classified provider terminal at the exact event and total byte bounds', async () => {
+    it('retains classified provider failure within the reserved terminal budget', async () => {
         const providerFailureSource = () => ({
             [Symbol.asyncIterator]() {
                 return {
@@ -585,19 +587,11 @@ describe('canonical native execution event stream', () => {
             boundedStream({
                 stream_id: streamId,
                 max_events: 2,
-                max_event_bytes: terminalBytes,
                 max_total_bytes: terminalBytes - 1,
             }),
         ).toThrow('max_total_bytes');
 
-        const exact = await collectFailure({
-            stream_id: streamId,
-            max_events: 2,
-            max_event_bytes: terminalBytes,
-            max_total_bytes: totalBytes,
-        });
-
-        expect(exact.at(-1)).toMatchObject({
+        expect(baseline.at(-1)).toMatchObject({
             type: 'stream_terminated',
             outcome: 'failed',
             diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: false },
@@ -707,10 +701,59 @@ describe('canonical native execution event stream', () => {
         expect(events.at(-1)).toMatchObject({
             type: 'stream_terminated',
             outcome: 'failed',
-            diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: false },
+            diagnostic: { code: CANONICAL_REQUIRED_TOOL_CALL_MISSING, retryable: false },
         });
         expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
         expect(stream.completion).toBeUndefined();
+    });
+
+    it('keeps forbidden tool calls nonrecoverable and reserves the longest selection terminal exactly', async () => {
+        const collect = async (
+            code: typeof CANONICAL_REQUIRED_TOOL_CALL_MISSING | typeof CANONICAL_FORBIDDEN_TOOL_CALL,
+            limits: Pick<CanonicalStreamOpenOptions, 'max_event_bytes' | 'max_total_bytes'> = {},
+        ) => {
+            const streamId = `stream:${code.toLowerCase()}`;
+            const stream = canonicalNativeExecutionEventStream({
+                identity,
+                open: { stream_id: streamId, max_events: 2, ...limits },
+                openSource: () => nativeSource('terminal'),
+                map: vi.fn(),
+                finalize: async () => {
+                    throw new CanonicalToolSelectionViolationError(decoded(), code);
+                },
+                classifyFailure: () => true,
+                abort: vi.fn(),
+                close: vi.fn(),
+            });
+            const events: ConversationStreamEvent[] = [];
+            for await (const event of stream) events.push(event);
+            return events;
+        };
+        const required = await collect(CANONICAL_REQUIRED_TOOL_CALL_MISSING);
+        const forbidden = await collect(CANONICAL_FORBIDDEN_TOOL_CALL);
+        expect(forbidden.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            diagnostic: { code: CANONICAL_FORBIDDEN_TOOL_CALL, retryable: false },
+        });
+
+        const bytes = (event: ConversationStreamEvent) => new TextEncoder().encode(JSON.stringify(event)).byteLength;
+        const longer = [required.at(-1), forbidden.at(-1)]
+            .filter((event): event is ConversationStreamEvent => event !== undefined)
+            .sort((left, right) => bytes(right) - bytes(left))[0];
+        if (longer?.type !== 'stream_terminated' || longer.diagnostic === undefined) {
+            throw new Error('Expected a selection terminal');
+        }
+        const code = longer.diagnostic.code;
+        if (code !== CANONICAL_REQUIRED_TOOL_CALL_MISSING && code !== CANONICAL_FORBIDDEN_TOOL_CALL) {
+            throw new Error('Expected a selection diagnostic code');
+        }
+        const selected = code === CANONICAL_REQUIRED_TOOL_CALL_MISSING ? required : forbidden;
+        const exactBytes = bytes(longer);
+        const exact = await collect(code, {
+            max_event_bytes: exactBytes,
+            max_total_bytes: selected.reduce((total, event) => total + bytes(event), 0),
+        });
+        expect(exact.at(-1)).toEqual(longer);
     });
 
     it('delivers cancellation after throwing abort, iterator return, and close cleanup', async () => {

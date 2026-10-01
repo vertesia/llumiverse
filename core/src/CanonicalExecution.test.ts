@@ -7,6 +7,7 @@ import {
     type ConversationStreamEvent,
     createConversationDocument,
     createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
     externalizeToolCallArguments,
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
@@ -21,6 +22,11 @@ import {
     legacyCompletionFromCanonicalExecution,
     markCanonicalAcceptedRecovery,
 } from './CanonicalExecution.js';
+import {
+    CANONICAL_FORBIDDEN_TOOL_CALL,
+    CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+    CanonicalToolSelectionViolationError,
+} from './CanonicalSelection.js';
 import {
     CanonicalStreamEventChannel,
     FallbackCanonicalExecutionEventStream,
@@ -429,6 +435,13 @@ describe('canonical typed execution stream', () => {
         generation_id: 'generation',
         draft_turn_id: 'agent-turn',
     };
+    const selectionError = (code: typeof CANONICAL_REQUIRED_TOOL_CALL_MISSING | typeof CANONICAL_FORBIDDEN_TOOL_CALL) =>
+        new CanonicalToolSelectionViolationError(
+            {
+                generation: { provider: 'provider', requested_model: 'model' },
+            } as DecodedConversationResponse,
+            code,
+        );
 
     it('delivers one finite response_accepted event without fabricating native drafts', async () => {
         const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
@@ -637,6 +650,49 @@ describe('canonical typed execution stream', () => {
             }),
         ]);
         expect(bounded.completion).toBe(response);
+    });
+
+    it('preserves required-tool recovery classification at the exact finite terminal budget', async () => {
+        const collect = async (
+            code: typeof CANONICAL_REQUIRED_TOOL_CALL_MISSING | typeof CANONICAL_FORBIDDEN_TOOL_CALL,
+            limits: { max_event_bytes?: number; max_total_bytes?: number } = {},
+        ) => {
+            const stream = new FallbackCanonicalExecutionEventStream(
+                identity,
+                async () => {
+                    throw selectionError(code);
+                },
+                { stream_id: `stream-${code.toLowerCase()}`, max_events: 1, ...limits },
+            );
+            const events: ConversationStreamEvent[] = [];
+            for await (const event of stream) events.push(event);
+            return events;
+        };
+        const required = await collect(CANONICAL_REQUIRED_TOOL_CALL_MISSING);
+        const forbidden = await collect(CANONICAL_FORBIDDEN_TOOL_CALL);
+        expect(required.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            diagnostic: { code: CANONICAL_REQUIRED_TOOL_CALL_MISSING, retryable: false },
+        });
+        expect(forbidden.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            diagnostic: { code: CANONICAL_FORBIDDEN_TOOL_CALL, retryable: false },
+        });
+
+        const eventBytes = (event: ConversationStreamEvent) =>
+            new TextEncoder().encode(JSON.stringify(event)).byteLength;
+        const longer = [required.at(-1), forbidden.at(-1)]
+            .filter((event): event is ConversationStreamEvent => event !== undefined)
+            .sort((left, right) => eventBytes(right) - eventBytes(left))[0];
+        if (longer?.type !== 'stream_terminated' || longer.diagnostic === undefined) {
+            throw new Error('Expected a classified finite terminal');
+        }
+        const exactBytes = eventBytes(longer);
+        const exact = await collect(longer.diagnostic.code as typeof CANONICAL_REQUIRED_TOOL_CALL_MISSING, {
+            max_event_bytes: exactBytes,
+            max_total_bytes: exactBytes,
+        });
+        expect(exact).toEqual([longer]);
     });
 
     it('preserves an already-blocked event before a terminal without waiting for buffer capacity', async () => {

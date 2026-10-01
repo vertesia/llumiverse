@@ -104,6 +104,136 @@ function canonicalOptions(attempt: string, recordedAt: string, conversation?: un
 }
 
 describe('Claude native reasoning replay', () => {
+    it('recovers required-tool sync and typed responses without confusing the bound policy with routing', async () => {
+        const finalMessage = {
+            id: 'msg-required-tool',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-sonnet-4-6',
+            content: [{ type: 'tool_use', id: 'call-required', name: 'lookup', input: { city: 'Tokyo' } }],
+            stop_reason: 'tool_use',
+            stop_sequence: null,
+            usage: { input_tokens: 2, output_tokens: 3 },
+        } as unknown as Message;
+        const nativeEvents = [
+            { type: 'message_start', message: { ...finalMessage, content: [], stop_reason: null } },
+            {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'tool_use', id: 'call-required', name: 'lookup', input: {} },
+            },
+            {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'input_json_delta', partial_json: '{"city":"Tokyo"}' },
+            },
+            { type: 'content_block_stop', index: 0 },
+            {
+                type: 'message_delta',
+                delta: { stop_reason: 'tool_use', stop_sequence: null },
+                usage: { output_tokens: 3 },
+            },
+            { type: 'message_stop' },
+        ] as RawMessageStreamEvent[];
+        const segments = [{ role: PromptRole.user, content: 'Look up Tokyo.' }];
+        const requiredOptions = (attempt: string, recordedAt: string, conversation?: unknown): ExecutionOptions => ({
+            ...canonicalOptions(attempt, recordedAt, conversation),
+            tools: [
+                {
+                    name: 'lookup',
+                    input_schema: {
+                        type: 'object',
+                        properties: { city: { type: 'string' } },
+                        required: ['city'],
+                    },
+                },
+            ],
+            model_options: {
+                _option_id: 'anthropic-claude',
+                tool_choice: 'required',
+                required_tool_name: 'lookup',
+            } as ExecutionOptions['model_options'] & { required_tool_name: string },
+        });
+
+        const syncTransport = vi.fn(() => sdkStream([], finalMessage));
+        const syncDriver = new AnthropicDriver({ apiKey: 'test' });
+        syncDriver.client = { messages: { stream: syncTransport } } as never;
+        const sync = await syncDriver.executeCanonical(
+            segments,
+            requiredOptions('attempt:required:sync:first', '2026-09-11T00:00:00.000Z'),
+        );
+        expect(
+            sync.conversation.generations[sync.accepted_output.generation.id]?.request_receipt?.target.options,
+        ).toEqual({
+            canonical_tool_selection: { mode: 'required', tool_name: 'lookup' },
+        });
+        const syncRetry = await syncDriver.executeCanonical(
+            segments,
+            requiredOptions(
+                'attempt:required:sync:retry',
+                '2026-09-11T00:01:00.000Z',
+                JSON.parse(JSON.stringify(sync.conversation)),
+            ),
+        );
+        expect(syncRetry.accepted_output).toEqual(sync.accepted_output);
+        expect(syncTransport).toHaveBeenCalledOnce();
+        await expect(
+            syncDriver.executeCanonical(segments, {
+                ...requiredOptions(
+                    'attempt:required:sync:changed-policy',
+                    '2026-09-11T00:02:00.000Z',
+                    sync.conversation,
+                ),
+                model_options: {
+                    _option_id: 'anthropic-claude',
+                    tool_choice: 'none',
+                } as ExecutionOptions['model_options'] & {
+                    tool_choice: 'none';
+                },
+            }),
+        ).rejects.toThrow('incompatible canonical tool-selection policy');
+        expect(syncTransport).toHaveBeenCalledOnce();
+
+        const legacyConversation = JSON.parse(JSON.stringify(sync.conversation)) as ConversationDocument;
+        const legacyGeneration = Object.values(legacyConversation.generations).at(-1);
+        if (legacyGeneration?.request_receipt === undefined) throw new Error('Expected retained Claude receipt');
+        delete legacyGeneration.request_receipt.target.options;
+        const legacyRetry = await syncDriver.executeCanonical(
+            segments,
+            requiredOptions('attempt:required:sync:legacy-retry', '2026-09-11T00:03:00.000Z', legacyConversation),
+        );
+        expect(legacyRetry.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'tool_call', tool_name: 'lookup' }),
+        );
+        expect(syncTransport).toHaveBeenCalledOnce();
+
+        const typedTransport = vi.fn(() => sdkStream(nativeEvents, finalMessage));
+        const typedDriver = new AnthropicDriver({ apiKey: 'test' });
+        typedDriver.client = { messages: { stream: typedTransport } } as never;
+        const typed = await typedDriver.streamCanonicalEvents(
+            segments,
+            requiredOptions('attempt:required:typed:first', '2026-09-11T00:10:00.000Z'),
+            undefined,
+            { stream_id: 'stream:claude:required:first' },
+        );
+        await collectCanonicalEvents(typed);
+        if (typed.completion === undefined) throw new Error('Expected required-tool typed completion');
+        const typedRetry = await typedDriver.streamCanonicalEvents(
+            segments,
+            requiredOptions(
+                'attempt:required:typed:retry',
+                '2026-09-11T00:11:00.000Z',
+                JSON.parse(JSON.stringify(typed.completion.conversation)),
+            ),
+            undefined,
+            { stream_id: 'stream:claude:required:retry' },
+        );
+        expect(await collectCanonicalEvents(typedRetry)).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'accepted_recovery' }),
+        ]);
+        expect(typedTransport).toHaveBeenCalledOnce();
+    });
+
     it('emits structured typed events with native content indices, exact recovery, and legacy acceptance parity', async () => {
         const rawText = '{"answer":"Tokyo"}';
         const finalMessage = {

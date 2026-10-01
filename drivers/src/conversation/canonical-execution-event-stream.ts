@@ -18,11 +18,14 @@ import {
     type NativeStreamPosition,
 } from '@llumiverse/conversation';
 import {
+    CANONICAL_FORBIDDEN_TOOL_CALL,
+    CANONICAL_REQUIRED_TOOL_CALL_MISSING,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     CanonicalStreamEventChannel,
     type CanonicalStreamOpenOptions,
     type CanonicalStreamTerminalEvent,
+    canonicalToolSelectionDiagnostic,
     finalizeCanonicalExecutionStreamResponse,
 } from '@llumiverse/core';
 
@@ -80,6 +83,7 @@ function terminatedEvent(
     outcome: 'cancelled' | 'failed',
     failureKind: 'provider' | 'delivery' = 'provider',
     retryable?: boolean,
+    diagnostic?: CanonicalStreamTerminalDiagnostic,
 ): CanonicalStreamTerminalEvent {
     return {
         ...envelope(identity, sequence),
@@ -88,17 +92,24 @@ function terminatedEvent(
         ...(outcome === 'failed'
             ? {
                   diagnostic: {
-                      code: failureKind === 'delivery' ? 'CANONICAL_EVENT_DELIVERY_FAILED' : 'PROVIDER_STREAM_FAILED',
-                      message:
-                          failureKind === 'delivery'
-                              ? 'Canonical event delivery failed'
-                              : 'Provider stream ended before canonical response acceptance',
-                      ...(retryable === undefined ? {} : { retryable }),
+                      ...(diagnostic ?? {
+                          code:
+                              failureKind === 'delivery' ? 'CANONICAL_EVENT_DELIVERY_FAILED' : 'PROVIDER_STREAM_FAILED',
+                          message:
+                              failureKind === 'delivery'
+                                  ? 'Canonical event delivery failed'
+                                  : 'Provider stream ended before canonical response acceptance',
+                          ...(retryable === undefined ? {} : { retryable }),
+                      }),
                   },
               }
             : {}),
     };
 }
+
+type CanonicalStreamTerminalDiagnostic = NonNullable<
+    Extract<ConversationStreamEvent, { type: 'stream_terminated' }>['diagnostic']
+>;
 
 function serializedBytes(value: unknown): number {
     return new TextEncoder().encode(JSON.stringify(value)).byteLength;
@@ -257,6 +268,20 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', false)),
             serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', true)),
             serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'delivery')),
+            serializedBytes(
+                terminatedEvent(identity, terminalSequence, 'failed', 'provider', undefined, {
+                    code: CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+                    message: 'Canonical response omitted a required tool call',
+                    retryable: false,
+                }),
+            ),
+            serializedBytes(
+                terminatedEvent(identity, terminalSequence, 'failed', 'provider', undefined, {
+                    code: CANONICAL_FORBIDDEN_TOOL_CALL,
+                    message: 'Canonical response included a forbidden tool call',
+                    retryable: false,
+                }),
+            ),
         );
         if (maxEventBytes < reservedTerminalBytes) {
             throw new RangeError('max_event_bytes cannot hold a canonical stream terminal event');
@@ -346,6 +371,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
                         'failed',
                         failureKind,
                         failureKind === 'provider' ? this.safeFailureClassification(error) : undefined,
+                        failureKind === 'provider' ? canonicalToolSelectionDiagnostic(error) : undefined,
                     );
                 } catch (settlementError: unknown) {
                     this.settled = true;
@@ -399,6 +425,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery' = 'provider',
         retryable?: boolean,
+        diagnostic?: CanonicalStreamTerminalDiagnostic,
     ): Promise<CanonicalStreamTerminalEvent> {
         if (this.settlement !== undefined) return this.settlement;
         this.settled = true;
@@ -415,7 +442,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             // The bounded terminal still settles while cleanup retains transport ownership.
         }
         this.startCleanup();
-        void this.terminateInternal(outcome, failureKind, retryable).then(resolve, reject);
+        void this.terminateInternal(outcome, failureKind, retryable, diagnostic).then(resolve, reject);
         return settlement;
     }
 
@@ -432,8 +459,9 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery',
         retryable?: boolean,
+        diagnostic?: CanonicalStreamTerminalDiagnostic,
     ): Promise<CanonicalStreamTerminalEvent> {
-        const terminal = this.appendTerminal(outcome, failureKind, retryable);
+        const terminal = this.appendTerminal(outcome, failureKind, retryable, diagnostic);
         await this.channel.terminate(terminal);
         return terminal;
     }
@@ -442,6 +470,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery' = 'provider',
         retryable?: boolean,
+        diagnostic?: CanonicalStreamTerminalDiagnostic,
     ): CanonicalStreamTerminalEvent {
         const event = terminatedEvent(
             this.accumulator.identity,
@@ -449,6 +478,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             outcome,
             failureKind,
             retryable,
+            diagnostic,
         );
         return this.accumulator.append(event).event as CanonicalStreamTerminalEvent;
     }

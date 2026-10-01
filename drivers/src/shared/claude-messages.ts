@@ -90,7 +90,9 @@ import {
 } from '../conversation/canonical-execution-stream.js';
 import {
     assertAcceptedCanonicalRequest,
+    CANONICAL_TOOL_SELECTION_TARGET_OPTION,
     canonicalConversationTurnNumber,
+    canonicalToolSelectionTargetOptions,
     providerJsonValue,
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
@@ -1247,14 +1249,19 @@ function recoveredCanonicalClaudeStream(response: CanonicalExecutionResponse): C
 }
 
 function assertClaudeAcceptedTargetOptions(
-    state: Pick<PreparedClaudeConversation, 'accepted_response' | 'runtime' | 'target_options'>,
+    state: Pick<
+        PreparedClaudeConversation,
+        'accepted_response' | 'response_selection_policy' | 'runtime' | 'target_options'
+    >,
 ): void {
     const accepted = state.accepted_response;
     if (accepted === undefined) return;
-    if (
-        canonicalJsonContentString(accepted.generation.request_receipt.target.options ?? null) !==
-        canonicalJsonContentString(state.target_options ?? null)
-    ) {
+    const retainedOptions = accepted.generation.request_receipt.target.options;
+    const expectedOptions =
+        retainedOptions !== undefined && Object.hasOwn(retainedOptions, CANONICAL_TOOL_SELECTION_TARGET_OPTION)
+            ? canonicalToolSelectionTargetOptions(state.target_options, state.response_selection_policy)
+            : state.target_options;
+    if (canonicalJsonContentString(retainedOptions ?? null) !== canonicalJsonContentString(expectedOptions ?? null)) {
         throw new Error(
             `Accepted response operation ${state.runtime.response_operation_id} has incompatible request routing`,
         );

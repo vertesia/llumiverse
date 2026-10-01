@@ -3,7 +3,10 @@ import type { AgentContentBlock, DecodedConversationResponse } from '@llumiverse
 import { describe, expect, it } from 'vitest';
 import {
     assertDecodedCanonicalToolSelection,
+    CANONICAL_FORBIDDEN_TOOL_CALL,
+    CANONICAL_REQUIRED_TOOL_CALL_MISSING,
     CanonicalToolSelectionViolationError,
+    canonicalToolSelectionDiagnostic,
     canonicalToolSelectionPolicy,
     parseCanonicalToolSelectionPolicy,
 } from './CanonicalSelection.js';
@@ -100,6 +103,37 @@ describe('canonical tool selection', () => {
                 tool_name: 'required_tool',
             }),
         ).toThrow(CanonicalToolSelectionViolationError);
+    });
+
+    it('distinguishes recoverable required omissions from forbidden tool calls with bounded diagnostics', () => {
+        const required = (() => {
+            try {
+                assertDecodedCanonicalToolSelection(decoded(), { mode: 'required' });
+            } catch (error) {
+                return error;
+            }
+        })();
+        const forbidden = (() => {
+            try {
+                assertDecodedCanonicalToolSelection(decoded('unexpected'), { mode: 'none' });
+            } catch (error) {
+                return error;
+            }
+        })();
+
+        expect(required).toMatchObject({ diagnostic_code: CANONICAL_REQUIRED_TOOL_CALL_MISSING });
+        expect(forbidden).toMatchObject({ diagnostic_code: CANONICAL_FORBIDDEN_TOOL_CALL });
+        expect(canonicalToolSelectionDiagnostic(required)).toEqual({
+            code: CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+            message: 'Canonical response omitted a required tool call',
+            retryable: false,
+        });
+        expect(canonicalToolSelectionDiagnostic(forbidden)).toEqual({
+            code: CANONICAL_FORBIDDEN_TOOL_CALL,
+            message: 'Canonical response included a forbidden tool call',
+            retryable: false,
+        });
+        expect(canonicalToolSelectionDiagnostic(new Error('other'))).toBeUndefined();
     });
 
     it('rejects a malformed present receipt marker', () => {

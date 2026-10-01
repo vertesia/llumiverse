@@ -6,8 +6,24 @@ export type CanonicalToolSelectionPolicy =
     | { mode: 'none' }
     | { mode: 'required'; tool_name?: string };
 
+export const CANONICAL_REQUIRED_TOOL_CALL_MISSING = 'CANONICAL_REQUIRED_TOOL_CALL_MISSING';
+export const CANONICAL_FORBIDDEN_TOOL_CALL = 'CANONICAL_FORBIDDEN_TOOL_CALL';
+
+export type CanonicalToolSelectionDiagnosticCode =
+    | typeof CANONICAL_REQUIRED_TOOL_CALL_MISSING
+    | typeof CANONICAL_FORBIDDEN_TOOL_CALL;
+
+export interface CanonicalToolSelectionDiagnostic {
+    code: CanonicalToolSelectionDiagnosticCode;
+    message: string;
+    retryable: false;
+}
+
 export class CanonicalToolSelectionViolationError extends LlumiverseError {
-    constructor(decoded: DecodedConversationResponse) {
+    constructor(
+        decoded: DecodedConversationResponse,
+        readonly diagnostic_code: CanonicalToolSelectionDiagnosticCode = CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+    ) {
         super(
             'Canonical response violated the requested tool-selection policy',
             false,
@@ -21,6 +37,19 @@ export class CanonicalToolSelectionViolationError extends LlumiverseError {
             'CanonicalToolSelectionViolationError',
         );
     }
+}
+
+/** Return the bounded public diagnostic for a pre-ingestion selection violation. */
+export function canonicalToolSelectionDiagnostic(error: unknown): CanonicalToolSelectionDiagnostic | undefined {
+    if (!(error instanceof CanonicalToolSelectionViolationError)) return undefined;
+    return {
+        code: error.diagnostic_code,
+        message:
+            error.diagnostic_code === CANONICAL_REQUIRED_TOOL_CALL_MISSING
+                ? 'Canonical response omitted a required tool call'
+                : 'Canonical response included a forbidden tool call',
+        retryable: false,
+    };
 }
 
 /** Normalize the effective private model-tool selection without changing omitted provider defaults. */
@@ -81,7 +110,9 @@ export function assertDecodedCanonicalToolSelection(
     if (policy === undefined || policy.mode === 'auto') return;
     const toolCalls = decoded.turns.flatMap((turn) => turn.blocks.filter((block) => block.type === 'tool_call'));
     if (policy.mode === 'none') {
-        if (toolCalls.length > 0) throw new CanonicalToolSelectionViolationError(decoded);
+        if (toolCalls.length > 0) {
+            throw new CanonicalToolSelectionViolationError(decoded, CANONICAL_FORBIDDEN_TOOL_CALL);
+        }
         return;
     }
     if (policy.tool_name === undefined) {

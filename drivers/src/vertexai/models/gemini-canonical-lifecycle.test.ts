@@ -12,7 +12,7 @@ import {
     parseConversationDocument,
     resolveToolExecutionRequest,
 } from '@llumiverse/conversation';
-import { type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { CANONICAL_REQUIRED_TOOL_CALL_MISSING, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
 import { GeminiModelDefinition } from './gemini.js';
@@ -190,7 +190,7 @@ describe('Gemini canonical lifecycle', () => {
         expect(finiteEvents.at(-1)).toMatchObject({
             type: 'stream_terminated',
             outcome: 'failed',
-            diagnostic: { code: 'CANONICAL_EXECUTION_FAILED' },
+            diagnostic: { code: CANONICAL_REQUIRED_TOOL_CALL_MISSING, retryable: false },
         });
         expect(finiteEvents.some((event) => event.type === 'response_accepted')).toBe(false);
         expect(finiteStream.completion).toBeUndefined();
@@ -211,7 +211,7 @@ describe('Gemini canonical lifecycle', () => {
         expect(invalidEvents.at(-1)).toMatchObject({
             type: 'stream_terminated',
             outcome: 'failed',
-            diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: false },
+            diagnostic: { code: CANONICAL_REQUIRED_TOOL_CALL_MISSING, retryable: false },
         });
         expect(invalidEvents.some((event) => event.type === 'response_accepted')).toBe(false);
         expect(invalidStream.completion).toBeUndefined();

@@ -22,6 +22,11 @@ import {
     type CanonicalExecutionStream,
     canonicalExecutionPreview,
 } from './CanonicalExecution.js';
+import {
+    CANONICAL_FORBIDDEN_TOOL_CALL,
+    CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+    canonicalToolSelectionDiagnostic,
+} from './CanonicalSelection.js';
 import { normalizeCompletionResult } from './validation.js';
 
 export type CanonicalStreamTerminalEvent = Extract<
@@ -244,6 +249,7 @@ function terminatedEvent(
     sequence: number,
     outcome: 'cancelled' | 'failed',
     failureKind: 'execution' | 'delivery' = 'execution',
+    diagnostic?: Extract<ConversationStreamEvent, { type: 'stream_terminated' }>['diagnostic'],
 ): Extract<ConversationStreamEvent, { type: 'stream_terminated' }> {
     return {
         ...streamEnvelope(identity, sequence),
@@ -257,7 +263,12 @@ function terminatedEvent(
                           message: 'Canonical event delivery failed',
                       },
                   }
-                : { diagnostic: { code: 'CANONICAL_EXECUTION_FAILED', message: 'Canonical execution failed' } }
+                : {
+                      diagnostic: diagnostic ?? {
+                          code: 'CANONICAL_EXECUTION_FAILED',
+                          message: 'Canonical execution failed',
+                      },
+                  }
             : {}),
     };
 }
@@ -538,6 +549,20 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
             serializedEventBytes(terminatedEvent(streamIdentity, terminalSequence, 'cancelled')),
             serializedEventBytes(terminatedEvent(streamIdentity, terminalSequence, 'failed')),
             serializedEventBytes(terminatedEvent(streamIdentity, terminalSequence, 'failed', 'delivery')),
+            serializedEventBytes(
+                terminatedEvent(streamIdentity, terminalSequence, 'failed', 'execution', {
+                    code: CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+                    message: 'Canonical response omitted a required tool call',
+                    retryable: false,
+                }),
+            ),
+            serializedEventBytes(
+                terminatedEvent(streamIdentity, terminalSequence, 'failed', 'execution', {
+                    code: CANONICAL_FORBIDDEN_TOOL_CALL,
+                    message: 'Canonical response included a forbidden tool call',
+                    retryable: false,
+                }),
+            ),
         );
         if (!this.retainedDelivery && maxEventBytes < reservedTerminalBytes) {
             throw new RangeError('max_event_bytes cannot hold a canonical stream terminal event');
@@ -640,7 +665,12 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
             }
             if (!this.settled) {
                 try {
-                    await this.settleTerminated('failed', this.completion === undefined ? 'execution' : 'delivery');
+                    const failureKind = this.completion === undefined ? 'execution' : 'delivery';
+                    await this.settleTerminated(
+                        'failed',
+                        failureKind,
+                        failureKind === 'execution' ? canonicalToolSelectionDiagnostic(error) : undefined,
+                    );
                 } catch (settlementError: unknown) {
                     this.settled = true;
                     this.channel.fail(settlementError);
@@ -654,10 +684,17 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
     private async settleTerminated(
         outcome: 'cancelled' | 'failed',
         failureKind: 'execution' | 'delivery' = 'execution',
+        diagnostic?: Extract<ConversationStreamEvent, { type: 'stream_terminated' }>['diagnostic'],
     ): Promise<CanonicalStreamTerminalEvent> {
         const existing = this.terminal_event;
         if (existing !== undefined) return existing;
-        const event = terminatedEvent(this.accumulator.identity, this.accumulator.next_sequence, outcome, failureKind);
+        const event = terminatedEvent(
+            this.accumulator.identity,
+            this.accumulator.next_sequence,
+            outcome,
+            failureKind,
+            diagnostic,
+        );
         this.accumulator.append(event);
         this.settled = true;
         await this.channel.terminate(event);
