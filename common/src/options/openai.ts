@@ -4,7 +4,12 @@ import type {
     OpenAiAudioOptionsSchema,
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
+<<<<<<< HEAD
     OpenAiSpeechOptionsSchema,
+=======
+    OpenAiImageGenerationMaskSchema,
+    OpenAiImageGenerationOptionsSchema,
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     OpenAiTextOptionsSchema,
     OpenAiThinkingOptionsSchema,
     OpenAiTranscriptionOptionsSchema,
@@ -18,7 +23,7 @@ import {
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE } from './version-parsing.js';
+import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE, isOpenAIImageVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -31,6 +36,8 @@ import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE } from './version
 export type OpenAiThinkingOptions = z.infer<typeof OpenAiThinkingOptionsSchema>;
 export type OpenAiTextOptions = z.infer<typeof OpenAiTextOptionsSchema>;
 export type OpenAiDalleOptions = z.infer<typeof OpenAiDalleOptionsSchema>;
+export type OpenAiImageGenerationOptions = z.infer<typeof OpenAiImageGenerationOptionsSchema>;
+export type OpenAiImageGenerationMask = z.infer<typeof OpenAiImageGenerationMaskSchema>;
 export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
 export type OpenAiTranscriptionOptions = z.infer<typeof OpenAiTranscriptionOptionsSchema>;
@@ -175,22 +182,36 @@ export function getOpenAiOptions(
             sizeOptions['1024x1792'] = '1024x1792';
         }
 
-        const baseImageOptions: ModelOptionInfoItem[] = [
-            {
-                name: 'size',
-                type: OptionType.enum,
-                enum: sizeOptions,
-                default: '1024x1024',
-                description: 'The size of the generated image',
-            },
-        ];
+        const baseImageOptions: ModelOptionInfoItem[] = isOpenAIImageVersionGTE(model, 2)
+            ? ['width', 'height'].map((name) => ({
+                  name,
+                  type: OptionType.numeric,
+                  integer: true,
+                  default: 1024,
+                  description: `The ${name} of the generated image in pixels`,
+              }))
+            : [
+                  {
+                      name: 'size',
+                      type: OptionType.enum,
+                      enum: sizeOptions,
+                      default: '1024x1024',
+                      description: 'The size of the generated image',
+                  },
+              ];
 
         const gptImageOptions: ModelOptionInfoItem[] = isGPTImage
             ? [
                   {
                       name: 'image_quality',
                       type: OptionType.enum,
-                      enum: { Low: 'low', Medium: 'medium', High: 'high', Auto: 'auto' },
+                      enum: {
+                          Low: 'low',
+                          Medium: 'medium',
+                          High: 'high',
+                          Auto: 'auto',
+                          ...(isOpenAIImageVersionGTE(model, 2, 5) ? { 'Extra high': 'xhigh', Max: 'max' } : {}),
+                      },
                       default: 'auto',
                       description: 'The quality of the generated image',
                   },
@@ -238,23 +259,58 @@ export function getOpenAiOptions(
                   ]
                 : [];
 
-        const nImagesOption: ModelOptionInfoItem[] = isDallE2
-            ? [
-                  {
-                      name: 'n',
-                      type: OptionType.numeric,
-                      min: 1,
-                      max: 10,
-                      default: 1,
-                      integer: true,
-                      description: 'Number of images to generate (DALL-E 2 only)',
-                  },
-              ]
-            : [];
+        const nImagesOption: ModelOptionInfoItem[] =
+            isDallE2 || isGPTImage
+                ? [
+                      {
+                          name: 'n',
+                          type: OptionType.numeric,
+                          min: 1,
+                          max: 10,
+                          default: 1,
+                          integer: true,
+                          description: 'Number of images to generate',
+                      },
+                  ]
+                : [];
 
         return {
             _option_id: isGPTImage ? 'openai-gpt-image' : 'openai-dalle',
-            options: [...baseImageOptions, ...gptImageOptions, ...dalleOptions, ...nImagesOption],
+            options: [
+                ...baseImageOptions,
+                ...gptImageOptions,
+                ...dalleOptions,
+                ...nImagesOption,
+                ...(isGPTImage
+                    ? [
+                          {
+                              name: 'output_compression',
+                              type: OptionType.numeric as const,
+                              min: 0,
+                              max: 100,
+                              integer: true,
+                          },
+                          { name: 'moderation', type: OptionType.enum as const, enum: { Auto: 'auto', Low: 'low' } },
+                          {
+                              name: 'partial_images',
+                              type: OptionType.numeric as const,
+                              min: 0,
+                              max: 3,
+                              integer: true,
+                              default: 0,
+                          },
+                          ...(!isOpenAIImageVersionGTE(model, 2) || isOpenAIImageVersionGTE(model, 2, 5)
+                              ? [
+                                    {
+                                        name: 'input_fidelity',
+                                        type: OptionType.enum as const,
+                                        enum: { Low: 'low', High: 'high' },
+                                    },
+                                ]
+                              : []),
+                      ]
+                    : []),
+            ],
         };
     }
 
@@ -327,6 +383,11 @@ export function getOpenAiOptions(
                 ...reasoningContextOptions,
                 ...visionOptions,
                 ...serviceTierOptions,
+                {
+                    name: 'image_generation',
+                    type: OptionType.json_object,
+                    description: 'Optional image generation tool configuration; requires an image model.',
+                },
             ],
         };
     } else {
@@ -405,7 +466,16 @@ export function getOpenAiOptions(
 
         return {
             _option_id: 'openai-text',
-            options: [...commonOptions, ...visionOptions, ...serviceTierOptions],
+            options: [
+                ...commonOptions,
+                ...visionOptions,
+                ...serviceTierOptions,
+                {
+                    name: 'image_generation',
+                    type: OptionType.json_object,
+                    description: 'Optional image generation tool configuration; requires an image model.',
+                },
+            ],
         };
     }
 }
@@ -438,8 +508,14 @@ export function getOpenAiCompatibleOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile, Providers.openai_compatible);
+<<<<<<< HEAD
     if (profile.family === 'speech' || profile.family === 'transcription') return options;
     const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
+=======
+    const compatibleOptions = options.options.filter(
+        (item) => item.name !== 'service_tier' && item.name !== 'image_generation',
+    );
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     const maxOutputTokens = profile.max_output_tokens;
     const profileEffortLevels = profile.reasoning_effort_levels?.length
         ? new Set(profile.reasoning_effort_levels)

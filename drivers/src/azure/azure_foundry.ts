@@ -1,4 +1,5 @@
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
+<<<<<<< HEAD
 import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import type {
@@ -11,6 +12,9 @@ import type {
     GetChatCompletionsParameters,
 } from '@azure-rest/ai-inference';
 import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
+=======
+import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import {
     type AIModel,
     type Completion,
@@ -26,6 +30,7 @@ import {
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
+    ModelType,
     normalizeEmbeddingsOptions,
     type PromptSegment,
     Providers,
@@ -33,20 +38,27 @@ import {
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
+<<<<<<< HEAD
 import type OpenAI from 'openai';
 import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
+=======
+import OpenAI from 'openai';
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
+    normalizeOpenAIChatCompletionsResponse,
+    normalizeOpenAIChatCompletionsStream,
     type OpenAIChatCompletionsContentPart,
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     type OpenAIChatCompletionsResponse,
-    type OpenAIChatCompletionsStreamResponse,
     openAIChatCompletionsStreamToSSE,
     preserveOpenAIChatCompletionsOriginalResponse,
+    toOpenAINonStreamingPayload,
+    toOpenAIStreamingPayload,
 } from '../openai/openai_chat_completions.js';
 import {
     convertResponseItemsToChatMessages,
@@ -58,27 +70,39 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 export type { AzureFoundryDriverOptions } from '../driver-options.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-type SSEMessage = { data?: string };
 
-class AzureFoundryHTTPError extends Error {
-    readonly status: number;
-    readonly body: unknown;
-
-    constructor(message: string, status: string, body?: unknown) {
-        super(message);
-        this.name = 'AzureFoundryHTTPError';
-        this.status = Number(status);
-        this.body = body;
-    }
+function resourceInferenceURL(baseURL: string): string {
+    const url = new URL(baseURL);
+    // Images and embeddings use the resource endpoint, rather than the project proxy.
+    url.pathname = url.pathname.replace(/\/api\/projects\/[^/]+\/openai\/v1\/?$/, '/openai/v1');
+    return url.toString();
 }
-
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
 
-    constructor(service: OpenAI, options: DriverOptions) {
-        super(options);
+    constructor(
+        service: OpenAI,
+        private readonly foundryOptions: AzureFoundryDriverOptions,
+    ) {
+        super(foundryOptions);
         this.service = service;
+    }
+
+    private imageService?: OpenAI;
+
+    getImageService(): OpenAI {
+        this.imageService ??= this.service.withOptions({
+            baseURL: resourceInferenceURL(this.service.baseURL),
+            fetch: this.getDriverFetch(),
+            maxRetries: 0,
+        });
+        return this.imageService;
+    }
+
+    getImageSourceModel(model: string): string {
+        if (model.includes('::') || resolveModelProfile(model, this.provider).family !== 'generic') return model;
+        return this.foundryOptions.sourceModel ?? model;
     }
 
     async listModels(): Promise<AIModel[]> {
@@ -92,9 +116,9 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
 
 class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBase<OpenAIChatCompletionsDriverOptions> {
     readonly provider = Providers.azure_foundry;
-    readonly service: AzureInferenceClient;
+    readonly service: OpenAI;
 
-    constructor(service: AzureInferenceClient, options: DriverOptions) {
+    constructor(service: OpenAI, options: DriverOptions) {
         super({ ...options, resultSchemaMode: 'response_format', toolSchemaMode: 'compatible' });
         this.service = service;
     }
@@ -104,6 +128,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         _options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
+<<<<<<< HEAD
         const response = await this.service.path('/chat/completions').post({
             body: toAzureInferenceRequest(payload, false),
             headers: { 'extra-parameters': 'pass-through' },
@@ -119,13 +144,24 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         }
         const original = response.body as ChatCompletionsOutput;
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeAzureInferenceResponse(original), original);
+=======
+        const response = await this.service.chat.completions.create(
+            toOpenAINonStreamingPayload(payload),
+            this.getDriverRequestOptions(_options, signal),
+        );
+        return preserveOpenAIChatCompletionsOriginalResponse(
+            normalizeOpenAIChatCompletionsResponse(response),
+            response,
+        );
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     }
 
     async _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
+<<<<<<< HEAD
         const response = await this.service
             .path('/chat/completions')
             .post({
@@ -148,6 +184,17 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         }
         return openAIChatCompletionsStreamToSSE(normalizeAzureInferenceStream(createSseStream(stream)), () =>
             stream.destroy(),
+=======
+        const request = toOpenAIStreamingPayload(payload);
+        // Preserve the inference transport contract: some Foundry models reject OpenAI usage options.
+        delete request.stream_options;
+        const stream = await this.service.chat.completions.create(
+            request,
+            this.getDriverRequestOptions(options, signal),
+        );
+        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
+            stream.controller.abort(),
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         );
     }
 
@@ -164,8 +211,24 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     }
 }
 
+<<<<<<< HEAD
+=======
+export interface AzureFoundryDriverOptions extends DriverOptions {
+    /**
+     * The credentials to use to access Azure AI Foundry
+     */
+    azureADTokenProvider?: TokenCredential;
+
+    endpoint?: string;
+
+    apiVersion?: string;
+
+    sourceModel?: string;
+}
+
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 export interface AzureFoundryInferencePrompt {
-    messages: ChatRequestMessage[];
+    messages: OpenAIChatCompletionsPayload['messages'];
 }
 
 export interface AzureFoundryOpenAIPrompt {
@@ -176,8 +239,9 @@ export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenA
 
 export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
     service: AIProjectClient;
-    private readonly inferenceClient: AzureInferenceClient;
-    private readonly inferenceProtocolDriver: AzureFoundryInferenceProtocolDriver;
+    private inferenceClient?: OpenAI;
+    private resourceClient?: OpenAI;
+    private inferenceProtocolDriver?: AzureFoundryInferenceProtocolDriver;
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
     readonly provider = Providers.azure_foundry;
@@ -211,12 +275,16 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     OPENAI_API_VERSION = '2025-01-01-preview';
-    INFERENCE_API_VERSION = '2024-05-01-preview';
 
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
 
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+        this.formatPrompt = (segments, options) =>
+            formatOpenAILikeMultimodalPrompt(segments, {
+                ...options,
+                imageGeneration: this.isImageModel(options.model),
+                result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
+            });
 
         if (!opts.endpoint) {
             throw new Error('Azure AI Foundry endpoint is required');
@@ -234,16 +302,19 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (opts.apiVersion) {
             this.OPENAI_API_VERSION = opts.apiVersion;
-            this.INFERENCE_API_VERSION = opts.apiVersion;
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
+<<<<<<< HEAD
         const endpoint = opts.endpoint.endsWith('/') ? opts.endpoint.slice(0, -1) : opts.endpoint;
         this.service = new AIProjectClient(endpoint, opts.azureADTokenProvider);
         this.inferenceClient = ModelClient(endpoint, opts.azureADTokenProvider, {
             apiVersion: this.INFERENCE_API_VERSION,
         });
         this.inferenceProtocolDriver = new AzureFoundryInferenceProtocolDriver(this.inferenceClient, opts);
+=======
+        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     }
 
     /**
@@ -276,22 +347,80 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
+        if ((_options.model_options as { image_generation?: unknown } | undefined)?.image_generation) {
+            return Promise.resolve(false);
+        }
+        if (this.isImageModel(_options.model)) {
+            return Promise.resolve(
+                this.getOpenAIProtocolDriver().getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'),
+            );
+        }
         return Promise.resolve(true);
     }
 
-    private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
-        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(
-            this.service.getOpenAIClient({
+    private getInferenceClient(): OpenAI {
+        if (!this.inferenceClient) {
+            const configured = this.service.getOpenAIClient();
+            // Projects resolves the project URL; inference uses our current SDK independently.
+            this.inferenceClient = new OpenAI({
+                baseURL: configured.baseURL,
+                apiKey: getBearerTokenProvider(
+                    this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
+                    'https://ai.azure.com/.default',
+                ),
+                defaultQuery: this.options.apiVersion ? { 'api-version': this.options.apiVersion } : undefined,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
+<<<<<<< HEAD
             }) as unknown as OpenAI,
+=======
+                maxRetries: 0,
+            });
+        }
+        return this.inferenceClient;
+    }
+
+    private getResourceClient(): OpenAI {
+        const inference = this.getInferenceClient();
+        this.resourceClient ??= inference.withOptions({ baseURL: resourceInferenceURL(inference.baseURL) });
+        return this.resourceClient;
+    }
+
+    private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
+        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.getInferenceClient(), this.options);
+        return this.openAIProtocolDriver;
+    }
+
+    private getInferenceProtocolDriver(): AzureFoundryInferenceProtocolDriver {
+        this.inferenceProtocolDriver ??= new AzureFoundryInferenceProtocolDriver(
+            this.getInferenceClient(),
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
             this.options,
         );
-        return this.openAIProtocolDriver;
+        return this.inferenceProtocolDriver;
+    }
+
+    protected destroyProviderResources(): void {
+        this.openAIProtocolDriver?.destroy();
+        this.inferenceProtocolDriver?.destroy();
     }
 
     public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
         return formatOpenAIDebugPrompt(prompt);
+    }
+
+    protected isImageModel(model: string): boolean {
+        const family = resolveModelProfile(model, this.provider).family;
+        const source = model.includes('::') || family !== 'generic' ? model : (this.options.sourceModel ?? model);
+        return resolveModelProfile(source, this.provider).family === 'image';
+    }
+
+    requestImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return this.getOpenAIProtocolDriver().requestImageGeneration(prompt, options, signal);
     }
 
     async requestTextCompletion(
@@ -299,6 +428,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (this.isImageModel(options.model)) return this.requestImageGeneration(prompt, options, signal);
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
 
@@ -306,7 +436,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().requestTextCompletion(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
-        return this.inferenceProtocolDriver.requestTextCompletion(
+        return this.getInferenceProtocolDriver().requestTextCompletion(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
             signal,
@@ -318,6 +448,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (this.isImageModel(options.model)) {
+            return this.getOpenAIProtocolDriver().requestImageStream(prompt, options, signal);
+        }
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
 
@@ -325,7 +458,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().requestTextCompletionStream(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
-        return this.inferenceProtocolDriver.requestTextCompletionStream(
+        return this.getInferenceProtocolDriver().requestTextCompletionStream(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
             signal,
@@ -344,7 +477,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.openAIProtocolDriver.buildStreamingConversation(prompt, result, toolUse, options);
         }
         if (protocol === 'chat_completions') {
-            return this.inferenceProtocolDriver.buildStreamingConversation(
+            return this.getInferenceProtocolDriver().buildStreamingConversation(
                 toAzureFoundryChatPrompt(prompt),
                 result,
                 toolUse,
@@ -362,7 +495,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return;
         }
         if (protocol === 'chat_completions') {
-            this.inferenceProtocolDriver.validateResult(result, toAzureFoundryChatOptions(options, deploymentName));
+            this.getInferenceProtocolDriver().validateResult(
+                result,
+                toAzureFoundryChatOptions(options, deploymentName),
+            );
             return;
         }
         super.validateResult(result, options);
@@ -371,11 +507,14 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         const { deploymentName } = parseAzureFoundryModelId(context.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
-        if (protocol === 'responses' && this.openAIProtocolDriver) {
+        if ((protocol === 'responses' || this.isImageModel(context.model)) && this.openAIProtocolDriver) {
             return this.openAIProtocolDriver.formatLlumiverseError(error, context);
         }
         if (protocol === 'chat_completions') {
-            return this.inferenceProtocolDriver.formatLlumiverseError(error, { ...context, model: deploymentName });
+            return this.getInferenceProtocolDriver().formatLlumiverseError(error, {
+                ...context,
+                model: deploymentName,
+            });
         }
         return super.formatLlumiverseError(error, context);
     }
@@ -450,20 +589,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private async callAzureEmbeddings(input: string[], model: string, kind: 'text' | 'image'): Promise<number[][]> {
         const { deploymentName } = parseAzureFoundryModelId(model);
         try {
-            const embeddingsClient = this.inferenceClient.path('/embeddings');
-            const response = await embeddingsClient.post({
-                body: { input, model: deploymentName },
-                timeout: this.getDriverRequestTimeoutMs(),
-            });
-            if (isUnexpected(response)) {
-                throw new AzureFoundryHTTPError(
-                    `${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`,
-                    response.status,
-                    response.body,
-                );
-            }
-
-            const data = response.body.data;
+            const response = await this.getResourceClient().embeddings.create(
+                { input, model: deploymentName, encoding_format: 'float' },
+                { timeout: this.getDriverRequestTimeoutMs() },
+            );
+            const data = response.data;
             if (!Array.isArray(data) || data.length === 0) {
                 throw new Error(`No embeddings found in Azure Foundry ${kind} response`);
             }
@@ -480,7 +610,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;
             this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
-            throw this.formatLlumiverseError(error, {
+            throw this.getOpenAIProtocolDriver().formatLlumiverseError(error, {
                 provider: this.provider,
                 model,
                 operation: 'execute',
@@ -532,6 +662,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     version: model.modelVersion,
                     provider: this.provider,
                     owner: model.modelPublisher,
+                    type:
+                        resolveModelProfile(model.modelName, this.provider).family === 'image'
+                            ? ModelType.Image
+                            : ModelType.Text,
                     ...modelMetadata,
                 } satisfies AIModel;
             })
@@ -598,6 +732,7 @@ function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: st
     };
 }
 
+<<<<<<< HEAD
 type AzureInferenceRequestBody = GetChatCompletionsParameters['body'] & {
     parallel_tool_calls?: boolean;
 };
@@ -651,6 +786,8 @@ export function toAzureInferenceRequest(
     } satisfies AzureInferenceRequestBody;
 }
 
+=======
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 function parseCapabilityFlag(value: unknown): boolean | undefined {
     if (typeof value === 'boolean') return value;
     if (typeof value !== 'string') return undefined;
@@ -669,13 +806,20 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 }
 
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
+<<<<<<< HEAD
     if (deployment.modelPublisher?.toLowerCase() === 'openai' && openAIAudioTask(deployment.modelName)) return true;
+=======
+    // Foundry Anthropic deployments require the Messages API rather than this driver's OpenAI transport.
+    if (deployment.modelPublisher.toLowerCase() === 'anthropic') return false;
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
+    if (sourceModel.includes('dall-e')) return false;
+    if (profile.family === 'image' && deployment.modelPublisher.toLowerCase() === 'openai') return true;
     // These source families use dedicated endpoint contracts, not Foundry chat or Responses inference.
     if (
         ['embedding', 'image', 'transcription', 'speech', 'realtime', 'video', 'moderation'].includes(profile.family) ||
-        /(?:^|[-_.:/])(?:embed|embeddings?|whisper|transcribe|tts|realtime|moderation|sora)(?:[-_.:/]|$)/.test(
+        /(?:^|[-_.:/])(?:embed|embeddings?|flux|whisper|transcribe|tts|realtime|moderation|sora)(?:[-_.:/]|$)/.test(
             sourceModel,
         )
     ) {
@@ -687,6 +831,7 @@ function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
     return parseCapabilityFlag(deployment.capabilities.chat_completion) !== false;
 }
 
+<<<<<<< HEAD
 function toAzureInferenceMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatRequestMessage {
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
     switch (message.role) {
@@ -793,6 +938,8 @@ async function* normalizeAzureInferenceStream(
     }
 }
 
+=======
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 // Helper functions to parse the composite ID
 export function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
     const parts = compositeId.split('::');

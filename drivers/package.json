@@ -143,6 +143,7 @@
         "@aws-sdk/lib-storage": "^3.1139.0",
         "@aws-sdk/types": "^3.974.6",
         "@aws/bedrock-token-generator": "^1.1.0",
+<<<<<<< HEAD
         "@azure-rest/ai-inference": "1.0.0-beta.6",
         "@azure/ai-projects": "^2.7.1",
         "@azure/core-auth": "^1.11.0",
@@ -152,6 +153,14 @@
         "@google-cloud/aiplatform": "^7.4.0",
         "@google/genai": "^2.24.0",
         "@huggingface/inference": "^4.13.30",
+=======
+        "@azure/ai-projects": "^2.7.1",
+        "@azure/core-auth": "^1.11.0",
+        "@azure/identity": "^4.13.3",
+        "@google-cloud/aiplatform": "^7.0.0",
+        "@google/genai": "^2.21.0",
+        "@huggingface/inference": "^4.13.25",
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.7.0",
@@ -162,7 +171,11 @@
         "groq-sdk": "^1.6.0",
         "lru-cache": "^11.5.3",
         "node-web-stream-adapters": "^0.2.1",
+<<<<<<< HEAD
         "openai": "^7.23.0",
+=======
+        "openai": "7.25.0",
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         "replicate": "^1.4.0",
         "together-ai": "^0.55.0"
     }

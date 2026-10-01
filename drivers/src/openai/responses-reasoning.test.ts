@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { PromptRole, Providers } from '@llumiverse/core';
+=======
+import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -612,4 +616,148 @@ describe('OpenAI Responses reasoning', () => {
             expect(create).toHaveBeenCalledWith(expect.objectContaining({ service_tier: 'future-tier' }));
         },
     );
+});
+
+describe('Responses image generation', () => {
+    const image = {
+        id: 'img-1',
+        type: 'image_generation_call' as const,
+        status: 'completed' as const,
+        result: 'YWJj',
+        output_format: 'webp' as const,
+    };
+    it('combines native image and function tools and retains follow-up state and file IDs', async () => {
+        const create = vi.fn(async (_request: unknown) => ({
+            ...response(),
+            output: [
+                messageItem,
+                image,
+                { type: 'function_call', id: 'fn-1', call_id: 'call-1', name: 'lookup', arguments: '{}' },
+            ],
+        }));
+        const driver = new TestResponsesDriver(create);
+        const config = {
+            _option_id: 'openai-thinking' as const,
+            image_generation: { model: 'gpt-image-2.5-flare', force: true },
+        };
+        const first = await driver.requestTextCompletion(
+            [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'input_text', text: 'Edit this' },
+                        { type: 'input_image', file_id: 'file-1', detail: 'auto' },
+                    ],
+                },
+            ],
+            {
+                model: 'gpt-5',
+                model_options: config,
+                stripTextMaxTokens: 1,
+                tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' } }],
+            },
+        );
+        expect(first.result).toContainEqual({ type: 'image', value: 'data:image/webp;base64,YWJj' });
+        expect(first.tool_use?.[0].tool_name).toBe('lookup');
+        expect(create.mock.calls[0][0]).toMatchObject({
+            tools: [
+                expect.objectContaining({ type: 'function', name: 'lookup' }),
+                expect.objectContaining({ type: 'image_generation', model: 'gpt-image-2.5-flare' }),
+            ],
+            tool_choice: { type: 'image_generation' },
+        });
+        const persisted = JSON.parse(JSON.stringify(first.conversation));
+        await driver.requestTextCompletion([{ role: 'user', content: 'Make it blue' }], {
+            model: 'gpt-5',
+            model_options: config,
+            conversation: persisted,
+        });
+        expect(create.mock.calls[1][0]).toMatchObject({ input: expect.arrayContaining([image]) });
+        expect(JSON.stringify(create.mock.calls[1][0])).toContain('file-1');
+    });
+    it('strips generated payloads according to retention without corrupting replay state', async () => {
+        const create = vi.fn(async (_request: unknown) => ({ ...response(), output: [image] }));
+        const driver = new TestResponsesDriver(create);
+        const completion = await driver.requestTextCompletion([{ role: 'user', content: 'Draw' }], {
+            model: 'gpt-5',
+            stripImagesAfterTurns: 0,
+            model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
+        });
+        expect(JSON.stringify(completion.conversation)).toContain('item_reference');
+        expect(JSON.stringify(completion.conversation)).not.toContain('YWJj');
+    });
+    it.each([Providers.openai, Providers.azure_openai, Providers.openai_compatible] as const)(
+        'does not add image headers or tool choice to ordinary text requests for %s',
+        async (provider) => {
+            const create = vi.fn(async (_request: unknown, _options?: unknown) => response());
+            const driver = new TestResponsesDriver(create, provider);
+            await driver.requestTextCompletion([{ role: 'user', content: 'Hello' }], { model: 'gpt-5' });
+            expect(create.mock.calls[0][1]).toBeUndefined();
+            const request = JSON.parse(JSON.stringify(create.mock.calls[0][0]));
+            expect(request).not.toHaveProperty('tool_choice');
+            expect(request).not.toHaveProperty('tools');
+        },
+    );
+    it('adds Azure deployment headers', async () => {
+        const create = vi.fn(async (_request: unknown, _options?: unknown) => ({ ...response(), output: [image] }));
+        const driver = new TestResponsesDriver(create, Providers.azure_openai);
+        await driver.requestTextCompletion([{ role: 'user', content: 'Draw' }], {
+            model: 'gpt-5',
+            model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
+        });
+        expect(create.mock.calls[0][1]).toMatchObject({
+            headers: {
+                'x-ms-oai-image-generation-deployment': 'gpt-image-2.5-flare',
+                api_version: 'preview',
+            },
+        });
+    });
+    it('returns streamed final images beside text without previews', async () => {
+        const create = vi.fn(async (_request: unknown) =>
+            (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'answer' };
+                yield { type: 'response.image_generation_call.partial_image', partial_image_b64: 'preview' };
+                yield { type: 'response.output_item.done', item: image };
+                yield { type: 'response.output_item.done', item: image };
+                yield { type: 'response.completed', response: { ...response(), output: [messageItem, image] } };
+            })(),
+        );
+        const driver = new TestResponsesDriver(create);
+        const results = [];
+        for await (const chunk of await driver.requestTextCompletionStream([{ role: 'user', content: 'Draw' }], {
+            model: 'gpt-5',
+            model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
+        }))
+            results.push(...chunk.result);
+        expect(results).toEqual([
+            { type: 'text', value: 'answer' },
+            { type: 'image', value: 'data:image/webp;base64,YWJj' },
+        ]);
+    });
+});
+
+it('maps PromptRole.mask to the Responses tool without treating it as a reference', async () => {
+    const create = vi.fn(async (_request: unknown) => response());
+    const driver = new TestResponsesDriver(create);
+    const options = {
+        model: 'gpt-5',
+        model_options: { _option_id: 'openai-thinking' as const, image_generation: { model: 'gpt-image-2.5-flare' } },
+    };
+    const prompt = await driver.createPrompt(
+        [
+            { role: PromptRole.user, content: 'Edit', files: [new Base64DataSource('a.png', 'image/png', 'YQ==')] },
+            { role: PromptRole.mask, content: '', files: [new Base64DataSource('mask.png', 'image/png', 'Yg==')] },
+        ],
+        options,
+    );
+    await driver.requestTextCompletion(prompt, options);
+    expect(create.mock.calls[0][0]).toMatchObject({
+        tools: [
+            expect.objectContaining({
+                type: 'image_generation',
+                input_image_mask: expect.objectContaining({ image_url: 'data:image/png;base64,Yg==' }),
+            }),
+        ],
+    });
+    expect(JSON.stringify((create.mock.calls[0][0] as { input: unknown }).input)).not.toContain('Yg==');
 });

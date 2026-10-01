@@ -483,3 +483,10 @@ export function isGeminiModelVersionGte(modelId: string, minVersion: string): bo
 
     return current.minor >= target.minor;
 }
+
+/** Compare GPT Image family versions, including qualified IDs and snapshots. */
+export function isOpenAIImageVersionGTE(model: string, major: number, minor = 0): boolean {
+    const match = model.toLowerCase().match(/(?:^|[./:])(?:openai\.)?gpt-image-(\d+)(?:\.(\d+))?(?:-|$)/);
+    if (!match) return false;
+    return Number(match[1]) > major || (Number(match[1]) === major && Number(match[2] ?? 0) >= minor);
+}

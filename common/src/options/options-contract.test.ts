@@ -98,7 +98,9 @@ function sampleValues(option: ModelOptionInfoItem): unknown[] {
         case OptionType.numeric_list:
             return [[1]];
         case OptionType.json_object:
-            return [{ provider_extension: { enabled: true } }];
+            return option.name === 'image_generation'
+                ? [{ model: 'gpt-image-2.5-flare' }]
+                : [{ provider_extension: { enabled: true } }];
     }
 }
 

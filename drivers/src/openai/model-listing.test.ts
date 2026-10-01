@@ -22,7 +22,11 @@ describe('OpenAI model listing', () => {
         driver.service = { models: { list } } as unknown as OpenAIDriver['service'];
 
         const models = await driver.listModels();
+<<<<<<< HEAD
         expect(models.map((model) => model.id)).not.toContain('sora-3');
+=======
+        expect(models).toHaveLength(4);
+>>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ id: 'gpt-5.6-codex', provider: Providers.openai }),
@@ -34,4 +38,23 @@ describe('OpenAI model listing', () => {
             ]),
         );
     });
+});
+
+it('discovers aliases, snapshots, qualified image IDs and future generations without advertising DALL-E', async () => {
+    const driver = new OpenAIDriver({ apiKey: 'test-key' });
+    const ids = [
+        'gpt-image-2.5-sunburst',
+        'gpt-image-2.5-flare-2026-09-08',
+        'openai/GPT-IMAGE-3',
+        'chatgpt-image-latest',
+        'dall-e-2',
+        'dall-e-3',
+    ];
+    driver.service.models.list = vi.fn().mockResolvedValue({ data: ids.map((id) => ({ id, owned_by: 'openai' })) });
+    const models = await driver.listModels();
+    expect(models.map((model) => model.id).sort()).toEqual(ids.slice(0, 4).sort());
+    for (const model of models) {
+        expect(model.type).toBe('image');
+        expect(model.output_modalities).toEqual(['image']);
+    }
 });
