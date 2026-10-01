@@ -55,6 +55,7 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 ## Requirements
 
 * Node.js 24.x
+* The OpenAI driver uses OpenAI SDK 7.25.0, whose minimum supported Node.js version is 22.
 * Bun 1.0+ (experimental support)
 
 ## Installation

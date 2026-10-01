@@ -148,7 +148,7 @@
         "groq-sdk": "^1.5.0",
         "lru-cache": "^11.1.0",
         "node-web-stream-adapters": "^0.2.1",
-        "openai": "^6.49.0",
+        "openai": "7.25.0",
         "replicate": "^1.4.0",
         "together-ai": "^0.48.0"
     }
