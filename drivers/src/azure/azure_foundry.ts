@@ -13,6 +13,10 @@ import type {
 import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionStream,
     type DriverCompletionStream,
@@ -99,6 +103,10 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         this.service = service;
     }
 
+    protected override resolveChatCompletionsRequestModel(options: ExecutionOptions): string {
+        return parseAzureFoundryModelId(options.model).deploymentName;
+    }
+
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
         _options: ExecutionOptions,
@@ -182,6 +190,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
     readonly provider = Providers.azure_foundry;
 
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
     override async execute(
         segments: PromptSegment[],
         options: ExecutionOptions,
@@ -208,6 +220,39 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().stream(segments, options, signal);
         }
         return super.stream(segments, options, signal);
+    }
+
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().executeCanonical(segments, options, signal);
+        }
+        return super.executeCanonical(segments, options, signal);
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (options.conversation_runtime === undefined) {
+            throw new Error('Canonical typed streaming requires conversation_runtime');
+        }
+        signal?.throwIfAborted();
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().streamCanonicalEvents(segments, options, signal, open);
+        }
+        return super.streamCanonicalEvents(segments, options, signal, open);
     }
 
     OPENAI_API_VERSION = '2025-01-01-preview';
@@ -292,6 +337,43 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
         return formatOpenAIDebugPrompt(prompt);
+    }
+
+    override async requestCanonicalTextCompletion(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout)) {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletion(prompt, options, signal);
+        }
+        return this.inferenceProtocolDriver.requestCanonicalTextCompletion(
+            toAzureFoundryChatPrompt(prompt),
+            toAzureFoundryChatOptions(options),
+            signal,
+        );
+    }
+
+    override async requestCanonicalTextCompletionEventStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout)) {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletionEventStream(
+                prompt,
+                options,
+                signal,
+                open,
+            );
+        }
+        return this.inferenceProtocolDriver.requestCanonicalTextCompletionEventStream(
+            toAzureFoundryChatPrompt(prompt),
+            toAzureFoundryChatOptions(options),
+            signal,
+            open,
+        );
     }
 
     async requestTextCompletion(
@@ -542,6 +624,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 }
 
 function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatCompletionsPrompt {
+    const toolResultStatuses = new Map<string, 'success' | 'error' | 'cancelled' | 'denied'>();
+    for (const item of items) {
+        if (item.type !== 'function_call_output') continue;
+        if (typeof item.call_id !== 'string' || item.call_id.length === 0) {
+            throw new Error('Cannot convert a function_call_output without call_id to Azure Foundry Chat Completions.');
+        }
+        const status = (item as typeof item & { _llumiverse_tool_result_status?: unknown })
+            ._llumiverse_tool_result_status;
+        if (status === 'success' || status === 'error' || status === 'cancelled' || status === 'denied') {
+            toolResultStatuses.set(item.call_id, status);
+        }
+    }
     const messages = convertResponseItemsToChatMessages(items).map((message) => {
         switch (message.role) {
             case 'assistant':
@@ -561,6 +655,9 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
                     role: message.role,
                     content: typeof message.content === 'string' ? message.content : '',
                     tool_call_id: message.tool_call_id,
+                    ...(message.tool_call_id === undefined || !toolResultStatuses.has(message.tool_call_id)
+                        ? {}
+                        : { tool_result_status: toolResultStatuses.get(message.tool_call_id) }),
                 };
             case 'user':
                 return {
@@ -588,7 +685,7 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
     return { _is_openai_chat_completions: true, messages };
 }
 
-function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: string): ExecutionOptions {
+function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName = options.model): ExecutionOptions {
     return {
         ...options,
         model: deploymentName,

@@ -43,12 +43,26 @@ import {
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
 } from '@llumiverse/common';
 import {
+    canonicalJsonContentString,
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    type JsonObject,
+    type JsonValue,
+    type NativeStreamPosition,
+    toolArgumentsForModel,
+} from '@llumiverse/conversation';
+import {
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    createCanonicalExecutionResponse,
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     getConversationMeta,
     incrementConversationTurn,
     isClaudeVersionGTE,
@@ -67,6 +81,29 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
+import {
+    assertAcceptedCanonicalRequest,
+    CANONICAL_TOOL_SELECTION_TARGET_OPTION,
+    canonicalConversationTurnNumber,
+    canonicalToolSelectionTargetOptions,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+} from '../conversation/canonical-runtime.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
+import {
+    appendClaudeCanonicalResponse,
+    type CanonicalClaudeToolResultBlockParam,
+    CLAUDE_MESSAGES_PROTOCOL,
+    decodeClaudeCanonicalResponse,
+    finalizeClaudePreparedRequest,
+    type PreparedClaudeConversation,
+    prepareClaudeCanonicalState,
+} from './claude-messages-conversation-adapter.js';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
@@ -89,6 +126,11 @@ const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
     JSON_SCHEMA_INSTRUCTION_PREFIX,
 ] as const;
+
+export interface ClaudeTransportIdentity {
+    model: string;
+    target_options?: JsonObject;
+}
 
 export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
     const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
@@ -321,7 +363,6 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 
 async function collectFileBlocks(
     segment: PromptSegment,
-    logger?: WarnLogger,
 ): Promise<Array<TextBlockParam | ImageBlockParam | DocumentBlockParam>> {
     const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
 
@@ -343,13 +384,7 @@ async function collectFileBlocks(
         } else if (file.mime_type?.startsWith('audio/')) {
             throw new Error('Claude does not support audio input; supply a transcript instead');
         } else if (file.mime_type?.startsWith('video/')) {
-            logger?.warn(
-                {
-                    file_name: file.name,
-                    mime_type: file.mime_type,
-                },
-                '[Claude] Skipping unsupported video attachment',
-            );
+            throw new Error(`Claude does not support video input: ${file.name}`);
         } else if (file.mime_type === 'application/pdf') {
             contentBlocks.push({
                 title: file.name,
@@ -383,7 +418,7 @@ async function collectFileBlocks(
 export async function formatClaudePrompt(
     segments: PromptSegment[],
     options: ExecutionOptions,
-    logger?: WarnLogger,
+    _logger?: WarnLogger,
 ): Promise<ClaudePrompt> {
     let system: TextBlockParam[] | undefined = segments
         .filter((s) => s.role === PromptRole.system)
@@ -414,7 +449,7 @@ export async function formatClaudePrompt(
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
+            contentBlocks.push(...(await collectFileBlocks(segment)));
             messages.push({
                 role: 'user',
                 content: [
@@ -422,7 +457,10 @@ export async function formatClaudePrompt(
                         type: 'tool_result',
                         tool_use_id: segment.tool_use_id,
                         content: contentBlocks,
-                    } satisfies ToolResultBlockParam,
+                        ...(segment.tool_result_status === undefined
+                            ? {}
+                            : { _llumiverse_tool_result_status: segment.tool_result_status }),
+                    } satisfies CanonicalClaudeToolResultBlockParam,
                 ],
             });
         } else {
@@ -430,7 +468,7 @@ export async function formatClaudePrompt(
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
+            contentBlocks.push(...(await collectFileBlocks(segment)));
             if (contentBlocks.length === 0) continue;
 
             const messageParam: MessageParam = {
@@ -718,8 +756,16 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
 // ============================================================================
 
 function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T): T {
-    if (typeof block === 'object' && block !== null && 'cache_control' in block) {
-        const { cache_control: _cc, ...rest } = block as T & { cache_control: unknown };
+    if (
+        typeof block === 'object' &&
+        block !== null &&
+        ('cache_control' in block || '_llumiverse_tool_result_status' in block)
+    ) {
+        const {
+            cache_control: _cc,
+            _llumiverse_tool_result_status: _status,
+            ...rest
+        } = block as T & { cache_control?: unknown; _llumiverse_tool_result_status?: unknown };
         return rest as T;
     }
     return block;
@@ -759,8 +805,9 @@ export function getClaudePayload(
     prompt: ClaudePrompt,
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
+    transport?: ClaudeTransportIdentity,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
-    const modelName = options.model;
+    const modelName = transport?.model ?? options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
     let requestOptions: RequestOptions | undefined;
@@ -1008,19 +1055,14 @@ export function buildClaudeStreamingConversation(
     return processed as ClaudePrompt;
 }
 
-function finalizeClaudeConversation(
+function projectClaudeConversation(
     conversation: ClaudePrompt,
-    result: Message,
     options: ExecutionOptions,
+    currentTurn: number,
 ): ClaudePrompt {
-    let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
-    completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
-    completedConversation = pruneClaudeThinking(completedConversation);
-    const currentTurn = getConversationMeta(completedConversation).turnNumber;
-    const activeTurnStart = findClaudeActiveTurnStart(completedConversation);
-    const protectedMessages = new Set(
-        activeTurnStart >= 0 ? completedConversation.messages.slice(activeTurnStart) : [],
-    );
+    const prunedConversation = pruneClaudeThinking(conversation);
+    const activeTurnStart = findClaudeActiveTurnStart(prunedConversation);
+    const protectedMessages = new Set(activeTurnStart >= 0 ? prunedConversation.messages.slice(activeTurnStart) : []);
     const preserveSubtree = (value: unknown): boolean => {
         if (!value || typeof value !== 'object') return false;
         if (protectedMessages.has(value as MessageParam)) return true;
@@ -1035,7 +1077,7 @@ function finalizeClaudeConversation(
         textMaxTokens: isClaudePromptCacheEnabled(options) ? undefined : options.stripTextMaxTokens,
         preserveSubtree,
     };
-    let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);
+    let processedConversation = stripBase64ImagesFromConversation(prunedConversation, stripOpts);
     processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
     processedConversation = stripHeartbeatsFromConversation(processedConversation, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
@@ -1099,6 +1141,184 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
 
+function prepareCanonicalClaudeProjection(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): ClaudePrompt {
+    return projectClaudeConversation(
+        prepared.native_conversation,
+        options,
+        canonicalConversationTurnNumber(prepared.document),
+    );
+}
+
+function canonicalClaudeUsage(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function canonicalClaudeServiceTier(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): string | undefined {
+    const reported = prepared.accepted_response?.generation.usage?.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === CLAUDE_MESSAGES_PROTOCOL,
+    );
+    const payload =
+        reported?.payload !== null && typeof reported?.payload === 'object' && !Array.isArray(reported.payload)
+            ? (reported.payload as Record<string, unknown>)
+            : undefined;
+    return claudeServiceTier({
+        service_tier: typeof payload?.service_tier === 'string' ? payload.service_tier : undefined,
+        speed: typeof payload?.speed === 'string' ? payload.speed : undefined,
+    });
+}
+
+function recoverClaudeCompletion(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Claude Messages response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+    }
+    const result = accepted.turn.blocks.flatMap((block): CompletionResult[] => {
+        if (block.type === 'text') return [{ type: 'text', value: block.text }];
+        if (block.type === 'json') return [{ type: 'json', value: block.value }];
+        if (block.type === 'reasoning' && includeThoughts) return [{ type: 'thoughts', value: block.text }];
+        return [];
+    });
+    const toolUse = accepted.turn.blocks.flatMap((block): ToolUse[] =>
+        block.type === 'tool_call'
+            ? [
+                  {
+                      id: block.call_id,
+                      tool_name: block.tool_name,
+                      tool_input:
+                          block.arguments.type === 'invalid'
+                              ? {}
+                              : (toolArgumentsForModel(block.arguments) as JSONObject),
+                  },
+              ]
+            : [],
+    );
+    return {
+        result: result.length > 0 ? result : [{ type: 'text', value: '' }],
+        ...(toolUse.length === 0 ? {} : { tool_use: toolUse }),
+        token_usage: canonicalClaudeUsage(prepared),
+        service_tier: canonicalClaudeServiceTier(prepared),
+        finish_reason: toolUse.length > 0 ? 'tool_use' : claudeFinishReason(accepted.generation.finish_reason),
+        conversation: prepared.document,
+    };
+}
+
+function recoveredClaudeStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+}
+
+function assertClaudeAcceptedTargetOptions(
+    state: Pick<
+        PreparedClaudeConversation,
+        'accepted_response' | 'response_selection_policy' | 'runtime' | 'target_options'
+    >,
+): void {
+    const accepted = state.accepted_response;
+    if (accepted === undefined) return;
+    const retainedOptions = accepted.generation.request_receipt.target.options;
+    const expectedOptions =
+        retainedOptions !== undefined && Object.hasOwn(retainedOptions, CANONICAL_TOOL_SELECTION_TARGET_OPTION)
+            ? canonicalToolSelectionTargetOptions(state.target_options, state.response_selection_policy)
+            : state.target_options;
+    if (canonicalJsonContentString(retainedOptions ?? null) !== canonicalJsonContentString(expectedOptions ?? null)) {
+        throw new Error(
+            `Accepted response operation ${state.runtime.response_operation_id} has incompatible request routing`,
+        );
+    }
+}
+
+/** Execute Claude Messages directly into the canonical conversation response contract. */
+export async function executeCanonicalClaudeCompletion(
+    client: ClaudeMessagesClient,
+    prompt: ClaudePrompt,
+    options: ExecutionOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
+): Promise<CanonicalExecutionResponse> {
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
+    });
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', transport);
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(payload),
+    );
+    assertClaudeAcceptedTargetOptions(canonicalState);
+    if (canonicalState.accepted_response !== undefined) {
+        if (options.include_original_response) {
+            throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+        }
+        return recoverCanonicalExecutionResponse(canonicalState, options, {
+            service_tier: canonicalClaudeServiceTier(canonicalState),
+        });
+    }
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        payload,
+    );
+    await publishCanonicalPreparedRequest(prepared, options);
+    const responseStream = await streamClaudeMessages(
+        client,
+        payload as MessageStreamParams,
+        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+    );
+    const result = await responseStream.finalMessage();
+    logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
+
+    const toolUse = collectClaudeTools(result.content);
+    const rawDecoded = await decodeClaudeCanonicalResponse(result, prepared);
+    const normalized =
+        !toolUse?.length && options.result_schema
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+            : undefined;
+    let decoded =
+        normalized?.status === 'valid'
+            ? await decodeClaudeCanonicalResponse(result, prepared, normalized.structured_output)
+            : rawDecoded;
+    if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+    const document = appendClaudeCanonicalResponse(prepared, decoded);
+    return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+        service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
+        ...(options.include_original_response ? { original_response: result } : {}),
+    });
+}
+
 /**
  * Execute a non-streaming Claude completion.
  * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
@@ -1110,12 +1330,33 @@ export async function executeClaudeCompletion(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
-
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
+    });
+    const includeThoughts = model_options?.include_thoughts ?? false;
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', transport);
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(payload),
+    );
+    assertClaudeAcceptedTargetOptions(canonicalState);
+    if (canonicalState.accepted_response !== undefined) {
+        return recoverClaudeCompletion(canonicalState, options, includeThoughts);
+    }
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        payload,
+    );
+    await publishCanonicalPreparedRequest(prepared, options);
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1125,11 +1366,18 @@ export async function executeClaudeCompletion(
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
 
-    const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
-
-    const processedConversation = finalizeClaudeConversation(conversation, result, options);
+    const rawDecoded = await decodeClaudeCanonicalResponse(result, prepared);
+    const normalized =
+        !tool_use?.length && options.result_schema
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+            : undefined;
+    const decoded =
+        normalized?.status === 'valid'
+            ? await decodeClaudeCanonicalResponse(result, prepared, normalized.structured_output)
+            : rawDecoded;
+    const processedConversation = appendClaudeCanonicalResponse(prepared, decoded);
 
     return {
         result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
@@ -1152,12 +1400,34 @@ export async function streamClaudeCompletion(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
-
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
+    });
+    const includeThoughts = model_options?.include_thoughts ?? false;
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', transport);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(streamingPayload),
+    );
+    assertClaudeAcceptedTargetOptions(canonicalState);
+    if (canonicalState.accepted_response !== undefined) {
+        return recoveredClaudeStream(recoverClaudeCompletion(canonicalState, options, includeThoughts));
+    }
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        streamingPayload as unknown as MessageCreateParamsBase,
+    );
+    await publishCanonicalPreparedRequest(prepared, options);
 
     const response_stream = await streamClaudeMessages(
         client,
@@ -1228,7 +1498,7 @@ export async function streamClaudeCompletion(
                         }
                         break;
                     case 'thinking_delta':
-                        if (model_options?.include_thoughts) {
+                        if (includeThoughts) {
                             return {
                                 result: streamEvent.delta.thinking
                                     ? [{ type: 'thoughts', value: streamEvent.delta.thinking }]
@@ -1251,13 +1521,425 @@ export async function streamClaudeCompletion(
         return { result: [] } satisfies CompletionChunkObject;
     });
 
-    return {
+    async function computeDecodedFinalResponse() {
+        const finalMessage = await response_stream.finalMessage();
+        const finalTools = collectClaudeTools(finalMessage.content);
+        const rawDecoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
+        const normalized =
+            !finalTools?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeClaudeCanonicalResponse(finalMessage, prepared, normalized.structured_output)
+                : rawDecoded;
+        return { decoded, finalMessage, normalized };
+    }
+    let decodedFinalResponse: ReturnType<typeof computeDecodedFinalResponse> | undefined;
+    const decodeFinalResponse = () => {
+        decodedFinalResponse ??= computeDecodedFinalResponse();
+        return decodedFinalResponse;
+    };
+    const driverStream: DriverCompletionStream = {
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
-            const finalMessage = await response_stream.finalMessage();
-            return finalizeClaudeConversation(conversation, finalMessage, options);
+            const { decoded } = await decodeFinalResponse();
+            return appendClaudeCanonicalResponse(prepared, decoded);
         },
     };
+    return driverStream;
+}
+
+interface ClaudeCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call';
+    text: string;
+    tool_argument_fragments: string[];
+    tool_argument_snapshot?: JsonValue;
+}
+
+function claudeStreamPosition(index: number, nativeItemId?: string): NativeStreamPosition {
+    return {
+        protocol: CLAUDE_MESSAGES_PROTOCOL,
+        path: ['content', index],
+        ...(nativeItemId === undefined ? {} : { native_item_id: nativeItemId }),
+    };
+}
+
+function claudeSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('Claude stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+function claudeSemanticPositions(message: Message): NativeStreamPosition[] {
+    return message.content.flatMap((block, index) => {
+        if (block.type === 'text' || block.type === 'thinking') return [claudeStreamPosition(index)];
+        if (block.type === 'tool_use') return [claudeStreamPosition(index, block.id)];
+        return [];
+    });
+}
+
+function isEmptyJsonObject(value: JsonValue): boolean {
+    return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 0;
+}
+
+function assertClaudeToolDraftArguments(
+    draft: ClaudeCanonicalDraft,
+    block: ReturnType<typeof claudeSemanticBlocks>[number],
+) {
+    if (draft.kind !== 'tool_call' || block.type !== 'tool_call' || block.arguments.type === 'invalid') return;
+    const expected = canonicalJsonContentString(toolArgumentsForModel(block.arguments));
+    if (draft.tool_argument_snapshot !== undefined) {
+        if (canonicalJsonContentString(draft.tool_argument_snapshot) !== expected) {
+            throw new Error('Claude tool argument snapshot differs from its terminal tool input');
+        }
+        if (draft.tool_argument_fragments.length > 0) {
+            throw new Error('Claude tool stream mixes an initial argument snapshot with JSON fragments');
+        }
+        return;
+    }
+    if (draft.tool_argument_fragments.length === 0) return;
+    let streamed: JsonValue;
+    try {
+        streamed = providerJsonValue(JSON.parse(draft.tool_argument_fragments.join('')));
+    } catch {
+        throw new Error('Claude tool argument fragments do not form valid JSON');
+    }
+    if (canonicalJsonContentString(streamed) !== expected) {
+        throw new Error('Claude tool argument fragments differ from the terminal tool input');
+    }
+}
+
+/** Execute a Claude Messages stream as request-scoped canonical draft events. */
+export async function streamCanonicalClaudeEvents(
+    client: ClaudeMessagesClient,
+    prompt: ClaudePrompt,
+    options: ExecutionOptions,
+    open: CanonicalStreamOpenOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
+): Promise<CanonicalExecutionEventStream> {
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
+    });
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', transport);
+    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(streamingPayload),
+    );
+    assertClaudeAcceptedTargetOptions(canonicalState);
+    const acceptedResponse = canonicalState.accepted_response;
+    const identity = {
+        request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
+        attempt_id: acceptedResponse?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+        response_operation_id: canonicalState.runtime.response_operation_id,
+        generation_id: acceptedResponse?.generation.id ?? canonicalState.generation_id,
+        draft_turn_id: acceptedResponse?.turn.id ?? canonicalState.response_turn_id,
+    };
+    if (acceptedResponse !== undefined) {
+        if (options.include_original_response) {
+            throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+        }
+        return new FallbackCanonicalExecutionEventStream(
+            identity,
+            () =>
+                recoverCanonicalExecutionResponse(canonicalState, options, {
+                    service_tier: canonicalClaudeServiceTier(canonicalState),
+                }),
+            { ...open, origin: 'accepted_recovery' },
+        );
+    }
+
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        streamingPayload as unknown as MessageCreateParamsBase,
+    );
+    const abortController = new AbortController();
+    const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
+    let responseStream: ClaudeMessageStream | undefined;
+    const drafts = new Map<number, ClaudeCanonicalDraft>();
+
+    const eventStream = canonicalNativeExecutionEventStream({
+        identity,
+        open,
+        openSource: async () => {
+            responseStream = await streamClaudeMessages(
+                client,
+                streamingPayload,
+                transportOptions
+                    ? { ...requestOptions, ...transportOptions, signal: abortController.signal }
+                    : { ...requestOptions, signal: abortController.signal },
+            );
+            return responseStream;
+        },
+        map: async (event, writer) => {
+            if (event.type === 'content_block_start') {
+                const index = event.index;
+                const block = event.content_block;
+                if (block.type === 'text' || block.type === 'thinking' || block.type === 'tool_use') {
+                    const position = claudeStreamPosition(index, block.type === 'tool_use' ? block.id : undefined);
+                    const draft: ClaudeCanonicalDraft = {
+                        draft_block_id: `${prepared.response_turn_id}:claude:${index}`,
+                        native_position: position,
+                        kind:
+                            block.type === 'thinking' ? 'reasoning' : block.type === 'tool_use' ? 'tool_call' : 'text',
+                        text: '',
+                        tool_argument_fragments: [],
+                    };
+                    drafts.set(index, draft);
+                    await writer.startBlock({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: position,
+                        block:
+                            block.type === 'thinking'
+                                ? { type: 'reasoning', visibility: 'display' }
+                                : block.type === 'tool_use'
+                                  ? {
+                                        type: 'tool_call',
+                                        executor: 'application',
+                                        call_id: block.id,
+                                        tool_name: block.name,
+                                    }
+                                  : { type: 'text' },
+                    });
+                    if (block.type === 'text' && block.text.length > 0) {
+                        draft.text = block.text;
+                        await writer.text({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            text: block.text,
+                        });
+                    } else if (block.type === 'thinking' && block.thinking.length > 0) {
+                        draft.text = block.thinking;
+                        await writer.reasoning({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            text: block.thinking,
+                        });
+                    } else if (block.type === 'tool_use') {
+                        const initialInput = providerJsonValue(block.input);
+                        if (!isEmptyJsonObject(initialInput)) {
+                            draft.tool_argument_snapshot = initialInput;
+                            await writer.toolArgumentsSnapshot({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                value: initialInput,
+                            });
+                        }
+                    }
+                }
+            } else if (event.type === 'content_block_delta') {
+                const draft = drafts.get(event.index);
+                if (draft === undefined) {
+                    if (event.delta.type !== 'signature_delta') {
+                        throw new Error(`Claude stream delta has no draft at content index ${event.index}`);
+                    }
+                    return;
+                }
+                if (event.delta.type === 'text_delta') {
+                    draft.text += event.delta.text;
+                    await writer.text({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: draft.native_position,
+                        text: event.delta.text,
+                    });
+                } else if (event.delta.type === 'thinking_delta') {
+                    draft.text += event.delta.thinking;
+                    await writer.reasoning({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: draft.native_position,
+                        text: event.delta.thinking,
+                    });
+                } else if (event.delta.type === 'input_json_delta') {
+                    draft.text += event.delta.partial_json;
+                    draft.tool_argument_fragments.push(event.delta.partial_json);
+                    await writer.toolArgumentsFragment({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: draft.native_position,
+                        fragment: event.delta.partial_json,
+                    });
+                }
+            } else if (event.type === 'message_delta') {
+                logClaudeTruncation(logger, event.delta.stop_reason, { provider, model: options.model });
+            }
+        },
+        finalize: async () => {
+            if (responseStream === undefined) throw new Error('Claude stream ended before transport initialization');
+            const finalMessage = await responseStream.finalMessage();
+            const finalTools = collectClaudeTools(finalMessage.content);
+            const rawDecoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
+            const normalized =
+                !finalTools?.length && options.result_schema
+                    ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                    : undefined;
+            let decoded =
+                normalized?.status === 'valid'
+                    ? await decodeClaudeCanonicalResponse(finalMessage, prepared, normalized.structured_output)
+                    : rawDecoded;
+            if (normalized?.status === 'invalid') {
+                decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+            }
+            const document = appendClaudeCanonicalResponse(prepared, decoded);
+            const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
+                ...(options.include_original_response ? { original_response: finalMessage } : {}),
+            });
+            return {
+                decoded,
+                response,
+                prepare_reconciliation: async () => {
+                    const positions = claudeSemanticPositions(finalMessage);
+                    const rawBlocks = claudeSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                    if (rawBlocks.length !== positions.length) {
+                        throw new Error('Claude stream decode does not match terminal native content positions');
+                    }
+                    const orderedDrafts = positions.map((position) =>
+                        [...drafts.values()].find(
+                            (draft) => JSON.stringify(draft.native_position) === JSON.stringify(position),
+                        ),
+                    );
+                    if (orderedDrafts.some((draft) => draft === undefined)) {
+                        throw new Error('Claude terminal response has no matching native stream draft');
+                    }
+                    const completeDrafts = orderedDrafts as ClaudeCanonicalDraft[];
+                    for (const [index, block] of rawBlocks.entries()) {
+                        const draft = completeDrafts[index];
+                        if (draft === undefined)
+                            throw new Error('Claude terminal response has no matching stream draft');
+                        assertClaudeToolDraftArguments(draft, block);
+                    }
+                    const itemMappings = rawBlocks.flatMap((block, index) => {
+                        const position = positions[index];
+                        if (position === undefined) return [];
+                        return [
+                            { canonical_id: block.id, native_position: position, kind: 'block' as const },
+                            ...(block.type === 'tool_call'
+                                ? [{ canonical_id: block.call_id, native_position: position, kind: 'call' as const }]
+                                : []),
+                        ];
+                    });
+                    const transformations = [];
+                    const reconciliations = [];
+                    if (normalized?.status === 'valid') {
+                        const sources = rawBlocks.filter((block) => block.type === 'text');
+                        const result = claudeSemanticBlocks(decoded, prepared.response_turn_id).find(
+                            (block) => block.type === 'json',
+                        );
+                        if (sources.length === 0 || result?.type !== 'json') {
+                            throw new Error('Claude structured stream is missing source or result blocks');
+                        }
+                        const proof = await createStructuredOutputTransformationProof({
+                            id: `${prepared.generation_id}:structured-output`,
+                            source_blocks: sources,
+                            result_block: result,
+                        });
+                        transformations.push(proof);
+                        const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                            block.type === 'text' && completeDrafts[index] !== undefined ? [completeDrafts[index]] : [],
+                        );
+                        reconciliations.push({
+                            draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                            native_positions: sourceDrafts.map((draft) => draft.native_position),
+                            committed_block_ids: [result.id],
+                            disposition: 'structured_output' as const,
+                            transformation_id: proof.id,
+                        });
+                    }
+                    for (const [index, block] of rawBlocks.entries()) {
+                        if (normalized?.status === 'valid' && block.type === 'text') continue;
+                        const draft = completeDrafts[index];
+                        if (draft === undefined) throw new Error('Claude direct reconciliation has no draft');
+                        reconciliations.push({
+                            draft_block_ids: [draft.draft_block_id],
+                            native_positions: [draft.native_position],
+                            committed_block_ids: [block.id],
+                            disposition: 'direct' as const,
+                        });
+                    }
+                    const decodedWithEvidence = {
+                        ...decoded,
+                        stream_evidence: { item_mappings: itemMappings, transformations },
+                    };
+                    return {
+                        decoded: decodedWithEvidence,
+                        reconciliations,
+                        deliver_final_events: async (writer) => {
+                            if (decodedWithEvidence.generation.usage !== undefined) {
+                                await writer.usage(decodedWithEvidence.generation.usage);
+                            }
+                            for (const [index, block] of rawBlocks.entries()) {
+                                const draft = completeDrafts[index];
+                                if (draft === undefined) continue;
+                                if (
+                                    block.type === 'tool_call' &&
+                                    block.arguments.type !== 'invalid' &&
+                                    draft.tool_argument_fragments.length === 0 &&
+                                    draft.tool_argument_snapshot === undefined
+                                ) {
+                                    await writer.toolArgumentsSnapshot({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        value: toolArgumentsForModel(block.arguments),
+                                    });
+                                }
+                                await writer.finishBlock({
+                                    draft_block_id: draft.draft_block_id,
+                                    native_position: draft.native_position,
+                                    outcome:
+                                        block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                            ? 'malformed'
+                                            : decodedWithEvidence.generation.status === 'cancelled'
+                                              ? 'interrupted'
+                                              : decodedWithEvidence.generation.status === 'failed'
+                                                ? 'failed'
+                                                : 'native_complete',
+                                });
+                            }
+                            await writer.finish({
+                                outcome:
+                                    decodedWithEvidence.generation.status === 'cancelled'
+                                        ? 'interrupted'
+                                        : decodedWithEvidence.generation.status === 'failed'
+                                          ? 'failed'
+                                          : 'completed',
+                                finish_reason: decodedWithEvidence.generation.finish_reason,
+                                ...(claudeServiceTier(finalMessage.usage as AnthropicUsageLike) === undefined
+                                    ? {}
+                                    : {
+                                          service_tier: claudeServiceTier(
+                                              finalMessage.usage as AnthropicUsageLike,
+                                          ) as string,
+                                      }),
+                            });
+                        },
+                    };
+                },
+                ...(normalized?.status === 'valid' && options.result_schema !== undefined
+                    ? { result_schema: options.result_schema }
+                    : {}),
+            };
+        },
+        abort: () => {
+            abortController.abort();
+            responseStream?.abort();
+        },
+        close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
+    });
+    await publishCanonicalPreparedRequest(prepared, options);
+    if (transportOptions?.signal?.aborted) forwardAbort();
+    else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
+    return eventStream;
 }
 
 // ============================================================================

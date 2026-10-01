@@ -191,7 +191,9 @@ export async function formatOpenAILikeMultimodalPrompt(
             // conversation, a document it fetched. The Responses API accepts those as a content
             // list on `function_call_output`; emitting only the text would silently drop them and
             // leave the model insisting it cannot see the image it just asked for.
-            const toolOutputMsg: OpenAI.Responses.ResponseInputItem.FunctionCallOutput = {
+            const toolOutputMsg: OpenAI.Responses.ResponseInputItem.FunctionCallOutput & {
+                _llumiverse_tool_result_status?: PromptSegment['tool_result_status'];
+            } = {
                 type: 'function_call_output',
                 call_id: msg.tool_use_id,
                 // The tool's own output reads first, then its attachments. With no attachments,
@@ -200,6 +202,9 @@ export async function formatOpenAILikeMultimodalPrompt(
                     fileParts.length > 0
                         ? [...(msg.content ? [{ type: 'input_text' as const, text: msg.content }] : []), ...fileParts]
                         : msg.content || '',
+                ...(msg.tool_result_status === undefined
+                    ? {}
+                    : { _llumiverse_tool_result_status: msg.tool_result_status }),
             };
             others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {

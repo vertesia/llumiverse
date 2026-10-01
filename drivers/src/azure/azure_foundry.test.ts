@@ -1,10 +1,15 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
 import type { TokenCredential } from '@azure/identity';
-import { PromptRole } from '@llumiverse/core';
+import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
+import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
+import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
 import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
+import { prepareOpenAIChatCanonicalState } from '../openai/openai-chat-conversation-adapter.js';
+import { prepareOpenAIResponsesCanonicalState } from '../openai/openai-responses-conversation-adapter.js';
 import { AzureFoundryDriver, toAzureInferenceRequest } from './azure_foundry.js';
 
 const credential: TokenCredential = {
@@ -25,7 +30,419 @@ function createDriver(): AzureFoundryDriver {
     });
 }
 
+function canonicalOptions(model: string, id: string, operation = 'next') {
+    return {
+        model,
+        conversation_runtime: {
+            conversation_id: id,
+            request_id: `${id}:${operation}:request`,
+            attempt_id: `${id}:${operation}:attempt`,
+            input_operation_id: `${id}:${operation}:input`,
+            response_operation_id: `${id}:${operation}:response`,
+            recorded_at: '2026-09-12T00:00:00.000Z',
+        },
+    };
+}
+
+async function collectCanonicalEvents(stream: AsyncIterable<ConversationStreamEvent>) {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
+
 describe('AzureFoundryDriver protocol composition', () => {
+    it.each(['missing_runtime', 'cancelled'] as const)(
+        'rejects %s typed audio before looking up the Foundry deployment',
+        async (mode) => {
+            const driver = createDriver();
+            const get = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
+            driver.service = { deployments: { get } } as unknown as AzureFoundryDriver['service'];
+            const model = 'speech-deployment::gpt-4o-mini-tts';
+            const options =
+                mode === 'missing_runtime'
+                    ? ({ model } as unknown as CanonicalExecutionInputOptions)
+                    : canonicalOptions(model, 'audio-cancelled');
+
+            await expect(
+                driver.streamCanonicalEvents(
+                    [{ role: PromptRole.user, content: 'hello' }],
+                    options,
+                    mode === 'cancelled' ? AbortSignal.abort(new Error('audio already cancelled')) : undefined,
+                    { stream_id: `stream:foundry:preflight:${mode}` },
+                ),
+            ).rejects.toThrow(
+                mode === 'missing_runtime'
+                    ? 'Invalid input: expected object, received undefined'
+                    : 'audio already cancelled',
+            );
+            expect(get).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each(['legacy', 'canonical'] as const)(
+        'accepts canonical history through the parent Chat %s execution path',
+        async (mode) => {
+            const driver = createDriver();
+            driver.service = {
+                deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            } as unknown as AzureFoundryDriver['service'];
+            const post = vi.fn(async () => ({
+                status: '200',
+                body: {
+                    id: 'foundry-chat-canonical',
+                    created: 1,
+                    model: 'llama-deployment',
+                    choices: [
+                        {
+                            index: 0,
+                            finish_reason: 'stop',
+                            message: { role: 'assistant', content: 'chat answer' },
+                        },
+                    ],
+                    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+                },
+            }));
+            const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+            Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+            const model = 'llama-deployment::llama';
+            const id = 'foundry-chat';
+            const state = await prepareOpenAIChatCanonicalState({
+                conversation: { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'prior' }] },
+                prompt: { _is_openai_chat_completions: true, messages: [] },
+                options: canonicalOptions(model, id, 'seed'),
+                provider: 'azure_foundry',
+            });
+
+            const segments = [{ role: PromptRole.user, content: 'next' }];
+            const options = { ...canonicalOptions(model, id), conversation: state.document };
+            expect(await driver.supportsCanonicalExecution(options)).toBe(true);
+            const completion =
+                mode === 'canonical'
+                    ? await driver.executeCanonical(segments, options)
+                    : await driver.execute(segments, options);
+
+            const document = parseConversationDocument(completion.conversation);
+            expect(document.id).toBe(id);
+            if (mode === 'canonical') {
+                expect(Object.values(document.generations)).toContainEqual(
+                    expect.objectContaining({
+                        provider: 'azure_foundry',
+                        requested_model: model,
+                        resolved_model: 'llama-deployment',
+                    }),
+                );
+                const retry = await driver.executeCanonical(segments, {
+                    ...options,
+                    conversation: JSON.parse(JSON.stringify(completion.conversation)),
+                });
+                expect(retry.conversation).toEqual(completion.conversation);
+                await expect(
+                    driver.executeCanonical(segments, {
+                        ...options,
+                        conversation: document,
+                        model_options: { _option_id: 'text-fallback', temperature: 0.123 },
+                    }),
+                ).rejects.toThrow();
+            }
+            expect(post).toHaveBeenCalledWith(
+                expect.objectContaining({ body: expect.objectContaining({ model: 'llama-deployment' }) }),
+            );
+            expect(post).toHaveBeenCalledOnce();
+        },
+    );
+
+    it('streams a canonical Chat response through the parent without losing deployment identity', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const chunk = {
+            id: 'foundry-stream',
+            model: 'llama-deployment',
+            created: 1,
+            choices: [{ index: 0, delta: { role: 'assistant', content: 'stream answer' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+        };
+        const post = vi.fn(() => ({
+            asNodeStream: async () => ({
+                status: '200',
+                body: Readable.from([Buffer.from(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)]),
+            }),
+        }));
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const options = canonicalOptions('llama-deployment::llama', 'foundry-stream');
+        const stream = await driver.streamCanonical([{ role: PromptRole.user, content: 'hello' }], options);
+        for await (const _chunk of stream) {
+            // Completion becomes authoritative only after the native stream terminates.
+        }
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({
+                type: 'text',
+                text: 'stream answer',
+            }),
+        );
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            requested_model: options.model,
+            resolved_model: 'llama-deployment',
+            provider: 'azure_foundry',
+        });
+        expect(post).toHaveBeenCalledWith(
+            expect.objectContaining({
+                body: expect.objectContaining({
+                    model: 'llama-deployment',
+                    stream: true,
+                }),
+            }),
+        );
+        expect(post).toHaveBeenCalledOnce();
+    });
+
+    it('delegates public typed canonical Chat events after the prepared-request barrier', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        let prepared = false;
+        const chunk = {
+            id: 'foundry-typed-chat',
+            model: 'llama-deployment',
+            created: 1,
+            choices: [{ index: 0, delta: { role: 'assistant', content: 'typed answer' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+        };
+        const post = vi.fn(() => {
+            expect(prepared).toBe(true);
+            return {
+                asNodeStream: async () => ({
+                    status: '200',
+                    body: Readable.from([Buffer.from(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)]),
+                }),
+            };
+        });
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const options = {
+            ...canonicalOptions('llama-deployment::llama', 'foundry-typed-chat'),
+            on_canonical_request_prepared: vi.fn(async () => {
+                prepared = true;
+            }),
+        };
+
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'hello' }],
+            options,
+            undefined,
+            { stream_id: 'stream:foundry:chat' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events).toContainEqual(expect.objectContaining({ type: 'draft_text_delta', text: 'typed answer' }));
+        expect(events.at(-1)).toMatchObject({ type: 'response_accepted', stream_id: 'stream:foundry:chat' });
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            provider: 'azure_foundry',
+            requested_model: options.model,
+            resolved_model: 'llama-deployment',
+        });
+        expect(options.on_canonical_request_prepared).toHaveBeenCalledOnce();
+        expect(post).toHaveBeenCalledOnce();
+    });
+
+    it('does not open the Foundry Chat transport when typed request publication is rejected', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const post = vi.fn();
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        await expect(
+            driver.streamCanonicalEvents(
+                [{ role: PromptRole.user, content: 'hello' }],
+                {
+                    ...canonicalOptions('llama-deployment::llama', 'foundry-typed-chat-rejected'),
+                    on_canonical_request_prepared: async () => {
+                        throw new Error('publication rejected');
+                    },
+                },
+                undefined,
+                { stream_id: 'stream:foundry:chat:rejected' },
+            ),
+        ).rejects.toThrow('publication rejected');
+        expect(post).not.toHaveBeenCalled();
+    });
+
+    it('preserves tool result status through Chat ingestion without sending private evidence', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const responses = [
+            {
+                id: 'foundry-tool-call',
+                created: 1,
+                model: 'llama-deployment',
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'tool_calls',
+                        message: {
+                            role: 'assistant',
+                            content: null,
+                            tool_calls: [
+                                {
+                                    id: 'call:lookup',
+                                    type: 'function',
+                                    function: { name: 'lookup', arguments: '{"city":"Tokyo"}' },
+                                },
+                            ],
+                        },
+                    },
+                ],
+                usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            },
+            {
+                id: 'foundry-tool-result',
+                created: 2,
+                model: 'llama-deployment',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'unavailable' } }],
+                usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+            },
+        ];
+        const post = vi.fn(async (_request: unknown) => ({ status: '200', body: responses.shift() }));
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const model = 'llama-deployment::llama';
+        const id = 'foundry-tool-status';
+
+        const first = await driver.execute([{ role: PromptRole.user, content: 'Weather?' }], {
+            ...canonicalOptions(model, id, 'ask'),
+            tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+        });
+        const second = await driver.execute(
+            [
+                {
+                    role: PromptRole.tool,
+                    content: '{"error":"offline"}',
+                    tool_use_id: 'call:lookup',
+                    tool_result_status: 'error',
+                },
+            ],
+            {
+                ...canonicalOptions(model, id, 'answer'),
+                conversation: first.conversation,
+                tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+            },
+        );
+
+        const persisted = parseConversationDocument(second.conversation);
+        expect(persisted.turns.find((turn) => turn.kind === 'tool')?.blocks[0]).toMatchObject({
+            type: 'tool_result',
+            call_id: 'call:lookup',
+            status: 'error',
+        });
+        expect(JSON.stringify(post.mock.calls[1]?.[0])).not.toContain('tool_result_status');
+        expect(JSON.stringify(post.mock.calls[1]?.[0])).not.toContain('_llumiverse_tool_result_status');
+    });
+
+    it.each(['legacy', 'canonical', 'canonical-sync', 'canonical-typed'] as const)(
+        'accepts canonical history through the parent Responses %s path',
+        async (mode) => {
+            const driver = createDriver();
+            const model = 'gpt-deployment::gpt-5';
+            const id = 'foundry-responses';
+            const response = {
+                id: 'foundry-response-canonical',
+                object: 'response',
+                created_at: 1,
+                model: 'gpt-deployment',
+                status: 'completed',
+                output: [
+                    {
+                        id: 'message-canonical',
+                        type: 'message',
+                        role: 'assistant',
+                        status: 'completed',
+                        content: [{ type: 'output_text', text: 'response answer', annotations: [], logprobs: [] }],
+                    },
+                ],
+                output_text: 'response answer',
+                error: null,
+                incomplete_details: null,
+                instructions: null,
+                metadata: {},
+                parallel_tool_calls: true,
+                temperature: 1,
+                tool_choice: 'auto',
+                tools: [],
+                top_p: 1,
+                usage: {
+                    input_tokens: 2,
+                    input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+                    output_tokens: 2,
+                    output_tokens_details: { reasoning_tokens: 0 },
+                    total_tokens: 4,
+                },
+            } satisfies OpenAI.Responses.Response;
+            const create = vi.fn((request: OpenAI.Responses.ResponseCreateParams, _options?: unknown) =>
+                Promise.resolve(
+                    request.stream
+                        ? (async function* () {
+                              yield { type: 'response.completed', sequence_number: 1, response };
+                          })()
+                        : response,
+                ),
+            );
+            driver.service = {
+                deployments: { get: vi.fn(async () => ({ modelPublisher: 'OpenAI' })) },
+                getOpenAIClient: vi.fn(() => ({ responses: { create } })),
+            } as unknown as AzureFoundryDriver['service'];
+            const state = await prepareOpenAIResponsesCanonicalState({
+                conversation: [{ type: 'message', role: 'user', content: 'prior' }],
+                prompt: [],
+                options: canonicalOptions(model, id, 'seed'),
+                provider: 'azure_foundry',
+            });
+
+            const segments = [{ role: PromptRole.user, content: 'next' }];
+            const options = { ...canonicalOptions(model, id), conversation: state.document };
+            expect(await driver.supportsCanonicalExecution(options)).toBe(true);
+            let completedConversation: unknown;
+            if (mode === 'canonical-sync') {
+                completedConversation = (await driver.executeCanonical(segments, options)).conversation;
+            } else if (mode === 'canonical-typed') {
+                const stream = await driver.streamCanonicalEvents(segments, options, undefined, {
+                    stream_id: 'stream:foundry:responses',
+                });
+                const events = await collectCanonicalEvents(stream);
+                expect(events.at(-1)).toMatchObject({
+                    type: 'response_accepted',
+                    stream_id: 'stream:foundry:responses',
+                });
+                completedConversation = stream.completion?.conversation;
+            } else {
+                const stream =
+                    mode === 'canonical'
+                        ? await driver.streamCanonical(segments, options)
+                        : await driver.stream(segments, options);
+                for await (const _chunk of stream) {
+                    // Consume the parent stream so terminal canonical finalization runs.
+                }
+                completedConversation = stream.completion?.conversation;
+            }
+
+            const conversation = parseConversationDocument(completedConversation);
+            expect(conversation.id).toBe(id);
+            expect(Object.values(conversation.generations)).toEqual(
+                expect.arrayContaining([expect.objectContaining({ requested_model: model })]),
+            );
+            expect(create.mock.calls[0]?.[0]).toEqual(
+                expect.objectContaining({ model: 'gpt-deployment', stream: mode !== 'canonical-sync' }),
+            );
+            expect(create).toHaveBeenCalledOnce();
+        },
+    );
+
     it('preserves required tool choice when adapting an OpenAI chat request', () => {
         const body = toAzureInferenceRequest(
             {

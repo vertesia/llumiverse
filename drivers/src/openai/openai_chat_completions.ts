@@ -1,22 +1,38 @@
 import {
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    type JsonObject,
+    type JsonValue,
+    type NativeStreamPosition,
+} from '@llumiverse/conversation';
+import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    createCanonicalExecutionResponse,
     type DriverCompletionStream,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
+    legacyCompletionFromCanonicalExecution,
     ModelType,
+    markCanonicalAcceptedRecovery,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -34,12 +50,39 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
+import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
+import {
+    assertAcceptedCanonicalRequest,
+    canonicalConversationTurnNumber,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+} from '../conversation/canonical-runtime.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
+import {
+    executeOpenAIAudioCanonical,
+    executeOpenAIAudioRequest,
+    openAIAudioTask,
+    openAIInputAudioPart,
+    streamOpenAIAudioCanonicalEvents,
+} from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
+import {
+    appendOpenAIChatCanonicalResponse,
+    compileOpenAIChatCompletionsConversation,
+    decodeOpenAIChatCanonicalResponse,
+    finalizeOpenAIChatPreparedRequest,
+    OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    type PreparedOpenAIChatConversation,
+    prepareOpenAIChatCanonicalState,
+} from './openai-chat-conversation-adapter.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
@@ -61,6 +104,13 @@ export type OpenAIChatCompletionsContentPart =
 export type OpenAIChatCompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
 export type OpenAIChatCompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
 
+export type OpenAIChatProviderReplay = JsonObject & {
+    provider: string;
+    protocol: string;
+    adapter_version: string;
+    payload: JsonValue;
+};
+
 export type OpenAIChatCompletionsMessage = {
     role: string;
     content?: string | null | OpenAIChatCompletionsContentPart[];
@@ -69,6 +119,8 @@ export type OpenAIChatCompletionsMessage = {
      * Per OpenAI API spec: https://platform.openai.com/docs/api-reference/chat/messages#message-role
      */
     tool_call_id?: string;
+    /** Internal canonical-ingestion status; removed when building the provider request. */
+    tool_result_status?: 'success' | 'error' | 'cancelled' | 'denied';
     /**
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
@@ -76,6 +128,8 @@ export type OpenAIChatCompletionsMessage = {
     /** Provider-native reasoning fields used by OpenAI-compatible APIs for replay. */
     reasoning_content?: string | null;
     reasoning?: string | null;
+    /** Provider-scoped opaque replay. Never serialized by the OpenAI transport. */
+    provider_replay?: OpenAIChatProviderReplay;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -85,6 +139,7 @@ export type OpenAIChatCompletionsRequestMessage = {
     tool_calls?: OpenAIChatCompletionsToolCall[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
 };
 
 export type OpenAIChatCompletionsPayload = Omit<
@@ -98,7 +153,10 @@ export type OpenAIChatCompletionsPayload = Omit<
     extra_body?: Record<string, unknown>;
 };
 
-type OpenAIChatCompletionsUsage = ChatCompletionsUsage;
+type OpenAIChatCompletionsUsage = ChatCompletionsUsage & {
+    /** Provider-native usage retained when this compatibility protocol normalizes field names. */
+    provider_usage?: JsonValue;
+};
 type OpenAIChatCompletionsResponseMessage = Omit<
     Partial<OpenAI.Chat.ChatCompletionMessage>,
     'content' | 'tool_calls'
@@ -107,6 +165,7 @@ type OpenAIChatCompletionsResponseMessage = Omit<
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_calls?: OpenAI.Chat.ChatCompletionMessageToolCall[];
 };
 type OpenAIChatCompletionsResponseChoice = Omit<
@@ -128,6 +187,7 @@ type OpenAIChatCompletionsStreamChoiceDelta = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -243,6 +303,65 @@ function getOptionalString(value: object, key: string): string | null | undefine
 type StreamChunk = string | Uint8Array;
 type ReadableAsyncStream = AsyncIterable<StreamChunk>;
 type StreamingOpenAIToolUse = ToolUse<unknown> & { _actual_id?: string };
+
+interface OpenAIChatCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call';
+    tool_index?: number;
+}
+
+function openAIChatStreamPosition(path: Array<string | number>): NativeStreamPosition {
+    return { protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, path };
+}
+
+async function* openAIChatNativeSSE(stream: ReadableStream): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
+    for await (const event of stream as unknown as AsyncIterable<{ type: string; data?: string }>) {
+        if (event.type !== 'event' || event.data === undefined || event.data === '[DONE]') continue;
+        yield JSON.parse(event.data) as OpenAIChatCompletionsStreamResponse;
+    }
+}
+
+function openAIChatSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('OpenAI Chat stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+async function finalizeOpenAIChatStreamResponse(input: {
+    response: OpenAIChatCompletionsResponse;
+    prepared: PreparedOpenAIChatConversation;
+    finish_reason: string;
+    options: ExecutionOptions;
+}) {
+    const message = input.response.choices[0]?.message;
+    if (message === undefined) throw new Error('Chat Completions stream has no terminal assistant message');
+    const hasTools = (message.tool_calls?.length ?? 0) > 0;
+    const rawDecoded = await decodeOpenAIChatCanonicalResponse(input.response, input.prepared, input.finish_reason);
+    const normalized =
+        !hasTools && input.options.result_schema
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, input.options.result_schema)
+            : undefined;
+    let decoded =
+        normalized?.status === 'valid'
+            ? await decodeOpenAIChatCanonicalResponse(
+                  input.response,
+                  input.prepared,
+                  input.finish_reason,
+                  normalized.structured_output,
+              )
+            : rawDecoded;
+    if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+    const document = appendOpenAIChatCanonicalResponse(input.prepared, decoded);
+    return {
+        raw_decoded: rawDecoded,
+        decoded,
+        normalized,
+        response: createCanonicalExecutionResponse(document, input.prepared.runtime.response_operation_id, {
+            ...(input.response.service_tier == null ? {} : { service_tier: input.response.service_tier }),
+        }),
+    };
+}
 
 async function streamToString(stream: ReadableAsyncStream): Promise<string> {
     const chunks: Buffer[] = [];
@@ -791,6 +910,14 @@ function finalizeOpenAIChatCompletionsConversation(
     options: ExecutionOptions,
 ): OpenAIChatCompletionsPrompt {
     conversation = incrementConversationTurn(conversation) as OpenAIChatCompletionsPrompt;
+    return projectOpenAIChatCompletionsHistory(conversation, options, getConversationMeta(conversation).turnNumber);
+}
+
+function projectOpenAIChatCompletionsHistory(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: ExecutionOptions,
+    currentTurn: number,
+): OpenAIChatCompletionsPrompt {
     const reasoningPolicy = getOpenAIChatReasoningReplayPolicy(options.model);
     if (reasoningPolicy === 'omit') {
         conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
@@ -814,7 +941,6 @@ function finalizeOpenAIChatCompletionsConversation(
     if (reasoningPolicy === 'active_tool_turn') {
         conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
     }
-    const currentTurn = getConversationMeta(conversation).turnNumber;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
@@ -841,6 +967,153 @@ function getOpenAIChatDriverProvider(driver: unknown): string {
         return Providers.openai_compatible;
     }
     return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
+}
+
+function prepareCanonicalOpenAIProjection(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): OpenAIChatCompletionsPrompt {
+    const native = prepared.native_conversation;
+    const prior: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: native.messages.slice(0, prepared.prior_native_message_count),
+    };
+    const projectedPrior = projectOpenAIChatCompletionsHistory(
+        prior,
+        options,
+        canonicalConversationTurnNumber(prepared.document),
+    );
+    return prepareOpenAIChatCompletionsConversation(
+        {
+            _is_openai_chat_completions: true,
+            messages: [...projectedPrior.messages, ...native.messages.slice(prepared.prior_native_message_count)],
+        },
+        options,
+    );
+}
+
+function canonicalOpenAIUsage(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    const reported = usage.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    );
+    const reportedProjection = mapOpenAIChatCompletionsUsage(reportedChatCompletionsUsage(reported?.payload));
+    if (reportedProjection !== undefined) return reportedProjection;
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function reportedChatCompletionsUsage(value: unknown): ChatCompletionsUsage | undefined {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const payload = value as Record<string, unknown>;
+    const promptTokens = payload.prompt_tokens;
+    const completionTokens = payload.completion_tokens;
+    const totalTokens = payload.total_tokens;
+    if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number') {
+        return undefined;
+    }
+    const details = payload.prompt_tokens_details;
+    if (details !== undefined && details !== null && (typeof details !== 'object' || Array.isArray(details))) {
+        return undefined;
+    }
+    const detailRecord = details as Record<string, unknown> | null | undefined;
+    const cachedTokens = detailRecord?.cached_tokens;
+    const cacheWriteTokens = detailRecord?.cache_write_tokens;
+    if (
+        (cachedTokens !== undefined && cachedTokens !== null && typeof cachedTokens !== 'number') ||
+        (cacheWriteTokens !== undefined && cacheWriteTokens !== null && typeof cacheWriteTokens !== 'number')
+    ) {
+        return undefined;
+    }
+    const cost = payload.cost;
+    const isByok = payload.is_byok;
+    if (
+        (cost !== undefined && cost !== null && typeof cost !== 'number') ||
+        (isByok !== undefined && isByok !== null && typeof isByok !== 'boolean')
+    ) {
+        return undefined;
+    }
+    return {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: totalTokens,
+        ...(details === undefined
+            ? {}
+            : {
+                  prompt_tokens_details:
+                      details === null
+                          ? null
+                          : {
+                                ...(cachedTokens == null ? {} : { cached_tokens: cachedTokens }),
+                                ...(cacheWriteTokens == null ? {} : { cache_write_tokens: cacheWriteTokens }),
+                            },
+              }),
+        ...(cost === undefined ? {} : { cost }),
+        ...(isByok === undefined ? {} : { is_byok: isByok }),
+    };
+}
+
+function recoverOpenAICompletion(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Chat Completions response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Chat Completions response cannot reconstruct original_response');
+    }
+    const projection = compileOpenAIChatCompletionsConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
+    const mapping = projection.mappings.find(
+        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+    );
+    const match = mapping === undefined ? undefined : /^messages\/(\d+)$/.exec(mapping.native_id);
+    const message = match == null ? undefined : projection.conversation.messages[Number(match[1])];
+    if (message?.role !== 'assistant') {
+        throw new Error(`Accepted Chat Completions turn ${accepted.turn.id} has no native projection`);
+    }
+    const toolUse = parseOpenAIChatCompletionsToolCalls(message.tool_calls);
+    return {
+        result: extractOpenAIChatCompletionsResults(message, includeThoughts),
+        tool_use: toolUse,
+        token_usage: canonicalOpenAIUsage(prepared),
+        finish_reason: normalizeOpenAIChatCompletionsFinishReason(accepted.generation.finish_reason, !!toolUse?.length),
+        conversation: prepared.document,
+    };
+}
+
+function recoveredOpenAIStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+            service_tier: completion.service_tier,
+        };
+    })();
+    return markCanonicalAcceptedRecovery(
+        Object.assign(stream, {
+            finalizeConversation: () => completion.conversation,
+        }),
+    );
+}
+
+interface OpenAIChatRequestBinding {
+    payload: JsonValue;
+    target_options?: JsonObject;
 }
 
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
@@ -924,6 +1197,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 const toolMessage: OpenAIChatCompletionsMessage = {
                     role: 'tool',
                     tool_call_id: segment.tool_use_id,
+                    ...(segment.tool_result_status === undefined
+                        ? {}
+                        : { tool_result_status: segment.tool_result_status }),
                     content: content.length === 1 && content[0]?.type === 'text' ? content[0].text : content,
                 };
                 messages.push(toolMessage);
@@ -976,20 +1252,43 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
     }
 
-    async requestTextCompletion(
+    async requestCanonicalTextCompletion(
         driver: DriverT,
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
-    ): Promise<Completion> {
-        let conversation = updateOpenAIChatCompletionsConversation(
-            options.conversation as OpenAIChatCompletionsPrompt,
+    ): Promise<CanonicalExecutionResponse> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
             prompt,
-        );
-        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
+            options,
+            provider,
+        });
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, false, getOpenAIChatDriverProvider(driver));
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, false, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (options.include_original_response) {
+                throw new Error(
+                    'An idempotently recovered Chat Completions response cannot reconstruct original_response',
+                );
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, options);
+        }
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        await publishCanonicalPreparedRequest(prepared, options);
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1003,35 +1302,110 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             throw new Error('Chat Completions response is not valid: no data');
         }
 
-        const assistantMessage: OpenAIChatCompletionsMessage = {
-            role: 'assistant',
-            content: message.content ?? null,
-            reasoning_content: message.reasoning_content,
-            reasoning: message.reasoning,
-        };
+        const rawDecoded = await decodeOpenAIChatCanonicalResponse(
+            result,
+            prepared,
+            typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+        );
+        const normalized =
+            !tool_use?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIChatCanonicalResponse(
+                      result,
+                      prepared,
+                      typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+                      normalized.structured_output,
+                  )
+                : rawDecoded;
+        if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+        const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
 
-        if (tool_use && tool_use.length > 0 && message.tool_calls) {
-            assistantMessage.tool_calls = message.tool_calls.filter(
-                (toolCall): toolCall is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
-                    toolCall.type === 'function',
-            );
-        }
-
-        conversation = updateOpenAIChatCompletionsConversation(conversation, {
-            messages: [assistantMessage],
+        return createCanonicalExecutionResponse(canonicalConversation, prepared.runtime.response_operation_id, {
+            ...(result.service_tier == null ? {} : { service_tier: result.service_tier }),
+            ...(options.include_original_response
+                ? {
+                      original_response:
+                          (result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result,
+                  }
+                : {}),
         });
-        conversation = finalizeOpenAIChatCompletionsConversation(conversation, options);
+    }
 
+    async requestTextCompletion(
+        driver: DriverT,
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider,
+        });
+        const includeThoughts =
+            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, false, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverOpenAICompletion(canonicalState, options, includeThoughts);
+        }
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        await publishCanonicalPreparedRequest(prepared, options);
+        const result = await this.postChatCompletion(driver, payload, options, signal);
+        const choice = result?.choices?.[0];
+        const message = choice?.message;
+        const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
+        const toolUse = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
+        if (
+            !message ||
+            (completionResults.length === 0 && !extractOpenAIChatCompletionsReasoningText(message) && !toolUse?.length)
+        ) {
+            throw new Error('Chat Completions response is not valid: no data');
+        }
+        const rawDecoded = await decodeOpenAIChatCanonicalResponse(
+            result,
+            prepared,
+            typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+        );
+        const normalized =
+            !toolUse?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIChatCanonicalResponse(
+                      result,
+                      prepared,
+                      typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+                      normalized.structured_output,
+                  )
+                : rawDecoded;
+        const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
         return {
             result: completionResults,
-            tool_use,
+            tool_use: toolUse,
             token_usage: mapOpenAIChatCompletionsUsage(result.usage),
             service_tier: result.service_tier ?? undefined,
-            finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
+            finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!toolUse?.length),
             original_response: options.include_original_response
                 ? ((result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result)
                 : undefined,
-            conversation,
+            conversation: canonicalConversation,
         };
     }
 
@@ -1041,20 +1415,50 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        let conversation = updateOpenAIChatCompletionsConversation(
-            options.conversation as OpenAIChatCompletionsPrompt,
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
             prompt,
-        );
-        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
+            options,
+            provider,
+        });
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, true, getOpenAIChatDriverProvider(driver));
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, true, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            const canonical = await recoverCanonicalExecutionResponse(canonicalState, options);
+            return recoveredOpenAIStream(
+                legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
+            );
+        }
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        await publishCanonicalPreparedRequest(prepared, options);
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
         let nativeContent = '';
         let nativeReasoningContent: string | undefined;
         let nativeReasoning: string | undefined;
+        let nativeProviderReplay: OpenAIChatProviderReplay | undefined;
+        let responseId: string | undefined;
+        let responseObject: string | undefined;
+        let responseCreated: number | undefined;
+        let responseModel: string | undefined;
+        let responseServiceTier: OpenAIChatServiceTier | undefined;
+        let responseSystemFingerprint: string | undefined;
+        let responseUsage: OpenAIChatCompletionsUsage | undefined;
+        let responseFinishReason: string | undefined;
         const nativeToolCalls = new Map<
             number,
             { id: string; type: 'function'; function: { name: string; arguments: string } }
@@ -1064,6 +1468,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
+            responseId = json.id;
+            responseObject = json.object;
+            responseCreated = json.created;
+            responseModel = json.model;
+            responseServiceTier = json.service_tier;
+            if (typeof json.system_fingerprint === 'string') responseSystemFingerprint = json.system_fingerprint;
+            if (json.usage != null) responseUsage = json.usage;
+            if (typeof choice?.finish_reason === 'string') responseFinishReason = choice.finish_reason;
             const chunkResults: CompletionResult[] = [];
             const content = extractOpenAIChatCompletionsContentText(delta?.content);
             if (content) {
@@ -1072,6 +1484,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             } else if (choice?.finish_reason) {
                 chunkResults.push(...projector.push('', true));
             }
+
+            if (delta?.provider_replay !== undefined) nativeProviderReplay = structuredClone(delta.provider_replay);
 
             if (typeof delta?.reasoning_content === 'string') {
                 nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
@@ -1123,25 +1537,446 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             } satisfies CompletionChunkObject;
         });
 
-        return Object.assign(stream, {
-            finalizeConversation: () => {
-                const assistantMessage: OpenAIChatCompletionsMessage = {
-                    role: 'assistant',
+        let finalizedConversation: Promise<unknown> | undefined;
+        const finalizeConversation = () => {
+            finalizedConversation ??= (async () => {
+                const assistantMessage = {
+                    role: 'assistant' as const,
                     content: nativeContent || null,
                     ...(nativeReasoningContent !== undefined && { reasoning_content: nativeReasoningContent }),
                     ...(nativeReasoning !== undefined && { reasoning: nativeReasoning }),
+                    ...(nativeProviderReplay !== undefined && { provider_replay: nativeProviderReplay }),
                     ...(nativeToolCalls.size > 0 && {
                         tool_calls: [...nativeToolCalls.entries()]
                             .sort(([left], [right]) => left - right)
                             .map(([, toolCall]) => toolCall),
                     }),
                 };
-                return finalizeOpenAIChatCompletionsConversation(
-                    updateOpenAIChatCompletionsConversation(conversation, { messages: [assistantMessage] }),
-                    options,
-                );
-            },
+                if (
+                    responseId === undefined ||
+                    responseObject === undefined ||
+                    responseCreated === undefined ||
+                    responseModel === undefined
+                ) {
+                    throw new Error('Chat Completions stream ended without a complete native response identity');
+                }
+                if (responseFinishReason === undefined) {
+                    throw new Error('Chat Completions stream ended without a terminal finish reason');
+                }
+                const response: OpenAIChatCompletionsResponse = {
+                    id: responseId,
+                    object: responseObject as OpenAI.Chat.ChatCompletion['object'],
+                    created: responseCreated,
+                    model: responseModel,
+                    choices: [
+                        {
+                            index: 0,
+                            message: assistantMessage,
+                            finish_reason: responseFinishReason,
+                        },
+                    ],
+                    ...(responseServiceTier === undefined ? {} : { service_tier: responseServiceTier }),
+                    ...(responseSystemFingerprint === undefined
+                        ? {}
+                        : { system_fingerprint: responseSystemFingerprint }),
+                    ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+                };
+                return (
+                    await finalizeOpenAIChatStreamResponse({
+                        response,
+                        prepared,
+                        finish_reason: responseFinishReason,
+                        options,
+                    })
+                ).response.conversation;
+            })();
+            return finalizedConversation;
+        };
+        return Object.assign(stream, { finalizeConversation });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        driver: DriverT,
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider,
         });
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, true, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        const acceptedResponse = canonicalState.accepted_response;
+        const identity = {
+            request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: acceptedResponse?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: acceptedResponse?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: acceptedResponse?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (canonicalState.accepted_response !== undefined) {
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () => recoverCanonicalExecutionResponse(canonicalState, options),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        let nativeContent = '';
+        let contentDraft: OpenAIChatCanonicalDraft | undefined;
+        let nativeReasoningContent: string | undefined;
+        let reasoningContentDraft: OpenAIChatCanonicalDraft | undefined;
+        let nativeReasoning: string | undefined;
+        let nativeProviderReplay: OpenAIChatProviderReplay | undefined;
+        let reasoningDraft: OpenAIChatCanonicalDraft | undefined;
+        let responseId: string | undefined;
+        let responseObject: string | undefined;
+        let responseCreated: number | undefined;
+        let responseModel: string | undefined;
+        let responseServiceTier: OpenAIChatServiceTier | undefined;
+        let responseSystemFingerprint: string | undefined;
+        let responseUsage: OpenAIChatCompletionsUsage | undefined;
+        let responseFinishReason: string | undefined;
+        const nativeToolCalls = new Map<
+            number,
+            {
+                id: string;
+                type: 'function';
+                function: { name: string; arguments: string };
+                draft: OpenAIChatCanonicalDraft;
+            }
+        >();
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            openSource: async () => {
+                const stream = await this.postChatCompletionStream(driver, payload, options, abortController.signal);
+                return openAIChatNativeSSE(stream);
+            },
+            map: async (json, writer) => {
+                const choice = json.choices?.[0];
+                const delta = choice?.delta;
+                responseId = json.id;
+                responseObject = json.object;
+                responseCreated = json.created;
+                responseModel = json.model;
+                responseServiceTier = json.service_tier;
+                if (typeof json.system_fingerprint === 'string') responseSystemFingerprint = json.system_fingerprint;
+                if (json.usage != null) responseUsage = json.usage;
+                if (typeof choice?.finish_reason === 'string') responseFinishReason = choice.finish_reason;
+
+                const content = extractOpenAIChatCompletionsContentText(delta?.content);
+                if (content) {
+                    contentDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:text`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'content']),
+                        kind: 'text',
+                    };
+                    if (nativeContent.length === 0) {
+                        await writer.startBlock({
+                            draft_block_id: contentDraft.draft_block_id,
+                            native_position: contentDraft.native_position,
+                            block: { type: 'text' },
+                        });
+                    }
+                    nativeContent += content;
+                    await writer.text({
+                        draft_block_id: contentDraft.draft_block_id,
+                        native_position: contentDraft.native_position,
+                        text: content,
+                    });
+                }
+
+                if (delta?.provider_replay !== undefined) {
+                    nativeProviderReplay = structuredClone(delta.provider_replay);
+                }
+
+                if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+                    reasoningContentDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:reasoning-content`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'reasoning_content']),
+                        kind: 'reasoning',
+                    };
+                    if (nativeReasoningContent === undefined) {
+                        await writer.startBlock({
+                            draft_block_id: reasoningContentDraft.draft_block_id,
+                            native_position: reasoningContentDraft.native_position,
+                            block: { type: 'reasoning', visibility: 'display' },
+                        });
+                    }
+                    nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
+                    await writer.reasoning({
+                        draft_block_id: reasoningContentDraft.draft_block_id,
+                        native_position: reasoningContentDraft.native_position,
+                        text: delta.reasoning_content,
+                    });
+                }
+                if (typeof delta?.reasoning === 'string' && delta.reasoning.length > 0) {
+                    reasoningDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:reasoning`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'reasoning']),
+                        kind: 'reasoning',
+                    };
+                    if (nativeReasoning === undefined) {
+                        await writer.startBlock({
+                            draft_block_id: reasoningDraft.draft_block_id,
+                            native_position: reasoningDraft.native_position,
+                            block: { type: 'reasoning', visibility: 'display' },
+                        });
+                    }
+                    nativeReasoning = (nativeReasoning ?? '') + delta.reasoning;
+                    await writer.reasoning({
+                        draft_block_id: reasoningDraft.draft_block_id,
+                        native_position: reasoningDraft.native_position,
+                        text: delta.reasoning,
+                    });
+                }
+
+                for (const toolCall of delta?.tool_calls ?? []) {
+                    const index = toolCall.index ?? 0;
+                    let native = nativeToolCalls.get(index);
+                    if (native === undefined) {
+                        const draft: OpenAIChatCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:chat:tool:${index}`,
+                            native_position: openAIChatStreamPosition(['choices', 0, 'message', 'tool_calls', index]),
+                            kind: 'tool_call',
+                            tool_index: index,
+                        };
+                        native = {
+                            id: toolCall.id ?? '',
+                            type: 'function',
+                            function: {
+                                name: toolCall.function?.name ?? '',
+                                arguments: '',
+                            },
+                            draft,
+                        };
+                        nativeToolCalls.set(index, native);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: draft.native_position,
+                            block: {
+                                type: 'tool_call',
+                                executor: 'application',
+                                ...(native.id.length === 0 ? {} : { call_id: native.id }),
+                                ...(native.function.name.length === 0 ? {} : { tool_name: native.function.name }),
+                            },
+                        });
+                    } else {
+                        const priorId = native.id;
+                        const priorName = native.function.name;
+                        if (toolCall.id) native.id = toolCall.id;
+                        if (toolCall.function?.name) native.function.name += toolCall.function.name;
+                        if (native.id !== priorId || native.function.name !== priorName) {
+                            await writer.toolIdentity({
+                                draft_block_id: native.draft.draft_block_id,
+                                native_position: native.draft.native_position,
+                                ...(native.id === priorId ? {} : { call_id: native.id }),
+                                ...(native.function.name === priorName ? {} : { tool_name: native.function.name }),
+                            });
+                        }
+                    }
+                    const argumentsFragment = toolCall.function?.arguments;
+                    if (typeof argumentsFragment === 'string' && argumentsFragment.length > 0) {
+                        native.function.arguments += argumentsFragment;
+                        await writer.toolArgumentsFragment({
+                            draft_block_id: native.draft.draft_block_id,
+                            native_position: native.draft.native_position,
+                            fragment: argumentsFragment,
+                        });
+                    }
+                }
+            },
+            finalize: async () => {
+                if (
+                    responseId === undefined ||
+                    responseObject === undefined ||
+                    responseCreated === undefined ||
+                    responseModel === undefined
+                ) {
+                    throw new Error('Chat Completions stream ended without a complete native response identity');
+                }
+                if (responseFinishReason === undefined) {
+                    throw new Error('Chat Completions stream ended without a terminal finish reason');
+                }
+                const assistantMessage = {
+                    role: 'assistant' as const,
+                    content: nativeContent || null,
+                    ...(nativeReasoningContent === undefined ? {} : { reasoning_content: nativeReasoningContent }),
+                    ...(nativeReasoning === undefined ? {} : { reasoning: nativeReasoning }),
+                    ...(nativeProviderReplay === undefined ? {} : { provider_replay: nativeProviderReplay }),
+                    ...(nativeToolCalls.size === 0
+                        ? {}
+                        : {
+                              tool_calls: [...nativeToolCalls.entries()]
+                                  .sort(([left], [right]) => left - right)
+                                  .map(([, toolCall]) => ({
+                                      id: toolCall.id,
+                                      type: toolCall.type,
+                                      function: toolCall.function,
+                                  })),
+                          }),
+                };
+                const response: OpenAIChatCompletionsResponse = {
+                    id: responseId,
+                    object: responseObject as OpenAI.Chat.ChatCompletion['object'],
+                    created: responseCreated,
+                    model: responseModel,
+                    choices: [{ index: 0, message: assistantMessage, finish_reason: responseFinishReason }],
+                    ...(responseServiceTier === undefined ? {} : { service_tier: responseServiceTier }),
+                    ...(responseSystemFingerprint === undefined
+                        ? {}
+                        : { system_fingerprint: responseSystemFingerprint }),
+                    ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+                };
+                const finalized = await finalizeOpenAIChatStreamResponse({
+                    response,
+                    prepared,
+                    finish_reason: responseFinishReason,
+                    options,
+                });
+                return {
+                    decoded: finalized.decoded,
+                    response: finalized.response,
+                    prepare_reconciliation: async () => {
+                        const { raw_decoded: rawDecoded, normalized } = finalized;
+                        let { decoded } = finalized;
+                        const drafts = [
+                            ...(contentDraft === undefined ? [] : [contentDraft]),
+                            ...(reasoningContentDraft === undefined ? [] : [reasoningContentDraft]),
+                            ...(reasoningDraft === undefined ? [] : [reasoningDraft]),
+                            ...[...nativeToolCalls.values()]
+                                .sort((left, right) => (left.draft.tool_index ?? 0) - (right.draft.tool_index ?? 0))
+                                .map((toolCall) => toolCall.draft),
+                        ];
+                        const rawBlocks = openAIChatSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== drafts.length) {
+                            throw new Error('OpenAI Chat stream drafts do not match its terminal native response');
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const draft = drafts[index];
+                            if (draft === undefined) return [];
+                            return [
+                                {
+                                    canonical_id: block.id,
+                                    native_position: draft.native_position,
+                                    kind: 'block' as const,
+                                },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: draft.native_position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = openAIChatSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error(
+                                    'OpenAI Chat structured stream decode is missing source or result blocks',
+                                );
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && drafts[index] !== undefined ? [drafts[index]] : [],
+                            );
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                                native_positions: sourceDrafts.map((draft) => draft.native_position),
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            const draft = drafts[index];
+                            if (draft === undefined || (normalized?.status === 'valid' && block.type === 'text')) {
+                                continue;
+                            }
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        decoded = { ...decoded, stream_evidence: { item_mappings: itemMappings, transformations } };
+                        return {
+                            decoded,
+                            reconciliations,
+                            deliver_final_events: async (finalWriter) => {
+                                if (decoded.generation.usage !== undefined) {
+                                    await finalWriter.usage(decoded.generation.usage);
+                                }
+                                for (const [index, block] of rawBlocks.entries()) {
+                                    const draft = drafts[index];
+                                    if (draft === undefined) continue;
+                                    await finalWriter.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : responseFinishReason === 'length'
+                                                  ? 'interrupted'
+                                                  : 'native_complete',
+                                    });
+                                }
+                                await finalWriter.finish({
+                                    outcome: responseFinishReason === 'length' ? 'interrupted' : 'completed',
+                                    finish_reason: responseFinishReason,
+                                    ...(typeof responseServiceTier === 'string'
+                                        ? { service_tier: responseServiceTier }
+                                        : {}),
+                                });
+                            },
+                        };
+                    },
+                    ...(finalized.normalized?.status === 'valid' && options.result_schema !== undefined
+                        ? { result_schema: options.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
+        });
+        await publishCanonicalPreparedRequest(prepared, options);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
     }
 
     protected buildPayload(
@@ -1220,6 +2055,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         return this.options.modelName ?? options.model;
     }
 
+    protected requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: providerJsonValue(payload) };
+    }
+
     protected abstract postChatCompletion(
         driver: DriverT,
         payload: OpenAIChatCompletionsPayload,
@@ -1287,6 +2130,17 @@ export function openAIChatCompletionsStreamToSSE(
 }
 
 class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsTransportDriver> {
+    constructor(
+        options: OpenAIChatCompletionsProtocolOptions,
+        private readonly resolveModelName: (options: ExecutionOptions) => string,
+    ) {
+        super(options);
+    }
+
+    protected override getModelName(options: ExecutionOptions): string {
+        return this.resolveModelName(options);
+    }
+
     protected async postChatCompletion(
         driver: OpenAIChatCompletionsTransportDriver,
         payload: OpenAIChatCompletionsPayload,
@@ -1306,7 +2160,10 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
     }
 }
 
-function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenAI.Chat.ChatCompletionMessageParam {
+/** @internal Convert only portable OpenAI fields; provider-scoped replay is intentionally omitted. */
+export function toOpenAISDKMessage(
+    message: OpenAIChatCompletionsRequestMessage,
+): OpenAI.Chat.ChatCompletionMessageParam {
     const textParts = Array.isArray(message.content)
         ? message.content.filter((part): part is OpenAIChatCompletionsTextPart => part.type === 'text')
         : undefined;
@@ -1418,14 +2275,26 @@ export abstract class OpenAIChatCompletionsDriverBase<
 
     constructor(options: OptionsT) {
         super(options);
-        this.chatCompletionsProtocol = new DriverChatCompletionsProtocol({
-            defaultMaxTokens: options.defaultMaxTokens,
-            extraBody: options.extraBody,
-            resultSchemaMode: options.resultSchemaMode,
-            includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
-            includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
-            toolSchemaMode: options.toolSchemaMode,
-        });
+        this.chatCompletionsProtocol = new DriverChatCompletionsProtocol(
+            {
+                defaultMaxTokens: options.defaultMaxTokens,
+                extraBody: options.extraBody,
+                resultSchemaMode: options.resultSchemaMode,
+                includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
+                includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
+                toolSchemaMode: options.toolSchemaMode,
+            },
+            (executionOptions) => this.resolveChatCompletionsRequestModel(executionOptions),
+        );
+    }
+
+    /** Resolve the transport body model without changing canonical requested-model identity. */
+    protected resolveChatCompletionsRequestModel(options: ExecutionOptions): string {
+        return options.model;
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
     }
 
     /** @internal Provider SDK transport boundary. */
@@ -1455,12 +2324,35 @@ export abstract class OpenAIChatCompletionsDriverBase<
         return this.chatCompletionsProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
+    requestCanonicalTextCompletion(
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.chatCompletionsProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
+    }
+
     requestTextCompletionStream(
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options, signal);
+    }
+
+    requestCanonicalTextCompletionEventStream(
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.requestCanonicalTextCompletionEventStream(
+            this,
+            prompt,
+            options,
+            signal,
+            open,
+        );
     }
 
     buildStreamingConversation(
@@ -1502,6 +2394,21 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         );
     }
 
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (!openAIAudioTask(options.model)) return super.executeCanonical(segments, options, signal);
+        return executeOpenAIAudioCanonical({
+            service: this.service,
+            segments,
+            options,
+            provider: this.provider,
+            request_options: this.getDriverRequestOptions(options, signal),
+        });
+    }
+
     override async stream(
         segments: PromptSegment[],
         options: ExecutionOptions,
@@ -1515,6 +2422,24 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             (streamSignal) =>
                 this.execute(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
         );
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (!openAIAudioTask(options.model)) {
+            return super.streamCanonicalEvents(segments, options, signal, open);
+        }
+        return streamOpenAIAudioCanonicalEvents({
+            segments,
+            options,
+            signal,
+            open,
+            execute: (streamSignal) => this.executeCanonical(segments, options, streamSignal),
+        });
     }
 
     constructor(options: OpenAIChatCompletionsDriverConfig) {

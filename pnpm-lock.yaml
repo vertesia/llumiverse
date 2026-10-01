@@ -203,6 +203,9 @@ importers:
 
   common:
     dependencies:
+      '@llumiverse/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -220,11 +223,39 @@ importers:
         specifier: 'catalog:'
         version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@24.13.6)(vite@8.0.16(@types/node@24.13.6))
 
+  conversation:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^24.13.6
+        version: 24.13.6
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
+      rimraf:
+        specifier: ^6.1.3
+        version: 6.1.3
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@24.13.6)(vite@8.0.16(@types/node@24.13.6))
+
   core:
     dependencies:
       '@llumiverse/common':
         specifier: workspace:*
         version: link:../common
+      '@llumiverse/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       '@types/node':
         specifier: ^24.13.6
         version: 24.13.6
@@ -316,6 +347,9 @@ importers:
       '@llumiverse/common':
         specifier: workspace:*
         version: link:../common
+      '@llumiverse/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core

@@ -1,0 +1,27 @@
+{
+    "compilerOptions": {
+        "target": "ES2024",
+        "lib": ["ES2024", "DOM"],
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "rootDir": "./src",
+        "outDir": "./lib",
+        "composite": true,
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+        "useDefineForClassFields": true,
+        "forceConsistentCasingInFileNames": true,
+        "allowSyntheticDefaultImports": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "isolatedModules": true,
+        "strict": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noFallthroughCasesInSwitch": true,
+        "useUnknownInCatchVariables": true
+    },
+    "include": ["src"],
+    "exclude": ["node_modules", "**/*.test.ts", "lib", "test"]
+}

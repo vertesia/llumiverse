@@ -14,6 +14,7 @@
  */
 
 import { FinishReason } from '@google/genai';
+import { parseConversationDocument } from '@llumiverse/conversation';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
@@ -24,6 +25,7 @@ import {
     normalizeVertexAIResolvedServiceTier,
     resolveVertexAIServiceTier,
 } from './gemini.js';
+import { exportLegacyGeminiConversation } from './gemini-conversation-adapter.js';
 
 // ---------------------------------------------------------------------------
 // Pure function tests — no driver needed
@@ -267,10 +269,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                 contents: [
                     {
                         role: 'user',
-                        parts: [
-                            { functionResponse: { name: 'first', response: { output: 'one' } } },
-                            { functionResponse: { name: 'second', response: { output: 'two' } } },
-                        ],
+                        parts: [{ functionResponse: { name: 'first', response: { output: 'one' } } }],
                     },
                 ],
             },
@@ -352,7 +351,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
 
         expect(results).toContainEqual({ type: 'thoughts', value: 'plan ' });
         expect(results).toContainEqual({ type: 'thoughts', value: 'continued' });
-        expect(conversation).toMatchObject({
+        expect(exportLegacyGeminiConversation(parseConversationDocument(conversation))).toMatchObject({
             _arrayConversation: expect.arrayContaining([
                 {
                     role: 'model',
@@ -377,20 +376,24 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
 
     it('prunes adjacent conversation content while preserving signed thought Parts', async () => {
         const modelDef = new GeminiModelDefinition('gemini-3-flash');
+        const requests: unknown[] = [];
         const driver = makeDriver({
-            generateContent: async () => ({
-                usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
-                candidates: [
-                    {
-                        finishReason: FinishReason.STOP,
-                        content: {
-                            role: 'model',
-                            parts: [{ text: 'signed plan', thought: true, thoughtSignature: 'signed-plan' }],
+            generateContent: async (request) => {
+                requests.push(request);
+                return {
+                    usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+                    candidates: [
+                        {
+                            finishReason: FinishReason.STOP,
+                            content: {
+                                role: 'model',
+                                parts: [{ text: 'signed plan', thought: true, thoughtSignature: 'signed-plan' }],
+                            },
+                            safetyRatings: [],
                         },
-                        safetyRatings: [],
-                    },
-                ],
-            }),
+                    ],
+                };
+            },
         });
 
         const completion = await modelDef.requestTextCompletion(
@@ -413,7 +416,17 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const serialized = JSON.stringify(completion.conversation);
         expect(serialized).toContain('signed plan');
         expect(serialized).toContain('signed-plan');
-        expect(serialized).toContain('[Content truncated - exceeded token limit]');
+        expect(serialized).toContain('old tool output that should be truncated');
+        await modelDef.requestTextCompletion(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'next' }] }] },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                conversation: JSON.parse(serialized),
+                stripTextMaxTokens: 1,
+            },
+        );
+        expect(JSON.stringify(requests.at(-1))).toContain('[Content truncated - exceeded token limit]');
 
         const imageCompletion = await modelDef.requestTextCompletion(
             driver,
@@ -421,7 +434,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                 contents: [
                     {
                         role: 'user',
-                        parts: [{ inlineData: { data: 'a'.repeat(1001), mimeType: 'image/png' } }],
+                        parts: [{ inlineData: { data: 'a'.repeat(1004), mimeType: 'image/png' } }],
                     },
                 ],
             },
@@ -430,7 +443,17 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                 stripImagesAfterTurns: 0,
             },
         );
-        expect(JSON.stringify(imageCompletion.conversation)).toContain('[Image removed from conversation history]');
+        expect(JSON.stringify(imageCompletion.conversation)).toContain('a'.repeat(1004));
+        await modelDef.requestTextCompletion(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'next' }] }] },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                conversation: JSON.parse(JSON.stringify(imageCompletion.conversation)),
+                stripImagesAfterTurns: 0,
+            },
+        );
+        expect(JSON.stringify(requests.at(-1))).toContain('[Image removed from conversation history]');
 
         const heartbeatCompletion = await modelDef.requestTextCompletion(
             driver,
@@ -442,9 +465,17 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                 stripHeartbeatsAfterTurns: 0,
             },
         );
-        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain(
-            '[Heartbeat removed from conversation history]',
+        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain('<heartbeat>old status</heartbeat>');
+        await modelDef.requestTextCompletion(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'next' }] }] },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                conversation: JSON.parse(JSON.stringify(heartbeatCompletion.conversation)),
+                stripHeartbeatsAfterTurns: 0,
+            },
         );
+        expect(JSON.stringify(requests.at(-1))).toContain('[Heartbeat removed from conversation history]');
     });
 
     it('does not merge a signed streamed Part into an unsigned Part', async () => {
@@ -479,7 +510,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         }
         const conversation = await stream.finalizeConversation?.();
 
-        expect(conversation).toMatchObject({
+        expect(exportLegacyGeminiConversation(parseConversationDocument(conversation))).toMatchObject({
             _arrayConversation: expect.arrayContaining([
                 {
                     role: 'model',

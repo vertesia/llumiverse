@@ -1,6 +1,7 @@
 packages:
   # pnpm 12 workspace discovery requires patterns without a leading "./".
   - common
+  - conversation
   - core
   - drivers
   - examples

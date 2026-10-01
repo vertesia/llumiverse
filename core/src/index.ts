@@ -1,4 +1,8 @@
 export * from '@llumiverse/common';
+export * from './CanonicalExecution.js';
+export * from './CanonicalSelection.js';
+export * from './CanonicalStreaming.js';
+export * from './CanonicalToolDefinitions.js';
 export * from './conversation-utils.js';
 export type { AbstractDriver, Driver } from './Driver.js';
 export type * from './embedding-batch.js';
@@ -6,3 +10,4 @@ export * from './embeddings.js';
 export * from './json.js';
 export * from './logger.js';
 export * from './stream.js';
+export * from './validation.js';

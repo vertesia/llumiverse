@@ -25,9 +25,8 @@ describe('formatClaudePrompt', () => {
         getURI: vi.fn(),
     });
 
-    it('warns and skips video attachments', async () => {
+    it('rejects video attachments before reading them', async () => {
         const getStream = vi.fn();
-        const warn = vi.fn();
         const segments = [
             {
                 role: PromptRole.user,
@@ -42,19 +41,10 @@ describe('formatClaudePrompt', () => {
             },
         ] as unknown as PromptSegment[];
 
-        const prompt = await formatClaudePrompt(segments, { model: 'claude-haiku-4-5' } as never, { warn });
-
-        expect(prompt.messages).toEqual([
-            {
-                role: 'user',
-                content: [{ type: 'text', text: 'Look at this' }],
-            },
-        ]);
-        expect(getStream).not.toHaveBeenCalled();
-        expect(warn).toHaveBeenCalledWith(
-            { file_name: 'clip.mp4', mime_type: 'video/mp4' },
-            '[Claude] Skipping unsupported video attachment',
+        await expect(formatClaudePrompt(segments, { model: 'claude-haiku-4-5' } as never)).rejects.toThrow(
+            'Claude does not support video input: clip.mp4',
         );
+        expect(getStream).not.toHaveBeenCalled();
     });
 
     it('places a routed cache breakpoint after stable source attachments and before the final task', async () => {

@@ -470,8 +470,11 @@ export async function formatConversePrompt(
                         toolResult: {
                             toolUseId: segment.tool_use_id,
                             content: toolContentBlocks,
+                            ...(segment.tool_result_status === undefined
+                                ? {}
+                                : { _llumiverse_tool_result_status: segment.tool_result_status }),
                         },
-                    },
+                    } as ContentBlock,
                 ],
                 role: ConversationRole.USER,
             });

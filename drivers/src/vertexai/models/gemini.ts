@@ -7,6 +7,7 @@ import {
     type FunctionResponsePart,
     type GenerateContentConfig,
     type GenerateContentParameters,
+    type GenerateContentResponse,
     type GenerateContentResponseUsageMetadata,
     HarmBlockThreshold,
     HarmCategory,
@@ -21,17 +22,31 @@ import {
     type Tool,
 } from '@google/genai';
 import {
+    canonicalJsonContentString,
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    fingerprintJson,
+    isConversationDocumentFormat,
+    type JsonValue,
+    type NativeStreamPosition,
+    parseConversationDocument,
+    toolArgumentsForModel,
+} from '@llumiverse/conversation';
+import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
+    type CompletionChunkObject,
     type CompletionResult,
+    createCanonicalExecutionResponse,
     type DataSource,
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
-    getConversationMeta,
-    incrementConversationTurn,
+    FallbackCanonicalExecutionEventStream,
     isGeminiModelVersionGte,
-    type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
@@ -45,16 +60,41 @@ import {
     type ToolDefinition,
     type ToolUse,
     truncateLargeTextInConversation,
-    unwrapConversationArray,
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
+import { canonicalNativeExecutionEventStream } from '../../conversation/canonical-execution-event-stream.js';
+import {
+    acceptedCanonicalResponse,
+    assertAcceptedCanonicalRequest,
+    canonicalConversationTurnNumber,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+    resolveConversationRuntime,
+} from '../../conversation/canonical-runtime.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../../conversation/structured-output.js';
+import { boundedAudioStream, canonicalAudioAssetStorage, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
-import { generateWithGeminiContextCache } from './gemini-context-cache.js';
+import { type GeminiContextCacheExecution, generateWithGeminiContextCache } from './gemini-context-cache.js';
+import {
+    appendGeminiCanonicalResponse,
+    cleanGeminiPromptPart,
+    compileGeminiConversation,
+    decodeGeminiCanonicalResponse,
+    finalizeGeminiPreparedRequest,
+    formatGeminiFunctionResponse,
+    GEMINI_GENERATE_CONTENT_PROTOCOL,
+    geminiToolUsesFromContent,
+    type PreparedGeminiConversation,
+    prepareGeminiCanonicalState,
+} from './gemini-conversation-adapter.js';
 
 type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 type GeminiFinishReasonHandling = { message: string; retryable: boolean };
@@ -192,14 +232,15 @@ function formatGeminiContentForDebug(content: Content): Content {
     return {
         ...content,
         parts: content.parts?.map((part) => {
-            if (!part.inlineData?.data) {
-                return part;
+            const cleaned = cleanGeminiPromptPart(part);
+            if (!cleaned.inlineData?.data) {
+                return cleaned;
             }
             return {
-                ...part,
+                ...cleaned,
                 inlineData: {
-                    ...part.inlineData,
-                    data: truncateBinaryForDebug(part.inlineData.data),
+                    ...cleaned.inlineData,
+                    data: truncateBinaryForDebug(cleaned.inlineData.data),
                 },
             } satisfies Part;
         }),
@@ -256,7 +297,12 @@ export function getGeminiPayload(
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
     // Use a local variable to avoid mutating the caller's conversation object.
-    let payloadContents = mergeFunctionResponseContents(prompt.contents ?? []);
+    let payloadContents = mergeFunctionResponseContents(
+        (prompt.contents ?? []).map((content) => ({
+            ...content,
+            parts: content.parts?.map((part) => cleanGeminiPromptPart(part)),
+        })),
+    );
     if (!tools && payloadContents) {
         const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {
@@ -367,94 +413,238 @@ function extractCompletionResults(content: Content, includeThoughts = true): Com
     return results;
 }
 
-function finalizeGeminiConversation(
-    conversation: Content[],
-    assistantContent: Content | undefined,
-    system: Content | undefined,
-    options: ExecutionOptions,
-): GenerateContentPrompt['contents'] {
-    let completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
-    completed = incrementConversationTurn(completed) as Content[];
-    const currentTurn = getConversationMeta(completed).turnNumber;
-    const preserveSubtree = (value: unknown): boolean => {
-        if (!value || typeof value !== 'object') return false;
-        const thoughtSignature = (value as { thoughtSignature?: unknown }).thoughtSignature;
-        return typeof thoughtSignature === 'string' && thoughtSignature.length > 0;
-    };
+function preserveGeminiSignedSubtree(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false;
+    const thoughtSignature = (value as { thoughtSignature?: unknown }).thoughtSignature;
+    return typeof thoughtSignature === 'string' && thoughtSignature.length > 0;
+}
+
+function projectGeminiHistoryContent(content: Content, options: ExecutionOptions, currentTurn: number): Content {
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
-        preserveSubtree,
+        preserveSubtree: preserveGeminiSignedSubtree,
     };
-    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
-    processed = stripHeartbeatsFromConversation(processed, {
+    let projected = stripBase64ImagesFromConversation(content, stripOptions);
+    projected = truncateLargeTextInConversation(projected, stripOptions);
+    projected = stripHeartbeatsFromConversation(projected, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
-        preserveSubtree,
+        preserveSubtree: preserveGeminiSignedSubtree,
     });
-    return storeSystemInConversation(processed, system) as Content[];
+    return projected as Content;
+}
+
+function prepareCanonicalGeminiProjection(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): GenerateContentPrompt {
+    const currentIndexes = new Set(prepared.current_native_content_indexes);
+    const currentTurn = canonicalConversationTurnNumber(prepared.document);
+    return {
+        contents: prepared.native_conversation.contents.map((content, index) =>
+            currentIndexes.has(index) ? content : projectGeminiHistoryContent(content, options, currentTurn),
+        ),
+        ...(prepared.native_conversation.system === undefined ? {} : { system: prepared.native_conversation.system }),
+    };
+}
+
+function reportedGeminiUsage(value: unknown): GenerateContentResponseUsageMetadata | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    for (const key of [
+        'cachedContentTokenCount',
+        'candidatesTokenCount',
+        'promptTokenCount',
+        'thoughtsTokenCount',
+        'toolUsePromptTokenCount',
+        'totalTokenCount',
+    ]) {
+        const candidate = record[key];
+        if (candidate !== undefined && (typeof candidate !== 'number' || !Number.isSafeInteger(candidate))) {
+            return undefined;
+        }
+    }
+    if (record.trafficType !== undefined && typeof record.trafficType !== 'string') return undefined;
+    return record as GenerateContentResponseUsageMetadata;
+}
+
+function canonicalGeminiUsage(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    definition: GeminiModelDefinition,
+    driver: VertexAIDriver,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    const reported = usage.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === GEMINI_GENERATE_CONTENT_PROTOCOL,
+    );
+    const native = reportedGeminiUsage(reported?.payload);
+    if (native !== undefined) return definition.usageMetadataToTokenUsage(driver, native);
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function canonicalGeminiServiceTier(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): string | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    const reported = usage?.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === GEMINI_GENERATE_CONTENT_PROTOCOL,
+    );
+    return normalizeVertexAIResolvedServiceTier(reportedGeminiUsage(reported?.payload)?.trafficType);
+}
+
+function acceptedGeminiContent(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): Content {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Gemini response is available');
+    const compiled = compileGeminiConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
+    const mapping = compiled.mappings.find(
+        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+    );
+    const match = mapping === undefined ? undefined : /^contents\/(\d+)$/.exec(mapping.native_id);
+    const content =
+        match === undefined || match === null ? undefined : compiled.conversation.contents[Number(match[1])];
+    if (content?.role !== 'model') {
+        throw new Error(`Accepted Gemini turn ${accepted.turn.id} has no native model projection`);
+    }
+    return content;
+}
+
+async function recoverGeminiCompletion(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    definition: GeminiModelDefinition,
+    driver: VertexAIDriver,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Promise<Completion> {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Gemini response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+    }
+    const content = acceptedGeminiContent(prepared);
+    const toolUse = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
+    return {
+        result: extractCompletionResults(content, includeThoughts),
+        ...(toolUse === undefined ? {} : { tool_use: toolUse }),
+        token_usage: canonicalGeminiUsage(prepared, definition, driver),
+        service_tier: canonicalGeminiServiceTier(prepared),
+        finish_reason: toolUse === undefined ? accepted.generation.finish_reason : 'tool_use',
+        conversation: prepared.document,
+    };
+}
+
+function recoveredGeminiStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            service_tier: completion.service_tier,
+            finish_reason: completion.finish_reason,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+}
+
+function appendGeminiStreamPart(target: Part[], part: Part): number {
+    const previous = target.at(-1);
+    const canMergeText =
+        typeof part.text === 'string' &&
+        part.text.length > 0 &&
+        typeof previous?.text === 'string' &&
+        !previous.thoughtSignature &&
+        !part.thoughtSignature &&
+        !!previous.thought === !!part.thought;
+    if (canMergeText && previous) {
+        previous.text = (previous.text ?? '') + part.text;
+        return target.length - 1;
+    }
+    target.push(structuredClone(part));
+    return target.length - 1;
 }
 
 function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
-    for (const part of incoming) {
-        const previous = target.at(-1);
-        const canMergeText =
-            typeof part.text === 'string' &&
-            part.text.length > 0 &&
-            typeof previous?.text === 'string' &&
-            !previous.thoughtSignature &&
-            !part.thoughtSignature &&
-            !!previous.thought === !!part.thought;
-        if (canMergeText && previous) {
-            previous.text = (previous.text ?? '') + part.text;
-        } else {
-            target.push(structuredClone(part));
-        }
-    }
+    for (const part of incoming) appendGeminiStreamPart(target, part);
 }
 
-function collectToolUseParts(content: Content): ToolUse[] | undefined {
-    const out: ToolUse[] = [];
-    const parts = content.parts ?? [];
-    for (const part of parts) {
-        if (part.functionCall) {
-            const toolUse: ToolUse = {
-                id: part.functionCall.name ?? '',
-                tool_name: part.functionCall.name ?? '',
-                tool_input: part.functionCall.args as JSONObject,
-            };
-            // Capture thought_signature for Gemini thinking models (2.5+/3.0+)
-            // This must be passed back with the function response
-            if (part.thoughtSignature) {
-                toolUse.thought_signature = part.thoughtSignature;
-            }
-            out.push(toolUse);
-        }
-    }
-    return out.length > 0 ? out : undefined;
+interface GeminiCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call' | 'image' | 'audio' | 'video' | 'document';
+    text: string;
+    tool_arguments?: JsonValue;
 }
 
-type StreamingToolUse = ToolUse & { _actual_id?: string };
+function geminiStreamPosition(partIndex: number, nativeItemId?: string): NativeStreamPosition {
+    return {
+        protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+        path: ['candidates', 0, 'content', 'parts', partIndex],
+        ...(nativeItemId === undefined ? {} : { native_item_id: nativeItemId }),
+    };
+}
 
-/**
- * Collect streamed function calls under accumulator keys that are unique per call.
- *
- * Gemini identifies a function call by name only, so `collectToolUseParts` uses the name as the
- * tool-use id and parallel calls to one tool share it. The core completion stream merges streamed
- * fragments by id, which folded such a batch into a single call: the model turn kept every
- * functionCall part but only one tool ran, and the next request was rejected by Vertex with 400
- * "number of function response parts is equal to the number of function call parts". A Gemini
- * functionCall part always arrives complete, so each one gets its own key; `_actual_id` restores
- * the name-based id once the stream is finalized.
- */
-function collectStreamingToolUseParts(content: Content, nextCallIndex: () => number): StreamingToolUse[] | undefined {
-    return collectToolUseParts(content)?.map((tool) => ({
-        ...tool,
-        id: `${tool.id}#${nextCallIndex()}`,
-        _actual_id: tool.id,
-    }));
+function geminiPromptFeedbackPosition(): NativeStreamPosition {
+    return {
+        protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+        path: ['promptFeedback', 'blockReasonMessage'],
+    };
+}
+
+function geminiSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('Gemini stream decode has no generated agent turn');
+    return turn.blocks.filter(
+        (block) => block.type !== 'native_replay' && block.type !== 'extension' && block.type !== 'external_reference',
+    );
+}
+
+function geminiSemanticPositions(content: Content): NativeStreamPosition[] {
+    return (content.parts ?? []).flatMap((part, partIndex) => {
+        if (typeof part.text === 'string') {
+            return part.text.length === 0 ? [] : [geminiStreamPosition(partIndex)];
+        }
+        if (part.functionCall !== undefined) {
+            return [geminiStreamPosition(partIndex, part.functionCall.id)];
+        }
+        if (part.inlineData !== undefined || part.fileData !== undefined) return [geminiStreamPosition(partIndex)];
+        return [];
+    });
+}
+
+function geminiDraftMediaKind(
+    mimeType: string | undefined,
+): Extract<GeminiCanonicalDraft['kind'], 'image' | 'audio' | 'video' | 'document'> {
+    if (mimeType?.startsWith('image/')) return 'image';
+    if (mimeType?.startsWith('audio/')) return 'audio';
+    if (mimeType?.startsWith('video/')) return 'video';
+    return 'document';
+}
+
+function assertGeminiToolDraftArguments(
+    draft: GeminiCanonicalDraft,
+    block: ReturnType<typeof geminiSemanticBlocks>[number],
+): void {
+    if (draft.kind !== 'tool_call' || block.type !== 'tool_call' || block.arguments.type === 'invalid') return;
+    if (draft.tool_arguments === undefined) return;
+    if (
+        canonicalJsonContentString(draft.tool_arguments) !==
+        canonicalJsonContentString(toolArgumentsForModel(block.arguments))
+    ) {
+        throw new Error('Gemini tool argument snapshot differs from its terminal function call');
+    }
 }
 
 /** True when `content` is a user turn holding nothing but functionResponse parts. */
@@ -650,7 +840,66 @@ function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): st
     }
 }
 
+function geminiProvider(driver: VertexAIDriver): string {
+    return typeof driver.provider === 'string' && driver.provider.length > 0 ? driver.provider : 'vertexai';
+}
+
+function geminiFileAudioRequest(
+    prompt: GenerateContentPrompt,
+    options: ExecutionOptions,
+    modelName: string,
+): {
+    model_options: VertexAIGeminiOptions | undefined;
+    payload: GenerateContentParameters;
+    speech: boolean;
+} {
+    const modelOptions = options.model_options as VertexAIGeminiOptions | undefined;
+    const speech = modelName.includes('tts');
+    const config: GenerateContentConfig = speech
+        ? {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                  languageCode: modelOptions?.speech_language,
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: modelOptions?.speech_voice ?? 'Kore' } },
+              },
+          }
+        : {
+              systemInstruction: prompt.system,
+              audioTranscriptionConfig: {
+                  languageCodes: modelOptions?.transcription_language_codes,
+                  diarization: modelOptions?.transcription_diarization,
+                  wordTimestamp: modelOptions?.transcription_word_timestamps,
+                  customVocabulary: modelOptions?.transcription_vocabulary,
+              },
+          };
+    const contents = speech
+        ? [
+              {
+                  role: 'user',
+                  parts: [
+                      ...(prompt.system?.parts ?? []),
+                      ...prompt.contents.flatMap((content) => content.parts ?? []),
+                  ],
+              },
+          ]
+        : prompt.contents;
+    return { model_options: modelOptions, payload: { model: modelName, contents, config }, speech };
+}
+
+function geminiFileAudioTransportRequest(
+    payload: GenerateContentParameters,
+    signal: AbortSignal | undefined,
+): GenerateContentParameters {
+    if (signal === undefined) return payload;
+    signal.throwIfAborted();
+    // AbortSignal is SDK transport state, not provider JSON. Keep it out of the exact request
+    // fingerprint. Experimental receipts that included abortSignal:{} remain incompatible rather
+    // than being silently relabeled as a signal-free request.
+    return { ...payload, config: { ...payload.config, abortSignal: signal } };
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
+    readonly canonical_conversation_supported = true;
     model: AIModel;
 
     constructor(modelId: string) {
@@ -673,7 +922,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options = { ...options, model: modelName };
 
         if (isFileAudioModel(modelName)) {
-            if (options.conversation || options.tools?.length || options.result_schema || options.format) {
+            if (
+                (options.conversation !== undefined && !isConversationDocumentFormat(options.conversation)) ||
+                options.tools?.length ||
+                options.result_schema ||
+                options.format
+            ) {
                 throw new Error(
                     'File audio operations do not accept conversation, tools, result schemas, or custom formatting',
                 );
@@ -730,14 +984,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     responseParts.push(await fileToMediaPart(f));
                 }
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
-                const functionResponsePart: Part = {
+                const functionResponsePart: Part & {
+                    _llumiverse_tool_result_status?: NonNullable<PromptSegment['tool_result_status']>;
+                    _llumiverse_tool_result_text?: string;
+                } = {
                     functionResponse: {
-                        name: msg.tool_use_id,
-                        response: formatFunctionResponse(msg.content || ''),
+                        id: msg.tool_use_id,
+                        response: formatGeminiFunctionResponse(msg.content ?? ''),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
                     // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
                     thoughtSignature: msg.thought_signature,
+                    ...(msg.tool_result_status === undefined
+                        ? {}
+                        : { _llumiverse_tool_result_status: msg.tool_result_status }),
+                    _llumiverse_tool_result_text: msg.content ?? '',
                 };
                 contents.push({
                     role: 'user',
@@ -857,26 +1118,319 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return tokenUsage;
     }
 
+    async requestCanonicalTextCompletion(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const requestedOptions = options;
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
+        const modelName = splits[splits.length - 1];
+        const fileAudioRequest = isFileAudioModel(modelName)
+            ? geminiFileAudioRequest(prompt, requestedOptions, modelName)
+            : undefined;
+        if (isFileAudioModel(modelName) && isConversationDocumentFormat(requestedOptions.conversation)) {
+            const document = parseConversationDocument(requestedOptions.conversation);
+            const runtime = resolveConversationRuntime(requestedOptions);
+            if (
+                requestedOptions.conversation_runtime?.conversation_id !== undefined &&
+                runtime.conversation_id !== document.id
+            ) {
+                throw new Error('conversation_runtime.conversation_id does not match the canonical document');
+            }
+            const accepted = acceptedCanonicalResponse(document, runtime.response_operation_id);
+            if (accepted === undefined && document.revision !== 0) {
+                throw new Error('Gemini file audio does not support conversation continuation');
+            }
+            if (accepted !== undefined) {
+                if (
+                    accepted.generation.request_id !== runtime.request_id ||
+                    accepted.generation.provider !== geminiProvider(driver) ||
+                    accepted.generation.protocol !== GEMINI_GENERATE_CONTENT_PROTOCOL ||
+                    accepted.generation.requested_model !== requestedOptions.model ||
+                    fileAudioRequest === undefined ||
+                    accepted.generation.request_receipt.request_fingerprint !==
+                        (await fingerprintJson(providerJsonValue(fileAudioRequest.payload)))
+                ) {
+                    throw new Error(
+                        `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
+                    );
+                }
+                if (requestedOptions.include_original_response) {
+                    throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+                }
+                return recoverCanonicalExecutionResponse(
+                    { document, runtime, accepted_response: accepted },
+                    requestedOptions,
+                );
+            }
+        }
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
+        if (isFileAudioModel(modelName)) {
+            if (canonicalState.accepted_response !== undefined) {
+                if (requestedOptions.include_original_response) {
+                    throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+                }
+                return recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                    service_tier: canonicalGeminiServiceTier(canonicalState),
+                });
+            }
+            const transportOptions = { ...options, model: modelName };
+            if (fileAudioRequest === undefined) throw new Error(`Model ${modelName} is not a Gemini file audio model`);
+            const modelOptions = fileAudioRequest.model_options;
+            const client = driver.getGoogleGenAIClient(
+                region,
+                resolveVertexAIServiceTier(modelOptions),
+                transportOptions.httpTimeout,
+            );
+            const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+            const { payload, speech } = geminiFileAudioRequest(canonicalPrompt, requestedOptions, modelName);
+            const prepared = await finalizeGeminiPreparedRequest(
+                { ...canonicalState, native_conversation: canonicalPrompt },
+                payload,
+            );
+            await publishCanonicalPreparedRequest(prepared, requestedOptions);
+            const response = await client.models.generateContent(geminiFileAudioTransportRequest(payload, signal));
+            const candidate = response.candidates?.[0];
+            if (candidate?.content === undefined) throw new Error('Audio model returned no candidate content');
+            const persistedAudio: Array<{
+                data: string;
+                result: Extract<CompletionResult, { type: 'audio' }>;
+                byte_length: number;
+            }> = [];
+            for (const part of candidate.content.parts ?? []) {
+                if (!part.inlineData?.mimeType?.startsWith('audio/')) continue;
+                if (!speech) throw new Error('Unexpected audio output from transcription model');
+                const data = part.inlineData.data ?? '';
+                if (data.length > Math.ceil(50_000_000 / 3) * 4)
+                    throw new Error('Audio exceeds the 50000000 byte limit');
+                const bytes = Buffer.from(data, 'base64');
+                const result = await storeAudioResult(
+                    new Blob([bytes]).stream(),
+                    {
+                        mime_type: part.inlineData.mimeType,
+                        container: 'raw',
+                        codec: 'pcm',
+                        sample_rate: 24000,
+                        channels: 1,
+                        sample_encoding: 'int16',
+                        byte_order: 'little',
+                    },
+                    transportOptions,
+                    signal,
+                );
+                persistedAudio.push({ data, result, byte_length: bytes.byteLength });
+            }
+            if (speech && persistedAudio.length === 0) throw new Error('Audio model returned no usable audio result');
+            const finishReason = normalizeGeminiFinishReason(candidate.finishReason);
+            let decoded = await decodeGeminiCanonicalResponse({
+                response,
+                content: candidate.content,
+                prepared,
+                finish_reason: finishReason,
+            });
+            const remainingAudio = [...persistedAudio];
+            decoded = {
+                ...decoded,
+                ...(speech
+                    ? {
+                          turns: decoded.turns.map((turn) =>
+                              turn.kind === 'agent' && 'generation_id' in turn
+                                  ? {
+                                        ...turn,
+                                        blocks: turn.blocks.filter((block) => block.type !== 'native_replay'),
+                                    }
+                                  : turn,
+                          ),
+                      }
+                    : {}),
+                assets: (decoded.assets ?? []).map((asset) => {
+                    if (asset.kind !== 'audio' || asset.storage.type !== 'inline_base64') return asset;
+                    const inlineData = asset.storage.data;
+                    const matchIndex = remainingAudio.findIndex((entry) => entry.data === inlineData);
+                    if (matchIndex < 0) return asset;
+                    const [match] = remainingAudio.splice(matchIndex, 1);
+                    if (match === undefined) return asset;
+                    return {
+                        ...asset,
+                        storage: canonicalAudioAssetStorage(match.result.value),
+                        byte_length: match.byte_length,
+                        media: {
+                            ...(match.result.container === undefined ? {} : { container: match.result.container }),
+                            ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
+                            ...(match.result.sample_rate === undefined
+                                ? {}
+                                : { sample_rate: match.result.sample_rate }),
+                            ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
+                            ...(match.result.sample_encoding === undefined
+                                ? {}
+                                : { sample_encoding: match.result.sample_encoding }),
+                            ...(match.result.byte_order === undefined ? {} : { byte_order: match.result.byte_order }),
+                        },
+                        metadata: {
+                            audio_result: {
+                                value: match.result.value,
+                                mime_type: match.result.mime_type,
+                                ...(match.result.container === undefined ? {} : { container: match.result.container }),
+                                ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
+                                ...(match.result.sample_rate === undefined
+                                    ? {}
+                                    : { sample_rate: match.result.sample_rate }),
+                                ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
+                                ...(match.result.sample_encoding === undefined
+                                    ? {}
+                                    : { sample_encoding: match.result.sample_encoding }),
+                                ...(match.result.byte_order === undefined
+                                    ? {}
+                                    : { byte_order: match.result.byte_order }),
+                            },
+                        },
+                    };
+                }),
+            };
+            const document = appendGeminiCanonicalResponse(prepared, decoded);
+            return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
+                ...(requestedOptions.include_original_response ? { original_response: response } : {}),
+            });
+        }
+        const transportOptions = { ...options, model: modelName };
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
+        const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(modelOptions),
+            transportOptions.httpTimeout,
+        );
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (requestedOptions.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                service_tier: canonicalGeminiServiceTier(canonicalState),
+            });
+        }
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
+        if (signal) payload.config = { ...payload.config, abortSignal: signal };
+        const cacheExecution = await generateWithGeminiContextCache(
+            driver,
+            client,
+            transportOptions,
+            canonicalPrompt,
+            payload,
+            (request) => client.models.generateContent(request),
+            region ?? driver.getVertexRegion?.() ?? 'global',
+        );
+        const response = cacheExecution.value;
+
+        let finalContent: Content = { role: 'model', parts: [] };
+        let finishReason: string | undefined;
+        let toolUse: ToolUse[] | undefined;
+        const candidates = response.candidates ?? [];
+        if (candidates.length > 1) {
+            throw new Error(
+                `Gemini returned ${candidates.length} candidates; canonical ingestion requires one candidate`,
+            );
+        }
+        const candidate = candidates[0];
+        if (candidate !== undefined) {
+            if (candidate.finishReason === undefined) {
+                throw new Error('Gemini response candidate has no terminal finish reason');
+            }
+            finishReason = normalizeGeminiFinishReason(candidate.finishReason);
+            const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
+            if (candidate.content !== undefined) {
+                toolUse = await geminiToolUsesFromContent(candidate.content, prepared.runtime.response_operation_id);
+                if (isRecoverableToolCall && toolUse && toolUse.length > 0) {
+                    driver.logger.warn(
+                        `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                            `Model tried to call undeclared tool(s): ${toolUse.map((tool) => tool.tool_name).join(', ')}`,
+                    );
+                }
+                finalContent = candidate.content;
+            }
+        } else if (response.promptFeedback?.blockReason !== undefined) {
+            finishReason = response.promptFeedback.blockReason;
+            const blockMessage = response.promptFeedback.blockReasonMessage ?? '';
+            finalContent = { role: 'model', parts: [{ text: blockMessage }] };
+        } else {
+            throw new Error('Gemini response has no candidate or prompt block reason');
+        }
+        if (toolUse?.length) finishReason = 'tool_use';
+
+        const rawDecoded = await decodeGeminiCanonicalResponse({
+            response,
+            content: finalContent,
+            prepared,
+            finish_reason: finishReason,
+        });
+        const normalized =
+            !toolUse?.length && requestedOptions.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeGeminiCanonicalResponse({
+                      response,
+                      content: finalContent,
+                      prepared,
+                      finish_reason: finishReason,
+                      structured_output: normalized.structured_output,
+                  })
+                : rawDecoded;
+        if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+        const document = appendGeminiCanonicalResponse(prepared, decoded);
+        return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+            service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
+            prompt_cache_diagnostic: cacheExecution.diagnostic,
+            ...(requestedOptions.include_original_response ? { original_response: response } : {}),
+        });
+    }
+
     async requestTextCompletion(
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        const requestedOptions = options;
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
             region = splits[1];
         }
         const modelName = splits[splits.length - 1];
-        options = { ...options, model: modelName };
+        const transportOptions = { ...options, model: modelName };
 
         if (isFileAudioModel(modelName)) {
-            const modelOptions = options.model_options as VertexAIGeminiOptions | undefined;
+            const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
             const client = driver.getGoogleGenAIClient(
                 region,
                 resolveVertexAIServiceTier(modelOptions),
-                options.httpTimeout,
+                transportOptions.httpTimeout,
             );
             const speech = modelName.includes('tts');
             const config: GenerateContentConfig = speech
@@ -954,7 +1508,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                                 sample_encoding: 'int16',
                                 byte_order: 'little',
                             },
-                            options,
+                            transportOptions,
                             signal,
                         ),
                     );
@@ -967,44 +1521,57 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 result: results,
                 finish_reason: normalizeGeminiFinishReason(response.candidates?.[0]?.finishReason),
                 token_usage: this.usageMetadataToTokenUsage(driver, response.usageMetadata),
-                original_response: options.include_original_response ? response : undefined,
+                original_response: transportOptions.include_original_response ? response : undefined,
             };
         }
 
-        // Restore system instruction from stored conversation on resume.
-        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
-        // from the initial call. Always prefer it over the prompt's system, which on resume only
-        // contains the schema instruction (no interaction system segments are present on resume).
-        const existingSystem = extractSystemFromConversation(options.conversation);
-        if (existingSystem) {
-            prompt.system = existingSystem;
-        }
-
-        const conversation = updateConversation(options.conversation, prompt.contents);
-        prompt.contents = conversation;
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
 
         // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes('gemini-2.5-flash-image')) {
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) {
             region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const model_options = transportOptions.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
             resolveVertexAIServiceTier(model_options),
-            options.httpTimeout,
+            transportOptions.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'execute');
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts);
+        }
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,
-            options,
-            prompt,
+            transportOptions,
+            canonicalPrompt,
             payload,
             (request) => client.models.generateContent(request),
             region ?? driver.getVertexRegion?.() ?? 'global',
@@ -1014,10 +1581,19 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
         let tool_use: ToolUse[] | undefined;
-        let finalContent: Content | undefined;
+        let finalContent: Content = { role: 'model', parts: [] };
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
-        const candidate = response.candidates?.[0];
+        const candidates = response.candidates ?? [];
+        if (candidates.length > 1) {
+            throw new Error(
+                `Gemini returned ${candidates.length} candidates; canonical ingestion requires one candidate`,
+            );
+        }
+        const candidate = candidates[0];
         if (candidate) {
+            if (candidate.finishReason === undefined) {
+                throw new Error('Gemini response candidate has no terminal finish reason');
+            }
             finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
             const content = candidate.content;
 
@@ -1026,7 +1602,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
 
             if (content) {
-                tool_use = collectToolUseParts(content);
+                tool_use = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
 
                 // For recoverable tool call issues, log warning but continue processing
                 // The workflow will handle the invalid tool call gracefully.
@@ -1043,20 +1619,48 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 result = extractCompletionResults(content, includeThoughts);
                 finalContent = content;
             }
+        } else if (response.promptFeedback?.blockReason !== undefined) {
+            finish_reason = response.promptFeedback.blockReason;
+            const blockMessage = response.promptFeedback.blockReasonMessage ?? '';
+            finalContent = { role: 'model', parts: [{ text: blockMessage }] };
+            result = blockMessage.length === 0 ? [] : [{ type: 'text', value: blockMessage }];
+        } else {
+            throw new Error('Gemini response has no candidate or prompt block reason');
         }
 
         if (tool_use) {
             finish_reason = 'tool_use';
         }
 
-        const finalConversation = finalizeGeminiConversation(conversation, finalContent, prompt.system, options);
+        const completionResults = result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }];
+        const rawDecoded = await decodeGeminiCanonicalResponse({
+            response,
+            content: finalContent,
+            prepared,
+            finish_reason,
+        });
+        const normalized =
+            !tool_use?.length && requestedOptions.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                : undefined;
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeGeminiCanonicalResponse({
+                      response,
+                      content: finalContent,
+                      prepared,
+                      finish_reason,
+                      structured_output: normalized.structured_output,
+                  })
+                : rawDecoded;
+        const finalConversation = appendGeminiCanonicalResponse(prepared, decoded);
 
         return {
-            result: result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }],
+            result: completionResults,
             token_usage: token_usage,
             service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
             finish_reason: finish_reason,
-            original_response: options.include_original_response ? response : undefined,
+            original_response: requestedOptions.include_original_response ? response : undefined,
             conversation: finalConversation,
             tool_use,
             prompt_cache_diagnostic: cacheExecution.diagnostic,
@@ -1069,46 +1673,60 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        const requestedOptions = options;
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
             region = splits[1];
         }
         const modelName = splits[splits.length - 1];
-        options = { ...options, model: modelName };
+        const transportOptions = { ...options, model: modelName };
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
 
-        // Restore system instruction from stored conversation on resume.
-        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
-        // from the initial call. Always prefer it over the prompt's system, which on resume only
-        // contains the schema instruction (no interaction system segments are present on resume).
-        const existingSystem = extractSystemFromConversation(options.conversation);
-        if (existingSystem) {
-            prompt.system = existingSystem;
-        }
-
-        // Include conversation history in prompt contents (same as non-streaming)
-        const conversation = updateConversation(options.conversation, prompt.contents);
-        prompt.contents = conversation;
-
-        if (options.model.includes('gemini-2.5-flash-image')) {
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) {
             region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const model_options = transportOptions.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
             resolveVertexAIServiceTier(model_options),
-            options.httpTimeout,
+            transportOptions.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'stream');
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            return recoveredGeminiStream(
+                await recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts),
+            );
+        }
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,
-            options,
-            prompt,
+            transportOptions,
+            canonicalPrompt,
             payload,
             (request) => client.models.generateContentStream(request),
             region ?? driver.getVertexRegion?.() ?? 'global',
@@ -1117,43 +1735,71 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const nativeParts: Part[] = [];
         let streamedToolCallCount = 0;
+        let streamedToolUseFound = false;
+        let terminalResponse: GenerateContentResponse | undefined;
+        let terminalCandidate: NonNullable<GenerateContentResponse['candidates']>[number] | undefined;
+        let terminalPromptFeedback: GenerateContentResponse['promptFeedback'] | undefined;
+        let terminalFinishReason: string | undefined;
+        let finalUsageMetadata: GenerateContentResponseUsageMetadata | undefined;
         const stream = asyncMap(response, async (item) => {
+            if (item.usageMetadata !== undefined) finalUsageMetadata = item.usageMetadata;
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
-                for (const candidate of item.candidates) {
-                    let tool_use: StreamingToolUse[] | undefined;
-                    let finish_reason: string | undefined;
-                    finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
-                    const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
-                    if (candidate.content?.role === 'model') {
-                        appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
-                        // Collect all parts in order (text and images)
-                        const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
-                        tool_use = collectStreamingToolUseParts(candidate.content, () => ++streamedToolCallCount);
-                        if (tool_use) {
-                            finish_reason = 'tool_use';
-                            // Log warning for recoverable tool call issues — see the
-                            // matching site in `requestTextCompletion` above for why
-                            // we route through the driver's logger instead of
-                            // `console.warn`.
-                            if (isRecoverableToolCall) {
-                                driver.logger.warn(
-                                    `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                                        `Model tried to call undeclared tool(s): ${tool_use.map((t) => t.tool_name).join(', ')}`,
-                                );
-                            }
+                if (item.candidates.length > 1) {
+                    throw new Error(
+                        `Gemini stream returned ${item.candidates.length} candidates; canonical ingestion requires one candidate`,
+                    );
+                }
+                const candidate = item.candidates[0];
+                let tool_use: ToolUse[] | undefined;
+                let finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
+                const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
+                if (candidate.finishReason !== undefined) {
+                    terminalResponse = item;
+                    terminalCandidate = candidate;
+                    terminalPromptFeedback = undefined;
+                    terminalFinishReason = finish_reason;
+                }
+                if (candidate.content?.role === 'model') {
+                    appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
+                    // Collect all parts in order (text and images)
+                    const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
+                    tool_use = await geminiToolUsesFromContent(
+                        candidate.content,
+                        prepared.runtime.response_operation_id,
+                        streamedToolCallCount,
+                    );
+                    streamedToolCallCount += tool_use?.length ?? 0;
+                    if (tool_use) {
+                        finish_reason = 'tool_use';
+                        streamedToolUseFound = true;
+                        // Log warning for recoverable tool call issues — see the
+                        // matching site in `requestTextCompletion` above for why
+                        // we route through the driver's logger instead of
+                        // `console.warn`.
+                        if (isRecoverableToolCall) {
+                            driver.logger.warn(
+                                `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                                    `Model tried to call undeclared tool(s): ${tool_use.map((t) => t.tool_name).join(', ')}`,
+                            );
                         }
-                        return {
-                            result: combinedResults.length > 0 ? combinedResults : [],
-                            token_usage: token_usage,
-                            service_tier: normalizeVertexAIResolvedServiceTier(item.usageMetadata?.trafficType),
-                            finish_reason: finish_reason,
-                            tool_use,
-                        };
                     }
+                    return {
+                        result: combinedResults.length > 0 ? combinedResults : [],
+                        token_usage: token_usage,
+                        service_tier: normalizeVertexAIResolvedServiceTier(item.usageMetadata?.trafficType),
+                        finish_reason: finish_reason,
+                        tool_use,
+                    };
                 }
             }
             //No normal output, returning block reason if it exists.
+            if (item.promptFeedback?.blockReason !== undefined) {
+                terminalResponse = item;
+                terminalCandidate = undefined;
+                terminalPromptFeedback = item.promptFeedback;
+                terminalFinishReason = item.promptFeedback.blockReason;
+            }
             return {
                 result: item.promptFeedback?.blockReasonMessage
                     ? [{ type: 'text' as const, value: item.promptFeedback.blockReasonMessage }]
@@ -1164,16 +1810,506 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             };
         });
 
+        async function computeDecodedFinalResponse() {
+            if (
+                terminalResponse === undefined ||
+                (terminalCandidate === undefined && terminalPromptFeedback === undefined)
+            ) {
+                throw new Error('Gemini stream ended without a terminal finish reason');
+            }
+            const blockMessage = terminalPromptFeedback?.blockReasonMessage ?? '';
+            const content: Content =
+                terminalCandidate === undefined
+                    ? { role: 'model', parts: [{ text: blockMessage }] }
+                    : { role: 'model', parts: nativeParts };
+            const finalResponse = {
+                ...terminalResponse,
+                ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
+                ...(terminalCandidate === undefined ? {} : { candidates: [{ ...terminalCandidate, content }] }),
+            } as GenerateContentResponse;
+            const rawDecoded = await decodeGeminiCanonicalResponse({
+                response: finalResponse,
+                content,
+                prepared,
+                finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
+            });
+            const normalized =
+                !streamedToolUseFound && requestedOptions.result_schema
+                    ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                    : undefined;
+            const decoded =
+                normalized?.status === 'valid'
+                    ? await decodeGeminiCanonicalResponse({
+                          response: finalResponse,
+                          content,
+                          prepared,
+                          finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
+                          structured_output: normalized.structured_output,
+                      })
+                    : rawDecoded;
+            return { decoded, finalResponse, normalized };
+        }
+        let decodedFinalResponse: ReturnType<typeof computeDecodedFinalResponse> | undefined;
+        const decodeFinalResponse = () => {
+            decodedFinalResponse ??= computeDecodedFinalResponse();
+            return decodedFinalResponse;
+        };
         return Object.assign(stream, {
             finalizePromptCacheDiagnostic: () => cacheExecution.diagnostic,
-            finalizeConversation: () =>
-                finalizeGeminiConversation(
-                    conversation,
-                    nativeParts.length > 0 ? { role: 'model', parts: nativeParts } : undefined,
-                    prompt.system,
-                    options,
-                ),
+            finalizeConversation: async () => {
+                const { decoded } = await decodeFinalResponse();
+                return appendGeminiCanonicalResponse(prepared, decoded);
+            },
         });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const requestedOptions = options;
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
+        const modelName = splits.at(-1) ?? options.model;
+
+        if (isFileAudioModel(modelName)) {
+            const runtime = resolveConversationRuntime(requestedOptions);
+            const document = isConversationDocumentFormat(requestedOptions.conversation)
+                ? parseConversationDocument(requestedOptions.conversation)
+                : undefined;
+            const accepted =
+                document === undefined ? undefined : acceptedCanonicalResponse(document, runtime.response_operation_id);
+            const state =
+                accepted === undefined
+                    ? await prepareGeminiCanonicalState({
+                          conversation: requestedOptions.conversation,
+                          prompt,
+                          options: requestedOptions,
+                          provider: geminiProvider(driver),
+                      })
+                    : undefined;
+            const identity = {
+                request_id: accepted?.generation.request_id ?? state?.runtime.request_id ?? runtime.request_id,
+                attempt_id: accepted?.generation.attempt_id ?? state?.runtime.attempt_id ?? runtime.attempt_id,
+                response_operation_id: runtime.response_operation_id,
+                generation_id:
+                    accepted?.generation.id ?? state?.generation_id ?? `${runtime.response_operation_id}:generation`,
+                draft_turn_id: accepted?.turn.id ?? state?.response_turn_id ?? `${runtime.response_operation_id}:turn`,
+            };
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                (fallbackSignal) =>
+                    this.requestCanonicalTextCompletion(
+                        driver,
+                        prompt,
+                        requestedOptions,
+                        signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                    ),
+                { ...open, origin: accepted === undefined ? 'live_transport' : 'accepted_recovery' },
+            );
+        }
+
+        const transportOptions = { ...options, model: modelName };
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
+        const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        const accepted = canonicalState.accepted_response;
+        const identity = {
+            request_id: accepted?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: accepted?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: accepted?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: accepted?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (accepted !== undefined) {
+            if (requestedOptions.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () =>
+                    recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                        service_tier: canonicalGeminiServiceTier(canonicalState),
+                    }),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        payload.config = { ...payload.config, abortSignal: abortController.signal };
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(modelOptions),
+            transportOptions.httpTimeout,
+        );
+        const nativeParts: Part[] = [];
+        const drafts = new Map<string, GeminiCanonicalDraft>();
+        let streamedToolCallCount = 0;
+        let terminalResponse: GenerateContentResponse | undefined;
+        let terminalCandidate: NonNullable<GenerateContentResponse['candidates']>[number] | undefined;
+        let terminalPromptFeedback: GenerateContentResponse['promptFeedback'] | undefined;
+        let terminalFinishReason: string | undefined;
+        let finalUsageMetadata: GenerateContentResponseUsageMetadata | undefined;
+        let cacheExecution: GeminiContextCacheExecution<AsyncIterable<GenerateContentResponse>> | undefined;
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            classifyFailure: (error) => {
+                const classified = LlumiverseError.isLlumiverseError(error)
+                    ? error
+                    : driver.formatLlumiverseError(error, {
+                          provider: geminiProvider(driver),
+                          model: requestedOptions.model,
+                          operation: 'stream',
+                      });
+                return classified.retryable;
+            },
+            openSource: async () => {
+                cacheExecution = await generateWithGeminiContextCache(
+                    driver,
+                    client,
+                    transportOptions,
+                    canonicalPrompt,
+                    payload,
+                    (request) => client.models.generateContentStream(request),
+                    region ?? driver.getVertexRegion?.() ?? 'global',
+                );
+                return cacheExecution.value;
+            },
+            map: async (item, writer) => {
+                if (item.usageMetadata !== undefined) finalUsageMetadata = item.usageMetadata;
+                if ((item.candidates?.length ?? 0) > 1) {
+                    throw new Error(
+                        `Gemini stream returned ${item.candidates?.length ?? 0} candidates; canonical ingestion requires one candidate`,
+                    );
+                }
+                const candidate = item.candidates?.[0];
+                if (candidate === undefined) {
+                    if (item.promptFeedback?.blockReason !== undefined) {
+                        terminalResponse = item;
+                        terminalCandidate = undefined;
+                        terminalPromptFeedback = item.promptFeedback;
+                        terminalFinishReason = item.promptFeedback.blockReason;
+                    }
+                    return;
+                }
+                assertSupportedGeminiFinishReason(candidate);
+                if (candidate.finishReason !== undefined) {
+                    terminalResponse = item;
+                    terminalCandidate = candidate;
+                    terminalPromptFeedback = undefined;
+                    terminalFinishReason = normalizeGeminiFinishReason(candidate.finishReason);
+                }
+                if (candidate.content?.role !== 'model') return;
+                for (const part of candidate.content.parts ?? []) {
+                    if (part.audioTranscription !== undefined) {
+                        throw new Error(
+                            'Gemini streaming transcription output requires the finite file-audio canonical path',
+                        );
+                    }
+                    const partIndex = appendGeminiStreamPart(nativeParts, part);
+                    const position = geminiStreamPosition(partIndex, part.functionCall?.id);
+                    const key = canonicalJsonContentString(position);
+                    if (typeof part.text === 'string') {
+                        if (part.text.length === 0) continue;
+                        let draft = drafts.get(key);
+                        if (draft === undefined) {
+                            draft = {
+                                draft_block_id: `${prepared.response_turn_id}:gemini:${partIndex}`,
+                                native_position: position,
+                                kind: part.thought ? 'reasoning' : 'text',
+                                text: '',
+                            };
+                            drafts.set(key, draft);
+                            await writer.startBlock({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                block: part.thought ? { type: 'reasoning', visibility: 'display' } : { type: 'text' },
+                            });
+                        }
+                        draft.text += part.text;
+                        if (draft.kind === 'reasoning') {
+                            await writer.reasoning({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                text: part.text,
+                            });
+                        } else {
+                            await writer.text({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                text: part.text,
+                            });
+                        }
+                        continue;
+                    }
+                    if (part.functionCall !== undefined) {
+                        const call = (
+                            await geminiToolUsesFromContent(
+                                { role: 'model', parts: [part] },
+                                prepared.runtime.response_operation_id,
+                                streamedToolCallCount,
+                            )
+                        )?.[0];
+                        streamedToolCallCount += 1;
+                        if (call === undefined)
+                            throw new Error('Gemini stream function call has no canonical identity');
+                        const toolArguments = providerJsonValue(part.functionCall.args ?? {}) as JsonValue;
+                        const draft: GeminiCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:gemini:${partIndex}`,
+                            native_position: position,
+                            kind: 'tool_call',
+                            text: '',
+                            tool_arguments: toolArguments,
+                        };
+                        drafts.set(key, draft);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            block: {
+                                type: 'tool_call',
+                                executor: 'application',
+                                call_id: call.id,
+                                tool_name: call.tool_name,
+                            },
+                        });
+                        await writer.toolArgumentsSnapshot({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            value: toolArguments,
+                        });
+                        continue;
+                    }
+                    const media = part.inlineData ?? part.fileData;
+                    if (media !== undefined) {
+                        const mediaKind = geminiDraftMediaKind(media.mimeType);
+                        const draft: GeminiCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:gemini:${partIndex}`,
+                            native_position: position,
+                            kind: mediaKind,
+                            text: '',
+                        };
+                        drafts.set(key, draft);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            block: { type: mediaKind, ...(media.mimeType ? { mime_type: media.mimeType } : {}) },
+                        });
+                    }
+                }
+            },
+            finalize: async () => {
+                if (
+                    terminalResponse === undefined ||
+                    (terminalCandidate === undefined && terminalPromptFeedback === undefined)
+                ) {
+                    throw new Error('Gemini stream ended without a terminal finish reason');
+                }
+                const blockedMessage = terminalPromptFeedback?.blockReasonMessage ?? '';
+                const content: Content =
+                    terminalCandidate === undefined
+                        ? { role: 'model', parts: [{ text: blockedMessage }] }
+                        : { role: 'model', parts: nativeParts };
+                const finalResponse = {
+                    ...terminalResponse,
+                    ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
+                    ...(terminalCandidate === undefined ? {} : { candidates: [{ ...terminalCandidate, content }] }),
+                } as GenerateContentResponse;
+                const toolUse = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
+                const finishReason = toolUse?.length ? 'tool_use' : terminalFinishReason;
+                const rawDecoded = await decodeGeminiCanonicalResponse({
+                    response: finalResponse,
+                    content,
+                    prepared,
+                    finish_reason: finishReason,
+                });
+                const normalized =
+                    !toolUse?.length && requestedOptions.result_schema
+                        ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                        : undefined;
+                let decoded =
+                    normalized?.status === 'valid'
+                        ? await decodeGeminiCanonicalResponse({
+                              response: finalResponse,
+                              content,
+                              prepared,
+                              finish_reason: finishReason,
+                              structured_output: normalized.structured_output,
+                          })
+                        : rawDecoded;
+                if (normalized?.status === 'invalid') {
+                    decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+                }
+                const document = appendGeminiCanonicalResponse(prepared, decoded);
+                const serviceTier = normalizeVertexAIResolvedServiceTier(finalUsageMetadata?.trafficType);
+                const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                    service_tier: serviceTier,
+                    ...(cacheExecution?.diagnostic === undefined
+                        ? {}
+                        : { prompt_cache_diagnostic: cacheExecution.diagnostic }),
+                    ...(requestedOptions.include_original_response ? { original_response: finalResponse } : {}),
+                });
+                return {
+                    decoded,
+                    response,
+                    prepare_reconciliation: async () => {
+                        const positions =
+                            terminalCandidate === undefined && blockedMessage.length > 0
+                                ? [geminiPromptFeedbackPosition()]
+                                : geminiSemanticPositions(content);
+                        const rawBlocks = geminiSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== positions.length) {
+                            throw new Error('Gemini stream decode does not match terminal native content positions');
+                        }
+                        const completeDrafts = positions.map((position) =>
+                            drafts.get(canonicalJsonContentString(position)),
+                        );
+                        const terminalOnly = terminalCandidate === undefined;
+                        if (!terminalOnly && completeDrafts.some((draft) => draft === undefined)) {
+                            throw new Error('Gemini terminal response has no matching native stream draft');
+                        }
+                        const orderedDrafts = completeDrafts as Array<GeminiCanonicalDraft | undefined>;
+                        for (const [index, block] of rawBlocks.entries()) {
+                            const draft = orderedDrafts[index];
+                            if (draft === undefined && terminalOnly) continue;
+                            if (draft === undefined) throw new Error('Gemini terminal response has no matching draft');
+                            assertGeminiToolDraftArguments(draft, block);
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const position = positions[index];
+                            if (position === undefined) return [];
+                            return [
+                                { canonical_id: block.id, native_position: position, kind: 'block' as const },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = geminiSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error('Gemini structured stream is missing source or result blocks');
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && orderedDrafts[index] !== undefined
+                                    ? [orderedDrafts[index]]
+                                    : [],
+                            );
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                                native_positions: sourceDrafts.map((draft) => draft.native_position),
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            if (normalized?.status === 'valid' && block.type === 'text') continue;
+                            const draft = orderedDrafts[index];
+                            if (draft === undefined && terminalOnly) continue;
+                            if (draft === undefined) throw new Error('Gemini direct reconciliation has no draft');
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        const decodedWithEvidence = {
+                            ...decoded,
+                            stream_evidence: { item_mappings: itemMappings, transformations },
+                        };
+                        return {
+                            decoded: decodedWithEvidence,
+                            reconciliations,
+                            deliver_final_events: async (writer) => {
+                                if (decodedWithEvidence.generation.usage !== undefined) {
+                                    await writer.usage(decodedWithEvidence.generation.usage);
+                                }
+                                for (const [index, block] of rawBlocks.entries()) {
+                                    const draft = orderedDrafts[index];
+                                    if (draft === undefined) continue;
+                                    await writer.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : decodedWithEvidence.generation.status === 'cancelled'
+                                                  ? 'interrupted'
+                                                  : decodedWithEvidence.generation.status === 'failed'
+                                                    ? 'failed'
+                                                    : 'native_complete',
+                                    });
+                                }
+                                await writer.finish({
+                                    outcome:
+                                        decodedWithEvidence.generation.status === 'cancelled'
+                                            ? 'interrupted'
+                                            : decodedWithEvidence.generation.status === 'failed'
+                                              ? 'failed'
+                                              : 'completed',
+                                    finish_reason: decodedWithEvidence.generation.finish_reason,
+                                    ...(serviceTier === undefined ? {} : { service_tier: serviceTier }),
+                                });
+                            },
+                        };
+                    },
+                    ...(normalized?.status === 'valid' && requestedOptions.result_schema !== undefined
+                        ? { result_schema: requestedOptions.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
+        });
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
     }
 
     /**
@@ -1422,49 +2558,6 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
 }
 
 /**
- * Update the conversation messages
- * @param prompt
- * @param response
- * @returns
- */
-function updateConversation(conversation: unknown, prompt: Content[]): Content[] {
-    // Unwrap array if wrapped, otherwise treat as array
-    const unwrapped = unwrapConversationArray<Content>(conversation);
-    const convArray = unwrapped ?? ((conversation as Content[]) || []);
-    return convArray.concat(prompt);
-}
-
-const SYSTEM_KEY = '_llumiverse_system';
-
-/**
- * Extract the stored system instruction from a Gemini conversation object.
- * Returns undefined if no system was stored.
- */
-function extractSystemFromConversation(conversation: unknown): Content | undefined {
-    if (typeof conversation === 'object' && conversation !== null) {
-        const c = conversation as Record<string, unknown>;
-        if (c[SYSTEM_KEY] && typeof c[SYSTEM_KEY] === 'object') {
-            return c[SYSTEM_KEY] as Content;
-        }
-    }
-    return undefined;
-}
-
-/**
- * Store the system instruction in the Gemini conversation wrapper object.
- * The conversation is already wrapped by incrementConversationTurn into
- * { _arrayConversation: Content[], _llumiverse_meta: {...} }.
- * We add _llumiverse_system alongside these fields.
- */
-function storeSystemInConversation(conversation: unknown, system: Content | undefined): unknown {
-    if (!system) return conversation;
-    if (typeof conversation === 'object' && conversation !== null) {
-        return { ...(conversation as object), [SYSTEM_KEY]: system };
-    }
-    return conversation;
-}
-
-/**
  * Media reference shape shared by `Part` and `FunctionResponsePart`, so the same attachment
  * mapping serves both a user turn and a tool result. Files already in Google Cloud Storage are
  * passed by URI; anything else is inlined as base64.
@@ -1483,28 +2576,4 @@ async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
         file.mime_type.startsWith('audio/') ? boundedAudioStream(source, 25_000_000) : source,
     );
     return { inlineData: { data, mimeType: file.mime_type } };
-}
-
-/**
- *
- * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
- *
- * This is an excerpt from googleapis.github.io/python-genai:
- *
- * The function response in JSON object format.
- * Use “output” key to specify function output and “error” key to specify error details (if any).
- * If “output” and “error” keys are not specified, then whole “response” is treated as function output.
- * @see https://googleapis.github.io/python-genai/genai.html#genai.types.FunctionResponse
- */
-function formatFunctionResponse(response: string): JSONObject {
-    response = response.trim();
-    if (response.startsWith('{') && response.endsWith('}')) {
-        try {
-            return JSON.parse(response);
-        } catch {
-            return { output: response };
-        }
-    } else {
-        return { output: response };
-    }
 }

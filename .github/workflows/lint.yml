@@ -47,6 +47,8 @@ jobs:
         run: node --test .github/bin/automerge-ci.node-test.mjs .github/bin/ci-approve.test.mjs
       - name: Test automation notifications
         run: node --test .github/bin/automation-notification.test.mjs
+      - name: Test package publication contracts
+        run: node --test .github/bin/verify-package-release.test.mjs
       - name: Locate pnpm store
         id: pnpm-store
         shell: bash

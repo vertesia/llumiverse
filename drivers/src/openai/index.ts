@@ -1,9 +1,20 @@
 import {
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    isConversationDocumentFormat,
+    type NativeStreamPosition,
+} from '@llumiverse/conversation';
+import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    createCanonicalExecutionResponse,
     type DataSource,
     type DriverCompletionStream,
     type DriverOptions,
@@ -13,17 +24,18 @@ import {
     type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
+    legacyCompletionFromCanonicalExecution,
     ModelType,
+    markCanonicalAcceptedRecovery,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
-    type OpenAiDalleOptions,
-    type OpenAiGptImageOptions,
     type PromptOptions,
     type PromptSegment,
     Providers,
@@ -43,12 +55,46 @@ import {
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import {
+    type CanonicalNativeStreamWriter,
+    canonicalNativeExecutionEventStream,
+} from '../conversation/canonical-execution-event-stream.js';
+import {
+    assertAcceptedCanonicalRequest,
+    canonicalConversationTurnNumber,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+} from '../conversation/canonical-runtime.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
+import {
+    executeOpenAIAudioCanonical,
+    executeOpenAIAudioRequest,
+    openAIAudioTask,
+    streamOpenAIAudioCanonicalEvents,
+} from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
+import {
+    executeOpenAIImageCanonical,
+    mapOpenAIImagesUsage,
+    openAIImageRequest,
+    validateOpenAICanonicalImageInput,
+} from './image.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import {
+    appendOpenAIResponsesCanonicalResponse,
+    decodeOpenAIResponsesCanonicalResponse,
+    finalizeOpenAIResponsesPreparedRequest,
+    OPENAI_RESPONSES_PROTOCOL,
+    type PreparedOpenAIResponsesConversation,
+    prepareOpenAIResponsesCanonicalState,
+} from './openai-responses-conversation-adapter.js';
 import { formatOpenAISchema } from './schema.js';
 import { openAIPromptUsage } from './usage.js';
 
@@ -120,7 +166,7 @@ type OpenAIFunctionItem = ResponseInputItem & {
     type?: string;
     name?: string;
     arguments?: string;
-    output?: string;
+    output?: unknown;
 };
 type OpenAIPromptCacheConfig = {
     input: ResponseInputItem[];
@@ -267,6 +313,155 @@ const supportFineTunning = new Set([
 
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
+function projectCanonicalResponsesHistory(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): { conversation: ResponseInputItem[]; current_items: ResponseInputItem[] } {
+    const currentTurn = canonicalConversationTurnNumber(prepared.document);
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
+        return typeof encryptedContent === 'string' && encryptedContent.length > 0;
+    };
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
+    };
+    const prior = prepared.native_conversation.slice(0, prepared.prior_native_item_count);
+    let projectedPrior = stripBase64ImagesFromConversation(prior, stripOptions);
+    projectedPrior = truncateLargeTextInConversation(projectedPrior, stripOptions);
+    projectedPrior = stripHeartbeatsFromConversation(projectedPrior, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+        preserveSubtree,
+    });
+    const currentItems = prepared.native_conversation.slice(prepared.prior_native_item_count);
+    return { conversation: [...(projectedPrior as ResponseInputItem[]), ...currentItems], current_items: currentItems };
+}
+
+function withoutCanonicalIngestionFields(items: ResponseInputItem[]): ResponseInputItem[] {
+    return items.map((item) => {
+        if (!('type' in item) || item.type !== 'function_call_output') return item;
+        const clone = { ...item } as Record<string, unknown>;
+        delete clone._llumiverse_tool_result_status;
+        return clone as unknown as ResponseInputItem;
+    });
+}
+
+function canonicalResponsesServiceTier(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): string | undefined {
+    const metadata = prepared.accepted_response?.generation.metadata?.openai_responses;
+    if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+    const serviceTier = metadata.service_tier;
+    return typeof serviceTier === 'string' ? serviceTier : undefined;
+}
+
+function recoveredOpenAIResponsesStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+            service_tier: completion.service_tier,
+        };
+    })();
+    return markCanonicalAcceptedRecovery(
+        Object.assign(stream, {
+            finalizeConversation: () => completion.conversation,
+        }),
+    );
+}
+
+interface OpenAIResponsesCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call' | 'image';
+    text: string;
+}
+
+function openAIResponsesStreamPosition(
+    outputIndex: number,
+    path: Array<string | number>,
+    nativeItemId?: string,
+): NativeStreamPosition {
+    return {
+        protocol: OPENAI_RESPONSES_PROTOCOL,
+        path: ['output', outputIndex, ...path],
+        ...(nativeItemId === undefined ? {} : { native_item_id: nativeItemId }),
+    };
+}
+
+function openAIResponsesSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('OpenAI Responses stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+function openAIResponsesSemanticPositions(response: OpenAI.Responses.Response): NativeStreamPosition[] {
+    const positions: NativeStreamPosition[] = [];
+    for (let outputIndex = 0; outputIndex < response.output.length; outputIndex += 1) {
+        const item = response.output[outputIndex];
+        if (item === undefined) continue;
+        if (item.type === 'message') {
+            for (let contentIndex = 0; contentIndex < item.content.length; contentIndex += 1) {
+                if (item.content[contentIndex]?.type === 'output_text') {
+                    positions.push(openAIResponsesStreamPosition(outputIndex, ['content', contentIndex], item.id));
+                }
+            }
+        } else if (item.type === 'reasoning') {
+            for (let summaryIndex = 0; summaryIndex < item.summary.length; summaryIndex += 1) {
+                positions.push(openAIResponsesStreamPosition(outputIndex, ['summary', summaryIndex], item.id));
+            }
+            for (let contentIndex = 0; contentIndex < (item.content?.length ?? 0); contentIndex += 1) {
+                positions.push(openAIResponsesStreamPosition(outputIndex, ['content', contentIndex], item.id));
+            }
+        } else if (item.type === 'function_call') {
+            positions.push(openAIResponsesStreamPosition(outputIndex, [], item.id));
+        } else if (item.type === 'image_generation_call' && typeof item.result === 'string') {
+            positions.push(openAIResponsesStreamPosition(outputIndex, [], item.id));
+        }
+    }
+    return positions;
+}
+
+async function finalizeOpenAIResponsesStreamResponse(input: {
+    response: OpenAI.Responses.Response;
+    prepared: PreparedOpenAIResponsesConversation;
+    options: ExecutionOptions;
+}) {
+    const finalTools = collectTools(input.response.output);
+    const rawDecoded = await decodeOpenAIResponsesCanonicalResponse({
+        response: input.response,
+        prepared: input.prepared,
+    });
+    const normalized =
+        !finalTools?.length && input.options.result_schema
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, input.options.result_schema)
+            : undefined;
+    let decoded =
+        normalized?.status === 'valid'
+            ? await decodeOpenAIResponsesCanonicalResponse({
+                  response: input.response,
+                  prepared: input.prepared,
+                  structured_output: normalized.structured_output,
+              })
+            : rawDecoded;
+    if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+    const document = appendOpenAIResponsesCanonicalResponse(input.prepared, decoded);
+    return {
+        raw_decoded: rawDecoded,
+        decoded,
+        normalized,
+        response: createCanonicalExecutionResponse(document, input.prepared.runtime.response_operation_id, {
+            ...(input.response.service_tier == null ? {} : { service_tier: input.response.service_tier }),
+        }),
+    };
+}
+
 /** Reusable Responses text protocol shared by OpenAI-compatible transports. */
 export class OpenAIResponsesProtocol {
     constructor(
@@ -292,24 +487,31 @@ export class OpenAIResponsesProtocol {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
-        // Include conversation history (same as non-streaming)
-        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
+        const canonicalState = await prepareOpenAIResponsesCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: driver.provider,
+        });
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
 
+        const model_options = options.model_options as OpenAIRequestOptions | undefined;
+        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'stream');
+        const includeThoughts = model_options?.include_thoughts !== false;
+        const projection = projectCanonicalResponsesHistory(canonicalState, options);
+        let conversation = projection.conversation;
+        const currentItems = projection.current_items;
+        convertRoles(currentItems, options.model);
+        insert_image_detail(currentItems, model_options?.image_detail ?? 'auto');
+        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
+
         // When no tools are provided but conversation contains function_call/function_call_output
-        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
+        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors.
         if (!useTools) {
             conversation = convertOpenAIFunctionItemsToText(conversation);
         }
-
-        convertRoles(prompt, options.model);
-
-        const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'stream');
-        insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
@@ -331,7 +533,6 @@ export class OpenAIResponsesProtocol {
             model_options?.reasoning_context,
         );
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
-        const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
 
@@ -371,22 +572,508 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider: driver.provider, protocol: 'openai.responses', model: options.model },
+            providerJsonValue(request),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            const canonical = await recoverCanonicalExecutionResponse(canonicalState, options, {
+                ...(canonicalResponsesServiceTier(canonicalState) === undefined
+                    ? {}
+                    : { service_tier: canonicalResponsesServiceTier(canonicalState) }),
+            });
+            return recoveredOpenAIResponsesStream(
+                legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
+            );
+        }
+        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            request,
+        );
+        await publishCanonicalPreparedRequest(prepared, options);
         const requestOptions = this.resolveRequestOptions(options, signal);
         const stream = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
 
-        return mapResponseStream(stream, includeThoughts, (response) =>
-            finalizeOpenAIResponsesConversation(conversation, response.output, options),
-        );
+        const mapped = mapResponseStream(stream, includeThoughts, async (response) => {
+            return (
+                await finalizeOpenAIResponsesStreamResponse({
+                    response,
+                    prepared,
+                    options,
+                })
+            ).response;
+        });
+        const finalize = mapped.finalizeConversation;
+        if (finalize === undefined) throw new Error('OpenAI Responses stream has no canonical finalizer');
+        let finalizedConversation: Promise<unknown> | undefined;
+        const finalizeConversation = () => {
+            finalizedConversation ??= Promise.resolve(finalize()).then(
+                (response) => (response as CanonicalExecutionResponse).conversation,
+            );
+            return finalizedConversation;
+        };
+        return Object.assign(mapped, { finalizeConversation });
     }
 
-    async requestTextCompletion(
+    async requestCanonicalTextCompletionEventStream(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const canonicalState = await prepareOpenAIResponsesCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: driver.provider,
+        });
+        const toolDefs = getToolDefinitions(options.tools);
+        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
+        const modelOptions = options.model_options as OpenAIRequestOptions | undefined;
+        assertOpenAIResponseToolChoiceAvailable(modelOptions, useTools, options.model, driver.provider, 'stream');
+        const projection = projectCanonicalResponsesHistory(canonicalState, options);
+        let conversation = projection.conversation;
+        const currentItems = projection.current_items;
+        convertRoles(currentItems, options.model);
+        insert_image_detail(currentItems, modelOptions?.image_detail ?? 'auto');
+        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
+        if (!useTools) conversation = convertOpenAIFunctionItemsToText(conversation);
+
+        let parsedSchema: JSONSchema | undefined;
+        let strictMode = false;
+        if (
+            options.result_schema &&
+            supportsSchema(options.model, driver.provider) &&
+            options.prompt_cache_schema_suffix !== true
+        ) {
+            const formattedSchema = formatOpenAISchema(options.result_schema);
+            parsedSchema = formattedSchema.schema;
+            strictMode = formattedSchema.strict;
+        }
+        const requestedEffort = modelOptions?.effort ?? modelOptions?.reasoning_effort;
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            modelOptions?.reasoning_context,
+        );
+        const reasoning = openAIReasoning(requestedEffort, isOpenAIReasoningModel(options.model), reasoningContext);
+        const promptCacheKey = modelOptions?.prompt_cache_key ?? options.prompt_cache_key;
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            promptCacheKey,
+        );
+        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
+            {
+                stream: true,
+                model: driver.getResponsesRequestModel(options.model),
+                prompt_cache_key: promptCacheKey,
+                ...getPromptCacheRequestOptions(
+                    options.model,
+                    modelOptions?.prompt_cache_retention,
+                    promptCache.options,
+                ),
+                input: promptCache.input,
+                reasoning,
+                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+                temperature: isOpenAIReasoningModel(options.model) ? undefined : modelOptions?.temperature,
+                top_p: isOpenAIReasoningModel(options.model) ? undefined : modelOptions?.top_p,
+                max_output_tokens: modelOptions?.max_tokens,
+                service_tier: asOpenAIResponseServiceTier(modelOptions?.service_tier),
+                tools: useTools ? toolDefs : undefined,
+                tool_choice: useTools ? getOpenAIResponseToolChoice(modelOptions) : undefined,
+                parallel_tool_calls: useTools ? modelOptions?.parallel_tool_calls : undefined,
+                text: buildResponseTextConfig(
+                    parsedSchema,
+                    strictMode,
+                    modelOptions?.verbosity,
+                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
+                ),
+            },
+            modelOptions?.extra_body,
+        );
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider: driver.provider, protocol: OPENAI_RESPONSES_PROTOCOL, model: options.model },
+            providerJsonValue(request),
+        );
+        const acceptedResponse = canonicalState.accepted_response;
+        const identity = {
+            request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: acceptedResponse?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: acceptedResponse?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: acceptedResponse?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (canonicalState.accepted_response !== undefined) {
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () =>
+                    recoverCanonicalExecutionResponse(canonicalState, options, {
+                        ...(canonicalResponsesServiceTier(canonicalState) === undefined
+                            ? {}
+                            : { service_tier: canonicalResponsesServiceTier(canonicalState) }),
+                    }),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            request,
+        );
+
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        const drafts = new Map<string, OpenAIResponsesCanonicalDraft>();
+        let finalResponse: OpenAI.Responses.Response | undefined;
+
+        const draftKey = (position: NativeStreamPosition) => JSON.stringify(position);
+        const startDraft = async (
+            writer: CanonicalNativeStreamWriter,
+            position: NativeStreamPosition,
+            kind: OpenAIResponsesCanonicalDraft['kind'],
+            block:
+                | { type: 'text' }
+                | { type: 'reasoning'; visibility: 'display' }
+                | { type: 'tool_call'; executor: 'application'; call_id?: string; tool_name?: string }
+                | { type: 'image'; mime_type?: string },
+        ) => {
+            const key = draftKey(position);
+            const existing = drafts.get(key);
+            if (existing !== undefined) return existing;
+            const draft = {
+                draft_block_id: `${prepared.response_turn_id}:responses:${drafts.size}`,
+                native_position: position,
+                kind,
+                text: '',
+            } satisfies OpenAIResponsesCanonicalDraft;
+            drafts.set(key, draft);
+            await writer.startBlock({ draft_block_id: draft.draft_block_id, native_position: position, block });
+            return draft;
+        };
+        const ensureFinalDrafts = async (response: OpenAI.Responses.Response, writer: CanonicalNativeStreamWriter) => {
+            for (let outputIndex = 0; outputIndex < response.output.length; outputIndex += 1) {
+                const item = response.output[outputIndex];
+                if (item === undefined) continue;
+                if (item.type === 'message') {
+                    for (let contentIndex = 0; contentIndex < item.content.length; contentIndex += 1) {
+                        const content = item.content[contentIndex];
+                        if (content?.type !== 'output_text') continue;
+                        const position = openAIResponsesStreamPosition(outputIndex, ['content', contentIndex], item.id);
+                        const draft = await startDraft(writer, position, 'text', { type: 'text' });
+                        if (draft.text.length === 0 && content.text.length > 0) {
+                            draft.text = content.text;
+                            await writer.text({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                text: content.text,
+                            });
+                        } else if (draft.text !== content.text) {
+                            throw new Error('OpenAI Responses text deltas differ from the terminal response');
+                        }
+                    }
+                } else if (item.type === 'reasoning') {
+                    const reasoningValues = [
+                        ...item.summary.map((part, index) => ({ text: part.text, path: ['summary', index] })),
+                        ...(item.content ?? []).map((part, index) => ({ text: part.text, path: ['content', index] })),
+                    ];
+                    for (const value of reasoningValues) {
+                        const position = openAIResponsesStreamPosition(outputIndex, value.path, item.id);
+                        const draft = await startDraft(writer, position, 'reasoning', {
+                            type: 'reasoning',
+                            visibility: 'display',
+                        });
+                        if (draft.text.length === 0 && value.text.length > 0) {
+                            draft.text = value.text;
+                            await writer.reasoning({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                text: value.text,
+                            });
+                        } else if (draft.text !== value.text) {
+                            throw new Error('OpenAI Responses reasoning deltas differ from the terminal response');
+                        }
+                    }
+                } else if (item.type === 'function_call') {
+                    const position = openAIResponsesStreamPosition(outputIndex, [], item.id);
+                    const draft = await startDraft(writer, position, 'tool_call', {
+                        type: 'tool_call',
+                        executor: 'application',
+                        call_id: item.call_id,
+                        tool_name: item.name,
+                    });
+                    if (draft.text.length === 0 && item.arguments.length > 0) {
+                        draft.text = item.arguments;
+                        await writer.toolArgumentsFragment({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            fragment: item.arguments,
+                        });
+                    } else if (draft.text !== item.arguments) {
+                        throw new Error('OpenAI Responses tool deltas differ from the terminal response');
+                    }
+                } else if (item.type === 'image_generation_call' && typeof item.result === 'string') {
+                    await startDraft(writer, openAIResponsesStreamPosition(outputIndex, [], item.id), 'image', {
+                        type: 'image',
+                        mime_type: 'image/png',
+                    });
+                }
+            }
+        };
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            openSource: async () => {
+                const requestOptions = this.resolveRequestOptions(options, abortController.signal);
+                return requestOptions
+                    ? await driver.service.responses.create(request, requestOptions)
+                    : await driver.service.responses.create(request);
+            },
+            map: async (event, writer) => {
+                if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
+                    await startDraft(
+                        writer,
+                        openAIResponsesStreamPosition(event.output_index, [], event.item.id),
+                        'tool_call',
+                        {
+                            type: 'tool_call',
+                            executor: 'application',
+                            call_id: event.item.call_id,
+                            tool_name: event.item.name,
+                        },
+                    );
+                } else if (event.type === 'response.output_text.delta') {
+                    const position = openAIResponsesStreamPosition(
+                        event.output_index,
+                        ['content', event.content_index],
+                        event.item_id,
+                    );
+                    const draft = await startDraft(writer, position, 'text', { type: 'text' });
+                    draft.text += event.delta;
+                    await writer.text({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: position,
+                        text: event.delta,
+                    });
+                } else if (
+                    event.type === 'response.reasoning_summary_text.delta' ||
+                    event.type === 'response.reasoning_text.delta'
+                ) {
+                    const position = openAIResponsesStreamPosition(
+                        event.output_index,
+                        [
+                            event.type === 'response.reasoning_summary_text.delta' ? 'summary' : 'content',
+                            event.type === 'response.reasoning_summary_text.delta'
+                                ? event.summary_index
+                                : event.content_index,
+                        ],
+                        event.item_id,
+                    );
+                    const draft = await startDraft(writer, position, 'reasoning', {
+                        type: 'reasoning',
+                        visibility: 'display',
+                    });
+                    draft.text += event.delta;
+                    await writer.reasoning({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: position,
+                        text: event.delta,
+                    });
+                } else if (event.type === 'response.function_call_arguments.delta') {
+                    const position = openAIResponsesStreamPosition(event.output_index, [], event.item_id);
+                    const draft = await startDraft(writer, position, 'tool_call', {
+                        type: 'tool_call',
+                        executor: 'application',
+                    });
+                    draft.text += event.delta;
+                    await writer.toolArgumentsFragment({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: position,
+                        fragment: event.delta,
+                    });
+                } else if (event.type === 'response.output_item.done' && event.item.type === 'function_call') {
+                    const position = openAIResponsesStreamPosition(event.output_index, [], event.item.id);
+                    const draft = await startDraft(writer, position, 'tool_call', {
+                        type: 'tool_call',
+                        executor: 'application',
+                    });
+                    await writer.toolIdentity({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: position,
+                        call_id: event.item.call_id,
+                        tool_name: event.item.name,
+                    });
+                } else if (
+                    event.type === 'response.completed' ||
+                    event.type === 'response.incomplete' ||
+                    event.type === 'response.failed'
+                ) {
+                    assertOpenAIResponseSucceeded(event.response);
+                    finalResponse = event.response;
+                }
+            },
+            finalize: async () => {
+                if (finalResponse === undefined) {
+                    throw new Error('OpenAI Responses stream ended without a final response');
+                }
+                const acceptedFinalResponse = finalResponse;
+                const finalized = await finalizeOpenAIResponsesStreamResponse({
+                    response: acceptedFinalResponse,
+                    prepared,
+                    options,
+                });
+                return {
+                    decoded: finalized.decoded,
+                    response: finalized.response,
+                    prepare_reconciliation: async (reconciliationWriter) => {
+                        await ensureFinalDrafts(acceptedFinalResponse, reconciliationWriter);
+                        const { raw_decoded: rawDecoded, normalized } = finalized;
+                        let { decoded } = finalized;
+                        const positions = openAIResponsesSemanticPositions(acceptedFinalResponse);
+                        const rawBlocks = openAIResponsesSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== positions.length) {
+                            throw new Error('OpenAI Responses decode does not match terminal native item positions');
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const position = positions[index];
+                            if (position === undefined) return [];
+                            return [
+                                { canonical_id: block.id, native_position: position, kind: 'block' as const },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = openAIResponsesSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error(
+                                    'OpenAI Responses structured stream is missing source or result blocks',
+                                );
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourcePositions = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && positions[index] !== undefined ? [positions[index]] : [],
+                            );
+                            const sourceDrafts = sourcePositions.map((position) => drafts.get(draftKey(position)));
+                            if (sourceDrafts.some((draft) => draft === undefined)) {
+                                throw new Error('OpenAI Responses structured stream is missing source drafts');
+                            }
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft?.draft_block_id ?? ''),
+                                native_positions: sourcePositions,
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            if (normalized?.status === 'valid' && block.type === 'text') continue;
+                            const position = positions[index];
+                            const draft = position === undefined ? undefined : drafts.get(draftKey(position));
+                            if (position === undefined || draft === undefined) {
+                                throw new Error(
+                                    `OpenAI Responses stream is missing draft for decoded ${block.type} block`,
+                                );
+                            }
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        const matchedPositions = new Set(positions.map(draftKey));
+                        for (const draft of drafts.values()) {
+                            if (matchedPositions.has(draftKey(draft.native_position))) continue;
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [],
+                                disposition: 'omitted_invalid' as const,
+                            });
+                        }
+                        decoded = { ...decoded, stream_evidence: { item_mappings: itemMappings, transformations } };
+                        const blocksByPosition = new Map(
+                            rawBlocks.map((block, index) => [
+                                positions[index] === undefined ? '' : draftKey(positions[index]),
+                                block,
+                            ]),
+                        );
+                        return {
+                            decoded,
+                            reconciliations,
+                            deliver_final_events: async (finalWriter) => {
+                                if (decoded.generation.usage !== undefined) {
+                                    await finalWriter.usage(decoded.generation.usage);
+                                }
+                                for (const draft of drafts.values()) {
+                                    const block = blocksByPosition.get(draftKey(draft.native_position));
+                                    await finalWriter.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            block?.type === 'tool_call' && block.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : acceptedFinalResponse.status === 'incomplete'
+                                                  ? 'interrupted'
+                                                  : block === undefined
+                                                    ? 'malformed'
+                                                    : 'native_complete',
+                                    });
+                                }
+                                await finalWriter.finish({
+                                    outcome:
+                                        acceptedFinalResponse.status === 'incomplete' ? 'interrupted' : 'completed',
+                                    finish_reason: decoded.generation.finish_reason,
+                                    ...(typeof acceptedFinalResponse.service_tier === 'string'
+                                        ? { service_tier: acceptedFinalResponse.service_tier }
+                                        : {}),
+                                });
+                            },
+                        };
+                    },
+                    ...(finalized.normalized?.status === 'valid' && options.result_schema !== undefined
+                        ? { result_schema: options.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
+        });
+        await publishCanonicalPreparedRequest(prepared, options);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
+    }
+
+    async requestCanonicalTextCompletion(
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
-    ): Promise<Completion> {
+    ): Promise<CanonicalExecutionResponse> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -397,17 +1084,23 @@ export class OpenAIResponsesProtocol {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
-        convertRoles(prompt, options.model);
-
+        const canonicalState = await prepareOpenAIResponsesCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: driver.provider,
+        });
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
-
         const toolDefs = getToolDefinitions(options.tools);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
         assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
-
-        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
+        const includeThoughts = model_options?.include_thoughts !== false;
+        const projection = projectCanonicalResponsesHistory(canonicalState, options);
+        let conversation = projection.conversation;
+        const currentItems = projection.current_items;
+        convertRoles(currentItems, options.model);
+        insert_image_detail(currentItems, model_options?.image_detail ?? 'auto');
+        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -474,21 +1167,78 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider: driver.provider, protocol: 'openai.responses', model: options.model },
+            providerJsonValue(request),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (options.include_original_response) {
+                throw new Error(
+                    'An idempotently recovered OpenAI Responses response cannot reconstruct original_response',
+                );
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, options, {
+                ...(canonicalResponsesServiceTier(canonicalState) === undefined
+                    ? {}
+                    : { service_tier: canonicalResponsesServiceTier(canonicalState) }),
+            });
+        }
+        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            request,
+        );
+        await publishCanonicalPreparedRequest(prepared, options);
         const requestOptions = this.resolveRequestOptions(options, signal);
         const res = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
 
-        const completion = driver.extractDataFromResponse(options, res);
-        if (options.include_original_response) {
-            completion.original_response = res;
+        assertOpenAIResponseSucceeded(res);
+        const completionResults = extractCompletionResults(res.output, includeThoughts);
+        const toolUse = collectTools(res.output);
+        if (completionResults.length === 0 && !toolUse) {
+            throw new Error('Response is not valid: no data');
         }
+        const fallbackItems =
+            res.output.length === 0 ? createAssistantMessageFromResults(completionResults, toolUse) : undefined;
+        const rawDecoded = await decodeOpenAIResponsesCanonicalResponse({
+            response: res,
+            prepared,
+            fallback_items: fallbackItems,
+        });
+        const normalized =
+            !toolUse?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIResponsesCanonicalResponse({
+                      response: res,
+                      prepared,
+                      fallback_items: fallbackItems,
+                      structured_output: normalized.structured_output,
+                  })
+                : rawDecoded;
+        if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+        const document = appendOpenAIResponsesCanonicalResponse(prepared, decoded);
 
-        completion.conversation = res.output.length
-            ? finalizeOpenAIResponsesConversation(conversation, res.output, options)
-            : updateConversation(conversation, createAssistantMessageFromCompletion(completion));
+        return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+            ...(res.service_tier == null ? {} : { service_tier: res.service_tier }),
+            ...(options.include_original_response ? { original_response: res } : {}),
+        });
+    }
 
-        return completion;
+    async requestTextCompletion(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        const response = await this.requestCanonicalTextCompletion(driver, prompt, options, signal);
+        return legacyCompletionFromCanonicalExecution(response, {
+            include_reasoning: (options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false,
+        });
     }
 }
 
@@ -523,6 +1273,22 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return this.executeFileAudio(segments, options, signal);
     }
 
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (!this.isFileAudioModel(options.model)) return super.executeCanonical(segments, options, signal);
+        return executeOpenAIAudioCanonical({
+            service: this.service,
+            segments,
+            options,
+            provider: this.provider,
+            request_model: this.getResponsesRequestModel(options.model),
+            request_options: this.getDriverRequestOptions(options, signal),
+        });
+    }
+
     protected async executeFileAudio(
         segments: PromptSegment[],
         options: ExecutionOptions,
@@ -552,11 +1318,41 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         );
     }
 
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (!this.isFileAudioModel(options.model)) {
+            return super.streamCanonicalEvents(segments, options, signal, open);
+        }
+        return streamOpenAIAudioCanonicalEvents({
+            segments,
+            options,
+            signal,
+            open,
+            execute: (streamSignal) => this.executeCanonical(segments, options, streamSignal),
+        });
+    }
+
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
         this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
             this.getDriverRequestOptions(options, signal),
         );
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return this.provider === Providers.openai;
+    }
+
+    protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
+        validateOpenAICanonicalImageInput(segments, options);
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
@@ -607,12 +1403,35 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
+    requestCanonicalTextCompletionEventStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (this.isFileAudioModel(options.model)) {
+            throw new Error(`OpenAI Responses audio model ${options.model} does not support canonical typed streaming`);
+        }
+        return this.responsesProtocol.requestCanonicalTextCompletionEventStream(this, prompt, options, signal, open);
+    }
+
     requestTextCompletion(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
         return this.responsesProtocol.requestTextCompletion(this, prompt, options, signal);
+    }
+
+    requestCanonicalTextCompletion(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (this.isFileAudioModel(options.model)) {
+            throw new Error(`OpenAI Responses audio model ${options.model} does not support canonical execution`);
+        }
+        return this.responsesProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -639,6 +1458,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ResponseInputItem[] | undefined {
+        if (isConversationDocumentFormat(options.conversation)) {
+            throw new Error('OpenAI Responses canonical streaming requires an authoritative terminal response');
+        }
         // Build assistant message from accumulated CompletionResult[]
         const completionResults = result as CompletionResult[];
 
@@ -856,47 +1678,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     ): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
 
-        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
-
-        // Extract prompt text from ResponseInputItem[]
-        let promptText = '';
-        for (const item of prompt) {
-            if ('content' in item && typeof item.content === 'string') {
-                promptText += `${item.content}\\n`;
-            } else if ('content' in item && Array.isArray(item.content)) {
-                // Extract text from content array
-                for (const part of item.content) {
-                    if ('type' in part && part.type === 'input_text' && 'text' in part) {
-                        promptText += `${part.text}\\n`;
-                    }
-                }
-            }
-        }
-        promptText = promptText.trim();
-
         try {
-            const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
-                model: options.model,
-                prompt: promptText,
-                size: model_options?.size || '1024x1024',
-            };
-
-            // Add DALL-E specific options
-            if (options.model.includes('dall-e') || model_options?._option_id === 'openai-dalle') {
-                const dalleOptions = model_options as OpenAiDalleOptions | undefined;
-                generateParams.n = dalleOptions?.n || 1;
-                generateParams.response_format = dalleOptions?.response_format || 'b64_json';
-
-                if (options.model.includes('dall-e-3')) {
-                    generateParams.quality = dalleOptions?.image_quality || 'standard';
-                    if (dalleOptions?.style) {
-                        generateParams.style = dalleOptions.style;
-                    }
-                }
-            } else {
-                // Default for other models
-                generateParams.n = 1;
-            }
+            const generateParams = openAIImageRequest(prompt, options);
 
             const response = signal
                 ? await this.service.images.generate(generateParams, { signal })
@@ -928,7 +1711,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
             return {
                 result: results,
-                token_usage: mapImagesUsage(response.usage),
+                token_usage: mapOpenAIImagesUsage(response.usage),
             };
         } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
@@ -945,6 +1728,22 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 },
             };
         }
+    }
+
+    override async requestCanonicalImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeOpenAIImageCanonical({
+            service: this.service,
+            provider: this.provider,
+            prompt,
+            options,
+            fetch_image: this.getDriverFetch(),
+            request_options: this.getDriverRequestOptions(options, signal),
+            signal,
+        });
     }
 }
 
@@ -987,18 +1786,6 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
     return {
         ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         result: usage.output_tokens,
-        total: usage.total_tokens,
-    };
-}
-
-/** GPT Image models report usage; every output token is an image token. DALL-E reports none. */
-function mapImagesUsage(usage: OpenAI.Images.ImagesResponse.Usage | undefined): ExecutionTokenUsage | undefined {
-    if (!usage) return undefined;
-    return {
-        prompt: usage.input_tokens,
-        prompt_new: usage.input_tokens,
-        result: usage.output_tokens,
-        result_image: usage.output_tokens,
         total: usage.total_tokens,
     };
 }
@@ -1057,8 +1844,11 @@ function buildResponseTextConfig(
     };
 }
 
-function createAssistantMessageFromCompletion(completion: Completion): ResponseInputItem[] {
-    const textContent = completionResultsToText(completion.result);
+function createAssistantMessageFromResults(
+    results: CompletionResult[],
+    toolUse: ToolUse<unknown>[] | undefined,
+): ResponseInputItem[] {
+    const textContent = completionResultsToText(results);
     const result: ResponseInputItem[] = [];
 
     // Add assistant text message if present
@@ -1072,8 +1862,8 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
     }
 
     // Add function calls as separate items (Response API format)
-    if (completion.tool_use && completion.tool_use.length > 0) {
-        for (const t of completion.tool_use) {
+    if (toolUse && toolUse.length > 0) {
+        for (const t of toolUse) {
             const functionCall: OpenAI.Responses.ResponseFunctionToolCall = {
                 type: 'function_call',
                 call_id: t.id,
@@ -1273,8 +2063,9 @@ export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): Re
             };
         }
         if (typed.type === 'function_call_output') {
-            const output = typed.output || 'No output';
-            const truncated = output.length > 500 ? `${output.substring(0, 500)}...` : output;
+            const output = typed.output ?? 'No output';
+            const outputText = typeof output === 'string' ? output : (JSON.stringify(output) ?? String(output));
+            const truncated = outputText.length > 500 ? `${outputText.substring(0, 500)}...` : outputText;
             return {
                 role: 'user' as const,
                 content: `[Tool result: ${truncated}]`,
@@ -1319,35 +2110,6 @@ function updateConversation(conversation: unknown, items: ResponseInputItem[]): 
     const unwrapped = unwrapConversationArray<ResponseInputItem>(conversation);
     const convArray = unwrapped ?? (conversation as ResponseInputItem[]);
     return [...convArray, ...items];
-}
-
-function finalizeOpenAIResponsesConversation(
-    conversation: ResponseInputItem[],
-    output: OpenAI.Responses.ResponseOutputItem[],
-    options: ExecutionOptions,
-): ResponseInputItem[] {
-    let completed = updateConversation(conversation, output as ResponseInputItem[]);
-    completed = incrementConversationTurn(completed) as ResponseInputItem[];
-    const currentTurn = getConversationMeta(completed).turnNumber;
-    const preserveSubtree = (value: unknown): boolean => {
-        if (!value || typeof value !== 'object') return false;
-        const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
-        return typeof encryptedContent === 'string' && encryptedContent.length > 0;
-    };
-    const stripOptions = {
-        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-        currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
-        preserveSubtree,
-    };
-    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
-    processed = stripHeartbeatsFromConversation(processed, {
-        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-        currentTurn,
-        preserveSubtree,
-    });
-    return processed as ResponseInputItem[];
 }
 
 export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse<unknown>[] | undefined {

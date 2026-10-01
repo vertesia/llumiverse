@@ -91,6 +91,10 @@ export const PromptSegmentSchema = z
         role: PromptRoleSchema,
         content: z.string(),
         tool_use_id: z.string().meta({ description: 'The tool use id if the segment is a tool response' }).optional(),
+        tool_result_status: z
+            .enum(['success', 'error', 'cancelled', 'denied'])
+            .meta({ description: 'Terminal status of a tool response supplied by the application' })
+            .optional(),
         thought_signature: z
             .string()
             .meta({

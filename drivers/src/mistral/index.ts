@@ -1,5 +1,8 @@
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
     type DriverCompletionStream,
@@ -37,6 +40,7 @@ import type {
     ChatCompletionRequestMessage,
     ChatCompletionRequestTool,
     ChatCompletionResponse,
+    CompletionEvent,
     ContentChunk,
     ToolCall,
 } from '@mistralai/mistralai/models/components';
@@ -46,13 +50,25 @@ import {
     MistralError,
     RequestAbortedError,
 } from '@mistralai/mistralai/models/errors';
+import { providerJsonValue } from '../conversation/canonical-runtime.js';
 import type { MistralAIDriverOptions } from '../driver-options.js';
-import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
+import {
+    type OpenAIChatCompletionsMessage,
+    type OpenAIChatCompletionsPayload,
+    type OpenAIChatCompletionsPrompt,
+    OpenAIChatCompletionsProtocol,
+    type OpenAIChatCompletionsResponse,
+    type OpenAIChatCompletionsStreamResponse,
+    openAIChatCompletionsStreamToSSE,
+    preserveOpenAIChatCompletionsOriginalResponse,
+} from '../openai/openai_chat_completions.js';
 import { type CompatibleAPIError, OpenAICompatibleDriverBase } from '../openai/openai_compatible.js';
 
 export type { MistralAIDriverOptions } from '../driver-options.js';
 
 const ENDPOINT = 'https://api.mistral.ai';
+const MISTRAL_CHAT_PROTOCOL = 'mistral.chat.completions';
+const MISTRAL_CHAT_ADAPTER_VERSION = '2026-09-30.canonical.1';
 
 export interface MistralPrompt {
     messages: ChatCompletionRequestMessage[];
@@ -64,6 +80,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     readonly apiKey: string;
     readonly client: Mistral;
     readonly endpointUrl?: string;
+    private readonly canonicalProtocol: MistralCanonicalChatProtocol;
 
     constructor(options: MistralAIDriverOptions) {
         super({ ...options, resultSchemaMode: 'prompt', toolSchemaMode: 'compatible' });
@@ -75,10 +92,43 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
             httpClient: new HTTPClient({ fetcher: this.getDriverFetch() }),
             timeoutMs: this.getDriverRequestTimeoutMs(),
         });
+        this.canonicalProtocol = new MistralCanonicalChatProtocol(options.defaultMaxTokens);
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<MistralPrompt> {
         return { messages: await formatMistralMessages(segments, options) };
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    async requestCanonicalTextCompletion(
+        prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.canonicalProtocol.requestCanonicalTextCompletion(
+            this,
+            mistralPromptToOpenAI(prompt),
+            canonicalMistralOptions(options),
+            signal,
+        );
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.canonicalProtocol.requestCanonicalTextCompletionEventStream(
+            this,
+            mistralPromptToOpenAI(prompt),
+            canonicalMistralOptions(options),
+            signal,
+            open,
+        );
     }
 
     async requestTextCompletion(
@@ -248,6 +298,11 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         }
     }
 
+    /** @internal Resolve request cancellation/timeout for the canonical protocol adapter. */
+    getMistralRequestOptions(options: ExecutionOptions, signal?: AbortSignal) {
+        return this.getDriverRequestOptions(options, signal);
+    }
+
     protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
         return error instanceof MistralError || error instanceof HTTPClientError || super.isCompatibleAPIError(error);
     }
@@ -261,6 +316,465 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         if (error instanceof RequestAbortedError) return true;
         if (error instanceof InvalidRequestError) return false;
         return super.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
+    }
+}
+
+type MistralReplayPayload = {
+    type: 'mistral_assistant_content';
+    content: ContentChunk[];
+};
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMistralThinkingPart(value: unknown): boolean {
+    if (!isJsonRecord(value)) return false;
+    if (value.type === 'text') return typeof value.text === 'string';
+    if (value.type === 'reference') {
+        return (
+            Array.isArray(value.referenceIds) &&
+            value.referenceIds.every((id) => typeof id === 'string' || typeof id === 'number')
+        );
+    }
+    if (value.type === 'tool_reference') {
+        return (
+            typeof value.tool === 'string' &&
+            typeof value.title === 'string' &&
+            (value.url === undefined || value.url === null || typeof value.url === 'string') &&
+            (value.favicon === undefined || value.favicon === null || typeof value.favicon === 'string') &&
+            (value.description === undefined || value.description === null || typeof value.description === 'string')
+        );
+    }
+    return false;
+}
+
+function isMistralAssistantReplayChunk(value: unknown): value is ContentChunk {
+    if (!isJsonRecord(value)) return false;
+    if (value.type === 'text') return typeof value.text === 'string';
+    if (value.type === 'thinking') {
+        return (
+            Array.isArray(value.thinking) &&
+            value.thinking.every(isMistralThinkingPart) &&
+            (value.signature === undefined || value.signature === null || typeof value.signature === 'string') &&
+            (value.closed === undefined || typeof value.closed === 'boolean')
+        );
+    }
+    if (value.type === 'reference') {
+        return (
+            Array.isArray(value.referenceIds) &&
+            value.referenceIds.every((id) => typeof id === 'string' || typeof id === 'number')
+        );
+    }
+    return false;
+}
+
+function mistralReplayPayload(value: unknown): MistralReplayPayload {
+    if (
+        !isJsonRecord(value) ||
+        value.type !== 'mistral_assistant_content' ||
+        !Array.isArray(value.content) ||
+        !value.content.every(isMistralAssistantReplayChunk)
+    ) {
+        throw new TypeError('Mistral signed-thinking replay has an unsupported payload');
+    }
+    return structuredClone(value) as MistralReplayPayload;
+}
+
+function mistralContentSemantics(content: string | ContentChunk[] | null | undefined): {
+    text: string;
+    reasoning: string;
+} {
+    if (typeof content === 'string') return { text: content, reasoning: '' };
+    let text = '';
+    let reasoning = '';
+    for (const part of content ?? []) {
+        if (part.type === 'text') text += part.text;
+        if (part.type === 'thinking') {
+            for (const thought of part.thinking) {
+                if (thought.type === 'text') reasoning += thought.text;
+            }
+        }
+    }
+    return { text, reasoning };
+}
+
+function openAIMessageText(message: OpenAIChatCompletionsMessage): string {
+    if (typeof message.content === 'string') return message.content;
+    return (message.content ?? [])
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('');
+}
+
+function mistralContentToOpenAI(
+    content: string | ContentChunk[] | null | undefined,
+    includeReplay = true,
+): Pick<OpenAIChatCompletionsMessage, 'content' | 'reasoning_content' | 'provider_replay'> {
+    const semantics = mistralContentSemantics(content);
+    const replayContent = typeof content === 'string' || content == null ? undefined : structuredClone(content);
+    const replayPayload =
+        replayContent === undefined || !includeReplay
+            ? undefined
+            : mistralReplayPayload({
+                  type: 'mistral_assistant_content',
+                  content: replayContent,
+              });
+    return {
+        content: semantics.text || null,
+        ...(semantics.reasoning ? { reasoning_content: semantics.reasoning } : {}),
+        ...(replayPayload === undefined
+            ? {}
+            : {
+                  provider_replay: {
+                      provider: Providers.mistralai,
+                      protocol: MISTRAL_CHAT_PROTOCOL,
+                      adapter_version: MISTRAL_CHAT_ADAPTER_VERSION,
+                      payload: providerJsonValue(replayPayload),
+                  },
+              }),
+    };
+}
+
+function mistralToolCallsToOpenAI(toolCalls: ToolCall[] | null | undefined) {
+    return toolCalls?.map((toolCall) => ({
+        id: toolCall.id ?? '',
+        type: 'function' as const,
+        function: {
+            name: toolCall.function.name,
+            arguments:
+                typeof toolCall.function.arguments === 'string'
+                    ? toolCall.function.arguments
+                    : toolCall.function.arguments == null
+                      ? ''
+                      : JSON.stringify(toolCall.function.arguments),
+        },
+    }));
+}
+
+function mistralMessageToOpenAI(message: ChatCompletionRequestMessage): OpenAIChatCompletionsMessage {
+    const role = message.role === 'system' ? 'system' : message.role;
+    if (role === 'assistant') {
+        const assistant = message as Extract<ChatCompletionRequestMessage, { role: 'assistant' }>;
+        return {
+            role,
+            ...mistralContentToOpenAI(assistant.content),
+            ...(assistant.toolCalls?.length ? { tool_calls: mistralToolCallsToOpenAI(assistant.toolCalls) } : {}),
+        };
+    }
+    const content = message.content;
+    if (typeof content === 'string' || content == null) {
+        return {
+            role,
+            content: content ?? '',
+            ...(role === 'tool' && 'toolCallId' in message && typeof message.toolCallId === 'string'
+                ? { tool_call_id: message.toolCallId }
+                : {}),
+        };
+    }
+    const parts = content.map((part) => {
+        if (part.type === 'text') return { type: 'text' as const, text: part.text };
+        if (part.type === 'image_url') {
+            return {
+                type: 'image_url' as const,
+                image_url: {
+                    url: typeof part.imageUrl === 'string' ? part.imageUrl : part.imageUrl.url,
+                    detail: 'auto' as const,
+                },
+            };
+        }
+        if (part.type === 'input_audio') {
+            throw new TypeError(
+                'Mistral canonical execution cannot infer the MIME type of retained native audio input',
+            );
+        }
+        throw new TypeError(`Mistral canonical execution cannot import native ${part.type} content`);
+    });
+    return {
+        role,
+        content: parts,
+        ...(role === 'tool' && 'toolCallId' in message && typeof message.toolCallId === 'string'
+            ? { tool_call_id: message.toolCallId }
+            : {}),
+    };
+}
+
+function mistralPromptToOpenAI(prompt: MistralPrompt | OpenAIChatCompletionsPrompt): OpenAIChatCompletionsPrompt {
+    if ('_is_openai_chat_completions' in prompt && prompt._is_openai_chat_completions === true) return prompt;
+    const native = prompt as MistralPrompt;
+    return {
+        _is_openai_chat_completions: true,
+        messages: native.messages.map(mistralMessageToOpenAI),
+    };
+}
+
+function canonicalMistralOptions(options: ExecutionOptions): ExecutionOptions {
+    const conversation = options.conversation;
+    if (
+        !isJsonRecord(conversation) ||
+        !Array.isArray(conversation.messages) ||
+        conversation._is_openai_chat_completions === true
+    ) {
+        return options;
+    }
+    return {
+        ...options,
+        conversation: mistralPromptToOpenAI({ messages: conversation.messages as ChatCompletionRequestMessage[] }),
+    };
+}
+
+function openAIContentToMistral(message: OpenAIChatCompletionsMessage): string | ContentChunk[] | null | undefined {
+    const replay = message.provider_replay;
+    if (replay !== undefined) {
+        if (
+            replay.provider !== Providers.mistralai ||
+            replay.protocol !== MISTRAL_CHAT_PROTOCOL ||
+            replay.adapter_version !== MISTRAL_CHAT_ADAPTER_VERSION
+        ) {
+            throw new TypeError('Mistral cannot restore provider replay outside its compatibility scope');
+        }
+        const payload = mistralReplayPayload(replay.payload);
+        const semantics = mistralContentSemantics(payload.content);
+        const visibleReasoning = message.reasoning_content ?? message.reasoning ?? '';
+        if (semantics.text !== openAIMessageText(message) || semantics.reasoning !== visibleReasoning) {
+            throw new TypeError('Mistral signed-thinking replay no longer matches canonical semantic content');
+        }
+        return payload.content;
+    }
+    const content = message.content;
+    const parts: ContentChunk[] =
+        typeof content === 'string' || content == null
+            ? content
+                ? [{ type: 'text', text: content }]
+                : []
+            : content.map((part): ContentChunk => {
+                  if (part.type === 'text') return { type: 'text', text: part.text };
+                  if (part.type === 'image_url') return { type: 'image_url', imageUrl: part.image_url.url };
+                  return { type: 'input_audio', inputAudio: part.input_audio.data };
+              });
+    const reasoning = message.reasoning_content ?? message.reasoning;
+    if (reasoning) {
+        parts.unshift({
+            type: 'thinking',
+            thinking: [{ type: 'text', text: reasoning }],
+            closed: true,
+        });
+    }
+    if (parts.length === 0) return null;
+    if (parts.length === 1 && parts[0]?.type === 'text') return parts[0].text;
+    return parts;
+}
+
+function openAIMessageToMistral(message: OpenAIChatCompletionsMessage): ChatCompletionRequestMessage {
+    switch (message.role) {
+        case 'system':
+        case 'developer':
+            return { role: 'system', content: openAIMessageText(message) };
+        case 'assistant':
+            return {
+                role: 'assistant',
+                content: openAIContentToMistral(message),
+                toolCalls: message.tool_calls?.map((toolCall, index) => ({
+                    id: toolCall.id,
+                    index,
+                    type: 'function',
+                    function: {
+                        name: toolCall.function.name,
+                        arguments: toolCall.function.arguments,
+                    },
+                })),
+            };
+        case 'tool':
+            if (!message.tool_call_id) throw new TypeError('Mistral tool messages require tool_call_id');
+            return {
+                role: 'tool',
+                toolCallId: message.tool_call_id,
+                content: openAIContentToMistral(message) ?? '',
+            };
+        case 'user':
+            return { role: 'user', content: openAIContentToMistral(message) ?? '' };
+        default:
+            throw new TypeError(`Mistral does not support canonical role ${message.role}`);
+    }
+}
+
+/** @internal Translate the canonical compatibility projection to the exact Mistral SDK request. */
+export function mistralRequestFromOpenAI(
+    payload: OpenAIChatCompletionsPayload,
+    options: ExecutionOptions,
+    defaultMaxTokens?: number,
+): ChatCompletionRequest {
+    return buildMistralRequest(
+        { messages: payload.messages.map(openAIMessageToMistral) },
+        options,
+        payload.stream,
+        defaultMaxTokens,
+    );
+}
+
+function normalizedMistralUsage(usage: ChatCompletionResponse['usage'] | undefined) {
+    if (usage === undefined) return undefined;
+    return {
+        // The installed Mistral SDK's inbound UsageInfo schema defaults omitted count fields to zero.
+        prompt_tokens: usage.promptTokens ?? 0,
+        completion_tokens: usage.completionTokens ?? 0,
+        total_tokens: usage.totalTokens ?? 0,
+        provider_usage: providerJsonValue({
+            source: 'mistral_sdk_usage_info',
+            omitted_token_count_semantics: 'sdk_default_zero',
+            payload: usage,
+        }),
+    };
+}
+
+function normalizeMistralFinishReason(reason: string | null | undefined): string | null {
+    return reason === 'model_length' ? 'length' : (reason ?? null);
+}
+
+function normalizeMistralResponse(response: ChatCompletionResponse): OpenAIChatCompletionsResponse {
+    return preserveOpenAIChatCompletionsOriginalResponse(
+        {
+            id: response.id,
+            object: 'chat.completion',
+            created: response.created,
+            model: response.model,
+            choices: response.choices.flatMap((choice) =>
+                choice.message === undefined
+                    ? []
+                    : [
+                          {
+                              index: choice.index,
+                              finish_reason: normalizeMistralFinishReason(choice.finishReason),
+                              message: {
+                                  role: 'assistant',
+                                  ...mistralContentToOpenAI(choice.message.content),
+                                  tool_calls: mistralToolCallsToOpenAI(choice.message.toolCalls),
+                              },
+                          },
+                      ],
+            ),
+            usage: normalizedMistralUsage(response.usage),
+        },
+        response,
+    );
+}
+
+/** @internal Normalize native Mistral chunks without repeatedly serializing cumulative protected replay. */
+export async function* normalizeMistralStream(
+    stream: AsyncIterable<CompletionEvent>,
+): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
+    const replayContent: ContentChunk[] = [];
+    let lastChunk: CompletionEvent['data'] | undefined;
+    let lastChoiceIndex = 0;
+    for await (const event of stream) {
+        const chunk = event.data;
+        lastChunk = chunk;
+        const choice = chunk.choices[0];
+        if (choice !== undefined) lastChoiceIndex = choice.index;
+        const deltaContent = normalizeMistralDeltaContent(choice?.delta.content);
+        appendMistralContent(replayContent, deltaContent);
+        const normalizedContent = mistralContentToOpenAI(deltaContent, false);
+        yield {
+            id: chunk.id,
+            object: 'chat.completion.chunk',
+            created: chunk.created as number,
+            model: chunk.model,
+            choices:
+                choice === undefined
+                    ? []
+                    : [
+                          {
+                              index: choice.index,
+                              finish_reason: normalizeMistralFinishReason(choice.finishReason),
+                              delta: {
+                                  role: choice.delta.role ?? undefined,
+                                  ...normalizedContent,
+                                  tool_calls: choice.delta.toolCalls?.map((toolCall, offset) => ({
+                                      index: toolCall.index ?? offset,
+                                      id: toolCall.id ?? undefined,
+                                      type: toolCall.type,
+                                      function: {
+                                          name: toolCall.function.name,
+                                          arguments:
+                                              typeof toolCall.function.arguments === 'string'
+                                                  ? toolCall.function.arguments
+                                                  : toolCall.function.arguments == null
+                                                    ? ''
+                                                    : JSON.stringify(toolCall.function.arguments),
+                                      },
+                                  })),
+                              },
+                          },
+                      ],
+            usage: normalizedMistralUsage(chunk.usage),
+        };
+    }
+    const providerReplay = mistralContentToOpenAI(replayContent).provider_replay;
+    if (lastChunk !== undefined && providerReplay !== undefined) {
+        yield {
+            id: lastChunk.id,
+            object: 'chat.completion.chunk',
+            created: lastChunk.created as number,
+            model: lastChunk.model,
+            choices: [
+                {
+                    index: lastChoiceIndex,
+                    finish_reason: null,
+                    delta: { provider_replay: providerReplay },
+                },
+            ],
+        };
+    }
+}
+
+class MistralCanonicalChatProtocol extends OpenAIChatCompletionsProtocol<MistralAIDriver> {
+    constructor(private readonly defaultMaxTokens?: number) {
+        super({ resultSchemaMode: 'prompt', toolSchemaMode: 'compatible', defaultMaxTokens });
+    }
+
+    protected override requestBinding(payload: OpenAIChatCompletionsPayload, options: ExecutionOptions) {
+        const request = mistralRequestFromOpenAI(payload, options, this.defaultMaxTokens);
+        const { messages: _messages, tools: _tools, metadata: _metadata, ...effectiveOptions } = request;
+        return {
+            payload: providerJsonValue(request),
+            target_options: providerJsonValue({
+                transport: 'mistral_sdk',
+                ...effectiveOptions,
+            }) as JSONObject,
+        };
+    }
+
+    protected async postChatCompletion(
+        driver: MistralAIDriver,
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<OpenAIChatCompletionsResponse> {
+        const request = mistralRequestFromOpenAI(payload, options, this.defaultMaxTokens);
+        const driverRequestOptions = driver.getMistralRequestOptions(options, signal);
+        const requestOptions = driverRequestOptions
+            ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
+            : undefined;
+        const response = requestOptions
+            ? await driver.client.chat.complete(request, requestOptions)
+            : await driver.client.chat.complete(request);
+        return normalizeMistralResponse(response);
+    }
+
+    protected async postChatCompletionStream(
+        driver: MistralAIDriver,
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ReadableStream> {
+        const request = mistralRequestFromOpenAI(payload, options, this.defaultMaxTokens);
+        const driverRequestOptions = driver.getMistralRequestOptions(options, signal);
+        const requestOptions =
+            driverRequestOptions?.timeout !== undefined
+                ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
+                : { signal };
+        const stream = await driver.client.chat.stream(request, requestOptions);
+        return openAIChatCompletionsStreamToSSE(normalizeMistralStream(stream));
     }
 }
 

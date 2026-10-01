@@ -28,6 +28,7 @@
     "exclude": ["node_modules", "**/*.test.ts", "lib", "test"],
     "references": [
         { "path": "../common" },
+        { "path": "../conversation" },
         { "path": "../core" }
     ]
 }
