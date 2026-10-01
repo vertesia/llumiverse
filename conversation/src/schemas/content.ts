@@ -499,6 +499,10 @@ export const ProgramContentBlockSchema = z
     ])
     .meta({ id: 'ConversationProgramContentBlock' });
 
+export const ProgramTurnPresentationSchema = z
+    .enum(['internal', 'transcript'])
+    .meta({ id: 'ConversationProgramTurnPresentation' });
+
 export const ReceivedTurnProvenanceSchema = z
     .strictObject({ type: z.literal('received') })
     .meta({ id: 'ConversationReceivedTurnProvenance' });
@@ -636,6 +640,9 @@ export const ProgramTurnSchema = z
         ...commonTurnShape,
         kind: z.literal('program'),
         authority: AuthoritySchema,
+        // Absence deliberately means internal to projection consumers. Do not add a schema default:
+        // rewriting persisted program turns would change canonical document fingerprints.
+        presentation: ProgramTurnPresentationSchema.optional(),
         blocks: z.array(ProgramContentBlockSchema),
         provenance: NonGeneratedTurnProvenanceSchema,
     })

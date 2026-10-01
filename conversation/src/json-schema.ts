@@ -14,6 +14,8 @@ import {
     ConversationStreamIdentitySchema,
     ConversationToolExecutionRequestSchema,
     ConversationToolExecutionResultSchema,
+    ConversationTranscriptFragmentSchema,
+    ConversationTranscriptProjectionInputSchema,
     ConversationTurnSchema,
     DecodedConversationResponseSchema,
     GenerationSchema,
@@ -91,6 +93,14 @@ export const ConversationToolExecutionResultJsonSchema = emitJsonSchema(
     ConversationToolExecutionResultSchema,
     'tool-execution-result',
 );
+export const ConversationTranscriptFragmentJsonSchema = emitJsonSchema(
+    ConversationTranscriptFragmentSchema,
+    'transcript-fragment',
+);
+export const ConversationTranscriptProjectionInputJsonSchema = emitJsonSchema(
+    ConversationTranscriptProjectionInputSchema,
+    'transcript-projection-input',
+);
 export const AppendConversationRecordsOptionsJsonSchema = emitJsonSchema(
     AppendConversationRecordsOptionsSchema,
     'append-options',
@@ -121,5 +131,7 @@ export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
     stream_identity: ConversationStreamIdentityJsonSchema,
     tool_execution_request: ConversationToolExecutionRequestJsonSchema,
     tool_execution_result: ConversationToolExecutionResultJsonSchema,
+    transcript_fragment: ConversationTranscriptFragmentJsonSchema,
+    transcript_projection_input: ConversationTranscriptProjectionInputJsonSchema,
     turn: ConversationTurnJsonSchema,
 });

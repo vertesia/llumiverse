@@ -9,3 +9,4 @@ export * from './prepared-request.js';
 export * from './primitives.js';
 export * from './streaming.js';
 export * from './tool-execution.js';
+export * from './transcript.js';

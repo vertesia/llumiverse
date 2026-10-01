@@ -14,10 +14,17 @@ assert.equal(typeof schemas.ConversationDocumentSchema?.safeParse, 'function');
 assert.equal(typeof schemas.ConversationStreamEventSchema?.safeParse, 'function');
 assert.equal(typeof schemas.ConversationStreamCursorSchema?.safeParse, 'function');
 assert.equal(typeof schemas.ConversationStreamIdentitySchema?.safeParse, 'function');
+assert.equal(typeof schemas.ConversationTranscriptFragmentSchema?.safeParse, 'function');
+assert.equal(typeof schemas.ConversationTranscriptGenerationSchema?.safeParse, 'function');
+assert.equal(typeof root.createConversationTranscriptFragment, 'function');
 assert.equal(jsonSchemas.ConversationDocumentJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(jsonSchemas.ConversationStreamEventJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(jsonSchemas.ConversationStreamCursorJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(jsonSchemas.ConversationStreamIdentityJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+assert.equal(
+    jsonSchemas.ConversationTranscriptFragmentJsonSchema.$schema,
+    'https://json-schema.org/draft/2020-12/schema',
+);
 assert.equal(typeof outputRuntime.cloneSemanticallyValidAcceptedOutputFragment, 'function');
 assert.equal(typeof outputRuntime.conversationOutputReceiptsEqual, 'function');
 assert.equal(typeof streamingRuntime.ConversationStreamAccumulatorRuntime, 'function');

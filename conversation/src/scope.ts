@@ -12,6 +12,7 @@ export const CONVERSATION_FOUNDATION_SCOPE = Object.freeze({
         'deterministic_json_schema',
         'idempotent_materialized_record_ingestion',
         'accepted_output_fragments',
+        'bounded_safe_transcript_views',
         'prepared_request_records',
         'bounded_stream_event_contracts_and_reconciliation',
     ]),
@@ -28,7 +29,7 @@ export const CONVERSATION_FOUNDATION_LIMITATIONS = Object.freeze([
         code: 'UNIMPLEMENTED_SCOPE',
         feature: 'general_fragments_and_working_sets',
         message:
-            'Accepted-output fragments are supported, but general loadable history fragments and bounded working-set validation are not implemented.',
+            'Accepted-output fragments and bounded safe transcript views are supported, but general loadable history fragments and working-set persistence are not implemented.',
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',

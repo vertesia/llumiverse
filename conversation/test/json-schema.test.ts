@@ -21,6 +21,8 @@ import {
     ConversationStreamIdentityJsonSchema,
     ConversationToolExecutionRequestJsonSchema,
     ConversationToolExecutionResultJsonSchema,
+    ConversationTranscriptFragmentJsonSchema,
+    ConversationTranscriptProjectionInputJsonSchema,
     ConversationTurnJsonSchema,
 } from '../src/json-schema.js';
 import { emptyDocument, generatedAgentTurn, importedGeneration, toolResultTurn } from './fixtures.js';
@@ -71,6 +73,8 @@ describe('generated JSON Schema', () => {
             ConversationStreamIdentityJsonSchema,
             ConversationToolExecutionRequestJsonSchema,
             ConversationToolExecutionResultJsonSchema,
+            ConversationTranscriptFragmentJsonSchema,
+            ConversationTranscriptProjectionInputJsonSchema,
         ]) {
             expect(schema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
             expect(String(schema.$id)).toContain('2026-09-30.adoption.1');

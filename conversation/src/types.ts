@@ -106,6 +106,7 @@ import type {
     ProcessingStateSchema,
     ProcessorConfigurationSchema,
     ProgramContentBlockSchema,
+    ProgramTurnPresentationSchema,
     ProgramTurnSchema,
     ReasoningBlockSchema,
     ReceivedAssetProvenanceSchema,
@@ -229,6 +230,7 @@ export type ContentBlock = z.infer<typeof ContentBlockSchema>;
 export type UserContentBlock = z.infer<typeof UserContentBlockSchema>;
 export type AgentContentBlock = z.infer<typeof AgentContentBlockSchema>;
 export type ProgramContentBlock = z.infer<typeof ProgramContentBlockSchema>;
+export type ProgramTurnPresentation = z.infer<typeof ProgramTurnPresentationSchema>;
 
 export type ReceivedTurnProvenance = z.infer<typeof ReceivedTurnProvenanceSchema>;
 export type InsertedTurnProvenance = z.infer<typeof InsertedTurnProvenanceSchema>;

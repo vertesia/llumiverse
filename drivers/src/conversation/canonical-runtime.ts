@@ -37,12 +37,14 @@ import {
     CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
     type CanonicalToolSelectionPolicy,
+    canonicalToolDefinitions,
     createCanonicalExecutionResponse,
     markCanonicalAcceptedRecovery,
     parseCanonicalToolSelectionPolicy,
 } from '@llumiverse/core';
 
 export type { ResolvedConversationRuntimeContext } from '@llumiverse/conversation';
+export { canonicalToolDefinitions } from '@llumiverse/core';
 
 type CanonicalRecoveredOutput = Awaited<ReturnType<NonNullable<ExecutionOptions['load_recovered_canonical_output']>>>;
 
@@ -425,31 +427,6 @@ export function selectedCanonicalTurns(
         }
     }
     return selected;
-}
-
-function jsonSchemaValue(tool: LegacyToolDefinition): JsonObject | boolean {
-    return structuredClone(tool.input_schema) as JsonObject;
-}
-
-export async function canonicalToolDefinitions(
-    tools: readonly LegacyToolDefinition[] | undefined,
-): Promise<ToolDefinition[]> {
-    const definitions: ToolDefinition[] = [];
-    for (const tool of tools ?? []) {
-        const versionHash = await fingerprintJson({
-            name: tool.name,
-            description: tool.description ?? null,
-            input_schema: jsonSchemaValue(tool),
-        });
-        definitions.push({
-            id: await deriveConversationId('tool_definition', tool.name, versionHash),
-            name: tool.name,
-            version: versionHash,
-            ...(tool.description === undefined ? {} : { description: tool.description }),
-            input_schema: jsonSchemaValue(tool),
-        });
-    }
-    return definitions;
 }
 
 /**
