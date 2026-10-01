@@ -1054,7 +1054,7 @@ describe('canonical typed execution stream', () => {
         expect(stream.completion).toBeUndefined();
     });
 
-    it('finalizes structured reconciliation from actual decode blocks through the shared normalizer', async () => {
+    it('finalizes structured reconciliation from canonical decode blocks without a CompletionResult projection', async () => {
         const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
         response.accepted_output.turn.blocks = [{ id: 'json', type: 'json', value: { emoji: '😀', ok: true } }];
         const sourceBlocks = [

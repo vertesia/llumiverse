@@ -110,6 +110,20 @@ export interface CanonicalStructuredOutput {
     source_texts: string[];
 }
 
+export type CanonicalStructuredOutputInput =
+    | { type: 'json'; value: JSONValue }
+    | { type: 'text'; source_texts: readonly string[] };
+
+export type CanonicalStructuredOutputNormalization =
+    | {
+          status: 'valid';
+          structured_output: CanonicalStructuredOutput;
+      }
+    | {
+          status: 'invalid';
+          error: ValidationError;
+      };
+
 export type CompletionResultNormalization =
     | {
           status: 'valid';
@@ -122,8 +136,8 @@ export type CompletionResultNormalization =
           error: ValidationError;
       };
 
-function parseCompletionAsJson(data: CompletionResult[]): CanonicalStructuredOutput {
-    const sourceTexts = data.flatMap((part) => (part.type === 'text' ? [part.value] : []));
+function parseStructuredOutputSources(sourceTextsInput: readonly string[]): CanonicalStructuredOutput {
+    const sourceTexts = [...sourceTextsInput];
     if (sourceTexts.length === 0) {
         throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
     }
@@ -191,44 +205,30 @@ function normalizeValidatedResult(data: CompletionResult[], json: JSONValue): Co
     }, []);
 }
 
-export function normalizeCompletionResult(data: CompletionResult[], schema: object): CompletionResultNormalization {
-    let json: JSONValue;
-    let sourceTexts: string[] = [];
-    if (Array.isArray(data)) {
-        const jsonResults = data.filter((r) => r.type === 'json');
-        if (jsonResults.length > 0) {
-            json = structuredClone(jsonResults[0].value);
-        } else {
-            try {
-                const parsed = parseCompletionAsJson(data);
-                json = parsed.value;
-                sourceTexts = parsed.source_texts;
-            } catch (error: unknown) {
-                return {
-                    status: 'invalid',
-                    result: data,
-                    error:
-                        error instanceof ValidationError
-                            ? error
-                            : new ValidationError('json_error', errorMessage(error)),
-                };
-            }
-        }
-    } else {
+export function normalizeCanonicalStructuredOutput(
+    input: CanonicalStructuredOutputInput,
+    schema: object,
+): CanonicalStructuredOutputNormalization {
+    let structuredOutput: CanonicalStructuredOutput;
+    try {
+        structuredOutput =
+            input.type === 'json'
+                ? { value: structuredClone(input.value), source_texts: [] }
+                : parseStructuredOutputSources(input.source_texts);
+    } catch (error: unknown) {
         return {
             status: 'invalid',
-            result: data,
-            error: new ValidationError('validation_error', 'Data to validate must be an array'),
+            error: error instanceof ValidationError ? error : new ValidationError('json_error', errorMessage(error)),
         };
     }
 
+    const json = structuredOutput.value;
     let validate: ValidateFunction;
     try {
         validate = compileSchema(schema);
     } catch (error: unknown) {
         return {
             status: 'invalid',
-            result: data,
             error: new ValidationError('validation_error', errorMessage(error)),
         };
     }
@@ -267,14 +267,12 @@ export function normalizeCompletionResult(data: CompletionResult[], schema: obje
             }
         }
 
-        //console.log("Errors", errors)
         if (errors.length > 0) {
             const errorsMessage = errors
                 .map((e) => `${e.instancePath}: ${e.message}\n${JSON.stringify(e.params)}`)
                 .join(',\n\n');
             return {
                 status: 'invalid',
-                result: data,
                 error: new ValidationError('validation_error', errorsMessage),
             };
         }
@@ -293,22 +291,45 @@ export function normalizeCompletionResult(data: CompletionResult[], schema: obje
         if (!exactValidate(json)) {
             return {
                 status: 'invalid',
-                result: data,
                 error: new ValidationError('validation_error', validationErrorsMessage(exactValidate)),
             };
         }
     } catch (error: unknown) {
         return {
             status: 'invalid',
-            result: data,
             error: new ValidationError('validation_error', errorMessage(error)),
         };
     }
 
     return {
         status: 'valid',
-        result: normalizeValidatedResult(data, json),
-        structured_output: { value: json, source_texts: sourceTexts },
+        structured_output: { value: json, source_texts: structuredOutput.source_texts },
+    };
+}
+
+/** Supported legacy CompletionResult[] compatibility projection around canonical validation. */
+export function normalizeCompletionResult(data: CompletionResult[], schema: object): CompletionResultNormalization {
+    if (!Array.isArray(data)) {
+        return {
+            status: 'invalid',
+            result: data,
+            error: new ValidationError('validation_error', 'Data to validate must be an array'),
+        };
+    }
+
+    const jsonResult = data.find((part) => part.type === 'json');
+    const normalized = normalizeCanonicalStructuredOutput(
+        jsonResult === undefined
+            ? { type: 'text', source_texts: data.flatMap((part) => (part.type === 'text' ? [part.value] : [])) }
+            : { type: 'json', value: jsonResult.value },
+        schema,
+    );
+    if (normalized.status === 'invalid') {
+        return { ...normalized, result: data };
+    }
+    return {
+        ...normalized,
+        result: normalizeValidatedResult(data, normalized.structured_output.value),
     };
 }
 

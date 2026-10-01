@@ -27,7 +27,7 @@ import {
     CANONICAL_REQUIRED_TOOL_CALL_MISSING,
     canonicalToolSelectionDiagnostic,
 } from './CanonicalSelection.js';
-import { normalizeCompletionResult } from './validation.js';
+import { normalizeCanonicalStructuredOutput } from './validation.js';
 
 export type CanonicalStreamTerminalEvent = Extract<
     ConversationStreamEvent,
@@ -400,15 +400,14 @@ async function assertStructuredReconciliation(
         }));
         const resultBlock = blocks.get(proof.result_block_id);
         if (resultBlock?.type !== 'json') throw new Error('Structured-output result is not decoded JSON');
-        const normalized = normalizeCompletionResult(
-            sourceBlocks.map((block) => ({ type: 'text' as const, value: block.text })),
+        const normalized = normalizeCanonicalStructuredOutput(
+            { type: 'text', source_texts: sourceBlocks.map((block) => block.text) },
             resultSchema,
         );
-        const normalizedJson =
-            normalized.status === 'valid' ? normalized.result.find((part) => part.type === 'json') : undefined;
         if (
-            normalizedJson?.type !== 'json' ||
-            canonicalJsonContentString(normalizedJson.value) !== canonicalJsonContentString(resultBlock.value)
+            normalized.status !== 'valid' ||
+            canonicalJsonContentString(normalized.structured_output.value) !==
+                canonicalJsonContentString(resultBlock.value)
         ) {
             throw new Error('Structured-output reconciliation does not match the shared normalizer result');
         }

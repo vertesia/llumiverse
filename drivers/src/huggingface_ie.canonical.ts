@@ -21,7 +21,7 @@ import {
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
-    normalizeCompletionResult,
+    normalizeCanonicalStructuredOutput,
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { canonicalNativeExecutionEventStream } from './conversation/canonical-execution-event-stream.js';
@@ -176,7 +176,7 @@ interface FinalizedHuggingFaceCanonical {
     raw_decoded: DecodedConversationResponse;
     decoded: DecodedConversationResponse;
     response: CanonicalExecutionResponse;
-    normalized: ReturnType<typeof normalizeCompletionResult> | undefined;
+    normalized: ReturnType<typeof normalizeCanonicalStructuredOutput> | undefined;
 }
 
 async function prepareHuggingFaceCanonical(input: {
@@ -339,7 +339,10 @@ async function finalizeHuggingFaceCanonical(
     const normalized =
         options.result_schema === undefined
             ? undefined
-            : normalizeCompletionResult([{ type: 'text', value: response.generated_text }], options.result_schema);
+            : normalizeCanonicalStructuredOutput(
+                  { type: 'text', source_texts: [response.generated_text] },
+                  options.result_schema,
+              );
     const rawTurn = createGeneratedAgentTurn({
         id: prepared.response_turn_id,
         authority: 'ordinary',

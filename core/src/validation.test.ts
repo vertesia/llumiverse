@@ -1,6 +1,94 @@
-import type { CompletionResult } from '@llumiverse/common';
+import type { CompletionResult, JSONValue } from '@llumiverse/common';
 import { describe, expect, it } from 'vitest';
-import { normalizeCompletionResult, validateResult } from './validation.js';
+import { normalizeCanonicalStructuredOutput, normalizeCompletionResult, validateResult } from './validation.js';
+
+describe('normalizeCanonicalStructuredOutput', () => {
+    it('matches the legacy wrapper while owning multipart parsing and schema normalization', () => {
+        const sourceTexts = ['```json\n{"count":"2",', '"optional_date":null}\n```'];
+        const schema = {
+            type: 'object',
+            properties: {
+                count: { type: 'integer' },
+                enabled: { type: 'boolean', default: false },
+                optional_date: { type: 'string', format: 'date-time' },
+            },
+            required: ['count', 'enabled'],
+            additionalProperties: false,
+        };
+
+        const canonical = normalizeCanonicalStructuredOutput({ type: 'text', source_texts: sourceTexts }, schema);
+        const legacy = normalizeCompletionResult(
+            sourceTexts.map((value) => ({ type: 'text' as const, value })),
+            schema,
+        );
+
+        expect(canonical).toEqual({
+            status: 'valid',
+            structured_output: { value: { count: 2, enabled: false }, source_texts: sourceTexts },
+        });
+        if (canonical.status !== 'valid') throw canonical.error;
+        expect(legacy.status).toBe('valid');
+        if (legacy.status === 'valid') expect(legacy.structured_output).toEqual(canonical.structured_output);
+    });
+
+    it('preserves exact top-level falsy and aggregate JSON values', () => {
+        const cases: Array<{ value: JSONValue; schema: object }> = [
+            { value: false, schema: { type: 'boolean' } },
+            { value: 0, schema: { type: 'number' } },
+            { value: '', schema: { type: 'string' } },
+            { value: null, schema: { type: 'null' } },
+            { value: [0, false, null], schema: { type: 'array' } },
+        ];
+
+        for (const { value, schema } of cases) {
+            expect(normalizeCanonicalStructuredOutput({ type: 'json', value }, schema)).toEqual({
+                status: 'valid',
+                structured_output: { value, source_texts: [] },
+            });
+        }
+    });
+
+    it('normalizes an owned JSON clone without mutating provider evidence', () => {
+        const value = { count: '3', optional_date: '' };
+        const normalized = normalizeCanonicalStructuredOutput(
+            { type: 'json', value },
+            {
+                type: 'object',
+                properties: {
+                    count: { type: 'integer' },
+                    enabled: { type: 'boolean', default: false },
+                    optional_date: { type: 'string', format: 'date-time' },
+                },
+                required: ['count', 'enabled'],
+                additionalProperties: false,
+            },
+        );
+
+        expect(normalized).toEqual({
+            status: 'valid',
+            structured_output: { value: { count: 3, enabled: false }, source_texts: [] },
+        });
+        expect(value).toEqual({ count: '3', optional_date: '' });
+    });
+
+    it('keeps parse failures distinct from schema-validation failures', () => {
+        expect(normalizeCanonicalStructuredOutput({ type: 'text', source_texts: [] }, {})).toMatchObject({
+            status: 'invalid',
+            error: { code: 'json_error' },
+        });
+        expect(
+            normalizeCanonicalStructuredOutput(
+                { type: 'json', value: { answer: { nested: true } } },
+                {
+                    type: 'object',
+                    properties: { answer: { type: 'string' } },
+                    required: ['answer'],
+                    additionalProperties: false,
+                },
+            ),
+        ).toMatchObject({ status: 'invalid', error: { code: 'validation_error' } });
+    });
+});
 
 describe('validateResult', () => {
     it('preserves thoughts while replacing the response content with validated JSON', () => {

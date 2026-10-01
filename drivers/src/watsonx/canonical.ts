@@ -20,7 +20,7 @@ import {
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
-    normalizeCompletionResult,
+    normalizeCanonicalStructuredOutput,
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
@@ -170,7 +170,7 @@ interface FinalizedWatsonxCanonical {
     raw_decoded: DecodedConversationResponse;
     decoded: DecodedConversationResponse;
     response: CanonicalExecutionResponse;
-    normalized: ReturnType<typeof normalizeCompletionResult> | undefined;
+    normalized: ReturnType<typeof normalizeCanonicalStructuredOutput> | undefined;
 }
 
 async function prepareWatsonxCanonical(input: {
@@ -318,7 +318,10 @@ async function finalizeWatsonxCanonical(
     const normalized =
         options.result_schema === undefined
             ? undefined
-            : normalizeCompletionResult([{ type: 'text', value: result.generated_text }], options.result_schema);
+            : normalizeCanonicalStructuredOutput(
+                  { type: 'text', source_texts: [result.generated_text] },
+                  options.result_schema,
+              );
     const rawTurn = createGeneratedAgentTurn({
         id: prepared.response_turn_id,
         authority: 'ordinary',

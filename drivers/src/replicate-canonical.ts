@@ -28,7 +28,7 @@ import {
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
-    normalizeCompletionResult,
+    normalizeCanonicalStructuredOutput,
     PromptRole,
     type PromptSegment,
     type TextFallbackOptions,
@@ -85,7 +85,7 @@ interface FinalizedReplicateCanonical {
     raw_decoded: DecodedConversationResponse;
     decoded: DecodedConversationResponse;
     response: CanonicalExecutionResponse;
-    normalized: ReturnType<typeof normalizeCompletionResult> | undefined;
+    normalized: ReturnType<typeof normalizeCanonicalStructuredOutput> | undefined;
 }
 
 function boundedDiagnostic(value: unknown): string {
@@ -647,7 +647,7 @@ async function finalizeReplicateCanonical(
         ),
     };
     let decoded = rawDecoded;
-    let normalized: ReturnType<typeof normalizeCompletionResult> | undefined;
+    let normalized: ReturnType<typeof normalizeCanonicalStructuredOutput> | undefined;
     if (options.result_schema !== undefined) {
         const block = rawTurn.blocks[0];
         if (rawTurn.blocks.length !== 1 || (block?.type !== 'text' && block?.type !== 'json')) {
@@ -656,8 +656,10 @@ async function finalizeReplicateCanonical(
                 message: 'Replicate structured output requires one text or JSON result',
             });
         } else {
-            normalized = normalizeCompletionResult(
-                [block.type === 'text' ? { type: 'text', value: block.text } : { type: 'json', value: block.value }],
+            normalized = normalizeCanonicalStructuredOutput(
+                block.type === 'text'
+                    ? { type: 'text', source_texts: [block.text] }
+                    : { type: 'json', value: block.value },
                 options.result_schema,
             );
             if (normalized.status === 'valid') {

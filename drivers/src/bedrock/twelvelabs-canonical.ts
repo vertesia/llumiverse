@@ -26,7 +26,7 @@ import {
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
-    normalizeCompletionResult,
+    normalizeCanonicalStructuredOutput,
     PromptRole,
 } from '@llumiverse/core';
 import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
@@ -102,7 +102,7 @@ interface FinalizedTwelvelabsPegasus {
     raw_decoded: DecodedConversationResponse;
     decoded: DecodedConversationResponse;
     response: CanonicalExecutionResponse;
-    normalized: ReturnType<typeof normalizeCompletionResult> | undefined;
+    normalized: ReturnType<typeof normalizeCanonicalStructuredOutput> | undefined;
 }
 
 function requestBody(prompt: TwelvelabsPegasusRequest): ReturnType<typeof providerJsonValue> {
@@ -498,7 +498,10 @@ async function finalizeTwelvelabsPegasusCanonical(
     const normalized =
         options.result_schema === undefined
             ? undefined
-            : normalizeCompletionResult([{ type: 'text', value: nativeResponse.message }], options.result_schema);
+            : normalizeCanonicalStructuredOutput(
+                  { type: 'text', source_texts: [nativeResponse.message] },
+                  options.result_schema,
+              );
     let decoded = rawDecoded;
     if (normalized?.status === 'valid') {
         const structuredBlockId = await deriveConversationId(
