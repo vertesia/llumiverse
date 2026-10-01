@@ -11,6 +11,7 @@ const credential: TokenCredential = {
 
 type FoundryInternals = {
     getDriverFetch: () => typeof fetch;
+    canStream: (options: import('@llumiverse/core').ExecutionOptions) => Promise<boolean>;
     getInferenceClient: () => OpenAI;
     getResourceClient: () => OpenAI;
     getInferenceProtocolDriver: () => { service: OpenAI };
@@ -54,6 +55,30 @@ describe('AzureFoundryDriver protocol composition', () => {
             'future-chat::Future-Chat-7',
             'image::gpt-image-2.5-flare',
         ]);
+    });
+
+    it.each([
+        ['image::dall-e-3', false],
+        ['gpt-image-2::gpt-image-2', true],
+        ['custom-image', true],
+        ['chat::gpt-4.1-mini', true],
+    ])('preserves image and text streaming capability for %s', async (model, expected) => {
+        const driver = new AzureFoundryDriver({
+            endpoint: 'https://foundry.example.test',
+            azureADTokenProvider: credential,
+            sourceModel: 'gpt-image-2',
+        });
+        try {
+            expect(await exposePrivate<FoundryInternals>(driver).canStream({ model })).toBe(expected);
+            expect(
+                await exposePrivate<FoundryInternals>(driver).canStream({
+                    model,
+                    model_options: { _option_id: 'openai-text', image_generation: { model: 'gpt-image-2' } },
+                }),
+            ).toBe(false);
+        } finally {
+            driver.destroy();
+        }
     });
 
     it('does not cache failed deployment lookups or silently route them to Chat', async () => {

@@ -235,9 +235,15 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        return Promise.resolve(
-            !(_options.model_options as { image_generation?: unknown } | undefined)?.image_generation,
-        );
+        if ((_options.model_options as { image_generation?: unknown } | undefined)?.image_generation) {
+            return Promise.resolve(false);
+        }
+        if (this.isImageModel(_options.model)) {
+            return Promise.resolve(
+                this.getOpenAIProtocolDriver().getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'),
+            );
+        }
+        return Promise.resolve(true);
     }
 
     private getInferenceClient(): OpenAI {
