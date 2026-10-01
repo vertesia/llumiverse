@@ -1041,6 +1041,42 @@ describe('Claude native reasoning replay', () => {
         expect(providerCall).toHaveBeenCalledOnce();
     });
 
+    it('normalizes every canonical Claude text partition when legacy presentation omits an empty block', async () => {
+        const finalMessage = {
+            id: 'msg-structured-partitions',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-sonnet-4-6',
+            content: [
+                { type: 'text', text: '' },
+                { type: 'text', text: '{"answer":"Tokyo"}' },
+            ],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 2, output_tokens: 3 },
+        } as unknown as Message;
+        const providerCall = vi.fn(() => sdkStream([], finalMessage));
+        const driver = new AnthropicDriver({ apiKey: 'test' });
+        driver.client = { messages: { stream: providerCall } } as never;
+
+        const result = await driver.executeCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...canonicalOptions('attempt:partitions', '2026-09-11T00:02:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(result.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } }),
+        );
+        expect(latestGeneratedJson(result.conversation)).toEqual({ answer: 'Tokyo' });
+        expect(legacyConversation(result.conversation).messages.at(-1)?.content).toEqual(finalMessage.content);
+        expect(providerCall).toHaveBeenCalledOnce();
+    });
+
     it('returns a direct canonical sync response and retries an accepted operation without transport', async () => {
         const rawText = '{"answer":"Tokyo"}';
         const finalMessage = {

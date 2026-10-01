@@ -70,7 +70,6 @@ import {
     LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
-    normalizeCompletionResult,
     PromptRole,
     type PromptSegment,
     readStreamAsBase64,
@@ -92,7 +91,10 @@ import {
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
 } from '../conversation/canonical-runtime.js';
-import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import {
     appendClaudeCanonicalResponse,
     type CanonicalClaudeToolResultBlockParam,
@@ -1299,17 +1301,16 @@ export async function executeCanonicalClaudeCompletion(
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
 
-    const completionResults = collectClaudeResults(result.content, true);
     const toolUse = collectClaudeTools(result.content);
+    const rawDecoded = await decodeClaudeCanonicalResponse(result, prepared);
     const normalized =
         !toolUse?.length && options.result_schema
-            ? normalizeCompletionResult(completionResults, options.result_schema)
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
             : undefined;
-    let decoded = await decodeClaudeCanonicalResponse(
-        result,
-        prepared,
-        normalized?.status === 'valid' ? normalized.structured_output : undefined,
-    );
+    let decoded =
+        normalized?.status === 'valid'
+            ? await decodeClaudeCanonicalResponse(result, prepared, normalized.structured_output)
+            : rawDecoded;
     if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
     const document = appendClaudeCanonicalResponse(prepared, decoded);
     return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
@@ -1367,15 +1368,15 @@ export async function executeClaudeCompletion(
 
     const completionResults = collectClaudeResults(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
+    const rawDecoded = await decodeClaudeCanonicalResponse(result, prepared);
     const normalized =
         !tool_use?.length && options.result_schema
-            ? normalizeCompletionResult(completionResults, options.result_schema)
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
             : undefined;
-    const decoded = await decodeClaudeCanonicalResponse(
-        result,
-        prepared,
-        normalized?.status === 'valid' ? normalized.structured_output : undefined,
-    );
+    const decoded =
+        normalized?.status === 'valid'
+            ? await decodeClaudeCanonicalResponse(result, prepared, normalized.structured_output)
+            : rawDecoded;
     const processedConversation = appendClaudeCanonicalResponse(prepared, decoded);
 
     return {
@@ -1522,17 +1523,16 @@ export async function streamClaudeCompletion(
 
     async function computeDecodedFinalResponse() {
         const finalMessage = await response_stream.finalMessage();
-        const finalResults = collectClaudeResults(finalMessage.content, includeThoughts);
         const finalTools = collectClaudeTools(finalMessage.content);
+        const rawDecoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
         const normalized =
             !finalTools?.length && options.result_schema
-                ? normalizeCompletionResult(finalResults, options.result_schema)
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
                 : undefined;
-        const decoded = await decodeClaudeCanonicalResponse(
-            finalMessage,
-            prepared,
-            normalized?.status === 'valid' ? normalized.structured_output : undefined,
-        );
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeClaudeCanonicalResponse(finalMessage, prepared, normalized.structured_output)
+                : rawDecoded;
         return { decoded, finalMessage, normalized };
     }
     let decodedFinalResponse: ReturnType<typeof computeDecodedFinalResponse> | undefined;
@@ -1623,8 +1623,6 @@ export async function streamCanonicalClaudeEvents(
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
     transport?: ClaudeTransportIdentity,
 ): Promise<CanonicalExecutionEventStream> {
-    const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
-    const includeThoughts = modelOptions?.include_thoughts ?? false;
     const canonicalState = await prepareClaudeCanonicalState({
         conversation: options.conversation,
         prompt,
@@ -1779,13 +1777,12 @@ export async function streamCanonicalClaudeEvents(
         finalize: async () => {
             if (responseStream === undefined) throw new Error('Claude stream ended before transport initialization');
             const finalMessage = await responseStream.finalMessage();
-            const finalResults = collectClaudeResults(finalMessage.content, includeThoughts);
             const finalTools = collectClaudeTools(finalMessage.content);
+            const rawDecoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
             const normalized =
                 !finalTools?.length && options.result_schema
-                    ? normalizeCompletionResult(finalResults, options.result_schema)
+                    ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
                     : undefined;
-            const rawDecoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
             let decoded =
                 normalized?.status === 'valid'
                     ? await decodeClaudeCanonicalResponse(finalMessage, prepared, normalized.structured_output)

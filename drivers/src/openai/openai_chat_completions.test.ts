@@ -1879,6 +1879,41 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(driver.payloads).toHaveLength(1);
     });
 
+    it('normalizes exact canonical text when legacy presentation splits think tags', async () => {
+        const rawText = '<think>Check the requested shape.</think>\n{"answer":"Tokyo"}';
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-structured-think-tag',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: rawText },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        const completion = await driver.execute([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions('attempt:think-tag', '2026-09-11T00:02:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'Check the requested shape.' },
+            { type: 'json', value: { answer: 'Tokyo' } },
+        ]);
+        expect(latestGeneratedJson(completion.conversation)).toEqual({ answer: 'Tokyo' });
+        expect(legacyConversation(completion.conversation).messages.at(-1)?.content).toBe(rawText);
+    });
+
     it('executes directly into canonical JSON and recovers without a second provider call', async () => {
         const driver = new TestOpenAIChatCompletionsDriver({
             id: 'chatcmpl-canonical-direct',

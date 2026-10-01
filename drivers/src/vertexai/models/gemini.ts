@@ -50,7 +50,6 @@ import {
     LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
-    normalizeCompletionResult,
     type PromptOptions,
     PromptRole,
     type PromptSegment,
@@ -74,7 +73,10 @@ import {
     recoverCanonicalExecutionResponse,
     resolveConversationRuntime,
 } from '../../conversation/canonical-runtime.js';
-import { rejectDecodedStructuredOutput } from '../../conversation/structured-output.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../../conversation/structured-output.js';
 import { boundedAudioStream, canonicalAudioAssetStorage, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
@@ -1303,7 +1305,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const transportOptions = { ...options, model: modelName };
         if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
         const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
-        const includeThoughts = modelOptions?.include_thoughts !== false;
         const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
@@ -1347,7 +1348,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         let finalContent: Content = { role: 'model', parts: [] };
         let finishReason: string | undefined;
-        let completionResults: CompletionResult[] = [];
         let toolUse: ToolUse[] | undefined;
         const candidates = response.candidates ?? [];
         if (candidates.length > 1) {
@@ -1370,33 +1370,37 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                             `Model tried to call undeclared tool(s): ${toolUse.map((tool) => tool.tool_name).join(', ')}`,
                     );
                 }
-                completionResults = extractCompletionResults(candidate.content, includeThoughts);
                 finalContent = candidate.content;
             }
         } else if (response.promptFeedback?.blockReason !== undefined) {
             finishReason = response.promptFeedback.blockReason;
             const blockMessage = response.promptFeedback.blockReasonMessage ?? '';
             finalContent = { role: 'model', parts: [{ text: blockMessage }] };
-            completionResults = blockMessage.length === 0 ? [] : [{ type: 'text', value: blockMessage }];
         } else {
             throw new Error('Gemini response has no candidate or prompt block reason');
         }
         if (toolUse?.length) finishReason = 'tool_use';
 
-        const normalized =
-            !toolUse?.length && requestedOptions.result_schema
-                ? normalizeCompletionResult(
-                      completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
-                      requestedOptions.result_schema,
-                  )
-                : undefined;
-        let decoded = await decodeGeminiCanonicalResponse({
+        const rawDecoded = await decodeGeminiCanonicalResponse({
             response,
             content: finalContent,
             prepared,
             finish_reason: finishReason,
-            ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
         });
+        const normalized =
+            !toolUse?.length && requestedOptions.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeGeminiCanonicalResponse({
+                      response,
+                      content: finalContent,
+                      prepared,
+                      finish_reason: finishReason,
+                      structured_output: normalized.structured_output,
+                  })
+                : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
         const document = appendGeminiCanonicalResponse(prepared, decoded);
         return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
@@ -1629,17 +1633,26 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         const completionResults = result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }];
-        const normalized =
-            !tool_use?.length && requestedOptions.result_schema
-                ? normalizeCompletionResult(completionResults, requestedOptions.result_schema)
-                : undefined;
-        const decoded = await decodeGeminiCanonicalResponse({
+        const rawDecoded = await decodeGeminiCanonicalResponse({
             response,
             content: finalContent,
             prepared,
             finish_reason,
-            ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
         });
+        const normalized =
+            !tool_use?.length && requestedOptions.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                : undefined;
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeGeminiCanonicalResponse({
+                      response,
+                      content: finalContent,
+                      prepared,
+                      finish_reason,
+                      structured_output: normalized.structured_output,
+                  })
+                : rawDecoded;
         const finalConversation = appendGeminiCanonicalResponse(prepared, decoded);
 
         return {
@@ -1814,18 +1827,26 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
                 ...(terminalCandidate === undefined ? {} : { candidates: [{ ...terminalCandidate, content }] }),
             } as GenerateContentResponse;
-            const finalResults = extractCompletionResults(content, includeThoughts);
-            const normalized =
-                !streamedToolUseFound && requestedOptions.result_schema
-                    ? normalizeCompletionResult(finalResults, requestedOptions.result_schema)
-                    : undefined;
-            const decoded = await decodeGeminiCanonicalResponse({
+            const rawDecoded = await decodeGeminiCanonicalResponse({
                 response: finalResponse,
                 content,
                 prepared,
                 finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
-                ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
             });
+            const normalized =
+                !streamedToolUseFound && requestedOptions.result_schema
+                    ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                    : undefined;
+            const decoded =
+                normalized?.status === 'valid'
+                    ? await decodeGeminiCanonicalResponse({
+                          response: finalResponse,
+                          content,
+                          prepared,
+                          finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
+                          structured_output: normalized.structured_output,
+                      })
+                    : rawDecoded;
             return { decoded, finalResponse, normalized };
         }
         let decodedFinalResponse: ReturnType<typeof computeDecodedFinalResponse> | undefined;
@@ -1901,7 +1922,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         });
         if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
         const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
-        const includeThoughts = modelOptions?.include_thoughts !== false;
         const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
         await assertAcceptedCanonicalRequest(
@@ -2123,20 +2143,16 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 } as GenerateContentResponse;
                 const toolUse = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
                 const finishReason = toolUse?.length ? 'tool_use' : terminalFinishReason;
-                const results = extractCompletionResults(content, includeThoughts);
-                const normalized =
-                    !toolUse?.length && requestedOptions.result_schema
-                        ? normalizeCompletionResult(
-                              results.length > 0 ? results : [{ type: 'text', value: '' }],
-                              requestedOptions.result_schema,
-                          )
-                        : undefined;
                 const rawDecoded = await decodeGeminiCanonicalResponse({
                     response: finalResponse,
                     content,
                     prepared,
                     finish_reason: finishReason,
                 });
+                const normalized =
+                    !toolUse?.length && requestedOptions.result_schema
+                        ? normalizeDecodedStructuredOutputForSchema(rawDecoded, requestedOptions.result_schema)
+                        : undefined;
                 let decoded =
                     normalized?.status === 'valid'
                         ? await decodeGeminiCanonicalResponse({

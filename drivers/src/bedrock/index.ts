@@ -66,7 +66,6 @@ import {
     type ModelOptions,
     markCanonicalAcceptedRecovery,
     type NovaCanvasOptions,
-    normalizeCompletionResult,
     type PromptSegment,
     Providers,
     parseClaudeVersion,
@@ -92,7 +91,10 @@ import {
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
 } from '../conversation/canonical-runtime.js';
-import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import type { BedrockDriverOptions } from '../driver-options.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
@@ -259,12 +261,6 @@ function converseFinishReason(reason: string | undefined) {
         default:
             return reason;
     }
-}
-
-function bedrockAnswerResults(message: Message | undefined): CompletionResult[] {
-    return (message?.content ?? []).flatMap((block) =>
-        block.text === undefined ? [] : [{ type: 'text' as const, value: block.text }],
-    );
 }
 
 function recoveredBedrockStream(completion: Completion): DriverCompletionStream {
@@ -1455,15 +1451,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             tool_use = undefined;
         }
 
+        const rawDecoded = await decodeBedrockConverseCanonicalResponse(res, prepared);
         const normalized =
             tool_use === undefined && options.result_schema
-                ? normalizeCompletionResult(bedrockAnswerResults(res.output?.message), options.result_schema)
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
                 : undefined;
-        let decoded = await decodeBedrockConverseCanonicalResponse(
-            res,
-            prepared,
-            normalized?.status === 'valid' ? normalized.structured_output : undefined,
-        );
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeBedrockConverseCanonicalResponse(res, prepared, normalized.structured_output)
+                : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
         const processedConversation = appendBedrockConverseCanonicalResponse(prepared, decoded);
 
@@ -1655,15 +1651,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                             throw new Error('Bedrock Converse stream ended without a terminal stop reason');
                         }
                         const blocks = finalizeBedrockNativeBlocks(nativeBlocks);
-                        const normalized =
-                            !blocks.some(
-                                (block) => block.toolUse !== undefined && block.toolUse.type !== 'server_tool_use',
-                            ) && options.result_schema
-                                ? normalizeCompletionResult(
-                                      bedrockAnswerResults({ role: 'assistant', content: blocks }),
-                                      options.result_schema,
-                                  )
-                                : undefined;
                         const terminalResponse = {
                             output: {
                                 message: {
@@ -1680,11 +1667,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                             ...(serviceTier === undefined ? {} : { serviceTier }),
                             $metadata: res.$metadata,
                         } as unknown as ConverseResponse;
-                        let decoded = await decodeBedrockConverseCanonicalResponse(
-                            terminalResponse,
-                            prepared,
-                            normalized?.status === 'valid' ? normalized.structured_output : undefined,
-                        );
+                        const rawDecoded = await decodeBedrockConverseCanonicalResponse(terminalResponse, prepared);
+                        const normalized =
+                            !blocks.some(
+                                (block) => block.toolUse !== undefined && block.toolUse.type !== 'server_tool_use',
+                            ) && options.result_schema
+                                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                                : undefined;
+                        let decoded =
+                            normalized?.status === 'valid'
+                                ? await decodeBedrockConverseCanonicalResponse(
+                                      terminalResponse,
+                                      prepared,
+                                      normalized.structured_output,
+                                  )
+                                : rawDecoded;
                         if (normalized?.status === 'invalid') {
                             decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
                         }
@@ -1962,14 +1959,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const hasApplicationTool = blocks.some(
                     (block) => block.toolUse !== undefined && block.toolUse.type !== 'server_tool_use',
                 );
+                const rawDecoded = await decodeBedrockConverseCanonicalResponse(terminalResponse, prepared);
                 const normalized =
                     !hasApplicationTool && options.result_schema
-                        ? normalizeCompletionResult(
-                              bedrockAnswerResults(terminalResponse.output?.message),
-                              options.result_schema,
-                          )
+                        ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
                         : undefined;
-                const rawDecoded = await decodeBedrockConverseCanonicalResponse(terminalResponse, prepared);
                 let decoded =
                     normalized?.status === 'valid'
                         ? await decodeBedrockConverseCanonicalResponse(

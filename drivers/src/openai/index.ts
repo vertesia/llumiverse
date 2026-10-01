@@ -34,7 +34,6 @@ import {
     legacyCompletionFromCanonicalExecution,
     ModelType,
     markCanonicalAcceptedRecovery,
-    normalizeCompletionResult,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -67,7 +66,10 @@ import {
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
 } from '../conversation/canonical-runtime.js';
-import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
@@ -430,18 +432,16 @@ async function finalizeOpenAIResponsesStreamResponse(input: {
     response: OpenAI.Responses.Response;
     prepared: PreparedOpenAIResponsesConversation;
     options: ExecutionOptions;
-    include_thoughts: boolean;
 }) {
-    const finalResults = extractCompletionResults(input.response.output, input.include_thoughts);
     const finalTools = collectTools(input.response.output);
-    const normalized =
-        !finalTools?.length && input.options.result_schema
-            ? normalizeCompletionResult(finalResults, input.options.result_schema)
-            : undefined;
     const rawDecoded = await decodeOpenAIResponsesCanonicalResponse({
         response: input.response,
         prepared: input.prepared,
     });
+    const normalized =
+        !finalTools?.length && input.options.result_schema
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, input.options.result_schema)
+            : undefined;
     let decoded =
         normalized?.status === 'valid'
             ? await decodeOpenAIResponsesCanonicalResponse({
@@ -603,7 +603,6 @@ export class OpenAIResponsesProtocol {
                     response,
                     prepared,
                     options,
-                    include_thoughts: includeThoughts,
                 })
             ).response;
         });
@@ -636,7 +635,6 @@ export class OpenAIResponsesProtocol {
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
         const modelOptions = options.model_options as OpenAIRequestOptions | undefined;
         assertOpenAIResponseToolChoiceAvailable(modelOptions, useTools, options.model, driver.provider, 'stream');
-        const includeThoughts = modelOptions?.include_thoughts !== false;
         const projection = projectCanonicalResponsesHistory(canonicalState, options);
         let conversation = projection.conversation;
         const currentItems = projection.current_items;
@@ -928,7 +926,6 @@ export class OpenAIResponsesProtocol {
                     response: acceptedFinalResponse,
                     prepared,
                     options,
-                    include_thoughts: includeThoughts,
                 });
                 return {
                     decoded: finalized.decoded,
@@ -1205,16 +1202,24 @@ export class OpenAIResponsesProtocol {
         }
         const fallbackItems =
             res.output.length === 0 ? createAssistantMessageFromResults(completionResults, toolUse) : undefined;
-        const normalized =
-            !toolUse?.length && options.result_schema
-                ? normalizeCompletionResult(completionResults, options.result_schema)
-                : undefined;
-        let decoded = await decodeOpenAIResponsesCanonicalResponse({
+        const rawDecoded = await decodeOpenAIResponsesCanonicalResponse({
             response: res,
             prepared,
             fallback_items: fallbackItems,
-            ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
         });
+        const normalized =
+            !toolUse?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIResponsesCanonicalResponse({
+                      response: res,
+                      prepared,
+                      fallback_items: fallbackItems,
+                      structured_output: normalized.structured_output,
+                  })
+                : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
         const document = appendOpenAIResponsesCanonicalResponse(prepared, decoded);
 

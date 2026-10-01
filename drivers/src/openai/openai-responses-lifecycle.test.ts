@@ -281,6 +281,44 @@ describe('OpenAI Responses canonical lifecycle', () => {
         );
     });
 
+    it('normalizes every canonical output-text partition even when legacy presentation omits an empty part', async () => {
+        const output = [
+            {
+                type: 'message',
+                id: 'message:canonical-partitions',
+                role: 'assistant',
+                status: 'completed',
+                content: [
+                    { type: 'output_text', text: '', annotations: [], logprobs: [] },
+                    { type: 'output_text', text: '{"answer":"Tokyo"}', annotations: [], logprobs: [] },
+                ],
+            },
+        ] as OpenAI.Responses.ResponseOutputItem[];
+        const create = vi.fn(async () => response({ id: 'response:canonical-partitions', output }));
+        const driver = new TestOpenAIResponsesDriver(create);
+
+        const result = await driver.executeCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...runtimeOptions({
+                flow: 'canonical-partitions',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:15.000Z',
+            }),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(result.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } }),
+        );
+        expect(latestGeneratedJson(result.conversation)).toEqual({ answer: 'Tokyo' });
+        expect(create).toHaveBeenCalledOnce();
+    });
+
     it('recovers an accepted typed stream as one terminal event without publishing or calling transport again', async () => {
         const final = response({
             id: 'response:typed-recovery',

@@ -6,7 +6,7 @@ import type {
     JsonValue,
     NativeReplayBlock,
 } from '@llumiverse/conversation';
-import type { CanonicalStructuredOutput } from '@llumiverse/core';
+import { type CanonicalStructuredOutput, normalizeCanonicalStructuredOutput } from '@llumiverse/core';
 
 export interface CanonicalStructuredOutputEvidence extends JsonObject {
     type: 'canonical_structured_output';
@@ -37,6 +37,28 @@ export type StructuredOutputReplayRewriter = (
 export interface InvalidStructuredOutputEvidence {
     code: 'validation_error' | 'json_error';
     message: string;
+}
+
+/**
+ * Validate the exact answer-text partitions already decoded from a native provider response.
+ *
+ * Canonical finalizers use this path so legacy `CompletionResult[]` presentation cannot become
+ * an independent source of structured-output meaning.
+ */
+export function normalizeDecodedStructuredOutputForSchema(
+    decoded: DecodedConversationResponse,
+    schema: object,
+): ReturnType<typeof normalizeCanonicalStructuredOutput> {
+    if (decoded.turns.length !== 1 || decoded.turns[0]?.kind !== 'agent') {
+        throw new TypeError('Structured output normalization requires one decoded agent turn');
+    }
+    return normalizeCanonicalStructuredOutput(
+        {
+            type: 'text',
+            source_texts: decoded.turns[0].blocks.flatMap((block) => (block.type === 'text' ? [block.text] : [])),
+        },
+        schema,
+    );
 }
 
 /** Retain raw decoded evidence while marking an invalid required structured result as failed. */

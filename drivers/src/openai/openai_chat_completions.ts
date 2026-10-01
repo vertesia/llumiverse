@@ -33,7 +33,6 @@ import {
     legacyCompletionFromCanonicalExecution,
     ModelType,
     markCanonicalAcceptedRecovery,
-    normalizeCompletionResult,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -59,7 +58,10 @@ import {
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
 } from '../conversation/canonical-runtime.js';
-import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
@@ -331,17 +333,15 @@ async function finalizeOpenAIChatStreamResponse(input: {
     prepared: PreparedOpenAIChatConversation;
     finish_reason: string;
     options: ExecutionOptions;
-    include_thoughts: boolean;
 }) {
     const message = input.response.choices[0]?.message;
     if (message === undefined) throw new Error('Chat Completions stream has no terminal assistant message');
-    const results = extractOpenAIChatCompletionsResults(message, input.include_thoughts);
     const hasTools = (message.tool_calls?.length ?? 0) > 0;
+    const rawDecoded = await decodeOpenAIChatCanonicalResponse(input.response, input.prepared, input.finish_reason);
     const normalized =
         !hasTools && input.options.result_schema
-            ? normalizeCompletionResult(results, input.options.result_schema)
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, input.options.result_schema)
             : undefined;
-    const rawDecoded = await decodeOpenAIChatCanonicalResponse(input.response, input.prepared, input.finish_reason);
     let decoded =
         normalized?.status === 'valid'
             ? await decodeOpenAIChatCanonicalResponse(
@@ -1302,16 +1302,24 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             throw new Error('Chat Completions response is not valid: no data');
         }
 
-        const normalized =
-            !tool_use?.length && options.result_schema
-                ? normalizeCompletionResult(completionResults, options.result_schema)
-                : undefined;
-        let decoded = await decodeOpenAIChatCanonicalResponse(
+        const rawDecoded = await decodeOpenAIChatCanonicalResponse(
             result,
             prepared,
             typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
-            normalized?.status === 'valid' ? normalized.structured_output : undefined,
         );
+        const normalized =
+            !tool_use?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIChatCanonicalResponse(
+                      result,
+                      prepared,
+                      typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+                      normalized.structured_output,
+                  )
+                : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
         const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
 
@@ -1369,16 +1377,24 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         ) {
             throw new Error('Chat Completions response is not valid: no data');
         }
-        const normalized =
-            !toolUse?.length && options.result_schema
-                ? normalizeCompletionResult(completionResults, options.result_schema)
-                : undefined;
-        const decoded = await decodeOpenAIChatCanonicalResponse(
+        const rawDecoded = await decodeOpenAIChatCanonicalResponse(
             result,
             prepared,
             typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
-            normalized?.status === 'valid' ? normalized.structured_output : undefined,
         );
+        const normalized =
+            !toolUse?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIChatCanonicalResponse(
+                      result,
+                      prepared,
+                      typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+                      normalized.structured_output,
+                  )
+                : rawDecoded;
         const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
         return {
             result: completionResults,
@@ -1571,7 +1587,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                         prepared,
                         finish_reason: responseFinishReason,
                         options,
-                        include_thoughts: includeThoughts,
                     })
                 ).response.conversation;
             })();
@@ -1594,8 +1609,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             options,
             provider,
         });
-        const includeThoughts =
-            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
         const payload = this.buildPayload(conversation, options, true, provider);
         const requestBinding = this.requestBinding(payload, options, provider);
@@ -1840,7 +1853,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     prepared,
                     finish_reason: responseFinishReason,
                     options,
-                    include_thoughts: includeThoughts,
                 });
                 return {
                     decoded: finalized.decoded,
