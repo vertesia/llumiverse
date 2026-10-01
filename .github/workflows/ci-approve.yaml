@@ -20,12 +20,17 @@ permissions: {}
 jobs:
   discover:
     name: Resolve approval branches
+    # Discovery only reads metadata; publishing jobs use the actual branch lock below.
+    concurrency:
+      group: ci-approve-discovery-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.event.inputs.pr_number || 'manual' }}
+      cancel-in-progress: false
+      queue: max
     if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
-      contents: read
-      pull-requests: read
+      contents: read # Read the trusted discovery script at the workflow commit.
+      pull-requests: read # Resolve manual dispatch targets to their PR head branches.
     outputs:
       branches: ${{ steps.branches.outputs.branches }}
     steps:
