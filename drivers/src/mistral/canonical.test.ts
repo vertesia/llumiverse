@@ -3,7 +3,12 @@ import {
     type ConversationStreamEvent,
     parseConversationDocument,
 } from '@llumiverse/conversation';
-import { type CanonicalExecutionEventStream, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import {
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type ExecutionOptions,
+    PromptRole,
+} from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { toOpenAISDKMessage } from '../openai/openai_chat_completions.js';
 import { compileOpenAIChatCompletionsConversation } from '../openai/openai-chat-conversation-adapter.js';
@@ -11,7 +16,7 @@ import { MistralAIDriver, mistralRequestFromOpenAI, normalizeMistralStream } fro
 
 const MODEL = 'mistral-small-latest';
 
-function runtime(flow: string, attempt = 'first', conversation?: ConversationDocument): ExecutionOptions {
+function runtime(flow: string, attempt = 'first', conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),
@@ -368,7 +373,7 @@ describe('Mistral canonical lifecycle', () => {
                     },
                 },
             ],
-        } satisfies ExecutionOptions;
+        } satisfies CanonicalExecutionInputOptions;
         const first = await driver.streamCanonicalEvents(
             [{ role: PromptRole.user, content: 'Think carefully.' }],
             longOptions,

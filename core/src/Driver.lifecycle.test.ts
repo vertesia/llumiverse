@@ -19,11 +19,18 @@ import {
     parseConversationDocument,
 } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
-import { CanonicalAcceptedOutputRecovered, createCanonicalExecutionResponse } from './CanonicalExecution.js';
-import type {
-    CanonicalExecutionEventStream,
-    CanonicalStreamOpenOptions,
-    CanonicalStreamTerminalEvent,
+import {
+    CanonicalAcceptedOutputRecovered,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionOptions,
+    type CanonicalExecutionStream,
+    createCanonicalExecutionResponse,
+} from './CanonicalExecution.js';
+import {
+    type CanonicalExecutionEventStream,
+    type CanonicalStreamOpenOptions,
+    type CanonicalStreamTerminalEvent,
+    FallbackCanonicalExecutionEventStream,
 } from './CanonicalStreaming.js';
 import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS, leaseCompletionStream } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
@@ -152,6 +159,55 @@ class RecoveredCanonicalLifecycleTestDriver extends CanonicalLifecycleTestDriver
     }
 }
 
+class CanonicalOptionSnapshotDriver extends CanonicalLifecycleTestDriver {
+    capturedOptions: CanonicalExecutionOptions | undefined;
+
+    override async requestCanonicalTextCompletion(
+        _prompt: string,
+        options: CanonicalExecutionOptions,
+    ): Promise<ReturnType<typeof createCanonicalExecutionResponse>> {
+        this.capturedOptions = options;
+        return createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
+    }
+}
+
+class TypedCanonicalLifecycleTestDriver extends CanonicalLifecycleTestDriver {
+    canonicalEventCalls = 0;
+    overriddenStringStreamCalls = 0;
+    openedStreamId: string | undefined;
+
+    override async streamCanonical(
+        _segments: PromptSegment[],
+        _options: ExecutionOptions,
+        _signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        this.overriddenStringStreamCalls += 1;
+        throw new Error('legacy CompletionChunkObject canonical stream selected');
+    }
+
+    override async requestCanonicalTextCompletionEventStream(
+        _prompt: string,
+        options: CanonicalExecutionOptions,
+        _signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        this.canonicalEventCalls += 1;
+        this.openedStreamId = open.stream_id;
+        const response = createCanonicalExecutionResponse(options.conversation, 'response-operation');
+        return new FallbackCanonicalExecutionEventStream(
+            {
+                request_id: response.accepted_output.generation.request_id,
+                attempt_id: response.accepted_output.generation.attempt_id,
+                response_operation_id: options.conversation_runtime.response_operation_id,
+                generation_id: response.accepted_output.generation.id,
+                draft_turn_id: response.accepted_output.turn.id,
+            },
+            async () => response,
+            open,
+        );
+    }
+}
+
 class OverriddenStreamDriver extends LifecycleTestDriver {
     readonly cancelStream = vi.fn().mockResolvedValue(undefined);
 
@@ -202,6 +258,14 @@ class OverriddenCanonicalEventStreamDriver extends CanonicalLifecycleTestDriver 
     releaseClosed?: () => void;
     holdClosed = false;
     private releaseRead?: () => void;
+
+    finishRead(): boolean {
+        const release = this.releaseRead;
+        if (release === undefined) return false;
+        this.releaseRead = undefined;
+        release();
+        return true;
+    }
 
     override async streamCanonicalEvents(
         _segments: PromptSegment[],
@@ -305,6 +369,23 @@ function acceptedFiniteDocument() {
     ).document;
 }
 
+function canonicalOptions(
+    conversation = createConversationDocument({ id: 'conversation:lifecycle', created_at: RECORDED_AT }),
+): CanonicalExecutionInputOptions {
+    return {
+        model: 'test-model',
+        conversation,
+        conversation_runtime: {
+            conversation_id: conversation.id,
+            request_id: 'request:lifecycle',
+            attempt_id: 'attempt:lifecycle',
+            input_operation_id: 'input:lifecycle',
+            response_operation_id: 'response-operation',
+            recorded_at: RECORDED_AT,
+        },
+    };
+}
+
 function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
     let release!: () => void;
     driver.cancelStream.mockImplementationOnce(
@@ -324,10 +405,10 @@ describe('AbstractDriver lifecycle', () => {
         driver.recovery = recovery;
 
         await expect(
-            driver.executeCanonical([], {
-                model: 'test-model',
-                conversation: createConversationDocument({ id: 'conversation:new', created_at: RECORDED_AT }),
-            }),
+            driver.executeCanonical(
+                [],
+                canonicalOptions(createConversationDocument({ id: 'conversation:new', created_at: RECORDED_AT })),
+            ),
         ).rejects.toBe(recovery);
     });
 
@@ -339,10 +420,10 @@ describe('AbstractDriver lifecycle', () => {
         const recovery = new CanonicalAcceptedOutputRecovered({ accepted_output: response.accepted_output });
         driver.recovery = recovery;
 
-        const stream = await driver.streamCanonical([], {
-            model: 'test-model',
-            conversation: createConversationDocument({ id: 'conversation:new', created_at: RECORDED_AT }),
-        });
+        const stream = await driver.streamCanonical(
+            [],
+            canonicalOptions(createConversationDocument({ id: 'conversation:new', created_at: RECORDED_AT })),
+        );
         const chunks: string[] = [];
         for await (const chunk of stream) chunks.push(chunk);
 
@@ -358,7 +439,7 @@ describe('AbstractDriver lifecycle', () => {
         driver.imageModel = true;
         driver.streaming = false;
         const conversation = acceptedFiniteDocument();
-        const recoveredOptions: ExecutionOptions = {
+        const recoveredOptions: CanonicalExecutionInputOptions = {
             model: 'test-model',
             conversation,
             conversation_runtime: {
@@ -423,7 +504,7 @@ describe('AbstractDriver lifecycle', () => {
             id: 'conversation:materialized',
             created_at: '2026-09-30T00:00:00.000Z',
         });
-        const canonicalOptions: ExecutionOptions = {
+        const canonicalOptions: CanonicalExecutionInputOptions = {
             ...options,
             conversation,
             conversation_runtime: {
@@ -447,6 +528,146 @@ describe('AbstractDriver lifecycle', () => {
         );
         expect(driver.createPromptCalls).toBe(0);
         expect(driver.requestTextCompletionCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
+    });
+
+    it('rejects missing identity and opaque native history before prompt preparation or provider dispatch', async () => {
+        const driver = new TypedCanonicalLifecycleTestDriver(vi.fn());
+        const nativeHistory = { messages: [{ role: 'user', content: 'legacy' }] };
+        const runtime = {
+            conversation_id: 'conversation:boundary',
+            request_id: 'request:boundary',
+            attempt_id: 'attempt:boundary',
+            input_operation_id: 'input:boundary',
+            response_operation_id: 'response:boundary',
+            recorded_at: RECORDED_AT,
+        };
+
+        await expect(
+            driver.executeCanonical([], { model: 'test-model' } as unknown as CanonicalExecutionInputOptions),
+        ).rejects.toThrow();
+        await expect(
+            driver.streamCanonical([], {
+                model: 'test-model',
+                conversation: nativeHistory,
+                conversation_runtime: runtime,
+            } as unknown as CanonicalExecutionInputOptions),
+        ).rejects.toThrow('Conversation document validation failed');
+        await expect(
+            driver.streamCanonicalEvents(
+                [],
+                {
+                    model: 'test-model',
+                    conversation: nativeHistory,
+                    conversation_runtime: runtime,
+                } as unknown as CanonicalExecutionInputOptions,
+                undefined,
+                { stream_id: 'stream:boundary' },
+            ),
+        ).rejects.toThrow('Conversation document validation failed');
+
+        expect(driver.createPromptCalls).toBe(0);
+        expect(driver.requestTextCompletionCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
+        expect(driver.canonicalEventCalls).toBe(0);
+        expect(driver.overriddenStringStreamCalls).toBe(0);
+    });
+
+    it('snapshots canonical identity, document, tools and JSON options before the first await', async () => {
+        const driver = new CanonicalOptionSnapshotDriver(vi.fn());
+        const conversation = createConversationDocument({ id: 'conversation:snapshot', created_at: RECORDED_AT });
+        const runtime = {
+            conversation_id: conversation.id,
+            request_id: 'request:snapshot',
+            attempt_id: 'attempt:snapshot',
+            input_operation_id: 'input:snapshot',
+            response_operation_id: 'response:snapshot',
+            recorded_at: RECORDED_AT,
+        };
+        const tools = [
+            {
+                name: 'lookup',
+                input_schema: {
+                    type: 'object',
+                    properties: { city: { type: 'string' } },
+                    required: ['city'],
+                    additionalProperties: false,
+                },
+            },
+        ];
+        const resultSchema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'string' as const } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const execution = driver.executeCanonical([], {
+            model: 'test-model',
+            conversation,
+            conversation_runtime: runtime,
+            tools,
+            result_schema: resultSchema,
+            model_options: { temperature: 0.2 },
+            labels: { purpose: 'snapshot' },
+        });
+
+        conversation.id = 'conversation:mutated';
+        runtime.request_id = 'request:mutated';
+        tools[0].name = 'mutated';
+        tools[0].input_schema.properties.city.type = 'number';
+        resultSchema.properties.answer.type = 'number' as 'string';
+
+        await execution;
+        expect(driver.capturedOptions).toMatchObject({
+            conversation: { id: 'conversation:snapshot' },
+            conversation_runtime: { request_id: 'request:snapshot', purpose: 'conversation' },
+            tools: [{ name: 'lookup', input_schema: { properties: { city: { type: 'string' } } } }],
+            result_schema: { properties: { answer: { type: 'string' } } },
+            model_options: { temperature: 0.2 },
+            labels: { purpose: 'snapshot' },
+        });
+        expect(driver.capturedOptions?.conversation).not.toBe(conversation);
+        expect(driver.capturedOptions?.conversation_runtime).not.toBe(runtime);
+        expect(driver.capturedOptions?.tools).not.toBe(tools);
+    });
+
+    it('creates a deterministic empty canonical document from the validated runtime identity', async () => {
+        const driver = new CanonicalOptionSnapshotDriver(vi.fn());
+        await driver.executeCanonical([], {
+            model: 'test-model',
+            conversation_runtime: {
+                conversation_id: 'conversation:new',
+                request_id: 'request:new',
+                attempt_id: 'attempt:new',
+                input_operation_id: 'input:new',
+                response_operation_id: 'response:new',
+                recorded_at: RECORDED_AT,
+            },
+        });
+
+        expect(driver.capturedOptions?.conversation).toMatchObject({
+            id: 'conversation:new',
+            created_at: RECORDED_AT,
+            revision: 0,
+        });
+        expect(driver.capturedOptions?.conversation_runtime).toMatchObject({
+            conversation_id: 'conversation:new',
+            purpose: 'conversation',
+        });
+    });
+
+    it('derives the compatibility string preview only from the typed canonical event stream', async () => {
+        const driver = new TypedCanonicalLifecycleTestDriver(vi.fn());
+        const conversation = acceptedFiniteDocument();
+        const stream = await driver.streamCanonical([], canonicalOptions(conversation));
+        const chunks: string[] = [];
+        for await (const chunk of stream) chunks.push(chunk);
+
+        expect(chunks).toEqual(['accepted']);
+        expect(stream.completion?.conversation).toEqual(conversation);
+        expect(driver.openedStreamId).toBe('response-operation');
+        expect(driver.canonicalEventCalls).toBe(1);
+        expect(driver.overriddenStringStreamCalls).toBe(0);
         expect(driver.requestTextCompletionStreamCalls).toBe(0);
     });
 
@@ -748,7 +969,7 @@ describe('AbstractDriver lifecycle', () => {
         const cleanup = vi.fn();
         const driver = new OverriddenCanonicalEventStreamDriver(cleanup);
         driver.holdClosed = true;
-        const stream = await driver.streamCanonicalEvents(segments, options, undefined, canonicalStreamOpen);
+        const stream = await driver.streamCanonicalEvents(segments, canonicalOptions(), undefined, canonicalStreamOpen);
         const read = stream[Symbol.asyncIterator]().next();
         driver.destroy();
 
@@ -764,11 +985,26 @@ describe('AbstractDriver lifecycle', () => {
         driver.releaseIteratorReturn?.();
     });
 
+    it('keeps projected canonical delivery independent from its owned closed lease', async () => {
+        const cleanup = vi.fn();
+        const driver = new OverriddenCanonicalEventStreamDriver(cleanup);
+        driver.holdClosed = true;
+        const stream = await driver.streamCanonical(segments, canonicalOptions());
+        const read = stream[Symbol.asyncIterator]().next();
+        await vi.waitFor(() => expect(driver.finishRead()).toBe(true));
+        await expect(read).resolves.toEqual({ done: true, value: undefined });
+
+        driver.destroy();
+        expect(cleanup).not.toHaveBeenCalled();
+        driver.releaseClosed?.();
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+    });
+
     it('reads the typed canonical stream abort signal from the third argument', async () => {
         const cleanup = vi.fn();
         const driver = new OverriddenCanonicalEventStreamDriver(cleanup);
         const controller = new AbortController();
-        await driver.streamCanonicalEvents(segments, options, controller.signal, canonicalStreamOpen);
+        await driver.streamCanonicalEvents(segments, canonicalOptions(), controller.signal, canonicalStreamOpen);
         driver.destroy();
 
         controller.abort();
@@ -782,7 +1018,7 @@ describe('AbstractDriver lifecycle', () => {
         try {
             const cleanup = vi.fn();
             const driver = new OverriddenCanonicalEventStreamDriver(cleanup, { streamStartTimeoutMs: 100 });
-            await driver.streamCanonicalEvents(segments, options, undefined, canonicalStreamOpen);
+            await driver.streamCanonicalEvents(segments, canonicalOptions(), undefined, canonicalStreamOpen);
             driver.destroy();
 
             await vi.advanceTimersByTimeAsync(101);

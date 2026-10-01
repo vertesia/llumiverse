@@ -1,5 +1,10 @@
 import type { ConversationDocument, ConversationStreamEvent } from '@llumiverse/conversation';
-import { type CanonicalExecutionEventStream, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import {
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type ExecutionOptions,
+    PromptRole,
+} from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from 'vitest';
 import { MistralAIDriver } from '../src/index.js';
@@ -88,7 +93,7 @@ if (
     throw new Error('Canonical Mistral live coverage requires MISTRAL_API_KEY');
 }
 
-function options(attempt: string, conversation?: ConversationDocument): ExecutionOptions {
+function options(attempt: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),

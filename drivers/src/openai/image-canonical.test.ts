@@ -1,5 +1,6 @@
 import {
     appendConversationRecords,
+    type ConversationDocument,
     createConversationDocument,
     createTextBlock,
     createUserTurn,
@@ -7,6 +8,7 @@ import {
 } from '@llumiverse/conversation';
 import {
     Base64DataSource,
+    type CanonicalExecutionInputOptions,
     type ExecutionOptions,
     isCanonicalAcceptedRecovery,
     PromptRole,
@@ -45,7 +47,7 @@ const pngA = encodedImage(pngSignature, 'first image bytes');
 const webpA = encodedImage(webpSignature, 'first webp image bytes');
 const webpB = encodedImage(webpSignature, 'second webp image bytes');
 
-function runtime(flow: string, conversation?: unknown): ExecutionOptions {
+function runtime(flow: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: 'gpt-image-1',
         ...(conversation === undefined ? {} : { conversation }),
@@ -96,7 +98,7 @@ describe('OpenAI standalone image canonical lifecycle', () => {
         const publish = vi.fn(async () => undefined);
         const driver = new ImageDriver(generate);
         const segments = [{ role: PromptRole.user, content: 'Draw two small icons.' }];
-        const options: ExecutionOptions = {
+        const options: CanonicalExecutionInputOptions = {
             ...runtime('multiple'),
             model_options: {
                 _option_id: 'openai-gpt-image',
@@ -311,7 +313,7 @@ describe('OpenAI standalone image canonical lifecycle', () => {
         async (mode) => {
             const generate = vi.fn(async () => imageResponse([{ b64_json: pngA }]));
             const driver = new ImageDriver(generate);
-            const options: ExecutionOptions = {
+            const options: CanonicalExecutionInputOptions = {
                 ...runtime(`barrier-${mode}`),
                 on_canonical_request_prepared: async () => {
                     throw new Error('image request was not durable');
@@ -481,7 +483,7 @@ describe('OpenAI standalone image canonical lifecycle', () => {
     it('does not publish accepted output when durable asset storage fails', async () => {
         let prepared: Parameters<NonNullable<ExecutionOptions['on_canonical_request_prepared']>>[0] | undefined;
         const driver = new ImageDriver(vi.fn(async () => imageResponse([{ b64_json: pngA }], undefined)));
-        const options: ExecutionOptions = {
+        const options: CanonicalExecutionInputOptions = {
             ...runtime('sink-failure'),
             on_canonical_request_prepared: async (value) => {
                 prepared = value;

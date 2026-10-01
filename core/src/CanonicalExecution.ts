@@ -2,6 +2,7 @@ import type {
     AudioResult,
     Completion,
     CompletionResult,
+    ExecutionOptions,
     ExecutionTokenUsage,
     JsonResult,
     PromptCacheDiagnostic,
@@ -13,9 +14,14 @@ import {
     type ConversationAcceptedOutputFragment,
     type ConversationDocument,
     type ConversationOutputBlock,
+    type ConversationRuntimeContext,
+    ConversationRuntimeContextSchema,
     createAcceptedOutputFragment,
+    createConversationDocument,
     parseAcceptedOutputFragment,
     parseConversationDocument,
+    type ResolvedConversationRuntimeContext,
+    ResolvedConversationRuntimeContextSchema,
     toolArgumentsForModel,
 } from '@llumiverse/conversation';
 import { MalformedStreamingToolArgumentsError } from './stream-errors.js';
@@ -33,6 +39,82 @@ export interface CanonicalExecutionResponse {
     service_tier?: string;
     prompt_cache_diagnostic?: PromptCacheDiagnostic;
     original_response?: unknown;
+}
+
+/**
+ * Provider-facing options for current canonical execution.
+ *
+ * `ExecutionOptions` remains the supported legacy Driver boundary and therefore keeps its opaque
+ * native `conversation` field. Canonical execution snapshots that boundary synchronously into this
+ * shape before prompt preparation or provider I/O. From that point on the complete document and
+ * resolved request identity are the only conversation authority.
+ */
+export type CanonicalExecutionOptions = Omit<ExecutionOptions, 'conversation' | 'conversation_runtime'> & {
+    conversation: ConversationDocument;
+    conversation_runtime: ResolvedConversationRuntimeContext;
+};
+
+/** Caller-facing canonical input before defaults and the empty document have been resolved. */
+export type CanonicalExecutionInputOptions = Omit<ExecutionOptions, 'conversation' | 'conversation_runtime'> & {
+    conversation?: ConversationDocument | null;
+    conversation_runtime: ConversationRuntimeContext;
+};
+
+function cloneOptionValue<T>(value: T | undefined): T | undefined {
+    return value === undefined ? undefined : structuredClone(value);
+}
+
+/**
+ * Validate and own one canonical request snapshot at the public Driver boundary.
+ *
+ * An absent document starts an empty canonical conversation only when the caller supplied its
+ * durable id. Opaque native histories are intentionally rejected; their one-time conversion belongs
+ * to the named provider import APIs rather than the current execution path.
+ */
+export function resolveCanonicalExecutionOptions(options: ExecutionOptions): CanonicalExecutionOptions {
+    const suppliedRuntime = ConversationRuntimeContextSchema.parse(options.conversation_runtime);
+    const conversation =
+        options.conversation === undefined || options.conversation === null
+            ? (() => {
+                  if (suppliedRuntime.conversation_id === undefined) {
+                      throw new TypeError(
+                          'Canonical execution without a document requires conversation_runtime.conversation_id',
+                      );
+                  }
+                  return createConversationDocument({
+                      id: suppliedRuntime.conversation_id,
+                      created_at: suppliedRuntime.recorded_at,
+                  });
+              })()
+            : parseConversationDocument(options.conversation);
+    if (suppliedRuntime.conversation_id !== undefined && suppliedRuntime.conversation_id !== conversation.id) {
+        throw new TypeError('conversation_runtime.conversation_id does not match the canonical document');
+    }
+    const runtime = ResolvedConversationRuntimeContextSchema.parse({
+        ...suppliedRuntime,
+        conversation_id: conversation.id,
+        purpose: suppliedRuntime.purpose ?? 'conversation',
+    });
+    const {
+        conversation: _conversation,
+        conversation_runtime: _conversationRuntime,
+        httpTimeout,
+        labels,
+        model_options,
+        result_schema,
+        tools,
+        ...rest
+    } = options;
+    return {
+        ...rest,
+        conversation,
+        conversation_runtime: runtime,
+        ...(httpTimeout === undefined ? {} : { httpTimeout: cloneOptionValue(httpTimeout) }),
+        ...(labels === undefined ? {} : { labels: cloneOptionValue(labels) }),
+        ...(model_options === undefined ? {} : { model_options: cloneOptionValue(model_options) }),
+        ...(result_schema === undefined ? {} : { result_schema: cloneOptionValue(result_schema) }),
+        ...(tools === undefined ? {} : { tools: cloneOptionValue(tools) }),
+    };
 }
 
 export function markCanonicalAcceptedRecovery<T extends object>(value: T): T & { [CANONICAL_ACCEPTED_RECOVERY]: true } {
@@ -145,9 +227,14 @@ function recoveredAcceptedOutput(
     return fragment;
 }
 
-export function canonicalExecutionPreview(response: CanonicalExecutionResponse, includeReasoning: boolean): string {
+export function canonicalExecutionPreview(
+    response: CanonicalExecutionResponse,
+    includeReasoning: boolean,
+    omittedCommittedBlockIds?: ReadonlySet<string>,
+): string {
     return response.accepted_output.turn.blocks
         .flatMap((block): string[] => {
+            if (omittedCommittedBlockIds?.has(block.id)) return [];
             switch (block.type) {
                 case 'text':
                     return [block.text];

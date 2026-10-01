@@ -4,6 +4,7 @@ import type {
 } from '@aws-sdk/client-bedrock-runtime';
 import {
     appendConversationRecords,
+    type ConversationDocument,
     type ConversationPreparedRequest,
     type ConversationStreamEvent,
     createConversationDocument,
@@ -14,8 +15,8 @@ import {
 import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type DataSource,
-    type ExecutionOptions,
     isCanonicalAcceptedRecovery,
     PromptRole,
     URLDataSource,
@@ -34,7 +35,7 @@ const RESULT_SCHEMA = {
     additionalProperties: false,
 };
 
-function runtimeOptions(flow: string, conversation?: unknown): ExecutionOptions {
+function runtimeOptions(flow: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),
@@ -57,7 +58,10 @@ function runtimeOptions(flow: string, conversation?: unknown): ExecutionOptions 
     };
 }
 
-function retryOptions(options: ExecutionOptions, conversation: unknown): ExecutionOptions {
+function retryOptions(
+    options: CanonicalExecutionInputOptions,
+    conversation: ConversationDocument,
+): CanonicalExecutionInputOptions {
     if (options.conversation_runtime === undefined) throw new Error('Missing Pegasus runtime');
     return {
         ...options,

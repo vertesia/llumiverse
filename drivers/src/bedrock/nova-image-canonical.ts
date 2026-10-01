@@ -446,7 +446,6 @@ export async function executeNovaCanvasCanonical(input: {
     await publishCanonicalPreparedRequest(
         {
             document,
-            native_conversation: input.prompt,
             receipt,
             runtime: { ...runtime, conversation_id: document.id },
             generation_id: identities.generation_id,

@@ -21,8 +21,18 @@ function source(): DataSource {
         getStream: vi.fn(async () => new Blob([bytes]).stream()),
     };
 }
-function speechOptions(store_audio?: ExecutionOptions['store_audio']): ExecutionOptions {
+function speechOptions(store_audio?: ExecutionOptions['store_audio']) {
     return { model: 'gpt-4o-mini-tts', store_audio };
+}
+function canonicalRuntime(flow: string) {
+    return {
+        conversation_id: `conversation:openai-audio:${flow}`,
+        request_id: `request:openai-audio:${flow}`,
+        attempt_id: `attempt:openai-audio:${flow}`,
+        input_operation_id: `input:openai-audio:${flow}`,
+        response_operation_id: `response:openai-audio:${flow}`,
+        recorded_at: '2026-09-30T00:00:00.000Z',
+    };
 }
 const prompt = [{ role: PromptRole.user, content: 'Hello from a file.' }];
 
@@ -320,6 +330,7 @@ describe('OpenAI file audio', () => {
             driver.executeCanonical([{ role: PromptRole.user, content: 'Describe', files: [first, second] }], {
                 model: 'gpt-audio',
                 store_audio: async () => 'gs://bucket/output.wav',
+                conversation_runtime: canonicalRuntime('file-count'),
             }),
         ).rejects.toThrow('at most one');
         expect(first.getStream).not.toHaveBeenCalled();
@@ -329,6 +340,7 @@ describe('OpenAI file audio', () => {
         await expect(
             driver.executeCanonical([{ role: PromptRole.assistant, content: '', files: [assistantFile] }], {
                 model: 'gpt-transcribe',
+                conversation_runtime: canonicalRuntime('file-role'),
             }),
         ).rejects.toThrow('only user and system');
         expect(assistantFile.getStream).not.toHaveBeenCalled();
@@ -338,6 +350,7 @@ describe('OpenAI file audio', () => {
         await expect(
             driver.executeCanonical([{ role: PromptRole.user, content: '', files: [unsupported] }], {
                 model: 'gpt-transcribe',
+                conversation_runtime: canonicalRuntime('file-mime'),
             }),
         ).rejects.toThrow('does not support application/pdf');
         expect(unsupported.getStream).not.toHaveBeenCalled();
@@ -347,6 +360,7 @@ describe('OpenAI file audio', () => {
             driver.executeCanonical([{ role: PromptRole.user, content: 'Speak', files: [speechFile] }], {
                 model: 'gpt-4o-mini-tts',
                 store_audio: async () => 'gs://bucket/output.mp3',
+                conversation_runtime: canonicalRuntime('speech-file'),
             }),
         ).rejects.toThrow('text only');
         expect(speechFile.getStream).not.toHaveBeenCalled();
@@ -370,6 +384,7 @@ describe('OpenAI file audio', () => {
         await expect(
             driver.executeCanonical(prompt, {
                 ...speechOptions(async () => 'gs://bucket/output.mp3'),
+                conversation_runtime: canonicalRuntime('publication'),
                 on_canonical_request_prepared: publish,
             }),
         ).rejects.toThrow('durable publication failed');

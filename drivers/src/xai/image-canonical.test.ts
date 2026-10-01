@@ -1,11 +1,13 @@
 import {
     appendConversationRecords,
+    type ConversationDocument,
     createConversationDocument,
     parseConversationDocument,
 } from '@llumiverse/conversation';
 import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type ExecutionOptions,
     isCanonicalAcceptedRecovery,
     PromptRole,
@@ -47,7 +49,7 @@ function testDriver(
     return { driver, post };
 }
 
-function runtimeOptions(flow: string, conversation?: unknown): ExecutionOptions {
+function runtimeOptions(flow: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),
@@ -73,7 +75,11 @@ function runtimeOptions(flow: string, conversation?: unknown): ExecutionOptions 
     };
 }
 
-function retryOptions(options: ExecutionOptions, conversation: unknown, attemptId: string): ExecutionOptions {
+function retryOptions(
+    options: CanonicalExecutionInputOptions,
+    conversation: ConversationDocument,
+    attemptId: string,
+): CanonicalExecutionInputOptions {
     if (options.conversation_runtime === undefined) throw new Error('Missing xAI image runtime');
     return {
         ...options,

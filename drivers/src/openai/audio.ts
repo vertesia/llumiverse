@@ -607,7 +607,7 @@ export async function executeOpenAIAudioCanonical(input: {
             input.options,
         );
     }
-    if (retainedDocument !== undefined)
+    if (retainedDocument !== undefined && retainedDocument.revision !== 0)
         throw new Error('File audio operations do not support conversation continuation');
     const receipt = await createRequestReceipt(
         appended.document,
@@ -626,7 +626,6 @@ export async function executeOpenAIAudioCanonical(input: {
     await publishCanonicalPreparedRequest(
         {
             document: appended.document,
-            native_conversation: transportSegments,
             receipt,
             runtime,
             generation_id: identities.generation_id,

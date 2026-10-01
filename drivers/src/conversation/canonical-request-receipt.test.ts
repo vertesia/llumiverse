@@ -14,6 +14,7 @@ import {
     acceptedCanonicalRequestDocument,
     assertAcceptedCanonicalRequest,
     type CanonicalPreparedState,
+    type CanonicalPreparedStateBase,
     canonicalToolSelectionTargetOptions,
     createExecutedGeneration,
     createRequestReceipt,
@@ -81,8 +82,8 @@ async function receipt(doc: ConversationDocument, mappings: NativeItemMapping[] 
 describe('canonical request receipt binding', () => {
     async function acceptedState(options?: {
         marker?: JsonValue;
-        response_selection_policy?: CanonicalPreparedState<unknown>['response_selection_policy'];
-    }): Promise<Pick<CanonicalPreparedState<unknown>, 'accepted_response' | 'response_selection_policy' | 'runtime'>> {
+        response_selection_policy?: CanonicalPreparedStateBase['response_selection_policy'];
+    }): Promise<Pick<CanonicalPreparedStateBase, 'accepted_response' | 'response_selection_policy' | 'runtime'>> {
         const doc = document();
         const nativePayload = { messages: [] };
         const requestReceipt = await createRequestReceipt(
@@ -238,7 +239,7 @@ describe('canonical request receipt binding', () => {
             doc.assets.asset = { ...doc.assets.asset, storage, ...actual };
             const bound = await receipt(doc, [{ canonical_id: 'user', kind: 'turn', native_id: 'messages/0' }]);
             expect(bound.asset_versions).toEqual([{ asset_id: 'asset', content_hash: actual.content_hash }]);
-            const accepted: NonNullable<CanonicalPreparedState<unknown>['accepted_response']> = {
+            const accepted: NonNullable<CanonicalPreparedStateBase['accepted_response']> = {
                 generation: await createExecutedGeneration({
                     id: 'accepted-generation',
                     runtime,

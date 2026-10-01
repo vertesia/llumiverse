@@ -298,7 +298,14 @@ class LeasedCanonicalExecutionStream implements CanonicalExecutionStream {
         streamStartTimeoutMs: number,
         signal?: AbortSignal,
     ) {
-        this.leased = new LeasedExecutionStream(source, releaseOperation, streamStartTimeoutMs, signal);
+        const lifecycle = source as CanonicalExecutionStream & { readonly closed?: Promise<void> };
+        this.leased = new LeasedExecutionStream(
+            source,
+            releaseOperation,
+            streamStartTimeoutMs,
+            signal,
+            lifecycle.closed,
+        );
     }
 
     get completion(): CanonicalExecutionResponse | undefined {
@@ -351,6 +358,10 @@ class LeasedCanonicalExecutionEventStream implements CanonicalExecutionEventStre
 
     get execution_started(): boolean {
         return this.source.execution_started;
+    }
+
+    get failure(): unknown {
+        return this.source.failure;
     }
 
     get closed(): Promise<void> {

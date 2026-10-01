@@ -1,6 +1,7 @@
 import {
     type AIModel,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
@@ -138,7 +139,7 @@ export class ReplicateDriver extends AbstractDriver<ReplicateDriverOptions, stri
 
     override async executeCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         validateReplicateCanonicalInput(segments, options);
@@ -150,7 +151,7 @@ export class ReplicateDriver extends AbstractDriver<ReplicateDriverOptions, stri
 
     override async streamCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         validateReplicateCanonicalInput(segments, options);
@@ -162,7 +163,7 @@ export class ReplicateDriver extends AbstractDriver<ReplicateDriverOptions, stri
 
     override async streamCanonicalEvents(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {

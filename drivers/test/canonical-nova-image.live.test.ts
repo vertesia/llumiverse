@@ -1,6 +1,7 @@
 import type { ConversationDocument, ConversationStreamEvent } from '@llumiverse/conversation';
 import {
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type ExecutionOptions,
     PromptRole,
     type PromptSegment,
@@ -76,7 +77,7 @@ const selectedDrivers = selectLiveTestDrivers(liveDrivers, {
     models: process.env.LLUMIVERSE_LIVE_MODELS,
 });
 
-function options(model: string, attempt: string, conversation?: ConversationDocument): ExecutionOptions {
+function options(model: string, attempt: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model,
         ...(conversation === undefined ? {} : { conversation }),

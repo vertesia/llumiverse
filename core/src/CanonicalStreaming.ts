@@ -47,6 +47,8 @@ export interface CanonicalStreamOpenOptions
 export interface CanonicalExecutionEventStream extends AsyncIterable<ConversationStreamEvent> {
     readonly completion: CanonicalExecutionResponse | undefined;
     readonly terminal_event: CanonicalStreamTerminalEvent | undefined;
+    /** Private in-process cause retained for legacy compatibility projection; never serialized into stream events. */
+    readonly failure?: unknown;
     /**
      * True once execution may have performed provider work: the finite execute callback or native openSource was
      * entered. Retained replay, explicit accepted recovery, and failure before execution leave this false.
@@ -522,6 +524,7 @@ export interface FallbackCanonicalExecutionEventStreamOptions extends CanonicalS
 /** Finite typed delivery for a canonical sync response. It never reconstructs native draft events from preview text. */
 export class FallbackCanonicalExecutionEventStream implements CanonicalExecutionEventStream {
     completion: CanonicalExecutionResponse | undefined;
+    failure: unknown;
     readonly closed: Promise<void>;
     private readonly abortController = new AbortController();
     private readonly accumulator: ConversationStreamAccumulator;
@@ -663,6 +666,7 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
                 this.channel.fail(error);
                 return;
             }
+            this.failure = error;
             if (!this.settled) {
                 try {
                     const failureKind = this.completion === undefined ? 'execution' : 'delivery';
@@ -704,6 +708,7 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
 
 /** Explicit compatibility projection. Canonical events and the final canonical response remain authoritative. */
 export class LegacyCanonicalExecutionEventProjection implements CanonicalExecutionStream {
+    accepted_recovery: CanonicalAcceptedOutputRecovered | undefined;
     private iteratorCreated = false;
 
     constructor(
@@ -715,6 +720,15 @@ export class LegacyCanonicalExecutionEventProjection implements CanonicalExecuti
         return this.source.completion;
     }
 
+    /** Internal lifecycle barrier forwarded to the Driver lease without delaying accepted delivery. */
+    get closed(): Promise<void> {
+        return this.source.closed;
+    }
+
+    get execution_started(): boolean {
+        return this.source.execution_started;
+    }
+
     async cancel(): Promise<void> {
         await this.source.cancel();
     }
@@ -724,22 +738,51 @@ export class LegacyCanonicalExecutionEventProjection implements CanonicalExecuti
         this.iteratorCreated = true;
         const self = this;
         return (async function* () {
-            let projectedDraft = false;
-            for await (const event of self.source) {
-                if (event.type === 'draft_text_delta') {
-                    projectedDraft = true;
-                    yield event.text;
-                } else if (event.type === 'draft_reasoning_delta' && self.includeReasoning) {
-                    projectedDraft = true;
-                    yield event.text;
-                } else if (
-                    event.type === 'response_accepted' &&
-                    !projectedDraft &&
-                    self.source.completion !== undefined
-                ) {
-                    const preview = canonicalExecutionPreview(self.source.completion, self.includeReasoning);
-                    if (preview.length > 0) yield preview;
+            const emittedDraftBlockIds = new Set<string>();
+            try {
+                for await (const event of self.source) {
+                    if (event.type === 'draft_text_delta') {
+                        emittedDraftBlockIds.add(event.draft_block_id);
+                        yield event.text;
+                    } else if (event.type === 'draft_reasoning_delta' && self.includeReasoning) {
+                        emittedDraftBlockIds.add(event.draft_block_id);
+                        yield event.text;
+                    } else if (
+                        event.type === 'response_accepted' &&
+                        event.origin !== 'accepted_recovery' &&
+                        self.source.completion !== undefined
+                    ) {
+                        const omittedCommittedBlockIds = new Set<string>();
+                        for (const reconciliation of event.reconciliations) {
+                            if (
+                                (reconciliation.disposition === 'direct' ||
+                                    reconciliation.disposition === 'structured_output') &&
+                                reconciliation.draft_block_ids.some((draftId) => emittedDraftBlockIds.has(draftId))
+                            ) {
+                                for (const blockId of reconciliation.committed_block_ids) {
+                                    omittedCommittedBlockIds.add(blockId);
+                                }
+                            }
+                        }
+                        const preview = canonicalExecutionPreview(
+                            self.source.completion,
+                            self.includeReasoning,
+                            omittedCommittedBlockIds,
+                        );
+                        if (preview.length > 0) yield preview;
+                    } else if (event.type === 'stream_terminated') {
+                        if (self.source.failure !== undefined) throw self.source.failure;
+                        throw new Error(
+                            event.outcome === 'cancelled'
+                                ? 'Canonical execution stream was cancelled before response acceptance'
+                                : (event.diagnostic?.message ??
+                                      'Canonical execution stream failed before response acceptance'),
+                        );
+                    }
                 }
+            } catch (error: unknown) {
+                if (!CanonicalAcceptedOutputRecovered.is(error)) throw error;
+                self.accepted_recovery = error;
             }
         })();
     }

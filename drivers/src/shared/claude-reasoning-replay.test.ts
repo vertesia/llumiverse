@@ -6,7 +6,7 @@ import {
     parseConversationDocument,
     resolveToolExecutionRequest,
 } from '@llumiverse/conversation';
-import { type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { type CanonicalExecutionInputOptions, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { AnthropicDriver } from '../anthropic/index.js';
 import {
@@ -87,7 +87,11 @@ function acceptedOutputWithoutProviderTimestamps(value: unknown): unknown {
     );
 }
 
-function canonicalOptions(attempt: string, recordedAt: string, conversation?: unknown): ExecutionOptions {
+function canonicalOptions(
+    attempt: string,
+    recordedAt: string,
+    conversation?: ConversationDocument,
+): CanonicalExecutionInputOptions {
     return {
         model: 'claude-sonnet-4-6',
         ...(conversation === undefined ? {} : { conversation }),
@@ -136,7 +140,11 @@ describe('Claude native reasoning replay', () => {
             { type: 'message_stop' },
         ] as RawMessageStreamEvent[];
         const segments = [{ role: PromptRole.user, content: 'Look up Tokyo.' }];
-        const requiredOptions = (attempt: string, recordedAt: string, conversation?: unknown): ExecutionOptions => ({
+        const requiredOptions = (
+            attempt: string,
+            recordedAt: string,
+            conversation?: ConversationDocument,
+        ): CanonicalExecutionInputOptions => ({
             ...canonicalOptions(attempt, recordedAt, conversation),
             tools: [
                 {
@@ -594,7 +602,7 @@ describe('Claude native reasoning replay', () => {
             const options = {
                 ...canonicalOptions(`attempt:tool-${stopReason}`, '2026-09-11T00:00:00.000Z'),
                 tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
-            } satisfies ExecutionOptions;
+            } satisfies CanonicalExecutionInputOptions;
             const syncDriver = new AnthropicDriver({ apiKey: 'test' });
             syncDriver.client = { messages: { stream: () => sdkStream([], finalMessage) } } as never;
             const sync = await syncDriver.executeCanonical(segments, options);
@@ -1021,7 +1029,11 @@ describe('Claude native reasoning replay', () => {
         });
 
         const retried = await driver.execute(segments, {
-            ...canonicalOptions('attempt:retry', '2026-09-11T00:01:00.000Z', first.conversation),
+            ...canonicalOptions(
+                'attempt:retry',
+                '2026-09-11T00:01:00.000Z',
+                parseConversationDocument(first.conversation),
+            ),
             result_schema: resultSchema,
         });
         expect(retried.result).toEqual(first.result);
@@ -1124,15 +1136,22 @@ describe('Claude native reasoning replay', () => {
         const events = [
             { type: 'message_start', message: { ...finalMessage, content: [], stop_reason: null } },
             {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'text', text: '', citations: null },
+            },
+            {
                 type: 'content_block_delta',
                 index: 0,
                 delta: { type: 'text_delta', text: '{"wrong":42}' },
             },
+            { type: 'content_block_stop', index: 0 },
             {
                 type: 'message_delta',
                 delta: { stop_reason: 'end_turn', stop_sequence: null },
                 usage: { output_tokens: 3 },
             },
+            { type: 'message_stop' },
         ] as RawMessageStreamEvent[];
         const streamDriver = new AnthropicDriver({ apiKey: 'test' });
         streamDriver.client = { messages: { stream: () => sdkStream(events, finalMessage) } } as never;
@@ -1186,8 +1205,9 @@ describe('Claude native reasoning replay', () => {
         );
         const iterator = stream[Symbol.asyncIterator]();
         const pending = iterator.next();
+        await vi.waitFor(() => expect(providerSignal).toBeDefined());
         await stream.cancel();
-        await expect(pending).resolves.toMatchObject({ done: true });
+        await expect(pending).rejects.toThrow('cancelled');
         expect(providerSignal?.aborted).toBe(true);
         expect(stream.completion).toBeUndefined();
     });

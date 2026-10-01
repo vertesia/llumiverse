@@ -28,7 +28,9 @@ import {
     CanonicalToolSelectionViolationError,
 } from './CanonicalSelection.js';
 import {
+    type CanonicalExecutionEventStream,
     CanonicalStreamEventChannel,
+    type CanonicalStreamTerminalEvent,
     FallbackCanonicalExecutionEventStream,
     finalizeCanonicalExecutionStreamResponse,
     LegacyCanonicalExecutionEventProjection,
@@ -60,7 +62,7 @@ function streamEvent(
     } as ConversationStreamEvent;
 }
 
-function acceptedDocument() {
+function acceptedDocument(options: { media?: boolean } = {}) {
     const initial = createConversationDocument({ id: 'conversation', created_at: RECORDED_AT });
     const requestReceipt = {
         id: 'request-receipt',
@@ -123,6 +125,7 @@ function acceptedDocument() {
                 executor: 'application' as const,
                 arguments: { type: 'json' as const, value: { query: 'answer' } },
             },
+            ...(options.media ? [{ id: 'image', type: 'image' as const, asset_id: 'image-asset' }] : []),
         ],
         status: 'completed' as const,
         timestamps: { recorded_at: RECORDED_AT, completed_at: RECORDED_AT },
@@ -132,7 +135,32 @@ function acceptedDocument() {
     };
     return appendConversationRecords(
         initial,
-        { turns: [turn], generations: [generation] },
+        {
+            turns: [turn],
+            generations: [generation],
+            ...(options.media
+                ? {
+                      assets: [
+                          {
+                              id: 'image-asset',
+                              kind: 'image' as const,
+                              mime_type: 'image/png',
+                              storage: {
+                                  type: 'external' as const,
+                                  resolver: 'url' as const,
+                                  locator: { url: 'gs://bucket/image.png' },
+                              },
+                              provenance: {
+                                  type: 'generated' as const,
+                                  generation_id: generation.id,
+                                  source_turn_id: turn.id,
+                              },
+                              created_at: RECORDED_AT,
+                          },
+                      ],
+                  }
+                : {}),
+        },
         {
             expected_revision: 0,
             operation_id: 'response-operation',
@@ -140,6 +168,114 @@ function acceptedDocument() {
             recorded_at: RECORDED_AT,
         },
     ).document;
+}
+
+function projectionSource(
+    response: CanonicalExecutionResponse,
+    drafts: Array<{
+        type: 'text' | 'reasoning' | 'image';
+        text?: string;
+        committed_block_ids: string[];
+        disposition?: 'direct' | 'structured_output';
+    }>,
+    failure?: unknown,
+): CanonicalExecutionEventStream {
+    const output = response.accepted_output;
+    const streamIdentity = {
+        stream_id: 'stream-projection',
+        request_id: output.generation.request_id,
+        attempt_id: output.generation.attempt_id,
+        response_operation_id: output.receipt.id,
+        generation_id: output.generation.id,
+        draft_turn_id: output.turn.id,
+    } as const;
+    const accumulator = new ConversationStreamAccumulator(streamIdentity);
+    let sequence = 0;
+    const envelope = () => ({
+        format: CONVERSATION_FORMAT,
+        schema_version: CONVERSATION_SCHEMA_VERSION,
+        experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+        ...streamIdentity,
+        event_id: `stream-projection#${sequence}`,
+        sequence: sequence++,
+    });
+    if (drafts.length > 0) {
+        accumulator.append({ ...envelope(), type: 'draft_started', origin: 'live_transport' });
+        for (const [index, draft] of drafts.entries()) {
+            const draftBlockId = `draft-${index}`;
+            const nativePosition = { protocol: 'provider.protocol', path: ['output', index] };
+            const block =
+                draft.type === 'reasoning'
+                    ? ({ type: 'reasoning', visibility: 'display' } as const)
+                    : ({ type: draft.type } as const);
+            accumulator.append({
+                ...envelope(),
+                type: 'draft_block_started',
+                draft_block_id: draftBlockId,
+                native_position: nativePosition,
+                block,
+            });
+            if (draft.text !== undefined) {
+                if (draft.type === 'image') throw new Error('Projection fixture media cannot emit text');
+                accumulator.append({
+                    ...envelope(),
+                    type: draft.type === 'text' ? 'draft_text_delta' : 'draft_reasoning_delta',
+                    draft_block_id: draftBlockId,
+                    native_position: nativePosition,
+                    text: draft.text,
+                });
+            }
+            accumulator.append({
+                ...envelope(),
+                type: 'draft_block_finished',
+                draft_block_id: draftBlockId,
+                native_position: nativePosition,
+                outcome: 'native_complete',
+            });
+        }
+        accumulator.append({ ...envelope(), type: 'draft_finished', outcome: 'completed' });
+    }
+    const reconciliations = drafts.map((draft, index) => ({
+        draft_block_ids: [`draft-${index}`],
+        native_positions: [{ protocol: 'provider.protocol', path: ['output', index] }],
+        committed_block_ids: draft.committed_block_ids,
+        disposition: draft.disposition ?? ('direct' as const),
+        ...(draft.disposition === 'structured_output' ? { transformation_id: `transform-${index}` } : {}),
+    }));
+    const terminal = {
+        ...envelope(),
+        ...(failure === undefined
+            ? {
+                  type: 'response_accepted' as const,
+                  origin: 'live_transport' as const,
+                  conversation: {
+                      conversation_id: response.conversation.id,
+                      revision: response.conversation.revision,
+                  },
+                  operation_receipt_id: output.receipt.id,
+                  committed_turn_id: output.turn.id,
+                  turn_status: output.turn.status,
+                  generation_status: output.generation.status,
+                  committed_block_ids: output.turn.blocks.map((block) => block.id),
+                  accepted_asset_ids: Object.keys(output.assets),
+                  reconciliations,
+              }
+            : { type: 'stream_terminated' as const, outcome: 'failed' as const }),
+    } satisfies CanonicalStreamTerminalEvent;
+    accumulator.append(terminal);
+    return {
+        completion: failure === undefined ? response : undefined,
+        terminal_event: terminal,
+        execution_started: true,
+        closed: Promise.resolve(),
+        ...(failure === undefined ? {} : { failure }),
+        async cancel() {
+            return terminal;
+        },
+        async *[Symbol.asyncIterator]() {
+            yield* accumulator.retained_events;
+        },
+    };
 }
 
 describe('canonical execution response', () => {
@@ -532,6 +668,98 @@ describe('canonical typed execution stream', () => {
 
         expect(preview).toBe('answer{"ok":true}');
         expect(projected.completion).toBe(response);
+    });
+
+    it('emits accepted text, JSON and media once after a reasoning-only draft', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument({ media: true }), 'response-operation');
+        response.accepted_output.turn.blocks = response.accepted_output.turn.blocks.filter(
+            (block) => block.type !== 'tool_call',
+        );
+        const projected = new LegacyCanonicalExecutionEventProjection(
+            projectionSource(response, [
+                { type: 'text', committed_block_ids: ['text'] },
+                { type: 'reasoning', text: 'why', committed_block_ids: ['reasoning'] },
+                { type: 'text', committed_block_ids: ['json'], disposition: 'structured_output' },
+                { type: 'image', committed_block_ids: ['image'] },
+            ]),
+            true,
+        );
+        const chunks: string[] = [];
+        for await (const chunk of projected) chunks.push(chunk);
+
+        expect(chunks).toEqual(['why', 'answer{"ok":true}[Image]']);
+        expect(projected.completion).toBe(response);
+    });
+
+    it('does not duplicate drafted text while retaining accepted nontext output', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument({ media: true }), 'response-operation');
+        response.accepted_output.turn.blocks = response.accepted_output.turn.blocks.filter(
+            (block) => block.type !== 'tool_call',
+        );
+        const projected = new LegacyCanonicalExecutionEventProjection(
+            projectionSource(response, [
+                { type: 'text', text: 'answer', committed_block_ids: ['text'] },
+                { type: 'reasoning', committed_block_ids: ['reasoning'] },
+                { type: 'text', committed_block_ids: ['json'], disposition: 'structured_output' },
+                { type: 'image', committed_block_ids: ['image'] },
+            ]),
+        );
+        const chunks: string[] = [];
+        for await (const chunk of projected) chunks.push(chunk);
+
+        expect(chunks).toEqual(['answer', '{"ok":true}[Image]']);
+    });
+
+    it('suppresses only the committed text block represented by a draft delta', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        response.accepted_output.turn.blocks = [
+            { id: 'text', type: 'text', text: 'answer', format: 'plain' },
+            { id: 'text-terminal', type: 'text', text: ' terminal', format: 'plain' },
+        ];
+        const projected = new LegacyCanonicalExecutionEventProjection(
+            projectionSource(response, [
+                { type: 'text', text: 'answer', committed_block_ids: ['text'] },
+                { type: 'text', committed_block_ids: ['text-terminal'] },
+            ]),
+        );
+        const chunks: string[] = [];
+        for await (const chunk of projected) chunks.push(chunk);
+
+        expect(chunks).toEqual(['answer', ' terminal']);
+    });
+
+    it('does not duplicate JSON committed from drafted structured-output text', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        response.accepted_output.turn.blocks = [{ id: 'json', type: 'json', value: { ok: true } }];
+        const projected = new LegacyCanonicalExecutionEventProjection(
+            projectionSource(response, [
+                {
+                    type: 'text',
+                    text: '{"ok":true}',
+                    committed_block_ids: ['json'],
+                    disposition: 'structured_output',
+                },
+            ]),
+        );
+        const chunks: string[] = [];
+        for await (const chunk of projected) chunks.push(chunk);
+
+        expect(chunks).toEqual(['{"ok":true}']);
+    });
+
+    it('rethrows the retained in-process failure when a typed stream terminates', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const failure = new Error('durable publication failed');
+        const projected = new LegacyCanonicalExecutionEventProjection(projectionSource(response, [], failure));
+
+        await expect(
+            (async () => {
+                for await (const _chunk of projected) {
+                    // The terminal is the only event.
+                }
+            })(),
+        ).rejects.toBe(failure);
+        expect(projected.completion).toBeUndefined();
     });
 
     it('cancels a pending fallback once and exposes its terminal even after iterator return', async () => {

@@ -1156,27 +1156,31 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 throw new Error('conversation_runtime.conversation_id does not match the canonical document');
             }
             const accepted = acceptedCanonicalResponse(document, runtime.response_operation_id);
-            if (accepted === undefined) throw new Error('Gemini file audio does not support conversation continuation');
-            if (
-                accepted.generation.request_id !== runtime.request_id ||
-                accepted.generation.provider !== geminiProvider(driver) ||
-                accepted.generation.protocol !== GEMINI_GENERATE_CONTENT_PROTOCOL ||
-                accepted.generation.requested_model !== requestedOptions.model ||
-                fileAudioRequest === undefined ||
-                accepted.generation.request_receipt.request_fingerprint !==
-                    (await fingerprintJson(providerJsonValue(fileAudioRequest.payload)))
-            ) {
-                throw new Error(
-                    `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
+            if (accepted === undefined && document.revision !== 0) {
+                throw new Error('Gemini file audio does not support conversation continuation');
+            }
+            if (accepted !== undefined) {
+                if (
+                    accepted.generation.request_id !== runtime.request_id ||
+                    accepted.generation.provider !== geminiProvider(driver) ||
+                    accepted.generation.protocol !== GEMINI_GENERATE_CONTENT_PROTOCOL ||
+                    accepted.generation.requested_model !== requestedOptions.model ||
+                    fileAudioRequest === undefined ||
+                    accepted.generation.request_receipt.request_fingerprint !==
+                        (await fingerprintJson(providerJsonValue(fileAudioRequest.payload)))
+                ) {
+                    throw new Error(
+                        `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
+                    );
+                }
+                if (requestedOptions.include_original_response) {
+                    throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+                }
+                return recoverCanonicalExecutionResponse(
+                    { document, runtime, accepted_response: accepted },
+                    requestedOptions,
                 );
             }
-            if (requestedOptions.include_original_response) {
-                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
-            }
-            return recoverCanonicalExecutionResponse(
-                { document, runtime, accepted_response: accepted },
-                requestedOptions,
-            );
         }
         const canonicalState = await prepareGeminiCanonicalState({
             conversation: requestedOptions.conversation,

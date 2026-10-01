@@ -5,7 +5,7 @@ import {
     Modality,
 } from '@google/genai';
 import type { ConversationDocument, ConversationStreamEvent } from '@llumiverse/conversation';
-import type { CanonicalExecutionEventStream, ExecutionOptions } from '@llumiverse/core';
+import type { CanonicalExecutionEventStream, CanonicalExecutionInputOptions, ExecutionOptions } from '@llumiverse/core';
 import { PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
@@ -31,7 +31,7 @@ class GeminiImageTestDriver extends VertexAIDriver {
     }
 }
 
-function options(attempt: string, conversation?: ConversationDocument): ExecutionOptions {
+function options(attempt: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),

@@ -236,6 +236,7 @@ export class CanonicalNativeStreamWriter {
 /** One-consumer native stream that emits canonical drafts before accepting the authoritative terminal decode. */
 export class CanonicalNativeExecutionEventStream<NativeEvent> implements CanonicalExecutionEventStream {
     completion: CanonicalExecutionResponse | undefined;
+    failure: unknown;
     readonly closed: Promise<void>;
     private readonly accumulator: ConversationStreamAccumulator;
     private readonly channel: CanonicalStreamEventChannel;
@@ -364,6 +365,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             if (this.settled) return;
             await this.beginAcceptance({ ...finalized, reconciliations });
         } catch (error: unknown) {
+            this.failure = error;
             if (this.settlement === undefined) {
                 try {
                     const failureKind = this.completion === undefined ? 'provider' : 'delivery';
@@ -411,7 +413,8 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             });
             await this.channel.terminate(accepted);
             return accepted;
-        } catch {
+        } catch (error: unknown) {
+            this.failure = error;
             const existing = this.terminal_event;
             if (existing !== undefined) {
                 await this.channel.terminate(existing);

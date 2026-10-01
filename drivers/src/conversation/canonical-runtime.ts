@@ -63,9 +63,8 @@ export interface CanonicalPromptRecords {
     execution_receipts?: ExecutionReceipt[];
 }
 
-export interface CanonicalPreparedState<NativeConversation> {
+export interface CanonicalPreparedStateBase {
     document: ConversationDocument;
-    native_conversation: NativeConversation;
     receipt: RequestReceipt;
     runtime: ResolvedConversationRuntimeContext;
     generation_id: string;
@@ -76,6 +75,10 @@ export interface CanonicalPreparedState<NativeConversation> {
         turn: GeneratedAgentTurn;
         generation: ExecutedGeneration;
     };
+}
+
+export interface CanonicalPreparedState<NativeConversation> extends CanonicalPreparedStateBase {
+    native_conversation: NativeConversation;
 }
 
 export const CANONICAL_TOOL_SELECTION_TARGET_OPTION = 'canonical_tool_selection';
@@ -114,7 +117,7 @@ function assertAcceptedToolSelectionPolicy(
     }
 }
 
-type AcceptedCanonicalResponse = NonNullable<CanonicalPreparedState<unknown>['accepted_response']>;
+type AcceptedCanonicalResponse = NonNullable<CanonicalPreparedStateBase['accepted_response']>;
 
 function selectedAssetIds(turns: readonly ConversationTurn[]): Set<string> {
     const assetIds = new Set<string>();
@@ -198,7 +201,7 @@ export async function acceptedCanonicalRequestDocument(
 
 /** Verify a rebuilt native request before returning an accepted response without provider transport. */
 export async function assertAcceptedCanonicalRequest(
-    state: Pick<CanonicalPreparedState<unknown>, 'accepted_response' | 'response_selection_policy' | 'runtime'>,
+    state: Pick<CanonicalPreparedStateBase, 'accepted_response' | 'response_selection_policy' | 'runtime'>,
     target: { provider: string; protocol: string; model: string },
     nativePayload: JsonValue,
 ): Promise<void> {
@@ -226,7 +229,7 @@ export async function assertAcceptedCanonicalRequest(
 /** Validate response selection before appending any canonical response records or acceptance receipt. */
 export function appendCanonicalDecodedResponse<NativePayload>(
     prepared: PreparedConversationRequest<NativePayload> &
-        Pick<CanonicalPreparedState<unknown>, 'response_selection_policy'>,
+        Pick<CanonicalPreparedStateBase, 'response_selection_policy'>,
     decoded: DecodedConversationResponse,
     options: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
 ): AppendConversationRecordsResult {
@@ -236,7 +239,7 @@ export function appendCanonicalDecodedResponse<NativePayload>(
 
 /** Await the host durability barrier for an exact finalized provider request. */
 export async function publishCanonicalPreparedRequest(
-    state: CanonicalPreparedState<unknown>,
+    state: CanonicalPreparedStateBase,
     options: ExecutionOptions,
 ): Promise<ConversationPreparedRequest | undefined> {
     const prepared = await parseConversationPreparedRequest({
@@ -265,7 +268,7 @@ export async function publishCanonicalPreparedRequest(
 
 /** Recover one already accepted response, optionally using a verified host-retained output fragment. */
 export async function recoverCanonicalExecutionResponse(
-    state: Pick<CanonicalPreparedState<unknown>, 'document' | 'runtime' | 'accepted_response'>,
+    state: Pick<CanonicalPreparedStateBase, 'document' | 'runtime' | 'accepted_response'>,
     options: ExecutionOptions,
     metadata: Parameters<typeof createCanonicalExecutionResponse>[2] = {},
 ): Promise<CanonicalExecutionResponse> {
@@ -764,7 +767,7 @@ export async function canonicalResponseIdentities(runtime: ResolvedConversationR
 export function acceptedCanonicalResponse(
     document: ConversationDocument,
     responseOperationId: string,
-): CanonicalPreparedState<unknown>['accepted_response'] {
+): CanonicalPreparedStateBase['accepted_response'] {
     const receipt = Object.hasOwn(document.operation_receipts, responseOperationId)
         ? document.operation_receipts[responseOperationId]
         : undefined;

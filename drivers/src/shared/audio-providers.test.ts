@@ -1,6 +1,12 @@
 import { FinishReason, GenerateContentResponse, GoogleGenAI } from '@google/genai';
 import { type ConversationStreamEvent, fingerprintJson, parseConversationDocument } from '@llumiverse/conversation';
-import { type DataSource, type ExecutionOptions, isCanonicalAcceptedRecovery, PromptRole } from '@llumiverse/core';
+import {
+    type CanonicalExecutionInputOptions,
+    type DataSource,
+    type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
+    PromptRole,
+} from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { AnthropicDriver } from '../anthropic/index.js';
@@ -272,10 +278,15 @@ describe('primary provider file audio', () => {
             const create = vi.spyOn(driver.service.audio.speech, 'create');
 
             await expect(
-                driver.streamCanonicalEvents(prompt, { model: 'gpt-4o-mini-tts', store_audio: store }, undefined, {
-                    stream_id: `stream:audio:no-runtime:${protocol}`,
-                }),
-            ).rejects.toThrow('Canonical typed streaming requires conversation_runtime');
+                driver.streamCanonicalEvents(
+                    prompt,
+                    { model: 'gpt-4o-mini-tts', store_audio: store } as unknown as CanonicalExecutionInputOptions,
+                    undefined,
+                    {
+                        stream_id: `stream:audio:no-runtime:${protocol}`,
+                    },
+                ),
+            ).rejects.toThrow('Invalid input: expected object, received undefined');
             expect(create).not.toHaveBeenCalled();
         },
     );
@@ -288,10 +299,11 @@ describe('primary provider file audio', () => {
                     ? new OpenAIDriver({ apiKey: 'test' })
                     : new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://example.test/v1' });
             const create = vi.spyOn(driver.service.audio.speech, 'create');
-            const options: ExecutionOptions = {
+            const options: CanonicalExecutionInputOptions = {
                 model: 'gpt-4o-mini-tts',
                 store_audio: store,
                 conversation_runtime: {
+                    conversation_id: `conversation:audio:aborted:${protocol}`,
                     request_id: `request:audio:aborted:${protocol}`,
                     attempt_id: `attempt:audio:aborted:${protocol}`,
                     input_operation_id: `input:audio:aborted:${protocol}`,

@@ -2,8 +2,8 @@ import type { InferenceClient, TextGenerationOutput, TextGenerationStreamOutput 
 import type { ConversationDocument, ConversationStreamEvent } from '@llumiverse/conversation';
 import {
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CompletionChunkObject,
-    type ExecutionOptions,
     PromptRole,
 } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,7 @@ const MODEL = 'endpoint-a';
 const MANAGEMENT_ENDPOINT = 'https://management.huggingface.test';
 const INFERENCE_ENDPOINT = 'https://endpoint-a.us-east-1.aws.endpoints.huggingface.cloud';
 
-function options(attempt: string, conversation?: ConversationDocument): ExecutionOptions {
+function options(attempt: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),

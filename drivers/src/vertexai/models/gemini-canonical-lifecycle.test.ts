@@ -7,12 +7,18 @@ import {
     Language,
 } from '@google/genai';
 import {
+    type ConversationDocument,
     type ConversationStreamEvent,
     fingerprintJson,
     parseConversationDocument,
     resolveToolExecutionRequest,
 } from '@llumiverse/conversation';
-import { CANONICAL_REQUIRED_TOOL_CALL_MISSING, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import {
+    CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+    type CanonicalExecutionInputOptions,
+    type ExecutionOptions,
+    PromptRole,
+} from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
 import { GeminiModelDefinition } from './gemini.js';
@@ -56,8 +62,8 @@ function runtimeOptions(input: {
     operation: string;
     attempt: string;
     recorded_at: string;
-    conversation?: unknown;
-}): ExecutionOptions {
+    conversation?: ConversationDocument;
+}): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(input.conversation === undefined ? {} : { conversation: input.conversation }),
@@ -154,7 +160,10 @@ describe('Gemini canonical lifecycle', () => {
             content: { role: 'model', parts: [{ functionCall: { name: 'lookup', args: { city: 'Tokyo' } } }] },
         });
         const segments = [{ role: PromptRole.user, content: 'Look up Tokyo.' }];
-        const requiredOptions = (flow: string, conversation?: unknown): ExecutionOptions => ({
+        const requiredOptions = (
+            flow: string,
+            conversation?: ConversationDocument,
+        ): CanonicalExecutionInputOptions => ({
             ...runtimeOptions({
                 flow,
                 operation: 'generate',
@@ -399,7 +408,7 @@ describe('Gemini canonical lifecycle', () => {
                     operation: 'generate',
                     attempt: 'changed-options',
                     recorded_at: '2026-09-30T01:08:00.000Z',
-                    conversation: first.conversation,
+                    conversation: parseConversationDocument(first.conversation),
                 }),
                 result_schema,
                 model_options: { _option_id: 'vertexai-gemini', temperature: 0.2 },
@@ -530,8 +539,9 @@ describe('Gemini canonical lifecycle', () => {
         );
         const iterator = stream[Symbol.asyncIterator]();
         const pending = iterator.next();
+        await vi.waitFor(() => expect(providerSignal).toBeDefined());
         await stream.cancel();
-        await expect(pending).resolves.toMatchObject({ done: true });
+        await expect(pending).rejects.toThrow('cancelled');
         expect(providerSignal?.aborted).toBe(true);
         expect(stream.completion).toBeUndefined();
     });
@@ -765,7 +775,7 @@ describe('Gemini canonical lifecycle', () => {
                 recorded_at: '2026-09-30T01:11:37.000Z',
             }),
             tools: [{ name: 'lookup', input_schema: { type: 'object' as const } }],
-        } satisfies ExecutionOptions;
+        } satisfies CanonicalExecutionInputOptions;
 
         const syncDriver = new TestGeminiDriver(async () => terminal);
         const sync = await syncDriver.executeCanonical(segments, options);
@@ -1437,7 +1447,7 @@ describe('Gemini canonical lifecycle', () => {
                     operation: 'continue',
                     attempt: 'continue',
                     recorded_at: '2026-09-30T02:01:00.000Z',
-                    conversation: first.conversation,
+                    conversation: parseConversationDocument(first.conversation),
                 }),
                 tools,
             },

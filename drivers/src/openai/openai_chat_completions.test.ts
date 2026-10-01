@@ -9,6 +9,7 @@ import {
 } from '@llumiverse/conversation';
 import {
     type AIModel,
+    type CanonicalExecutionInputOptions,
     type CompletionChunkObject,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -252,7 +253,11 @@ function legacyConversation(value: unknown): OpenAIChatCompletionsPrompt {
     return exportLegacyOpenAIChatCompletionsConversation(value as ConversationDocument);
 }
 
-function canonicalOptions(attempt: string, recordedAt: string, conversation?: unknown): ExecutionOptions {
+function canonicalOptions(
+    attempt: string,
+    recordedAt: string,
+    conversation?: ConversationDocument,
+): CanonicalExecutionInputOptions {
     return {
         model: 'test/model',
         ...(conversation === undefined ? {} : { conversation }),
@@ -1180,7 +1185,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
             undefined,
             { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'current request' }] },
             {
-                ...canonicalOptions('attempt:aged', '2026-09-11T00:00:00.000Z', agedHistory),
+                ...canonicalOptions('attempt:aged', '2026-09-11T00:00:00.000Z'),
+                conversation: agedHistory,
                 stripImagesAfterTurns: 5,
                 stripTextMaxTokens: 8_000,
                 stripHeartbeatsAfterTurns: 1,
@@ -1860,7 +1866,11 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(legacyConversation(first.conversation).messages.at(-1)?.content).toBe(rawText);
 
         const retried = await driver.execute(segments, {
-            ...canonicalOptions('attempt:retry', '2026-09-11T00:01:00.000Z', first.conversation),
+            ...canonicalOptions(
+                'attempt:retry',
+                '2026-09-11T00:01:00.000Z',
+                parseConversationDocument(first.conversation),
+            ),
             result_schema: resultSchema,
         });
         expect(retried.result).toEqual(first.result);
@@ -1968,7 +1978,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
                     },
                 },
             ],
-        } satisfies ExecutionOptions;
+        } satisfies CanonicalExecutionInputOptions;
         const first = await driver.executeCanonical(segments, executionOptions);
         const prepared = await prepareToolArgumentExternalization(first.conversation, 'call-write', ['content']);
         const replayArchives = prepared.replay_archives.map((archive, index) => ({
@@ -2257,7 +2267,11 @@ describe('OpenAIChatCompletionsProtocol', () => {
         );
         const retried = await driver.execute(
             segments,
-            canonicalOptions('attempt:usage:retry', '2026-09-11T01:01:00.000Z', first.conversation),
+            canonicalOptions(
+                'attempt:usage:retry',
+                '2026-09-11T01:01:00.000Z',
+                parseConversationDocument(first.conversation),
+            ),
         );
 
         expect(first.token_usage).toMatchObject({ prompt: 10, prompt_new: 10, result: 2, total: 12 });
@@ -2352,7 +2366,11 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(completion.error).toMatchObject({ code: 'validation_error' });
         expect(latestGeneratedText(completion.conversation)).toBe(rawText);
         const recovered = await driver.execute(segments, {
-            ...canonicalOptions('attempt:invalid:retry', '2026-09-11T00:01:00.000Z', completion.conversation),
+            ...canonicalOptions(
+                'attempt:invalid:retry',
+                '2026-09-11T00:01:00.000Z',
+                parseConversationDocument(completion.conversation),
+            ),
             result_schema: resultSchema,
         });
         expect(recovered.error).toEqual(completion.error);
@@ -2385,9 +2403,9 @@ describe('protected Chat replay origin at the provider boundary', () => {
 
     it('rejects unknown and changed origins before sending a provider request, retaining exact known origins', async () => {
         const driver = new TestOpenAIChatCompletionsDriver(response);
-        await expect(driver.execute(segments, canonicalOptions('unknown', recordedAt, history))).rejects.toThrow(
-            /unknown recorded model origin/,
-        );
+        await expect(
+            driver.execute(segments, { ...canonicalOptions('unknown', recordedAt), conversation: history }),
+        ).rejects.toThrow(/unknown recorded model origin/);
         expect(driver.payloads).toHaveLength(0);
         const imported = await importOpenAIChatCompletionsHistory(history, {
             conversation_id: 'conversation:structured-output',

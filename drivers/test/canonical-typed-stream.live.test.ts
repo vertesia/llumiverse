@@ -2,6 +2,7 @@ import type { ConversationDocument, ConversationStreamEvent } from '@llumiverse/
 import {
     type AbstractDriver,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type ExecutionOptions,
     PromptRole,
     type PromptSegment,
@@ -192,7 +193,7 @@ function runtimeOptions(
     attempt: string,
     conversation: ConversationDocument | undefined,
     publish: () => Promise<void>,
-): ExecutionOptions {
+): CanonicalExecutionInputOptions {
     const scope = live.protocol.replaceAll('.', '-');
     const toolOptions = live.coverage === 'tool' ? { required_tool_name: 'lookup', tool_choice: 'required' } : {};
     const modelOptions = {

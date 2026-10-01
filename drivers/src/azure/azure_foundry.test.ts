@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { TokenCredential } from '@azure/identity';
 import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
-import { PromptRole } from '@llumiverse/core';
+import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
@@ -58,7 +58,10 @@ describe('AzureFoundryDriver protocol composition', () => {
             const get = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
             driver.service = { deployments: { get } } as unknown as AzureFoundryDriver['service'];
             const model = 'speech-deployment::gpt-4o-mini-tts';
-            const options = mode === 'missing_runtime' ? { model } : canonicalOptions(model, 'audio-cancelled');
+            const options =
+                mode === 'missing_runtime'
+                    ? ({ model } as unknown as CanonicalExecutionInputOptions)
+                    : canonicalOptions(model, 'audio-cancelled');
 
             await expect(
                 driver.streamCanonicalEvents(
@@ -69,7 +72,7 @@ describe('AzureFoundryDriver protocol composition', () => {
                 ),
             ).rejects.toThrow(
                 mode === 'missing_runtime'
-                    ? 'Canonical typed streaming requires conversation_runtime'
+                    ? 'Invalid input: expected object, received undefined'
                     : 'audio already cancelled',
             );
             expect(get).not.toHaveBeenCalled();
@@ -136,7 +139,7 @@ describe('AzureFoundryDriver protocol composition', () => {
                 await expect(
                     driver.executeCanonical(segments, {
                         ...options,
-                        conversation: completion.conversation,
+                        conversation: document,
                         model_options: { _option_id: 'text-fallback', temperature: 0.123 },
                     }),
                 ).rejects.toThrow();

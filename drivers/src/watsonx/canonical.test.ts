@@ -1,11 +1,11 @@
 import type { ConversationDocument, ConversationStreamEvent } from '@llumiverse/conversation';
-import { type CanonicalExecutionEventStream, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { type CanonicalExecutionEventStream, type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { WatsonxDriver } from './index.js';
 
 const MODEL = 'ibm/granite-3-2b-instruct';
 
-function options(attempt: string, conversation?: ConversationDocument): ExecutionOptions {
+function options(attempt: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),

@@ -3,6 +3,7 @@ import {
     type AIModel,
     AIModelStatus,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
@@ -93,7 +94,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     override executeCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         this.validateCanonicalPromptSegments(segments);
@@ -102,7 +103,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     override streamCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         this.validateCanonicalPromptSegments(segments);
@@ -111,7 +112,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     override streamCanonicalEvents(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {

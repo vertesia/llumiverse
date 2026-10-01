@@ -39,6 +39,7 @@ import {
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
@@ -162,7 +163,9 @@ export {
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 const TWELVELABS_PEGASUS_CANONICAL_FORMAT = Symbol('twelvelabs.pegasus.canonical_format');
 const TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES = 25 * 1024 * 1024;
-type PegasusCanonicalExecutionOptions = ExecutionOptions & { [TWELVELABS_PEGASUS_CANONICAL_FORMAT]?: true };
+type PegasusCanonicalExecutionOptions = CanonicalExecutionInputOptions & {
+    [TWELVELABS_PEGASUS_CANONICAL_FORMAT]?: true;
+};
 
 type AwsSdkError = {
     name?: string;
@@ -796,7 +799,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     override async executeCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         if (options.model.includes('twelvelabs.pegasus')) {
@@ -812,7 +815,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     override async streamCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
@@ -828,7 +831,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     override async streamCanonicalEvents(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {
@@ -1942,6 +1945,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let executorScope: BedrockRuntimeExecutorScope | undefined;
         let messageStopped = false;
         let nativeContentBytes = 0;
+        let previewChunks = 0;
         const maxNativeContentBytes = open.max_total_bytes ?? CONVERSATION_STREAM_MAX_TOTAL_BYTES;
 
         const eventStream = canonicalNativeExecutionEventStream({
@@ -2035,6 +2039,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         if (draft.kind !== 'text')
                             throw new Error(`Bedrock Converse content block ${index} changed kind`);
                         draft.text += delta.text;
+                        if (delta.text.length > 0) previewChunks += 1;
                         await writer.text({
                             draft_block_id: draft.draft_block_id,
                             native_position: draft.native_position,
@@ -2074,6 +2079,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                                 throw new Error(`Bedrock Converse content block ${index} changed kind`);
                             }
                             draft.text += delta.reasoningContent.text;
+                            if (delta.reasoningContent.text.length > 0) previewChunks += 1;
                             await writer.reasoning({
                                 draft_block_id: draft.draft_block_id,
                                 native_position: draft.native_position,
@@ -2148,6 +2154,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const document = appendBedrockConverseCanonicalResponse(prepared, decoded);
                 const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
                     ...(serviceTier?.type === undefined ? {} : { service_tier: serviceTier.type }),
+                    chunks: previewChunks,
                     ...(options.include_original_response ? { original_response: terminalResponse } : {}),
                 });
                 return {

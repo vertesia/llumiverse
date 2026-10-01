@@ -1,5 +1,10 @@
 import { type ConversationDocument, type ConversationStreamEvent, hashContentBytes } from '@llumiverse/conversation';
-import { type CanonicalExecutionEventStream, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import {
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type ExecutionOptions,
+    PromptRole,
+} from '@llumiverse/core';
 import type { Prediction } from 'replicate';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,7 +61,7 @@ const segments = [
     { role: PromptRole.safety, content: 'Safety rule.' },
 ];
 
-function options(flow: string, conversation?: ConversationDocument): ExecutionOptions {
+function options(flow: string, conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),

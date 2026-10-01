@@ -14,6 +14,7 @@ import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
@@ -224,7 +225,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     override async executeCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         if (
@@ -238,7 +239,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     override async streamCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         if (
@@ -252,7 +253,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     override async streamCanonicalEvents(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {

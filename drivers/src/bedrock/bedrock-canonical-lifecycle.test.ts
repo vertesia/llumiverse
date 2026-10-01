@@ -5,12 +5,13 @@ import type {
     ConverseStreamOutput,
 } from '@aws-sdk/client-bedrock-runtime';
 import {
+    type ConversationDocument,
     type ConversationStreamEvent,
     fingerprintJson,
     parseConversationDocument,
     resolveToolExecutionRequest,
 } from '@llumiverse/conversation';
-import { type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver, exportLegacyBedrockConverseConversation } from './index.js';
 
@@ -28,9 +29,9 @@ function runtimeOptions(input: {
     operation: string;
     attempt?: string;
     model?: string;
-    conversation?: unknown;
+    conversation?: ConversationDocument;
     tools?: typeof TOOLS;
-}): ExecutionOptions {
+}): CanonicalExecutionInputOptions {
     const recordedAt = `2026-09-30T00:00:0${input.operation === 'first' ? '0' : '1'}.000Z`;
     return {
         model: input.model ?? MODEL,
@@ -1153,7 +1154,7 @@ describe('Bedrock canonical driver lifecycle', () => {
         ).toBe(true);
 
         await driver.execute([{ role: PromptRole.user, content: 'Continue.' }], {
-            ...runtimeOptions({ flow: 'deepseek', operation: 'second', model, conversation: persisted }),
+            ...runtimeOptions({ flow: 'deepseek', operation: 'second', model, conversation: firstDocument }),
         });
         expect(requests[1].messages).toContainEqual({ role: 'assistant', content: [{ text: 'First answer.' }] });
         expect(
@@ -1206,7 +1207,7 @@ describe('Bedrock canonical driver lifecycle', () => {
         ).toBe(true);
 
         await driver.execute([{ role: PromptRole.user, content: 'Continue.' }], {
-            ...runtimeOptions({ flow: 'gpt-oss', operation: 'second', model, conversation: persisted }),
+            ...runtimeOptions({ flow: 'gpt-oss', operation: 'second', model, conversation: firstDocument }),
         });
         expect(continuationRequest?.messages).toContainEqual({
             role: 'assistant',
@@ -1348,7 +1349,12 @@ describe('Bedrock canonical driver lifecycle', () => {
                     },
                 } as unknown as ContentBlock,
             ]),
-            runtimeOptions({ flow: 'sync', operation: 'second', conversation: first.conversation, tools: TOOLS }),
+            runtimeOptions({
+                flow: 'sync',
+                operation: 'second',
+                conversation: parseConversationDocument(first.conversation),
+                tools: TOOLS,
+            }),
         );
         const document = parseConversationDocument(second.conversation);
         const callBlocks = document.turns.flatMap((turn) =>

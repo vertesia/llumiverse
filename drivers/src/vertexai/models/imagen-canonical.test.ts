@@ -3,6 +3,7 @@ import { createConversationDocument, parseConversationDocument } from '@llumiver
 import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type ExecutionOptions,
     isCanonicalAcceptedRecovery,
     PromptRole,
@@ -23,7 +24,7 @@ class ImagenLifecycleTestDriver extends VertexAIDriver {
     }
 }
 
-function runtimeOptions(flow: string, operation = 'first'): ExecutionOptions {
+function runtimeOptions(flow: string, operation = 'first'): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         model_options: {
@@ -43,7 +44,7 @@ function runtimeOptions(flow: string, operation = 'first'): ExecutionOptions {
     };
 }
 
-function retryRuntime(options: ExecutionOptions, attempt_id: string) {
+function retryRuntime(options: CanonicalExecutionInputOptions, attempt_id: string) {
     if (options.conversation_runtime === undefined) throw new Error('missing test runtime');
     return { ...options.conversation_runtime, attempt_id };
 }
@@ -196,7 +197,7 @@ describe('Vertex Imagen canonical lifecycle', () => {
 
     it('retains reference and mask inputs and binds them before transport', async () => {
         const { driver, predict } = imagenDriver(predictionResponse([imagePrediction()]));
-        const options: ExecutionOptions = {
+        const options: CanonicalExecutionInputOptions = {
             ...runtimeOptions('references'),
             model_options: {
                 _option_id: 'vertexai-imagen',
@@ -292,7 +293,7 @@ describe('Vertex Imagen canonical lifecycle', () => {
             expect.objectContaining({ type: 'response_accepted', sequence: 0, origin: 'live_transport' }),
         ]);
         if (first.completion === undefined) throw new Error('Expected accepted Imagen response');
-        const recoveredOptions: ExecutionOptions = {
+        const recoveredOptions: CanonicalExecutionInputOptions = {
             ...options,
             conversation: JSON.parse(JSON.stringify(first.completion.conversation)),
             conversation_runtime: retryRuntime(options, 'attempt:imagen:typed:retry'),

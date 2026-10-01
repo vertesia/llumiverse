@@ -7,6 +7,7 @@ import {
 import {
     type AIModel,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
@@ -1311,7 +1312,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     override async executeCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         if (!this.isFileAudioModel(options.model)) return super.executeCanonical(segments, options, signal);
@@ -1356,7 +1357,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     override async streamCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         if (!this.isFileAudioModel(options.model)) return super.streamCanonical(segments, options, signal);
@@ -1371,7 +1372,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     override async streamCanonicalEvents(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {

@@ -5,8 +5,8 @@ import {
 } from '@llumiverse/conversation';
 import {
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type DataSource,
-    type ExecutionOptions,
     isCanonicalAcceptedRecovery,
     PromptRole,
 } from '@llumiverse/core';
@@ -55,7 +55,7 @@ function completedResponse(
     };
 }
 
-function runtime(flow: string, attempt = 'first', conversation?: ConversationDocument): ExecutionOptions {
+function runtime(flow: string, attempt = 'first', conversation?: ConversationDocument): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),
@@ -352,9 +352,15 @@ describe('Gemini Omni canonical video lifecycle', () => {
             version: '1',
             input_schema: { type: 'object' },
         };
+        const activeToolsOptions = runtime('active-tools');
+        if (activeToolsOptions.conversation_runtime === undefined) throw new Error('Expected canonical runtime');
         await expect(
             activeTools.driver.executeCanonical([{ role: PromptRole.user, content: 'No.', files: [media] }], {
-                ...runtime('active-tools'),
+                ...activeToolsOptions,
+                conversation_runtime: {
+                    ...activeToolsOptions.conversation_runtime,
+                    conversation_id: document.id,
+                },
                 conversation: document,
             }),
         ).rejects.toThrow('active canonical tools');

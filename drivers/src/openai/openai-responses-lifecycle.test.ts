@@ -1,12 +1,19 @@
 import {
     appendConversationRecords,
+    type ConversationDocument,
     type ConversationStreamEvent,
     createConversationDocument,
     createTextBlock,
     createUserTurn,
     parseConversationDocument,
 } from '@llumiverse/conversation';
-import { type ExecutionOptions, legacyCompletionFromCanonicalExecution, PromptRole, Providers } from '@llumiverse/core';
+import {
+    type CanonicalExecutionInputOptions,
+    type ExecutionOptions,
+    legacyCompletionFromCanonicalExecution,
+    PromptRole,
+    Providers,
+} from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -106,10 +113,10 @@ function runtimeOptions(input: {
     operation: string;
     attempt: string;
     recordedAt: string;
-    conversation?: unknown;
+    conversation?: ConversationDocument;
     model?: string;
     materializedInput?: { operation_id: string; result_revision: number };
-}): ExecutionOptions {
+}): CanonicalExecutionInputOptions {
     return {
         model: input.model ?? 'gpt-5',
         ...(input.conversation === undefined ? {} : { conversation: input.conversation }),
@@ -216,7 +223,7 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 yield { type: 'response.completed' as const, sequence_number: 3, response: final };
             })(),
         );
-        const executionOptions: ExecutionOptions = {
+        const executionOptions: CanonicalExecutionInputOptions = {
             ...runtimeOptions({
                 flow: 'typed-parity',
                 operation: 'generate',
@@ -294,7 +301,7 @@ describe('OpenAI Responses canonical lifecycle', () => {
             })(),
         );
         const publish = vi.fn(async () => undefined);
-        const firstOptions: ExecutionOptions = {
+        const firstOptions: CanonicalExecutionInputOptions = {
             ...runtimeOptions({
                 flow: 'typed-recovery',
                 operation: 'generate',
@@ -716,7 +723,7 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 }),
             );
             const driver = new TestOpenAIResponsesDriver(create);
-            const options: ExecutionOptions = {
+            const options: CanonicalExecutionInputOptions = {
                 ...runtimeOptions({
                     flow: `publication-${mode}`,
                     operation: 'generate',
@@ -1111,7 +1118,7 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 operation: 'answer',
                 attempt: 'answer',
                 recordedAt: '2026-09-12T01:01:00.000Z',
-                conversation: first.conversation,
+                conversation: parseConversationDocument(first.conversation),
             }),
             tools,
         });
@@ -1346,9 +1353,9 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 operation: 'generate',
                 attempt: 'first',
                 recordedAt: '2026-09-12T05:00:00.000Z',
-                conversation: nativeHistory,
                 model: 'o1',
             }),
+            conversation: nativeHistory,
             stripHeartbeatsAfterTurns: 1,
             model_options: { _option_id: 'openai-thinking', image_detail: 'high' },
         });

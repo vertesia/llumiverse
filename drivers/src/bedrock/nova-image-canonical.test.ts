@@ -1,12 +1,14 @@
 import type { InvokeModelCommandOutput } from '@aws-sdk/client-bedrock-runtime';
 import {
     appendConversationRecords,
+    type ConversationDocument,
     createConversationDocument,
     parseConversationDocument,
 } from '@llumiverse/conversation';
 import {
     Base64DataSource,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type ExecutionOptions,
     isCanonicalAcceptedRecovery,
     type NovaCanvasOptions,
@@ -54,8 +56,8 @@ function novaDriver(implementation: Invoke = async () => response({ images: [PNG
 function runtimeOptions(
     flow: string,
     modelOptions: Partial<NovaCanvasOptions> = {},
-    conversation?: unknown,
-): ExecutionOptions {
+    conversation?: ConversationDocument,
+): CanonicalExecutionInputOptions {
     return {
         model: MODEL,
         ...(conversation === undefined ? {} : { conversation }),
@@ -80,7 +82,11 @@ function runtimeOptions(
     };
 }
 
-function retryOptions(options: ExecutionOptions, conversation: unknown, attempt: string): ExecutionOptions {
+function retryOptions(
+    options: CanonicalExecutionInputOptions,
+    conversation: ConversationDocument,
+    attempt: string,
+): CanonicalExecutionInputOptions {
     if (options.conversation_runtime === undefined) throw new Error('Missing Nova Canvas test runtime');
     return {
         ...options,

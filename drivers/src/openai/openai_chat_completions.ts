@@ -8,6 +8,7 @@ import {
 import {
     type AIModel,
     type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
@@ -2435,7 +2436,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
 
     override async executeCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         if (!openAIAudioTask(options.model)) return super.executeCanonical(segments, options, signal);
@@ -2465,7 +2466,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
 
     override async streamCanonical(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         if (!openAIAudioTask(options.model)) return super.streamCanonical(segments, options, signal);
@@ -2480,7 +2481,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
 
     override async streamCanonicalEvents(
         segments: PromptSegment[],
-        options: ExecutionOptions,
+        options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {
