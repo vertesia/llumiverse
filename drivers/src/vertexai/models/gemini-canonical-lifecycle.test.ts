@@ -856,6 +856,43 @@ describe('Gemini canonical lifecycle', () => {
         expect(generateStream).not.toHaveBeenCalled();
     });
 
+    it.each([
+        ['retryable URL fetch throttle', 'URL_REJECTED-REJECTED_CLIENT_THROTTLED', true],
+        ['permanent URL rejection', 'URL_REJECTED-ROBOTS_DENIED', false],
+    ] as const)('preserves %s classification on the public typed stream', async (_label, marker, retryable) => {
+        const providerFailure = Object.assign(new Error(`private provider details ${marker}`), { status: 400 });
+        const generateStream = vi.fn<GenerateStream>(async () => {
+            throw providerFailure;
+        });
+        const driver = new TestGeminiDriver(vi.fn<Generate>(), generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Analyze the media.' }],
+            runtimeOptions({
+                flow: `typed-provider-failure-${retryable}`,
+                operation: 'one',
+                attempt: 'one',
+                recorded_at: '2026-09-30T06:00:00.000Z',
+            }),
+            undefined,
+            { stream_id: `stream:gemini:typed-provider-failure:${retryable}` },
+        );
+
+        const events = await collectCanonicalEvents(stream);
+
+        expect(generateStream).toHaveBeenCalledOnce();
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: {
+                code: 'PROVIDER_STREAM_FAILED',
+                message: 'Provider stream ended before canonical response acceptance',
+                retryable,
+            },
+        });
+        expect(JSON.stringify(events)).not.toContain('private provider details');
+        expect(JSON.stringify(events)).not.toContain(marker);
+    });
+
     it('retains the authoritative Gemini response when final event delivery exceeds its budget', async () => {
         const generateStream = vi.fn<GenerateStream>(async () =>
             (async function* () {

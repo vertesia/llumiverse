@@ -2060,6 +2060,16 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const eventStream = canonicalNativeExecutionEventStream({
             identity,
             open,
+            classifyFailure: (error) => {
+                const classified = LlumiverseError.isLlumiverseError(error)
+                    ? error
+                    : driver.formatLlumiverseError(error, {
+                          provider: geminiProvider(driver),
+                          model: requestedOptions.model,
+                          operation: 'stream',
+                      });
+                return classified.retryable;
+            },
             openSource: async () => {
                 cacheExecution = await generateWithGeminiContextCache(
                     driver,

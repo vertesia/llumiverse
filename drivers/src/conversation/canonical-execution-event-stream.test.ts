@@ -472,6 +472,7 @@ describe('canonical native execution event stream', () => {
         const stream = canonicalNativeExecutionEventStream({
             identity,
             open: { stream_id: 'stream:delivery-failure' },
+            classifyFailure: () => true,
             openSource: () => nativeSource('answer'),
             map: emitText,
             finalize: async (writer) => {
@@ -490,6 +491,7 @@ describe('canonical native execution event stream', () => {
             outcome: 'failed',
             diagnostic: { code: 'CANONICAL_EVENT_DELIVERY_FAILED' },
         });
+        expect((events.at(-1) as { diagnostic?: object }).diagnostic).not.toHaveProperty('retryable');
     });
 
     it('rejects bounds that cannot hold the reserved terminal before opening the source', () => {
@@ -544,6 +546,7 @@ describe('canonical native execution event stream', () => {
         const stream = canonicalNativeExecutionEventStream({
             identity,
             open: { stream_id: 'stream:failure' },
+            classifyFailure: () => true,
             openSource: () => source,
             map: vi.fn(),
             finalize: vi.fn(),
@@ -559,7 +562,7 @@ describe('canonical native execution event stream', () => {
         await consumption;
         expect(events.at(-1)).toMatchObject({
             type: 'stream_terminated',
-            diagnostic: { code: 'PROVIDER_STREAM_FAILED' },
+            diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: true },
         });
         let closed = false;
         void stream.closed.then(() => {
@@ -572,6 +575,39 @@ describe('canonical native execution event stream', () => {
 
         expect(closed).toBe(true);
         expect(JSON.stringify(events)).not.toContain('private provider failure');
+    });
+
+    it('keeps failed provider classification unknown when the classifier cannot classify it', async () => {
+        const source = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: async () => {
+                        throw new Error('private unknown failure');
+                    },
+                };
+            },
+        };
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:unknown-failure' },
+            classifyFailure: () => {
+                throw new Error('private classifier failure');
+            },
+            openSource: () => source,
+            map: vi.fn(),
+            finalize: vi.fn(),
+            abort: vi.fn(),
+            close: vi.fn(),
+        });
+        const events: ConversationStreamEvent[] = [];
+        for await (const event of stream) events.push(event);
+
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            diagnostic: { code: 'PROVIDER_STREAM_FAILED' },
+        });
+        expect((events.at(-1) as { diagnostic?: object }).diagnostic).not.toHaveProperty('retryable');
+        expect(JSON.stringify(events)).not.toContain('private');
     });
 
     it('delivers cancellation after throwing abort, iterator return, and close cleanup', async () => {

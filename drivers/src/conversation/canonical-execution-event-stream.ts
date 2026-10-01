@@ -57,6 +57,7 @@ export interface CanonicalNativeEventStreamOptions<NativeEvent> {
     openSource(): AsyncIterable<NativeEvent> | Promise<AsyncIterable<NativeEvent>>;
     map(event: NativeEvent, writer: CanonicalNativeStreamWriter): void | Promise<void>;
     finalize(writer: CanonicalNativeStreamWriter): Promise<CanonicalNativeStreamFinalization>;
+    classifyFailure?(error: unknown): boolean | undefined;
     abort(): void;
     close(): void | Promise<void>;
 }
@@ -77,6 +78,7 @@ function terminatedEvent(
     sequence: number,
     outcome: 'cancelled' | 'failed',
     failureKind: 'provider' | 'delivery' = 'provider',
+    retryable?: boolean,
 ): CanonicalStreamTerminalEvent {
     return {
         ...envelope(identity, sequence),
@@ -90,6 +92,7 @@ function terminatedEvent(
                           failureKind === 'delivery'
                               ? 'Canonical event delivery failed'
                               : 'Provider stream ended before canonical response acceptance',
+                      ...(retryable === undefined ? {} : { retryable }),
                   },
               }
             : {}),
@@ -335,7 +338,12 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         } catch (error: unknown) {
             if (this.settlement === undefined) {
                 try {
-                    await this.beginTermination('failed', this.completion === undefined ? 'provider' : 'delivery');
+                    const failureKind = this.completion === undefined ? 'provider' : 'delivery';
+                    await this.beginTermination(
+                        'failed',
+                        failureKind,
+                        failureKind === 'provider' ? this.safeFailureClassification(error) : undefined,
+                    );
                 } catch (settlementError: unknown) {
                     this.settled = true;
                     this.channel.fail(settlementError ?? error);
@@ -387,6 +395,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     private beginTermination(
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery' = 'provider',
+        retryable?: boolean,
     ): Promise<CanonicalStreamTerminalEvent> {
         if (this.settlement !== undefined) return this.settlement;
         this.settled = true;
@@ -403,15 +412,24 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             // The bounded terminal still settles while cleanup retains transport ownership.
         }
         this.startCleanup();
-        void this.terminateInternal(outcome, failureKind).then(resolve, reject);
+        void this.terminateInternal(outcome, failureKind, retryable).then(resolve, reject);
         return settlement;
+    }
+
+    private safeFailureClassification(error: unknown): boolean | undefined {
+        try {
+            return this.options.classifyFailure?.(error);
+        } catch {
+            return undefined;
+        }
     }
 
     private async terminateInternal(
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery',
+        retryable?: boolean,
     ): Promise<CanonicalStreamTerminalEvent> {
-        const terminal = this.appendTerminal(outcome, failureKind);
+        const terminal = this.appendTerminal(outcome, failureKind, retryable);
         await this.channel.terminate(terminal);
         return terminal;
     }
@@ -419,8 +437,15 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     private appendTerminal(
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery' = 'provider',
+        retryable?: boolean,
     ): CanonicalStreamTerminalEvent {
-        const event = terminatedEvent(this.accumulator.identity, this.accumulator.next_sequence, outcome, failureKind);
+        const event = terminatedEvent(
+            this.accumulator.identity,
+            this.accumulator.next_sequence,
+            outcome,
+            failureKind,
+            retryable,
+        );
         return this.accumulator.append(event).event as CanonicalStreamTerminalEvent;
     }
 
