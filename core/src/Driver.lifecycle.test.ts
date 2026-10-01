@@ -21,6 +21,8 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import {
     CanonicalAcceptedOutputRecovered,
+    type CanonicalExecutionContextInputOptions,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionOptions,
     type CanonicalExecutionStream,
@@ -168,6 +170,43 @@ class CanonicalOptionSnapshotDriver extends CanonicalLifecycleTestDriver {
     ): Promise<ReturnType<typeof createCanonicalExecutionResponse>> {
         this.capturedOptions = options;
         return createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
+    }
+}
+
+class CanonicalContextSnapshotDriver extends CanonicalLifecycleTestDriver {
+    capturedOptions: CanonicalExecutionContextOptions | undefined;
+    canonicalContextEventCalls = 0;
+
+    protected override supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
+        return true;
+    }
+
+    override async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+    ): Promise<ReturnType<typeof createCanonicalExecutionResponse>> {
+        this.capturedOptions = options;
+        return createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
+    }
+
+    override async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        _signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        this.capturedOptions = options;
+        this.canonicalContextEventCalls += 1;
+        const response = createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
+        return new FallbackCanonicalExecutionEventStream(
+            {
+                request_id: response.accepted_output.generation.request_id,
+                attempt_id: response.accepted_output.generation.attempt_id,
+                response_operation_id: options.conversation_runtime.response_operation_id,
+                generation_id: response.accepted_output.generation.id,
+                draft_turn_id: response.accepted_output.turn.id,
+            },
+            async () => response,
+            open,
+        );
     }
 }
 
@@ -380,6 +419,21 @@ function canonicalOptions(
             request_id: 'request:lifecycle',
             attempt_id: 'attempt:lifecycle',
             input_operation_id: 'input:lifecycle',
+            response_operation_id: 'response-operation',
+            recorded_at: RECORDED_AT,
+        },
+    };
+}
+
+function canonicalContextOptions(conversation = acceptedFiniteDocument()): CanonicalExecutionContextInputOptions {
+    return {
+        model: 'test-model',
+        conversation,
+        conversation_runtime: {
+            conversation_id: conversation.id,
+            request_id: 'request:context',
+            attempt_id: 'attempt:context',
+            input_operation_id: 'input:context',
             response_operation_id: 'response-operation',
             recorded_at: RECORDED_AT,
         },
@@ -654,6 +708,89 @@ describe('AbstractDriver lifecycle', () => {
             conversation_id: 'conversation:new',
             purpose: 'conversation',
         });
+    });
+
+    it('executes a synchronously owned canonical context without prompt authoring', async () => {
+        const driver = new CanonicalContextSnapshotDriver(vi.fn());
+        const conversation = acceptedFiniteDocument();
+        const contextOptions = canonicalContextOptions(conversation);
+        const resultSchema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'string' as const } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        contextOptions.result_schema = resultSchema;
+        contextOptions.model_options = { temperature: 0.2 };
+        contextOptions.labels = { purpose: 'context-snapshot' };
+
+        const execution = driver.executeCanonicalContext(contextOptions);
+        conversation.id = 'conversation:mutated';
+        contextOptions.conversation_runtime.request_id = 'request:mutated';
+        resultSchema.properties.answer.type = 'number' as 'string';
+        (contextOptions.model_options as { temperature: number }).temperature = 0.9;
+        if (contextOptions.labels) contextOptions.labels.purpose = 'mutated';
+
+        await expect(execution).resolves.toMatchObject({ accepted_output: { turn: { status: 'completed' } } });
+        expect(driver.capturedOptions).toMatchObject({
+            conversation: { id: 'conversation:finite' },
+            conversation_runtime: { request_id: 'request:context', purpose: 'conversation' },
+            result_schema: { properties: { answer: { type: 'string' } } },
+            model_options: { temperature: 0.2 },
+            labels: { purpose: 'context-snapshot' },
+        });
+        expect(driver.capturedOptions?.conversation).not.toBe(conversation);
+        expect(driver.capturedOptions?.conversation_runtime).not.toBe(contextOptions.conversation_runtime);
+        expect(driver.createPromptCalls).toBe(0);
+        expect(driver.requestTextCompletionCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
+    });
+
+    it('rejects native history and legacy authoring policy before canonical context provider dispatch', async () => {
+        const driver = new CanonicalContextSnapshotDriver(vi.fn());
+        const valid = canonicalContextOptions();
+
+        await expect(
+            driver.executeCanonicalContext({
+                ...valid,
+                conversation: { messages: [{ role: 'user', content: 'legacy' }] },
+            } as unknown as CanonicalExecutionContextInputOptions),
+        ).rejects.toThrow('Conversation document validation failed');
+        await expect(
+            driver.executeCanonicalContext({ ...valid, tools: [] } as unknown as CanonicalExecutionContextInputOptions),
+        ).rejects.toThrow('uses the document active tool definitions');
+        await expect(
+            driver.executeCanonicalContext({
+                ...valid,
+                format: () => 'legacy',
+            } as unknown as CanonicalExecutionContextInputOptions),
+        ).rejects.toThrow('does not accept a prompt formatter');
+        await expect(
+            driver.executeCanonicalContext({
+                ...valid,
+                output_modality: 'audio',
+            } as unknown as CanonicalExecutionContextInputOptions),
+        ).rejects.toThrow('does not accept legacy output modality policy');
+
+        expect(driver.capturedOptions).toBeUndefined();
+        expect(driver.createPromptCalls).toBe(0);
+        expect(driver.requestTextCompletionCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
+    });
+
+    it('projects canonical context strings only from the typed context event stream', async () => {
+        const driver = new CanonicalContextSnapshotDriver(vi.fn());
+        const stream = await driver.streamCanonicalContext(canonicalContextOptions());
+        const chunks: string[] = [];
+        for await (const chunk of stream) chunks.push(chunk);
+
+        expect(chunks).toEqual(['accepted']);
+        expect(stream.completion?.accepted_output.turn.blocks).toEqual([
+            { id: 'block:original', type: 'text', text: 'accepted', format: 'plain' },
+        ]);
+        expect(driver.canonicalContextEventCalls).toBe(1);
+        expect(driver.createPromptCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
     });
 
     it('derives the compatibility string preview only from the typed canonical event stream', async () => {

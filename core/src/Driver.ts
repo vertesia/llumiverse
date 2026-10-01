@@ -31,12 +31,15 @@ import { deriveConversationId, isConversationDocumentFormat } from '@llumiverse/
 import type { Agent } from 'undici';
 import {
     CanonicalAcceptedOutputRecovered,
+    type CanonicalExecutionContextInputOptions,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     createCanonicalExecutionResponse,
     legacyCompletionFromCanonicalExecution,
+    resolveCanonicalExecutionContextOptions,
     resolveCanonicalExecutionOptions,
 } from './CanonicalExecution.js';
 import {
@@ -103,6 +106,12 @@ export interface Driver<PromptT = unknown> {
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse>;
 
+    /** Current canonical execution over an already materialized document; no prompt authoring occurs. */
+    executeCanonicalContext(
+        options: CanonicalExecutionContextInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse>;
+
     /** Supported legacy string/CompletionResult stream boundary. */
     stream(
         segments: PromptSegment[],
@@ -116,6 +125,12 @@ export interface Driver<PromptT = unknown> {
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream>;
 
+    /** Legacy string preview projected from the current typed canonical context stream. */
+    streamCanonicalContext(
+        options: CanonicalExecutionContextInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream>;
+
     streamCanonicalEvents(
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
@@ -123,8 +138,17 @@ export interface Driver<PromptT = unknown> {
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream>;
 
+    streamCanonicalContextEvents(
+        options: CanonicalExecutionContextInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream>;
+
     /** Report whether this concrete provider/model path can produce canonical execution authority. */
     supportsCanonicalExecution(options: ExecutionOptions): Promise<boolean>;
+
+    /** Report whether this path compiles an already materialized canonical context without prompt authoring. */
+    supportsCanonicalContextExecution(options: CanonicalExecutionContextInputOptions): Promise<boolean>;
 
     startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob>;
 
@@ -163,10 +187,14 @@ type LifecycleGuardedOperationName = AsyncDriverOperationName;
 const lifecycleGuardedOperationNames = [
     'execute',
     'executeCanonical',
+    'executeCanonicalContext',
     'stream',
     'streamCanonical',
+    'streamCanonicalContext',
     'streamCanonicalEvents',
+    'streamCanonicalContextEvents',
     'supportsCanonicalExecution',
+    'supportsCanonicalContextExecution',
     'startTraining',
     'cancelTraining',
     'getTrainingJob',
@@ -218,6 +246,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return false;
     }
 
+    /** Whether this model path can compile an already materialized canonical document directly. */
+    protected supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
+        return false;
+    }
+
     /** Whether this concrete image model path can produce canonical execution authority directly. */
     protected supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
         return false;
@@ -227,6 +260,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return this.isImageModel(options.model)
             ? this.supportsCanonicalImageGeneration(options)
             : this.supportsCanonicalConversation(options);
+    }
+
+    async supportsCanonicalContextExecution(options: CanonicalExecutionContextInputOptions): Promise<boolean> {
+        const canonicalOptions = options as CanonicalExecutionContextOptions;
+        return (
+            !this.isImageModel(canonicalOptions.model) && this.supportsCanonicalContextConversation(canonicalOptions)
+        );
     }
 
     /** Validate raw media-generation input before prompt formatting can read or discard unsupported content. */
@@ -257,34 +297,49 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     ? (AbstractDriver.prototype.streamCanonical as (...args: unknown[]) => Promise<unknown>)
                     : installedOperation;
             const invoke = (args: unknown[]) => {
-                const operationArgs =
-                    name === 'executeCanonical' || name === 'streamCanonical' || name === 'streamCanonicalEvents'
-                        ? [
-                              args[0],
-                              resolveCanonicalExecutionOptions(args[1] as CanonicalExecutionInputOptions),
-                              ...args.slice(2),
-                          ]
-                        : args;
+                const segmentCanonicalOperation =
+                    name === 'executeCanonical' || name === 'streamCanonical' || name === 'streamCanonicalEvents';
+                const contextCanonicalOperation =
+                    name === 'executeCanonicalContext' ||
+                    name === 'streamCanonicalContext' ||
+                    name === 'streamCanonicalContextEvents' ||
+                    name === 'supportsCanonicalContextExecution';
+                const operationArgs = segmentCanonicalOperation
+                    ? [
+                          args[0],
+                          resolveCanonicalExecutionOptions(args[1] as CanonicalExecutionInputOptions),
+                          ...args.slice(2),
+                      ]
+                    : contextCanonicalOperation
+                      ? [
+                            resolveCanonicalExecutionContextOptions(args[0] as CanonicalExecutionContextInputOptions),
+                            ...args.slice(1),
+                        ]
+                      : args;
                 return operation.apply(this, operationArgs);
             };
             Object.defineProperty(this, name, {
                 configurable: false,
                 value:
-                    name === 'stream' || name === 'streamCanonical' || name === 'streamCanonicalEvents'
+                    name === 'stream' ||
+                    name === 'streamCanonical' ||
+                    name === 'streamCanonicalContext' ||
+                    name === 'streamCanonicalEvents' ||
+                    name === 'streamCanonicalContextEvents'
                         ? (...args: unknown[]) =>
                               name === 'stream'
                                   ? this.runStreamOperation(
                                         () => invoke(args) as Promise<CompletionStream<PromptT>>,
                                         args[2] as AbortSignal | undefined,
                                     )
-                                  : name === 'streamCanonical'
+                                  : name === 'streamCanonical' || name === 'streamCanonicalContext'
                                     ? this.runCanonicalStreamOperation(
                                           () => invoke(args) as Promise<CanonicalExecutionStream>,
-                                          args[2] as AbortSignal | undefined,
+                                          args[name === 'streamCanonical' ? 2 : 1] as AbortSignal | undefined,
                                       )
                                     : this.runCanonicalEventStreamOperation(
                                           () => invoke(args) as Promise<CanonicalExecutionEventStream>,
-                                          args[2] as AbortSignal | undefined,
+                                          args[name === 'streamCanonicalEvents' ? 2 : 1] as AbortSignal | undefined,
                                       )
                         : (...args: unknown[]) => this.runOperation(() => invoke(args)),
                 writable: false,
@@ -517,6 +572,49 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         });
     }
 
+    async executeCanonicalContext(
+        options: CanonicalExecutionContextInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const canonicalOptions = options as CanonicalExecutionContextOptions;
+        if (!this.supportsCanonicalContextConversation(canonicalOptions) || this.isImageModel(canonicalOptions.model)) {
+            throw new Error(
+                `Provider ${this.provider} model ${canonicalOptions.model} does not support canonical context execution`,
+            );
+        }
+        return await this._executeCanonicalContext(canonicalOptions, signal).catch((error: unknown) => {
+            if (CanonicalAcceptedOutputRecovered.is(error)) throw error;
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model: canonicalOptions.model,
+                operation: 'execute',
+            });
+        });
+    }
+
+    async _executeCanonicalContext(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const httpScope = this.createExecutionHttpAgentScope(options, signal !== undefined);
+        const abort = () => void httpScope.abort();
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
+        const start = Date.now();
+        try {
+            return await httpScope.run(async () => {
+                const response = await this.requestCanonicalContextCompletion(options, signal);
+                return response.execution_time === undefined
+                    ? { ...response, execution_time: Date.now() - start }
+                    : response;
+            });
+        } finally {
+            signal?.removeEventListener('abort', abort);
+            await httpScope.close();
+        }
+    }
+
     async _executeCanonical(
         prompt: PromptT,
         options: CanonicalExecutionOptions,
@@ -653,6 +751,20 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         );
     }
 
+    async streamCanonicalContext(
+        options: CanonicalExecutionContextInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        const canonicalOptions = options as CanonicalExecutionContextOptions;
+        const source = await this.streamCanonicalContextEvents(canonicalOptions, signal, {
+            stream_id: canonicalOptions.conversation_runtime.response_operation_id,
+        });
+        return new LegacyCanonicalExecutionEventProjection(
+            source,
+            (canonicalOptions.model_options as { include_thoughts?: unknown } | undefined)?.include_thoughts === true,
+        );
+    }
+
     async streamCanonicalEvents(
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
@@ -709,6 +821,51 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             );
         }
         return await this.requestCanonicalTextCompletionEventStream(prompt, canonicalOptions, signal, open);
+    }
+
+    async streamCanonicalContextEvents(
+        options: CanonicalExecutionContextInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const canonicalOptions = options as CanonicalExecutionContextOptions;
+        if (!this.supportsCanonicalContextConversation(canonicalOptions) || this.isImageModel(canonicalOptions.model)) {
+            throw new Error(
+                `Provider ${this.provider} model ${canonicalOptions.model} does not support canonical context execution`,
+            );
+        }
+        const runtime = canonicalOptions.conversation_runtime;
+        signal?.throwIfAborted();
+        if (!(await this.canStream(canonicalOptions, signal))) {
+            const retainedDocument = canonicalOptions.conversation;
+            const retainedResponse = Object.hasOwn(retainedDocument.operation_receipts, runtime.response_operation_id)
+                ? createCanonicalExecutionResponse(retainedDocument, runtime.response_operation_id)
+                : undefined;
+            const [generationId, responseTurnId] =
+                retainedResponse === undefined
+                    ? await Promise.all([
+                          deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+                          deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+                      ])
+                    : [retainedResponse.accepted_output.generation.id, retainedResponse.accepted_output.turn.id];
+            const identityGeneration = retainedResponse?.accepted_output.generation;
+            return new FallbackCanonicalExecutionEventStream(
+                {
+                    request_id: identityGeneration?.request_id ?? runtime.request_id,
+                    attempt_id: identityGeneration?.attempt_id ?? runtime.attempt_id,
+                    response_operation_id: runtime.response_operation_id,
+                    generation_id: generationId,
+                    draft_turn_id: responseTurnId,
+                },
+                (fallbackSignal) =>
+                    this._executeCanonicalContext(
+                        canonicalOptions,
+                        signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                    ),
+                { ...open, ...(retainedResponse === undefined ? {} : { origin: 'accepted_recovery' as const }) },
+            );
+        }
+        return await this.requestCanonicalContextCompletionEventStream(canonicalOptions, signal, open);
     }
 
     /**
@@ -888,6 +1045,25 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {
         throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical typed streaming`);
+    }
+
+    async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        _signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        throw new Error(
+            `Provider ${this.provider} model ${options.model} does not support canonical context execution`,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        _signal: AbortSignal | undefined,
+        _open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        throw new Error(
+            `Provider ${this.provider} model ${options.model} does not support canonical context typed streaming`,
+        );
     }
 
     async requestCanonicalImageGeneration(

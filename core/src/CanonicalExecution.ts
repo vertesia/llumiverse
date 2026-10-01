@@ -4,16 +4,25 @@ import type {
     CompletionResult,
     ExecutionOptions,
     ExecutionTokenUsage,
+    HttpTimeoutOptions,
+    JSONSchema,
     JsonResult,
+    ModelOptions,
     PromptCacheDiagnostic,
+    PromptCacheMode,
     ResultValidationError,
     ToolUse,
 } from '@llumiverse/common';
 import {
     type Asset,
+    type AssetKind,
+    type AssetMediaMetadata,
+    type AssetStorage,
     type ConversationAcceptedOutputFragment,
     type ConversationDocument,
     type ConversationOutputBlock,
+    type ConversationPreparedRequest,
+    type ConversationPreparedRequestRecord,
     type ConversationRuntimeContext,
     ConversationRuntimeContextSchema,
     createAcceptedOutputFragment,
@@ -59,6 +68,63 @@ export type CanonicalExecutionInputOptions = Omit<ExecutionOptions, 'conversatio
     conversation?: ConversationDocument | null;
     conversation_runtime: ConversationRuntimeContext;
 };
+
+/**
+ * Transport and response policy for current canonical execution.
+ *
+ * This is intentionally declared independently from legacy `ExecutionOptions`: prompt formatters,
+ * native conversation values, and legacy tool DTOs are authoring/import concerns and cannot enter
+ * an already materialized canonical context. Projection-retention fields remain temporarily because
+ * adopted providers still apply those policies while compiling a canonical document to native wire.
+ */
+export interface CanonicalExecutionTransportOptions {
+    model: string;
+    result_schema?: JSONSchema;
+    prompt_cache_schema_suffix?: boolean;
+    include_original_response?: boolean;
+    model_options?: ModelOptions;
+    prompt_cache_key?: string;
+    prompt_cache_mode?: PromptCacheMode;
+    prompt_cache_ttl_seconds?: number;
+    httpTimeout?: HttpTimeoutOptions;
+    output_storage_uri?: string;
+    store_audio?: (
+        stream: ReadableStream<Uint8Array>,
+        metadata: Omit<AudioResult, 'type' | 'value'>,
+        signal?: AbortSignal,
+    ) => Promise<string>;
+    store_generated_asset?: (
+        stream: ReadableStream<Uint8Array>,
+        metadata: { kind: AssetKind; mime_type: string; media?: AssetMediaMetadata },
+        signal?: AbortSignal,
+    ) => Promise<{ storage: AssetStorage; byte_length: number; content_hash: string }>;
+    load_recovered_canonical_output?: (identity: {
+        conversation_id: string;
+        response_operation_id: string;
+        prepared_request?: ConversationPreparedRequestRecord;
+    }) => Promise<
+        | ConversationAcceptedOutputFragment
+        | { accepted_output: ConversationAcceptedOutputFragment; conversation?: ConversationDocument }
+        | undefined
+    >;
+    on_canonical_request_prepared?: (prepared: ConversationPreparedRequest) => Promise<void>;
+    labels?: Record<string, string>;
+    stripImagesAfterTurns?: number;
+    stripTextMaxTokens?: number;
+    stripHeartbeatsAfterTurns?: number;
+}
+
+/** Caller-facing, already materialized canonical context. */
+export interface CanonicalExecutionContextInputOptions extends CanonicalExecutionTransportOptions {
+    conversation: ConversationDocument;
+    conversation_runtime: ConversationRuntimeContext;
+}
+
+/** Validated and owned canonical context used by provider adapters. */
+export interface CanonicalExecutionContextOptions extends CanonicalExecutionTransportOptions {
+    conversation: ConversationDocument;
+    conversation_runtime: ResolvedConversationRuntimeContext;
+}
 
 function cloneOptionValue<T>(value: T | undefined): T | undefined {
     return value === undefined ? undefined : structuredClone(value);
@@ -114,6 +180,56 @@ export function resolveCanonicalExecutionOptions(options: ExecutionOptions): Can
         ...(model_options === undefined ? {} : { model_options: cloneOptionValue(model_options) }),
         ...(result_schema === undefined ? {} : { result_schema: cloneOptionValue(result_schema) }),
         ...(tools === undefined ? {} : { tools: cloneOptionValue(tools) }),
+    };
+}
+
+/**
+ * Validate and own an already materialized canonical context without accepting authoring inputs.
+ * The returned snapshot contains no legacy tool catalog or custom prompt formatter.
+ */
+export function resolveCanonicalExecutionContextOptions(
+    options: CanonicalExecutionContextInputOptions,
+): CanonicalExecutionContextOptions {
+    const unsafe = options as CanonicalExecutionContextInputOptions & {
+        format?: unknown;
+        output_modality?: unknown;
+        tools?: unknown;
+    };
+    if (unsafe.format !== undefined)
+        throw new TypeError('Canonical context execution does not accept a prompt formatter');
+    if (unsafe.tools !== undefined) {
+        throw new TypeError('Canonical context execution uses the document active tool definitions');
+    }
+    if (unsafe.output_modality !== undefined) {
+        throw new TypeError('Canonical context execution does not accept legacy output modality policy');
+    }
+    const conversation = parseConversationDocument(options.conversation);
+    const suppliedRuntime = ConversationRuntimeContextSchema.parse(options.conversation_runtime);
+    if (suppliedRuntime.conversation_id !== undefined && suppliedRuntime.conversation_id !== conversation.id) {
+        throw new TypeError('conversation_runtime.conversation_id does not match the canonical document');
+    }
+    const conversationRuntime = ResolvedConversationRuntimeContextSchema.parse({
+        ...suppliedRuntime,
+        conversation_id: conversation.id,
+        purpose: suppliedRuntime.purpose ?? 'conversation',
+    });
+    const {
+        conversation: _conversation,
+        conversation_runtime: _conversationRuntime,
+        httpTimeout,
+        labels,
+        model_options,
+        result_schema,
+        ...rest
+    } = options;
+    return {
+        ...rest,
+        conversation,
+        conversation_runtime: conversationRuntime,
+        ...(httpTimeout === undefined ? {} : { httpTimeout: cloneOptionValue(httpTimeout) }),
+        ...(labels === undefined ? {} : { labels: cloneOptionValue(labels) }),
+        ...(model_options === undefined ? {} : { model_options: cloneOptionValue(model_options) }),
+        ...(result_schema === undefined ? {} : { result_schema: cloneOptionValue(result_schema) }),
     };
 }
 
