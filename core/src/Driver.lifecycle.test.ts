@@ -210,6 +210,54 @@ class CanonicalContextSnapshotDriver extends CanonicalLifecycleTestDriver {
     }
 }
 
+class OverriddenCanonicalContextEventStreamDriver extends CanonicalContextSnapshotDriver {
+    readonly cancelEventStream = vi
+        .fn<() => Promise<CanonicalStreamTerminalEvent>>()
+        .mockResolvedValue(canonicalTerminal);
+    contextSignal?: AbortSignal;
+    releaseClosed?: () => void;
+    holdClosed = false;
+    private releaseRead?: () => void;
+
+    finishRead(): boolean {
+        const release = this.releaseRead;
+        if (release === undefined) return false;
+        this.releaseRead = undefined;
+        release();
+        return true;
+    }
+
+    override async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        _open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        this.capturedOptions = options;
+        this.contextSignal = signal;
+        const driver = this;
+        const closed = this.holdClosed
+            ? new Promise<void>((resolve) => {
+                  this.releaseClosed = resolve;
+              })
+            : Promise.resolve();
+        return {
+            completion: undefined,
+            terminal_event: undefined,
+            execution_started: false,
+            closed,
+            cancel: this.cancelEventStream,
+            [Symbol.asyncIterator]() {
+                return {
+                    next: () =>
+                        new Promise<IteratorResult<never>>((resolve) => {
+                            driver.releaseRead = () => resolve({ done: true, value: undefined });
+                        }),
+                };
+            },
+        };
+    }
+}
+
 class TypedCanonicalLifecycleTestDriver extends CanonicalLifecycleTestDriver {
     canonicalEventCalls = 0;
     overriddenStringStreamCalls = 0;
@@ -791,6 +839,65 @@ describe('AbstractDriver lifecycle', () => {
         expect(driver.canonicalContextEventCalls).toBe(1);
         expect(driver.createPromptCalls).toBe(0);
         expect(driver.requestTextCompletionStreamCalls).toBe(0);
+    });
+
+    it('delivers a retained context fallback with the accepted response identity without new execution authority', async () => {
+        const driver = new CanonicalContextSnapshotDriver(vi.fn());
+        driver.streaming = false;
+        const stream = await driver.streamCanonicalContextEvents(canonicalContextOptions(), undefined, {
+            stream_id: 'stream:context:retained-fallback',
+        });
+        const events = [];
+        for await (const event of stream) events.push(event);
+
+        expect(stream.execution_started).toBe(false);
+        expect(events).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'accepted_recovery',
+                request_id: 'request:original',
+                attempt_id: 'attempt:original',
+                generation_id: 'generation:original',
+                draft_turn_id: 'turn:original',
+            }),
+        ]);
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            request_id: 'request:original',
+            attempt_id: 'attempt:original',
+        });
+        expect(driver.canonicalContextEventCalls).toBe(0);
+        expect(driver.createPromptCalls).toBe(0);
+    });
+
+    it('uses the second context-stream argument for abort cancellation', async () => {
+        const cleanup = vi.fn();
+        const driver = new OverriddenCanonicalContextEventStreamDriver(cleanup);
+        const controller = new AbortController();
+        await driver.streamCanonicalContextEvents(canonicalContextOptions(), controller.signal, {
+            stream_id: 'stream:context:abort',
+        });
+        driver.destroy();
+
+        expect(driver.contextSignal).toBe(controller.signal);
+        controller.abort();
+
+        await vi.waitFor(() => expect(driver.cancelEventStream).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+    });
+
+    it('settles projected context delivery without waiting for a non-cooperating closed lease', async () => {
+        const cleanup = vi.fn();
+        const driver = new OverriddenCanonicalContextEventStreamDriver(cleanup);
+        driver.holdClosed = true;
+        const stream = await driver.streamCanonicalContext(canonicalContextOptions());
+        const read = stream[Symbol.asyncIterator]().next();
+        await vi.waitFor(() => expect(driver.finishRead()).toBe(true));
+        await expect(read).resolves.toEqual({ done: true, value: undefined });
+
+        driver.destroy();
+        expect(cleanup).not.toHaveBeenCalled();
+        driver.releaseClosed?.();
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
     });
 
     it('derives the compatibility string preview only from the typed canonical event stream', async () => {

@@ -1,4 +1,5 @@
 import {
+    type ToolDefinition as CanonicalToolDefinition,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
     isConversationDocumentFormat,
@@ -6,6 +7,7 @@ import {
 } from '@llumiverse/conversation';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
@@ -93,6 +95,7 @@ import {
     finalizeOpenAIResponsesPreparedRequest,
     OPENAI_RESPONSES_PROTOCOL,
     type PreparedOpenAIResponsesConversation,
+    prepareOpenAIResponsesCanonicalContext,
     prepareOpenAIResponsesCanonicalState,
 } from './openai-responses-conversation-adapter.js';
 import { formatOpenAISchema } from './schema.js';
@@ -494,7 +497,7 @@ export class OpenAIResponsesProtocol {
             provider: driver.provider,
         });
 
-        const toolDefs = getToolDefinitions(options.tools);
+        const toolDefs = getToolDefinitions(canonicalState.tool_definitions);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
@@ -631,7 +634,30 @@ export class OpenAIResponsesProtocol {
             options,
             provider: driver.provider,
         });
-        const toolDefs = getToolDefinitions(options.tools);
+        return this.requestPreparedCanonicalTextCompletionEventStream(driver, canonicalState, options, signal, open);
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        driver: OpenAIResponsesDriverBase,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const canonicalState = await prepareOpenAIResponsesCanonicalContext({
+            options,
+            provider: driver.provider,
+        });
+        return this.requestPreparedCanonicalTextCompletionEventStream(driver, canonicalState, options, signal, open);
+    }
+
+    private async requestPreparedCanonicalTextCompletionEventStream(
+        driver: OpenAIResponsesDriverBase,
+        canonicalState: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const toolDefs = getToolDefinitions(canonicalState.tool_definitions);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
         const modelOptions = options.model_options as OpenAIRequestOptions | undefined;
         assertOpenAIResponseToolChoiceAvailable(modelOptions, useTools, options.model, driver.provider, 'stream');
@@ -1074,6 +1100,33 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
+        const canonicalState = await prepareOpenAIResponsesCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: driver.provider,
+        });
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal);
+    }
+
+    async requestCanonicalContextCompletion(
+        driver: OpenAIResponsesDriverBase,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const canonicalState = await prepareOpenAIResponsesCanonicalContext({
+            options,
+            provider: driver.provider,
+        });
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal);
+    }
+
+    private async requestPreparedCanonicalTextCompletion(
+        driver: OpenAIResponsesDriverBase,
+        canonicalState: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -1084,14 +1137,8 @@ export class OpenAIResponsesProtocol {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
-        const canonicalState = await prepareOpenAIResponsesCanonicalState({
-            conversation: options.conversation,
-            prompt,
-            options,
-            provider: driver.provider,
-        });
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        const toolDefs = getToolDefinitions(options.tools);
+        const toolDefs = getToolDefinitions(canonicalState.tool_definitions);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
         assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
         const includeThoughts = model_options?.include_thoughts !== false;
@@ -1347,6 +1394,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return true;
     }
 
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        return !this.isFileAudioModel(options.model);
+    }
+
     protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
         return this.provider === Providers.openai;
     }
@@ -1415,6 +1466,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return this.responsesProtocol.requestCanonicalTextCompletionEventStream(this, prompt, options, signal, open);
     }
 
+    requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.responsesProtocol.requestCanonicalContextCompletionEventStream(this, options, signal, open);
+    }
+
     requestTextCompletion(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
@@ -1432,6 +1491,13 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             throw new Error(`OpenAI Responses audio model ${options.model} does not support canonical execution`);
         }
         return this.responsesProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
+    }
+
+    requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.responsesProtocol.requestCanonicalContextCompletion(this, options, signal);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -2075,10 +2141,18 @@ export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): Re
     });
 }
 
-function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.Responses.Tool[] | undefined {
+function getToolDefinitions(
+    tools:
+        | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+        | ToolDefinition[]
+        | undefined
+        | null,
+): OpenAI.Responses.Tool[] | undefined {
     return tools ? tools.map(getToolDefinition) : undefined;
 }
-function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTool {
+function getToolDefinition(
+    toolDef: Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition,
+): OpenAI.Responses.FunctionTool {
     let parsedSchema: JSONSchema | undefined;
     let strictMode = false;
     if (toolDef.input_schema) {

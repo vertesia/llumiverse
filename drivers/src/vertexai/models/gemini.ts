@@ -22,6 +22,7 @@ import {
     type Tool,
 } from '@google/genai';
 import {
+    type ToolDefinition as CanonicalToolDefinition,
     canonicalJsonContentString,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
@@ -34,6 +35,7 @@ import {
 } from '@llumiverse/conversation';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -93,6 +95,7 @@ import {
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     geminiToolUsesFromContent,
     type PreparedGeminiConversation,
+    prepareGeminiCanonicalContext,
     prepareGeminiCanonicalState,
 } from './gemini-conversation-adapter.js';
 
@@ -271,10 +274,13 @@ function getProminentPeopleOption(
     }
 }
 
+type GeminiToolDefinition = Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition;
+
 export function getGeminiPayload(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
     operation: LlumiverseErrorContext['operation'] = 'execute',
+    toolDefinitions: readonly GeminiToolDefinition[] | undefined = options.tools,
 ): GenerateContentParameters {
     const model_options = options.model_options as
         | (VertexAIGeminiOptions & {
@@ -282,7 +288,7 @@ export function getGeminiPayload(
               required_tool_name?: string;
           })
         | undefined;
-    const tools = getToolDefinitions(options.tools);
+    const tools = getToolDefinitions(toolDefinitions);
     const forcedToolRequested =
         model_options?.required_tool_name !== undefined ||
         model_options?.tool_choice === 'required' ||
@@ -439,14 +445,31 @@ function projectGeminiHistoryContent(content: Content, options: ExecutionOptions
 function prepareCanonicalGeminiProjection(
     prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
     options: ExecutionOptions,
+    contextOnly = false,
 ): GenerateContentPrompt {
     const currentIndexes = new Set(prepared.current_native_content_indexes);
     const currentTurn = canonicalConversationTurnNumber(prepared.document);
-    return {
+    const projected: GenerateContentPrompt = {
         contents: prepared.native_conversation.contents.map((content, index) =>
             currentIndexes.has(index) ? content : projectGeminiHistoryContent(content, options, currentTurn),
         ),
         ...(prepared.native_conversation.system === undefined ? {} : { system: prepared.native_conversation.system }),
+    };
+    if (!contextOnly || options.result_schema === undefined) return projected;
+
+    const hasTools = prepared.tool_definitions.length > 0;
+    const instruction =
+        supportsStructuredOutput(options) && !hasTools
+            ? 'Fill all appropriate fields in the JSON output.'
+            : hasTools
+              ? `When not calling tools, the output must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
+              : `The output must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`;
+    return {
+        ...projected,
+        system: {
+            ...(projected.system ?? { role: 'user' }),
+            parts: [...(projected.system?.parts ?? []), { text: instruction }],
+        },
     };
 }
 
@@ -1302,16 +1325,62 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 ...(requestedOptions.include_original_response ? { original_response: response } : {}),
             });
         }
-        const transportOptions = { ...options, model: modelName };
+        return this.requestPreparedCanonicalTextCompletion(
+            driver,
+            canonicalState,
+            requestedOptions,
+            modelName,
+            region,
+            signal,
+        );
+    }
+
+    async requestCanonicalContextCompletion(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
+        const modelName = splits.at(-1) ?? options.model;
+        if (isFileAudioModel(modelName)) {
+            throw new Error(`Gemini file audio model ${options.model} does not support canonical context execution`);
+        }
+        const canonicalState = await prepareGeminiCanonicalContext({
+            options,
+            provider: geminiProvider(driver),
+        });
+        return this.requestPreparedCanonicalTextCompletion(
+            driver,
+            canonicalState,
+            options,
+            modelName,
+            region,
+            signal,
+            true,
+        );
+    }
+
+    private async requestPreparedCanonicalTextCompletion(
+        driver: VertexAIDriver,
+        canonicalState: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        requestedOptions: ExecutionOptions,
+        modelName: string,
+        region: string | undefined,
+        signal?: AbortSignal,
+        contextOnly = false,
+    ): Promise<CanonicalExecutionResponse> {
+        const transportOptions = { ...requestedOptions, model: modelName };
         if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
         const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
-        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions, contextOnly);
         const client = driver.getGoogleGenAIClient(
             region,
             resolveVertexAIServiceTier(modelOptions),
             transportOptions.httpTimeout,
         );
-        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute');
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute', canonicalState.tool_definitions);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             {
@@ -1913,17 +1982,67 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             );
         }
 
-        const transportOptions = { ...options, model: modelName };
         const canonicalState = await prepareGeminiCanonicalState({
             conversation: requestedOptions.conversation,
             prompt,
             options: requestedOptions,
             provider: geminiProvider(driver),
         });
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            requestedOptions,
+            modelName,
+            region,
+            signal,
+            open,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
+        const modelName = splits.at(-1) ?? options.model;
+        if (isFileAudioModel(modelName)) {
+            throw new Error(`Gemini file audio model ${options.model} does not support canonical context streaming`);
+        }
+        const canonicalState = await prepareGeminiCanonicalContext({
+            options,
+            provider: geminiProvider(driver),
+        });
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            options,
+            modelName,
+            region,
+            signal,
+            open,
+            true,
+        );
+    }
+
+    private async requestPreparedCanonicalTextCompletionEventStream(
+        driver: VertexAIDriver,
+        canonicalState: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        requestedOptions: ExecutionOptions,
+        modelName: string,
+        region: string | undefined,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        contextOnly = false,
+    ): Promise<CanonicalExecutionEventStream> {
+        const transportOptions = { ...requestedOptions, model: modelName };
         if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
         const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
-        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
-        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions, contextOnly);
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream', canonicalState.tool_definitions);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             {
@@ -2535,7 +2654,7 @@ export function convertGeminiFunctionPartsToText(contents: Content[]): Content[]
     });
 }
 
-function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | undefined {
+function getToolDefinitions(tools: readonly GeminiToolDefinition[] | undefined | null): Tool | undefined {
     if (!tools || tools.length === 0) {
         return undefined;
     }
@@ -2546,7 +2665,7 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | 
     };
 }
 
-function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
+function getToolFunction(tool: GeminiToolDefinition): FunctionDeclaration {
     return {
         name: tool.name,
         description: tool.description,

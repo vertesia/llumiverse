@@ -24,6 +24,7 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
 import {
+    type ToolDefinition as CanonicalToolDefinition,
     CONVERSATION_STREAM_MAX_TOTAL_BYTES,
     canonicalJsonContentString,
     createStructuredOutputTransformationProof,
@@ -31,7 +32,6 @@ import {
     isConversationDocumentFormat,
     type JsonValue,
     type NativeStreamPosition,
-    parseConversationDocument,
     toolArgumentsForModel,
 } from '@llumiverse/conversation';
 import {
@@ -39,6 +39,7 @@ import {
     type BedrockClaudeOptions,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
@@ -61,6 +62,7 @@ import {
     incrementConversationTurn,
     isEmbeddingModel,
     type JSONObject,
+    type ToolDefinition as LegacyToolDefinition,
     LlumiverseError,
     type LlumiverseErrorContext,
     legacyCompletionFromCanonicalExecution,
@@ -74,7 +76,6 @@ import {
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
     type TextFallbackOptions,
-    type ToolDefinition,
     type ToolUse,
     type TrainingJob,
     TrainingJobStatus,
@@ -107,6 +108,8 @@ import {
     bedrockConverseJsonValue,
     decodeBedrockConverseCanonicalResponse,
     finalizeBedrockConversePreparedRequest,
+    type PreparedBedrockConverseConversation,
+    prepareBedrockConverseCanonicalContext,
     prepareBedrockConverseCanonicalState,
 } from './bedrock-converse-conversation-adapter.js';
 import {
@@ -114,6 +117,7 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    projectConverseContextResultSchema,
     relocateConverseToolImages,
     shouldIncludeSchemaInConversePrompt,
     supportsConverseOutputConfig,
@@ -164,11 +168,10 @@ export {
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 const TWELVELABS_PEGASUS_CANONICAL_FORMAT = Symbol('twelvelabs.pegasus.canonical_format');
-const BEDROCK_CANONICAL_CONTEXT_FORMAT = Symbol('bedrock.canonical_context_format');
+type BedrockToolDefinition =
+    | Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>
+    | LegacyToolDefinition;
 
-type BedrockCanonicalContextOptions = CanonicalExecutionInputOptions & {
-    [BEDROCK_CANONICAL_CONTEXT_FORMAT]?: true;
-};
 const TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES = 25 * 1024 * 1024;
 type PegasusCanonicalExecutionOptions = CanonicalExecutionInputOptions & {
     [TWELVELABS_PEGASUS_CANONICAL_FORMAT]?: true;
@@ -696,6 +699,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return true;
     }
 
+    protected override supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        return !options.model.includes('twelvelabs.pegasus');
+    }
+
     override async executeCanonical(
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
@@ -709,11 +716,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 signal,
             );
         }
-        const canonicalOptions: BedrockCanonicalContextOptions = {
-            ...options,
-            [BEDROCK_CANONICAL_CONTEXT_FORMAT]: true,
-        };
-        return super.executeCanonical(segments, canonicalOptions, signal);
+        return super.executeCanonical(segments, options, signal);
     }
 
     override async streamCanonicalEvents(
@@ -731,11 +734,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 open,
             );
         }
-        const canonicalOptions: BedrockCanonicalContextOptions = {
-            ...options,
-            [BEDROCK_CANONICAL_CONTEXT_FORMAT]: true,
-        };
-        return super.streamCanonicalEvents(segments, canonicalOptions, signal, open);
+        return super.streamCanonicalEvents(segments, options, signal, open);
     }
 
     protected override supportsCanonicalImageGeneration(options: ExecutionOptions): boolean {
@@ -858,18 +857,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ? { max_video_bytes: TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES }
                     : {},
             );
-        }
-        if (
-            segments.length === 0 &&
-            (opts as BedrockCanonicalContextOptions)[BEDROCK_CANONICAL_CONTEXT_FORMAT] === true &&
-            isConversationDocumentFormat(opts.conversation)
-        ) {
-            const document = parseConversationDocument(opts.conversation);
-            if (document.context.entries.length > 0) {
-                // These are empty newly authored records; the canonical adapter compiles the retained context.
-                // The private entry-point marker keeps ordinary legacy empty prompts rejected.
-                return { modelId: undefined, messages: [] };
-            }
         }
         return await formatConversePrompt(segments, opts);
     }
@@ -1426,11 +1413,37 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options,
             provider: this.provider,
         });
-        const conversation: ConverseRequest = {
+        return this.requestPreparedCanonicalTextCompletion(canonicalState, options, signal);
+    }
+
+    async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            throw new Error(`TwelveLabs Pegasus model ${options.model} does not support canonical context execution`);
+        }
+        const canonicalState = await prepareBedrockConverseCanonicalContext({
+            options,
+            provider: this.provider,
+        });
+        return this.requestPreparedCanonicalTextCompletion(canonicalState, options, signal, true);
+    }
+
+    private async requestPreparedCanonicalTextCompletion(
+        canonicalState: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        contextOnly = false,
+    ): Promise<CanonicalExecutionResponse> {
+        const baseConversation: ConverseRequest = {
             ...canonicalState.native_conversation,
             modelId: options.model,
         };
-        const payload = this.preparePayload(conversation, options);
+        const conversation = contextOnly
+            ? projectConverseContextResultSchema(baseConversation, options, canonicalState.tool_definitions.length > 0)
+            : baseConversation;
+        const payload = this.preparePayload(conversation, options, canonicalState.tool_definitions);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider: this.provider, protocol: 'aws.bedrock.converse', model: options.model },
@@ -1750,8 +1763,36 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options,
             provider: this.provider,
         });
-        const conversation: ConverseRequest = { ...canonicalState.native_conversation, modelId: options.model };
-        const payload = this.preparePayload(conversation, options);
+        return this.requestPreparedCanonicalTextCompletionEventStream(canonicalState, options, signal, open);
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            throw new Error(`TwelveLabs Pegasus model ${options.model} does not support canonical context streaming`);
+        }
+        const canonicalState = await prepareBedrockConverseCanonicalContext({
+            options,
+            provider: this.provider,
+        });
+        return this.requestPreparedCanonicalTextCompletionEventStream(canonicalState, options, signal, open, true);
+    }
+
+    private async requestPreparedCanonicalTextCompletionEventStream(
+        canonicalState: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        contextOnly = false,
+    ): Promise<CanonicalExecutionEventStream> {
+        const baseConversation: ConverseRequest = { ...canonicalState.native_conversation, modelId: options.model };
+        const conversation = contextOnly
+            ? projectConverseContextResultSchema(baseConversation, options, canonicalState.tool_definitions.length > 0)
+            : baseConversation;
+        const payload = this.preparePayload(conversation, options, canonicalState.tool_definitions);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider: this.provider, protocol: 'aws.bedrock.converse', model: options.model },
@@ -2161,7 +2202,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return eventStream;
     }
 
-    preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
+    preparePayload(
+        prompt: ConverseRequest,
+        options: ExecutionOptions,
+        toolDefinitions: readonly BedrockToolDefinition[] | undefined = options.tools,
+    ) {
         const model_options: TextFallbackOptions = (options.model_options as TextFallbackOptions) ?? {
             _option_id: 'text-fallback',
         };
@@ -2173,7 +2218,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             privateToolOptions.required_tool_name !== undefined ||
             privateToolOptions.tool_choice === 'required' ||
             privateToolOptions.tool_choice === 'any';
-        const tool_defs = getToolDefinitions(options.tools);
+        const tool_defs = getToolDefinitions(toolDefinitions);
         if (forcedToolRequested && !tool_defs?.length) {
             throw createToolChoiceConfigurationError(
                 'A forced Bedrock tool turn requires at least one tool definition.',
@@ -2906,11 +2951,11 @@ function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): Tra
     };
 }
 
-function getToolDefinitions(tools?: ToolDefinition[]): Tool[] | undefined {
+function getToolDefinitions(tools?: readonly BedrockToolDefinition[]): Tool[] | undefined {
     return tools ? tools.map(getToolDefinition) : undefined;
 }
 
-function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
+function getToolDefinition(tool: BedrockToolDefinition): Tool.ToolSpecMember {
     return {
         toolSpec: {
             name: tool.name,

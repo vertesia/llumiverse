@@ -1,5 +1,6 @@
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -15,10 +16,12 @@ import {
 import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import {
     executeCanonicalClaudeCompletion,
+    executeCanonicalClaudeContext,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
     isClaudeErrorRetryable,
+    streamCanonicalClaudeContextEvents,
     streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../../shared/claude-messages.js';
@@ -135,6 +138,23 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         );
     }
 
+    async requestCanonicalContextCompletion(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        return executeCanonicalClaudeContext(
+            client,
+            options,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+            transport.identity,
+        );
+    }
+
     async requestTextCompletionStream(
         driver: VertexAIDriver,
         prompt: ClaudePrompt,
@@ -174,6 +194,25 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         return streamCanonicalClaudeEvents(
             client,
             prompt,
+            options,
+            open,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+            transport.identity,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        return streamCanonicalClaudeContextEvents(
+            client,
             options,
             open,
             driver.logger,

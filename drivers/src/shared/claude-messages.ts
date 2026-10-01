@@ -43,6 +43,7 @@ import {
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
 } from '@llumiverse/common';
 import {
+    type ToolDefinition as CanonicalToolDefinition,
     canonicalJsonContentString,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
@@ -52,6 +53,7 @@ import {
     toolArgumentsForModel,
 } from '@llumiverse/conversation';
 import {
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -77,6 +79,7 @@ import {
     type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
+    type ToolDefinition,
     type ToolUse,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
@@ -102,6 +105,7 @@ import {
     decodeClaudeCanonicalResponse,
     finalizeClaudePreparedRequest,
     type PreparedClaudeConversation,
+    prepareClaudeCanonicalContext,
     prepareClaudeCanonicalState,
 } from './claude-messages-conversation-adapter.js';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
@@ -132,6 +136,8 @@ export interface ClaudeTransportIdentity {
     target_options?: JsonObject;
 }
 
+type ClaudeToolDefinition = Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition;
+
 export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
     const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
     return options.prompt_cache_key !== undefined || modelOptions?.cache_enabled === true;
@@ -143,6 +149,27 @@ function isAgentPromptCacheKey(promptCacheKey: string | undefined): boolean {
 
 function isResultSchemaSystemBlock(block: TextBlockParam): boolean {
     return block.type === 'text' && RESULT_SCHEMA_INSTRUCTION_PREFIXES.some((prefix) => block.text.startsWith(prefix));
+}
+
+function claudeResultSchemaInstruction(options: ExecutionOptions, hasTools: boolean): string | undefined {
+    if (options.result_schema === undefined) return undefined;
+    return hasTools
+        ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`
+        : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`;
+}
+
+/** Add request-local schema guidance without changing the retained canonical document. */
+export function projectClaudeContextResultSchema(
+    conversation: ClaudePrompt,
+    options: ExecutionOptions,
+    hasTools: boolean,
+): ClaudePrompt {
+    const schemaText = claudeResultSchemaInstruction(options, hasTools);
+    if (schemaText === undefined) return conversation;
+    return {
+        ...conversation,
+        system: [...(conversation.system ?? []), { text: schemaText, type: 'text' }],
+    };
 }
 
 function mergeClaudeSystemBlocks(base: TextBlockParam[], additions: TextBlockParam[]): TextBlockParam[] {
@@ -806,6 +833,7 @@ export function getClaudePayload(
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
     transport?: ClaudeTransportIdentity,
+    tools: readonly ClaudeToolDefinition[] | undefined = options.tools,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = transport?.model ?? options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -834,17 +862,30 @@ export function getClaudePayload(
     const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 
-    if (options.tools) {
-        for (const tool of options.tools) {
-            if (tool.input_schema.type !== 'object') {
+    if (tools) {
+        for (const tool of tools) {
+            if (
+                typeof tool.input_schema !== 'object' ||
+                tool.input_schema === null ||
+                Array.isArray(tool.input_schema) ||
+                tool.input_schema.type !== 'object'
+            ) {
+                const actualType =
+                    typeof tool.input_schema === 'object' && tool.input_schema !== null
+                        ? tool.input_schema.type
+                        : typeof tool.input_schema;
                 throw new Error(
-                    `Tool "${tool.name}" has invalid input_schema.type: expected "object", got "${tool.input_schema.type}"`,
+                    'Tool "' +
+                        tool.name +
+                        '" has invalid input_schema.type: expected "object", got "' +
+                        String(actualType) +
+                        '"',
                 );
             }
         }
     }
 
-    const hasTools = options.tools && options.tools.length > 0;
+    const hasTools = tools !== undefined && tools.length > 0;
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
     }
@@ -870,7 +911,13 @@ export function getClaudePayload(
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
     const sanitizedTools = hasTools
-        ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
+        ? stripClaudeCacheControlFromTools(
+              tools.map(({ name, description, input_schema }) => ({
+                  name,
+                  ...(description === undefined ? {} : { description }),
+                  input_schema,
+              })) as MessageCreateParamsBase['tools'],
+          )
         : undefined;
 
     const cacheEnabled = isClaudePromptCacheEnabled(options);
@@ -1144,12 +1191,16 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 function prepareCanonicalClaudeProjection(
     prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
     options: ExecutionOptions,
+    contextOnly = false,
 ): ClaudePrompt {
-    return projectClaudeConversation(
+    const projected = projectClaudeConversation(
         prepared.native_conversation,
         options,
         canonicalConversationTurnNumber(prepared.document),
     );
+    return contextOnly
+        ? projectClaudeContextResultSchema(projected, options, prepared.tool_definitions.length > 0)
+        : projected;
 }
 
 function canonicalClaudeUsage(
@@ -1272,8 +1323,61 @@ export async function executeCanonicalClaudeCompletion(
         provider,
         ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
-    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', transport);
+    return executePreparedCanonicalClaudeCompletion(
+        client,
+        canonicalState,
+        options,
+        logger,
+        provider,
+        transportOptions,
+        transport,
+    );
+}
+
+export async function executeCanonicalClaudeContext(
+    client: ClaudeMessagesClient,
+    options: CanonicalExecutionContextOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
+): Promise<CanonicalExecutionResponse> {
+    const canonicalState = await prepareClaudeCanonicalContext({
+        options,
+        provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
+    });
+    return executePreparedCanonicalClaudeCompletion(
+        client,
+        canonicalState,
+        options,
+        logger,
+        provider,
+        transportOptions,
+        transport,
+        true,
+    );
+}
+
+async function executePreparedCanonicalClaudeCompletion(
+    client: ClaudeMessagesClient,
+    canonicalState: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    logger: Logger | undefined,
+    provider: string,
+    transportOptions: Pick<RequestOptions, 'signal' | 'timeout'> | undefined,
+    transport: ClaudeTransportIdentity | undefined,
+    contextOnly = false,
+): Promise<CanonicalExecutionResponse> {
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options, contextOnly);
+    const { payload, requestOptions } = getClaudePayload(
+        options,
+        conversation,
+        provider,
+        'execute',
+        transport,
+        canonicalState.tool_definitions,
+    );
     await assertAcceptedCanonicalRequest(
         canonicalState,
         { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
@@ -1342,7 +1446,14 @@ export async function executeClaudeCompletion(
     });
     const includeThoughts = model_options?.include_thoughts ?? false;
     const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', transport);
+    const { payload, requestOptions } = getClaudePayload(
+        options,
+        conversation,
+        provider,
+        'execute',
+        transport,
+        canonicalState.tool_definitions,
+    );
     await assertAcceptedCanonicalRequest(
         canonicalState,
         { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
@@ -1412,7 +1523,14 @@ export async function streamClaudeCompletion(
     });
     const includeThoughts = model_options?.include_thoughts ?? false;
     const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', transport);
+    const { payload, requestOptions } = getClaudePayload(
+        options,
+        conversation,
+        provider,
+        'stream',
+        transport,
+        canonicalState.tool_definitions,
+    );
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
     await assertAcceptedCanonicalRequest(
         canonicalState,
@@ -1630,8 +1748,65 @@ export async function streamCanonicalClaudeEvents(
         provider,
         ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
-    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', transport);
+    return streamPreparedCanonicalClaudeEvents(
+        client,
+        canonicalState,
+        options,
+        open,
+        logger,
+        provider,
+        transportOptions,
+        transport,
+    );
+}
+
+export async function streamCanonicalClaudeContextEvents(
+    client: ClaudeMessagesClient,
+    options: CanonicalExecutionContextOptions,
+    open: CanonicalStreamOpenOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
+): Promise<CanonicalExecutionEventStream> {
+    const canonicalState = await prepareClaudeCanonicalContext({
+        options,
+        provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
+    });
+    return streamPreparedCanonicalClaudeEvents(
+        client,
+        canonicalState,
+        options,
+        open,
+        logger,
+        provider,
+        transportOptions,
+        transport,
+        true,
+    );
+}
+
+async function streamPreparedCanonicalClaudeEvents(
+    client: ClaudeMessagesClient,
+    canonicalState: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    open: CanonicalStreamOpenOptions,
+    logger: Logger | undefined,
+    provider: string,
+    transportOptions: Pick<RequestOptions, 'signal' | 'timeout'> | undefined,
+    transport: ClaudeTransportIdentity | undefined,
+    contextOnly = false,
+): Promise<CanonicalExecutionEventStream> {
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options, contextOnly);
+    const { payload, requestOptions } = getClaudePayload(
+        options,
+        conversation,
+        provider,
+        'stream',
+        transport,
+        canonicalState.tool_definitions,
+    );
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
     await assertAcceptedCanonicalRequest(
         canonicalState,

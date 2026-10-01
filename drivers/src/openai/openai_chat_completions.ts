@@ -1,4 +1,5 @@
 import {
+    type ToolDefinition as CanonicalToolDefinition,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
     type JsonObject,
@@ -7,6 +8,7 @@ import {
 } from '@llumiverse/conversation';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
@@ -81,6 +83,7 @@ import {
     finalizeOpenAIChatPreparedRequest,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
     type PreparedOpenAIChatConversation,
+    prepareOpenAIChatCanonicalContext,
     prepareOpenAIChatCanonicalState,
 } from './openai-chat-conversation-adapter.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -386,7 +389,10 @@ export function updateOpenAIChatCompletionsConversation(
 
 export function prepareOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt,
-    options: Pick<ExecutionOptions, 'tools'> & Partial<Pick<ExecutionOptions, 'model'>>,
+    options: {
+        tools?: readonly (Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition)[];
+        model?: string;
+    },
 ): OpenAIChatCompletionsPrompt {
     let messages = fixOrphanedOpenAIChatCompletionsToolResults(
         fixOrphanedOpenAIChatCompletionsToolUse(conversation.messages),
@@ -748,7 +754,10 @@ export function extractOpenAIChatCompletionsContentText(
 }
 
 export function convertToolsToOpenAIChatCompletionsFormat(
-    tools: ToolDefinition[] | undefined,
+    tools:
+        | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+        | ToolDefinition[]
+        | undefined,
     mode: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'] = 'openai_strict',
 ): OpenAIChatCompletionsToolDefinition[] | undefined {
     if (!tools || tools.length === 0) {
@@ -988,7 +997,7 @@ function prepareCanonicalOpenAIProjection(
             _is_openai_chat_completions: true,
             messages: [...projectedPrior.messages, ...native.messages.slice(prepared.prior_native_message_count)],
         },
-        options,
+        { model: options.model, tools: prepared.tool_definitions },
     );
 }
 
@@ -1265,10 +1274,30 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             options,
             provider,
         });
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, provider, signal);
+    }
+
+    async requestCanonicalContextCompletion(
+        driver: DriverT,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalContext({ options, provider });
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, provider, signal);
+    }
+
+    private async requestPreparedCanonicalTextCompletion(
+        driver: DriverT,
+        canonicalState: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        provider: string,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
-        const payload = this.buildPayload(conversation, options, false, provider);
+        const payload = this.buildPayload(conversation, options, false, provider, canonicalState.tool_definitions);
         const requestBinding = this.requestBinding(payload, options, provider);
         await assertAcceptedCanonicalRequest(
             canonicalState,
@@ -1609,8 +1638,44 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             options,
             provider,
         });
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            options,
+            provider,
+            signal,
+            open,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        driver: DriverT,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalContext({ options, provider });
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            options,
+            provider,
+            signal,
+            open,
+        );
+    }
+
+    private async requestPreparedCanonicalTextCompletionEventStream(
+        driver: DriverT,
+        canonicalState: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        provider: string,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
-        const payload = this.buildPayload(conversation, options, true, provider);
+        const payload = this.buildPayload(conversation, options, true, provider, canonicalState.tool_definitions);
         const requestBinding = this.requestBinding(payload, options, provider);
         await assertAcceptedCanonicalRequest(
             canonicalState,
@@ -1984,6 +2049,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         stream: boolean,
         provider: string = Providers.openai_compatible,
+        tools:
+            | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+            | ToolDefinition[]
+            | undefined = options.tools,
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -2019,7 +2088,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             payload.extra_body = { ...this.options.extraBody, ...executionExtraBody };
         }
 
-        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
+        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(tools, this.options.toolSchemaMode);
         const forcedToolChoice =
             typeof modelOptions?.required_tool_name === 'string' ||
             modelOptions?.tool_choice === 'required' ||
@@ -2297,6 +2366,10 @@ export abstract class OpenAIChatCompletionsDriverBase<
         return true;
     }
 
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        return !openAIAudioTask(options.model);
+    }
+
     /** @internal Provider SDK transport boundary. */
     abstract _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
@@ -2332,6 +2405,13 @@ export abstract class OpenAIChatCompletionsDriverBase<
         return this.chatCompletionsProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
     }
 
+    requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.chatCompletionsProtocol.requestCanonicalContextCompletion(this, options, signal);
+    }
+
     requestTextCompletionStream(
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
@@ -2353,6 +2433,14 @@ export abstract class OpenAIChatCompletionsDriverBase<
             signal,
             open,
         );
+    }
+
+    requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.requestCanonicalContextCompletionEventStream(this, options, signal, open);
     }
 
     buildStreamingConversation(

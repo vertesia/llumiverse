@@ -27,7 +27,11 @@ import {
     toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
-import { type CanonicalStructuredOutput, canonicalToolSelectionPolicy } from '@llumiverse/core';
+import {
+    type CanonicalExecutionContextOptions,
+    type CanonicalStructuredOutput,
+    canonicalToolSelectionPolicy,
+} from '@llumiverse/core';
 import type OpenAI from 'openai';
 import {
     acceptedCanonicalRequestDocument,
@@ -42,6 +46,7 @@ import {
     createRequestReceipt,
     newCanonicalConversation,
     parseCanonicalConversation,
+    prepareCanonicalContext,
     providerJsonValue,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
@@ -1498,6 +1503,34 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
         requested_model: input.options.model,
         prior_native_item_count: priorNativeItemCount,
         ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
+    };
+}
+
+/** Prepare a retained canonical document directly, without importing native response input items. */
+export async function prepareOpenAIResponsesCanonicalContext(input: {
+    options: CanonicalExecutionContextOptions;
+    provider: string;
+}): Promise<Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>> {
+    const prepared = await prepareCanonicalContext({
+        options: input.options,
+        provider: input.provider,
+        protocol: OPENAI_RESPONSES_PROTOCOL,
+        adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+    });
+    const target = { provider: input.provider, model: input.options.model };
+    const compiled = compileOpenAIResponsesConversation(prepared.request_document, target);
+    const priorCompiled =
+        prepared.request_document === prepared.document
+            ? compiled
+            : compileOpenAIResponsesConversation(prepared.document, target);
+    const priorNativeItemCount = priorCompiled.conversation.length;
+    const { request_document: _requestDocument, ...base } = prepared;
+    return {
+        ...base,
+        native_conversation: compiled.conversation,
+        provider: input.provider,
+        requested_model: input.options.model,
+        prior_native_item_count: priorNativeItemCount,
     };
 }
 

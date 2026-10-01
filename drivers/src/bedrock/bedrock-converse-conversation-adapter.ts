@@ -42,7 +42,11 @@ import {
     toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
-import { type CanonicalStructuredOutput, canonicalToolSelectionPolicy } from '@llumiverse/core';
+import {
+    type CanonicalExecutionContextOptions,
+    type CanonicalStructuredOutput,
+    canonicalToolSelectionPolicy,
+} from '@llumiverse/core';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -56,6 +60,7 @@ import {
     createRequestReceipt,
     newCanonicalConversation,
     parseCanonicalConversation,
+    prepareCanonicalContext,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
@@ -1890,6 +1895,34 @@ export async function prepareBedrockConverseCanonicalState(input: {
         requested_model: input.options.model,
         prior_native_message_count: priorNativeMessageCount,
         ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
+    };
+}
+
+/** Prepare a retained canonical document directly, without importing an empty Converse prompt. */
+export async function prepareBedrockConverseCanonicalContext(input: {
+    options: CanonicalExecutionContextOptions;
+    provider: string;
+}): Promise<Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>> {
+    const prepared = await prepareCanonicalContext({
+        options: input.options,
+        provider: input.provider,
+        protocol: BEDROCK_CONVERSE_PROTOCOL,
+        adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
+    });
+    const target = { provider: input.provider, model: input.options.model };
+    const compiled = compileBedrockConverseConversation(prepared.request_document, target);
+    const priorCompiled =
+        prepared.request_document === prepared.document
+            ? compiled
+            : compileBedrockConverseConversation(prepared.document, target);
+    const priorNativeMessageCount = priorCompiled.conversation.messages?.length ?? 0;
+    const { request_document: _requestDocument, ...base } = prepared;
+    return {
+        ...base,
+        native_conversation: compiled.conversation,
+        provider: input.provider,
+        requested_model: input.options.model,
+        prior_native_message_count: priorNativeMessageCount,
     };
 }
 

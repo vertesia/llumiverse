@@ -1,4 +1,5 @@
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
+import { JSON_SCHEMA_INSTRUCTION_PREFIX, TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX } from '@llumiverse/common';
 import {
     type ConversationDocument,
     type ConversationStreamEvent,
@@ -13,6 +14,7 @@ import {
     type ClaudePrompt,
     executeClaudeCompletion,
     formatClaudePrompt,
+    projectClaudeContextResultSchema,
     pruneClaudeThinking,
     streamClaudeCompletion,
 } from './claude-messages.js';
@@ -108,6 +110,37 @@ function canonicalOptions(
 }
 
 describe('Claude native reasoning replay', () => {
+    it('adds context schema guidance without deleting literal retained text or rewriting an assistant tail', () => {
+        const retainedSystem = `${JSON_SCHEMA_INSTRUCTION_PREFIX}\nThis is retained source text, not generated guidance.`;
+        const retainedAssistant = `Retained answer.\n\n${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n{"source":true}`;
+        const conversation: ClaudePrompt = {
+            system: [{ type: 'text', text: retainedSystem }],
+            messages: [{ role: 'assistant', content: [{ type: 'text', text: retainedAssistant }] }],
+        };
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+
+        const projected = projectClaudeContextResultSchema(
+            conversation,
+            { model: 'claude-sonnet-4-6', prompt_cache_key: 'routed-task', result_schema: resultSchema },
+            false,
+        );
+
+        expect(projected.messages).toBe(conversation.messages);
+        expect(projected.messages).toEqual([
+            { role: 'assistant', content: [{ type: 'text', text: retainedAssistant }] },
+        ]);
+        expect(projected.system).toEqual([
+            { type: 'text', text: retainedSystem },
+            { type: 'text', text: `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(resultSchema)}` },
+        ]);
+        expect(conversation.system).toEqual([{ type: 'text', text: retainedSystem }]);
+    });
+
     it('recovers required-tool sync and typed responses without confusing the bound policy with routing', async () => {
         const finalMessage = {
             id: 'msg-required-tool',

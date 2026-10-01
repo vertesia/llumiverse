@@ -7,8 +7,13 @@ import {
     Language,
 } from '@google/genai';
 import {
+    appendConversationRecords,
     type ConversationDocument,
     type ConversationStreamEvent,
+    createConversationDocument,
+    createProgramTurn,
+    createTextBlock,
+    createUserTurn,
     fingerprintJson,
     parseConversationDocument,
     resolveToolExecutionRequest,
@@ -29,6 +34,11 @@ import {
 } from './gemini-conversation-adapter.js';
 
 const MODEL = 'publishers/google/models/gemini-2.5-pro';
+const LEGACY_GEMINI_GENERATED_SCHEMA_PREFIXES = [
+    'Fill all appropriate fields in the JSON output.',
+    'When not calling tools, the output must be a JSON object using the following JSON Schema:\n',
+    'The output must be a JSON object using the following JSON Schema:\n',
+] as const;
 
 type Generate = (request: GenerateContentParameters) => Promise<GenerateContentResponse>;
 type GenerateStream = (request: GenerateContentParameters) => Promise<AsyncIterable<GenerateContentResponse>>;
@@ -108,6 +118,78 @@ function response(input: {
             trafficType: 'ON_DEMAND_PRIORITY',
         },
     } as unknown as GenerateContentResponse;
+}
+
+function retainedContextDocument(flow: string, withTools = true, schemaLookingSystem = false): ConversationDocument {
+    const recordedAt = '2026-10-01T00:30:00.000Z';
+    const initial = createConversationDocument({ id: `conversation:${flow}`, created_at: recordedAt });
+    const turn = createUserTurn({
+        id: `turn:${flow}:input`,
+        authority: 'ordinary',
+        status: 'completed',
+        timestamps: { recorded_at: recordedAt },
+        model_visibility: 'include',
+        provenance: { type: 'received' },
+        blocks: [createTextBlock({ id: `block:${flow}:input`, text: 'Return the answer.', format: 'plain' })],
+    });
+    const program = schemaLookingSystem
+        ? createProgramTurn({
+              id: `turn:${flow}:program`,
+              authority: 'system',
+              status: 'completed',
+              timestamps: { recorded_at: recordedAt },
+              model_visibility: 'include',
+              provenance: { type: 'received' },
+              blocks: LEGACY_GEMINI_GENERATED_SCHEMA_PREFIXES.map((prefix, index) =>
+                  createTextBlock({
+                      id: `block:${flow}:program:${index}`,
+                      text: `${prefix}Retained source text ${index + 1}.`,
+                      format: 'plain',
+                  }),
+              ),
+          })
+        : undefined;
+    const turns = program === undefined ? [turn] : [program, turn];
+    return appendConversationRecords(
+        initial,
+        {
+            turns,
+            context_entries: turns.map((sourceTurn) => ({
+                id: `context:${sourceTurn.id}`,
+                type: 'source_turn' as const,
+                turn_id: sourceTurn.id,
+            })),
+            ...(withTools
+                ? {
+                      tool_definitions: [
+                          {
+                              id: 'tool-definition:write:v2',
+                              name: 'write',
+                              version: 'v2',
+                              description: 'Write a value',
+                              input_schema: { type: 'object', properties: { value: { type: 'string' } } },
+                              result_capabilities: ['text' as const],
+                          },
+                          {
+                              id: 'tool-definition:lookup:v1',
+                              name: 'lookup',
+                              version: 'v1',
+                              description: 'Look up a value',
+                              input_schema: { type: 'object', properties: { key: { type: 'string' } } },
+                              result_capabilities: ['json' as const],
+                          },
+                      ],
+                      active_tool_definition_ids: ['tool-definition:write:v2', 'tool-definition:lookup:v1'],
+                  }
+                : { active_tool_definition_ids: [] }),
+        },
+        {
+            expected_revision: initial.revision,
+            operation_id: `input:${flow}:materialized`,
+            payload_fingerprint: `sha256:${flow}:materialized`,
+            recorded_at: recordedAt,
+        },
+    ).document;
 }
 
 function requestContents(request: GenerateContentParameters): Content[] {
@@ -277,6 +359,150 @@ describe('Gemini canonical lifecycle', () => {
             driver.executeCanonical(segments, requiredOptions('selection-recovery', legacy)),
         ).resolves.toMatchObject({ accepted_output: first.accepted_output });
         expect(validTransport).toHaveBeenCalledOnce();
+    });
+
+    it('executes retained context with exact ordered tools and request-local schema guidance', async () => {
+        const flow = 'retained-context';
+        const document = retainedContextDocument(flow, true, true);
+        const nativeResponse = response({
+            id: 'response-retained-context',
+            content: { role: 'model', parts: [{ text: '{"answer":"Tokyo"}' }] },
+        });
+        const generate = vi.fn<Generate>(async () => nativeResponse);
+        const driver = new TestGeminiDriver(generate);
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const first = await driver.executeCanonicalContext({
+            ...runtimeOptions({
+                flow,
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-10-01T00:31:00.000Z',
+                conversation: document,
+            }),
+            conversation: document,
+            result_schema: resultSchema,
+        });
+
+        const request = generate.mock.calls[0]?.[0];
+        expect(requestContents(request as GenerateContentParameters)).toEqual([
+            { role: 'user', parts: [{ text: 'Return the answer.' }] },
+        ]);
+        expect(request?.config?.tools).toMatchObject([
+            {
+                functionDeclarations: [
+                    { name: 'write', description: 'Write a value' },
+                    { name: 'lookup', description: 'Look up a value' },
+                ],
+            },
+        ]);
+        const systemInstruction = request?.config?.systemInstruction;
+        expect(typeof systemInstruction).toBe('object');
+        const systemInstructionParts =
+            systemInstruction &&
+            typeof systemInstruction === 'object' &&
+            !Array.isArray(systemInstruction) &&
+            'parts' in systemInstruction
+                ? systemInstruction.parts
+                : undefined;
+        expect(systemInstructionParts).toEqual([
+            ...LEGACY_GEMINI_GENERATED_SCHEMA_PREFIXES.map((prefix, index) => ({
+                text: `${prefix}Retained source text ${index + 1}.`,
+            })),
+            {
+                text: expect.stringContaining(
+                    'When not calling tools, the output must be a JSON object using the following JSON Schema:',
+                ),
+            },
+        ]);
+        expect(first.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } }),
+        );
+        expect(document.revision).toBe(1);
+        expect(document.generations).toEqual({});
+        const generation = Object.values(first.conversation.generations).find(
+            (candidate) =>
+                candidate.record_source === 'executed' && candidate.id === first.accepted_output.generation.id,
+        );
+        expect(generation?.record_source).toBe('executed');
+        expect(generation?.record_source === 'executed' ? generation.request_receipt.source : undefined).toEqual({
+            conversation_id: document.id,
+            revision: document.revision,
+        });
+
+        const recovered = await driver.executeCanonicalContext({
+            ...runtimeOptions({
+                flow,
+                operation: 'generate',
+                attempt: 'retry',
+                recorded_at: '2026-10-01T00:32:00.000Z',
+                conversation: first.conversation,
+            }),
+            conversation: first.conversation,
+            result_schema: resultSchema,
+        });
+        expect(recovered.accepted_output).toEqual(first.accepted_output);
+        expect(generate).toHaveBeenCalledOnce();
+
+        await expect(
+            driver.executeCanonicalContext({
+                ...runtimeOptions({
+                    flow,
+                    operation: 'generate',
+                    attempt: 'changed-schema',
+                    recorded_at: '2026-10-01T00:33:00.000Z',
+                    conversation: first.conversation,
+                }),
+                conversation: first.conversation,
+                result_schema: { ...resultSchema, required: [] },
+            }),
+        ).rejects.toThrow('incompatible request identity');
+        expect(generate).toHaveBeenCalledOnce();
+    });
+
+    it('streams retained canonical context as typed events without authoring an empty input', async () => {
+        const flow = 'retained-context-stream';
+        const document = retainedContextDocument(flow, false);
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            nativeSource(
+                response({
+                    id: 'response-retained-context-stream',
+                    content: { role: 'model', parts: [{ text: 'Canonical stream answer.' }] },
+                }),
+            ),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('Blocking transport must not run');
+        }, generateStream);
+        const stream = await driver.streamCanonicalContextEvents(
+            {
+                ...runtimeOptions({
+                    flow,
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-10-01T00:34:00.000Z',
+                    conversation: document,
+                }),
+                conversation: document,
+            },
+            undefined,
+            { stream_id: 'stream:gemini:retained-context' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events).toContainEqual(
+            expect.objectContaining({ type: 'draft_text_delta', text: 'Canonical stream answer.' }),
+        );
+        expect(events).toContainEqual(expect.objectContaining({ type: 'response_accepted' }));
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Canonical stream answer.' }),
+        );
+        expect(generateStream).toHaveBeenCalledOnce();
+        expect(document.revision).toBe(1);
     });
 
     it('validates structured sync output, preserves usage, and durably recovers an accepted response', async () => {

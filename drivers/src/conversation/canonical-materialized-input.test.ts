@@ -10,6 +10,7 @@ import {
     appendCanonicalPrompt,
     type CanonicalPromptRecords,
     canonicalToolDefinitions,
+    prepareCanonicalContext,
     type ResolvedConversationRuntimeContext,
 } from './canonical-runtime.js';
 
@@ -114,6 +115,49 @@ function freshRuntime(document: ConversationDocument, suffix: string): ResolvedC
 }
 
 describe('canonical active tool precedence', () => {
+    it('prepares an exact retained context without an empty append or legacy tool authority', async () => {
+        const document = activeToolDocument();
+        const prepared = await prepareCanonicalContext({
+            options: {
+                model: 'test-model',
+                conversation: document,
+                conversation_runtime: freshRuntime(document, 'direct-context'),
+            },
+            provider: 'test-provider',
+            protocol: 'test.protocol',
+            adapter_version: 'test.v1',
+        });
+
+        expect(prepared.document).toEqual(document);
+        expect(prepared.document).not.toBe(document);
+        expect(prepared.document.revision).toBe(document.revision);
+        expect(prepared.document.operation_receipts).toEqual(document.operation_receipts);
+        expect(prepared.request_document).toEqual(prepared.document);
+        expect(prepared.tool_definitions).toEqual([
+            document.tool_definitions['tool-definition:write:v2'],
+            document.tool_definitions['tool-definition:lookup:v1'],
+        ]);
+        expect(prepared.tool_definitions[0]).not.toBe(document.tool_definitions['tool-definition:write:v2']);
+    });
+
+    it('rejects a missing active definition while preparing a retained context', async () => {
+        const document = activeToolDocument();
+        delete document.tool_definitions['tool-definition:write:v2'];
+
+        await expect(
+            prepareCanonicalContext({
+                options: {
+                    model: 'test-model',
+                    conversation: document,
+                    conversation_runtime: freshRuntime(document, 'missing-context-tool'),
+                },
+                provider: 'test-provider',
+                protocol: 'test.protocol',
+                adapter_version: 'test.v1',
+            }),
+        ).rejects.toThrow('Conversation document validation failed');
+    });
+
     it('preserves the exact ordered canonical catalog when legacy tools are omitted', async () => {
         const document = activeToolDocument();
         const appended = await appendCanonicalPrompt(
@@ -173,6 +217,23 @@ describe('canonical active tool precedence', () => {
 });
 
 describe('materialized canonical input proof', () => {
+    it('validates a retained materialized input without appending or changing its operation receipt', async () => {
+        const document = materializedDocument();
+        const proof = runtime(document);
+        const prepared = await prepareCanonicalContext({
+            options: { model: 'test-model', conversation: document, conversation_runtime: proof },
+            provider: 'test-provider',
+            protocol: 'test.protocol',
+            adapter_version: 'test.v1',
+        });
+
+        expect(prepared.document.revision).toBe(document.revision);
+        expect(prepared.document.operation_receipts[INPUT_OPERATION_ID]).toEqual(
+            document.operation_receipts[INPUT_OPERATION_ID],
+        );
+        expect(prepared.document.operation_receipts[proof.input_operation_id]).toBeUndefined();
+    });
+
     it('reuses an exactly accepted current-head input without appending it again', async () => {
         const document = materializedDocument();
         const options = runtime(document);

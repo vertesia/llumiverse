@@ -35,9 +35,11 @@ import {
 import {
     assertDecodedCanonicalToolSelection,
     CanonicalAcceptedOutputRecovered,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionResponse,
     type CanonicalToolSelectionPolicy,
     canonicalToolDefinitions,
+    canonicalToolSelectionPolicy,
     createCanonicalExecutionResponse,
     markCanonicalAcceptedRecovery,
     parseCanonicalToolSelectionPolicy,
@@ -79,6 +81,10 @@ export interface CanonicalPreparedStateBase {
 
 export interface CanonicalPreparedState<NativeConversation> extends CanonicalPreparedStateBase {
     native_conversation: NativeConversation;
+}
+
+export interface CanonicalContextPreparation extends Omit<CanonicalPreparedStateBase, 'receipt'> {
+    request_document: ConversationDocument;
 }
 
 export const CANONICAL_TOOL_SELECTION_TARGET_OPTION = 'canonical_tool_selection';
@@ -690,6 +696,64 @@ export async function appendCanonicalPrompt(
         },
     );
     return { document: appended.document, tool_definitions: toolDefinitions };
+}
+
+/**
+ * Prepare an already materialized canonical context without importing native prompt content or
+ * appending an empty input operation. The document's ordered active catalog is the only tool authority.
+ */
+export async function prepareCanonicalContext(input: {
+    options: CanonicalExecutionContextOptions;
+    provider: string;
+    protocol: string;
+    adapter_version: string;
+}): Promise<CanonicalContextPreparation> {
+    const document = parseConversationDocument(input.options.conversation);
+    const runtime = input.options.conversation_runtime;
+    if (runtime.conversation_id !== document.id) {
+        throw new Error('conversation_runtime.conversation_id does not match the canonical document');
+    }
+    const toolDefinitions = await resolveCanonicalToolDefinitions(document, undefined);
+    if (runtime.materialized_input !== undefined) {
+        assertMaterializedInputRecords(document, runtime.materialized_input);
+    }
+    const acceptedResponse = acceptedCanonicalResponse(document, runtime.response_operation_id);
+    if (acceptedResponse !== undefined) {
+        const requestReceipt = acceptedResponse.generation.request_receipt;
+        if (
+            acceptedResponse.generation.request_id !== runtime.request_id ||
+            acceptedResponse.generation.provider !== input.provider ||
+            acceptedResponse.generation.protocol !== input.protocol ||
+            acceptedResponse.generation.adapter_version !== input.adapter_version ||
+            acceptedResponse.generation.requested_model !== input.options.model ||
+            requestReceipt.request_id !== runtime.request_id ||
+            requestReceipt.source.conversation_id !== document.id
+        ) {
+            throw new Error(
+                `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
+            );
+        }
+        if (runtime.materialized_input !== undefined) {
+            await assertAcceptedMaterializedResponse(document, runtime, toolDefinitions);
+        }
+    }
+    const requestDocument =
+        acceptedResponse === undefined ? document : await acceptedCanonicalRequestDocument(document, acceptedResponse);
+    const identities =
+        acceptedResponse === undefined
+            ? await canonicalResponseIdentities(runtime)
+            : { generation_id: acceptedResponse.generation.id, response_turn_id: acceptedResponse.turn.id };
+    const responseSelectionPolicy = canonicalToolSelectionPolicy(input.options);
+    return {
+        document,
+        request_document: requestDocument,
+        runtime,
+        generation_id: identities.generation_id,
+        response_turn_id: identities.response_turn_id,
+        tool_definitions: toolDefinitions,
+        ...(responseSelectionPolicy === undefined ? {} : { response_selection_policy: responseSelectionPolicy }),
+        ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
+    };
 }
 
 export async function createRequestReceipt(

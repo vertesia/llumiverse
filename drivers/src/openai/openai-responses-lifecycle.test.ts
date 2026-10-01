@@ -662,7 +662,7 @@ describe('OpenAI Responses canonical lifecycle', () => {
             operation_id: 'operation:materialized-driver-input',
             result_revision: materialized.revision,
         };
-        const first = await driver.executeCanonical([], {
+        const first = await driver.executeCanonicalContext({
             ...runtimeOptions({
                 flow: 'materialized-driver-retry',
                 operation: 'generate',
@@ -671,22 +671,34 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 conversation: materialized,
                 materializedInput: proof,
             }),
+            conversation: materialized,
         });
         expect(first.conversation.revision).toBe(materialized.revision + 1);
 
-        const retry = await driver.executeCanonical([], {
+        const retained = JSON.parse(JSON.stringify(first.conversation)) as ConversationDocument;
+        const retry = await driver.executeCanonicalContext({
             ...runtimeOptions({
                 flow: 'materialized-driver-retry',
                 operation: 'generate',
                 attempt: 'retry',
                 recordedAt: '2026-09-12T00:02:00.000Z',
-                conversation: JSON.parse(JSON.stringify(first.conversation)),
+                conversation: retained,
                 materializedInput: proof,
             }),
+            conversation: retained,
         });
         expect(retry.accepted_output).toEqual(first.accepted_output);
         expect(retry.conversation).toEqual(first.conversation);
         expect(create).toHaveBeenCalledOnce();
+        const generation = Object.values(first.conversation.generations).find(
+            (candidate) =>
+                candidate.record_source === 'executed' && candidate.id === first.accepted_output.generation.id,
+        );
+        expect(generation?.record_source).toBe('executed');
+        expect(generation?.record_source === 'executed' ? generation.request_receipt.source : undefined).toEqual({
+            conversation_id: materialized.id,
+            revision: materialized.revision,
+        });
     });
 
     it('executes directly into canonical output and recovers an accepted retry without transport', async () => {

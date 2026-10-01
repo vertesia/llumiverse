@@ -4,6 +4,7 @@ import type {
     ConverseResponse,
     ConverseStreamOutput,
 } from '@aws-sdk/client-bedrock-runtime';
+import { JSON_SCHEMA_INSTRUCTION_PREFIX, TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX } from '@llumiverse/common';
 import {
     appendConversationRecords,
     type ConversationDocument,
@@ -15,8 +16,13 @@ import {
     parseConversationDocument,
     resolveToolExecutionRequest,
 } from '@llumiverse/conversation';
-import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
+import {
+    type CanonicalExecutionContextInputOptions,
+    type CanonicalExecutionInputOptions,
+    PromptRole,
+} from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
+import { projectConverseContextResultSchema } from './converse.js';
 import { BedrockDriver, exportLegacyBedrockConverseConversation } from './index.js';
 
 const MODEL = 'anthropic.claude-sonnet-4-6-v1:0';
@@ -67,6 +73,32 @@ async function collectCanonicalEvents(
 }
 
 describe('Bedrock canonical driver lifecycle', () => {
+    it('adds retained-context schema guidance without deleting collisions or rewriting an assistant tail', () => {
+        const retainedSystem = `IMPORTANT: ${JSON_SCHEMA_INSTRUCTION_PREFIX}\nRetained source text.`;
+        const retainedAssistant = `Retained answer.\n\nIMPORTANT: ${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n{"source":true}`;
+        const retained: ConverseRequest = {
+            modelId: MODEL,
+            system: [{ text: retainedSystem }],
+            messages: [{ role: 'assistant', content: [{ text: retainedAssistant }] }],
+        };
+
+        const projected = projectConverseContextResultSchema(
+            retained,
+            { model: MODEL, prompt_cache_key: 'routed-task', result_schema: RESULT_SCHEMA },
+            false,
+        );
+
+        expect(projected.messages).toBe(retained.messages);
+        expect(projected.messages).toEqual([{ role: 'assistant', content: [{ text: retainedAssistant }] }]);
+        expect(projected.system).toEqual([
+            { text: retainedSystem },
+            {
+                text: `IMPORTANT: ${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(RESULT_SCHEMA, undefined, 2)}`,
+            },
+        ]);
+        expect(retained.system).toEqual([{ text: retainedSystem }]);
+    });
+
     it('prepares retained canonical context with no new segments while legacy empty input stays rejected', async () => {
         const initial = createConversationDocument({
             id: 'conversation:retained-empty-input',
@@ -100,21 +132,28 @@ describe('Bedrock canonical driver lifecycle', () => {
         Object.defineProperty(driver, 'getExecutor', { value: () => ({ converse, destroy: vi.fn() }) });
         const prepared = vi.fn(
             async (
-                value: Parameters<NonNullable<CanonicalExecutionInputOptions['on_canonical_request_prepared']>>[0],
+                value: Parameters<
+                    NonNullable<CanonicalExecutionContextInputOptions['on_canonical_request_prepared']>
+                >[0],
             ) => {
                 expect(value.document.turns).toEqual(document.turns);
-                expect(value.record.source.revision).toBe(document.revision + 1);
+                expect(value.record.source.revision).toBe(document.revision);
                 throw new Error('Prepared persistence gate');
             },
         );
-        const options: CanonicalExecutionInputOptions = {
+        const options: CanonicalExecutionContextInputOptions = {
             ...runtimeOptions({ flow: 'retained-empty-input', operation: 'next', conversation: document }),
+            conversation: document,
             on_canonical_request_prepared: prepared,
         };
         try {
             await expect(driver.execute([], options)).rejects.toThrow('Prompt must contain at least one message');
             expect(prepared).not.toHaveBeenCalled();
-            await expect(driver.executeCanonical([], options)).rejects.toThrow('Prepared persistence gate');
+            await expect(driver.executeCanonical([], options)).rejects.toThrow(
+                'Prompt must contain at least one message',
+            );
+            expect(prepared).not.toHaveBeenCalled();
+            await expect(driver.executeCanonicalContext(options)).rejects.toThrow('Prepared persistence gate');
             expect(prepared).toHaveBeenCalledOnce();
             await expect(driver.executeCanonical([], { ...options, conversation: initial })).rejects.toThrow(
                 'Prompt must contain at least one message',

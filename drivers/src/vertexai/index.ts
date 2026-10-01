@@ -3,6 +3,7 @@ import { type Content, GoogleGenAI, type Model } from '@google/genai';
 import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -120,6 +121,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
         if (this.isImageModel(options.model)) return this.supportsCanonicalImageGeneration(options);
         return getModelDefinition(options.model).canonical_conversation_supported === true;
+    }
+
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        const definition = getModelDefinition(options.model);
+        return (
+            definition.requestCanonicalContextCompletion !== undefined &&
+            definition.requestCanonicalContextCompletionEventStream !== undefined
+        );
     }
 
     protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
@@ -496,6 +505,29 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             throw new Error(`Vertex AI model ${options.model} does not support canonical typed streaming`);
         }
         return definition.requestCanonicalTextCompletionEventStream(this, prompt, options, signal, open);
+    }
+
+    async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalContextCompletion === undefined) {
+            throw new Error('Vertex AI model does not support canonical context execution');
+        }
+        return definition.requestCanonicalContextCompletion(this, options, signal);
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalContextCompletionEventStream === undefined) {
+            throw new Error('Vertex AI model does not support canonical context typed streaming');
+        }
+        return definition.requestCanonicalContextCompletionEventStream(this, options, signal, open);
     }
 
     /**

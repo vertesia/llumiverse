@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AnthropicClaudeOptions } from '@llumiverse/common';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -25,10 +26,12 @@ import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
     executeCanonicalClaudeCompletion,
+    executeCanonicalClaudeContext,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    streamCanonicalClaudeContextEvents,
     streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
@@ -40,6 +43,10 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
     client: Anthropic;
 
     protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
         return true;
     }
 
@@ -95,6 +102,19 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         );
     }
 
+    async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeCanonicalClaudeContext(
+            this.client,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
     async requestTextCompletionStream(
         prompt: ClaudePrompt,
         options: ExecutionOptions,
@@ -123,6 +143,21 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         return streamCanonicalClaudeEvents(
             this.client,
             prompt,
+            options,
+            open,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return streamCanonicalClaudeContextEvents(
+            this.client,
             options,
             open,
             this.logger,

@@ -37,6 +37,7 @@ import {
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import {
+    type CanonicalExecutionContextOptions,
     type CanonicalStructuredOutput,
     canonicalToolSelectionPolicy,
     type ExecutionOptions,
@@ -56,6 +57,7 @@ import {
     createRequestReceipt,
     newCanonicalConversation,
     parseCanonicalConversation,
+    prepareCanonicalContext,
     providerJsonValue,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
@@ -1678,6 +1680,35 @@ export async function prepareGeminiCanonicalState(input: {
         prior_native_content_count: priorNativeContentCount,
         current_native_content_indexes: currentNativeContentIndexes,
         ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
+    };
+}
+
+/** Prepare a retained canonical document directly, without importing a native Gemini prompt. */
+export async function prepareGeminiCanonicalContext(input: {
+    options: CanonicalExecutionContextOptions;
+    provider: string;
+}): Promise<Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>> {
+    const prepared = await prepareCanonicalContext({
+        options: input.options,
+        provider: input.provider,
+        protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+        adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
+    });
+    const target = { provider: input.provider, model: input.options.model };
+    const compiled = compileGeminiConversation(prepared.request_document, target);
+    const priorCompiled =
+        prepared.request_document === prepared.document
+            ? compiled
+            : compileGeminiConversation(prepared.document, target);
+    const priorNativeContentCount = priorCompiled.conversation.contents.length;
+    const { request_document: _requestDocument, ...base } = prepared;
+    return {
+        ...base,
+        native_conversation: compiled.conversation,
+        provider: input.provider,
+        requested_model: input.options.model,
+        prior_native_content_count: priorNativeContentCount,
+        current_native_content_indexes: [],
     };
 }
 
