@@ -395,7 +395,11 @@ export const OpenAiTextOptionsSchema = z
     })
     .meta({ id: 'OpenAiTextOptions' });
 
-export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({ _option_id: true, extra_body: true })
+export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({
+    _option_id: true,
+    extra_body: true,
+    image_generation: true,
+})
     .extend({
         _option_id: z.literal('openrouter-text').optional(),
         provider_sort: z.enum(['price', 'throughput', 'latency', 'exacto']).optional(),

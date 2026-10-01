@@ -83,7 +83,7 @@ describe('Foundry OpenAI v1 transport', () => {
             expect(requests[0].headers.has('x-ms-oai-image-generation-deployment')).toBe(false);
             expect(getToken.mock.calls[0][0]).toContain('https://ai.azure.com/.default');
             expect(result.result).toEqual([{ type: 'text', value: 'Hello' }]);
-            expect(result.token_usage).toEqual({ prompt: 2, result: 1, total: 3 });
+            expect(result.token_usage).toMatchObject({ prompt: 2, prompt_new: 2, result: 1, total: 3 });
             expect(result.original_response).toEqual(chatResponse);
         } finally {
             driver.destroy();

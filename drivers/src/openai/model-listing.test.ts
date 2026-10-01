@@ -22,11 +22,7 @@ describe('OpenAI model listing', () => {
         driver.service = { models: { list } } as unknown as OpenAIDriver['service'];
 
         const models = await driver.listModels();
-<<<<<<< HEAD
         expect(models.map((model) => model.id)).not.toContain('sora-3');
-=======
-        expect(models).toHaveLength(4);
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ id: 'gpt-5.6-codex', provider: Providers.openai }),

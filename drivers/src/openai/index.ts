@@ -384,14 +384,13 @@ export class OpenAIResponsesProtocol {
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-<<<<<<< HEAD
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
-                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
-=======
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
-                tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
+                tool_choice: model_options?.image_generation?.force
+                    ? { type: 'image_generation' }
+                    : useTools
+                      ? toolChoice
+                      : undefined,
+                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -495,14 +494,13 @@ export class OpenAIResponsesProtocol {
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-<<<<<<< HEAD
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
-                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
-=======
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
-                tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
+                tool_choice: model_options?.image_generation?.force
+                    ? { type: 'image_generation' }
+                    : useTools
+                      ? toolChoice
+                      : undefined,
+                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -821,13 +819,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 }
 
                 // Determine model type based on capabilities
-<<<<<<< HEAD
                 let modelType = this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text;
-                if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
-=======
-                let modelType = ModelType.Text;
                 if (this.isImageModel(m.id)) {
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
                     modelType = ModelType.Image;
                 }
 
@@ -982,64 +975,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                         token_usage: imageUsage(event.usage),
                     } satisfies CompletionChunkObject;
                 }
-<<<<<<< HEAD
-            } else {
-                // Default for other models
-                generateParams.n = 1;
-            }
-
-            const response = signal
-                ? await this.service.images.generate(generateParams, { signal })
-                : await this.service.images.generate(generateParams);
-
-            // Convert response to CompletionResults
-            const results: CompletionResult[] = [];
-
-            if (response.data) {
-                for (const image of response.data) {
-                    let imageValue: string;
-
-                    if (image.b64_json) {
-                        // Base64 format
-                        imageValue = `data:image/png;base64,${image.b64_json}`;
-                    } else if (image.url) {
-                        // URL format
-                        imageValue = image.url;
-                    } else {
-                        continue;
-                    }
-
-                    results.push({
-                        type: 'image',
-                        value: imageValue,
-                    });
-                }
-            }
-
-            return {
-                result: results,
-                token_usage: mapImagesUsage(response.usage),
-            };
-        } catch (error: unknown) {
-            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
-            const generationError = error instanceof Error ? error : new Error(String(error));
-            const errorCode =
-                (error as { code?: unknown })?.code === 'content_policy_violation'
-                    ? 'content_policy_violation'
-                    : 'validation_error';
-            return {
-                result: [],
-                error: {
-                    message: generationError.message,
-                    code: errorCode,
-                },
-            };
-        }
-=======
                 if (!completed) throw new Error('Image stream ended without a completed image');
             },
         };
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     }
 }
 
@@ -1082,18 +1020,6 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
     return {
         ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         result: usage.output_tokens,
-        total: usage.total_tokens,
-    };
-}
-
-/** GPT Image models report usage; every output token is an image token. DALL-E reports none. */
-function mapImagesUsage(usage: OpenAI.Images.ImagesResponse.Usage | undefined): ExecutionTokenUsage | undefined {
-    if (!usage) return undefined;
-    return {
-        prompt: usage.input_tokens,
-        prompt_new: usage.input_tokens,
-        result: usage.output_tokens,
-        result_image: usage.output_tokens,
         total: usage.total_tokens,
     };
 }
@@ -1231,27 +1157,12 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
-<<<<<<< HEAD
-=======
-                }
-                // Note: We don't emit response.function_call_arguments.done because the arguments were already
-                // streamed via delta events. Emitting it again would duplicate the tool_input content.
-                // We only update the metadata to ensure the tool name is captured.
-                else if (event.type === 'response.function_call_arguments.done') {
-                    // Just update metadata, don't yield (arguments already accumulated from delta events)
-                    const metadata = toolCallMetadata.get(event.item_id);
-                    const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
-                    const tool_name = metadata?.name ?? '';
-                    if (event.item_id) {
-                        toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
-                    }
                 } else if (event.type === 'response.output_item.done' && event.item.type === 'image_generation_call') {
                     const results = extractCompletionResults([event.item], false, requestedFormat);
                     if (results.length && !emittedImages.has(event.item.id)) {
                         emittedImages.add(event.item.id);
                         yield { result: results } satisfies CompletionChunkObject;
                     }
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
                     yield {
@@ -1640,13 +1551,8 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     // First pass: collect all function_call_output call_ids
     const outputCallIds = new Set<string>();
     for (const item of items) {
-<<<<<<< HEAD
         if ('type' in item && item.type === 'function_call_output' && item.call_id != null) {
             outputCallIds.add(item.call_id);
-=======
-        if ('type' in item && item.type === 'function_call_output') {
-            if (item.call_id) outputCallIds.add(item.call_id);
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         }
     }
 
@@ -1712,11 +1618,7 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-<<<<<<< HEAD
             return item.call_id != null && callIds.has(item.call_id);
-=======
-            return !!item.call_id && callIds.has(item.call_id);
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         }
         return true;
     });
@@ -1738,7 +1640,15 @@ function imageUsage(usage?: {
     output_tokens: number;
     total_tokens: number;
 }): ExecutionTokenUsage | undefined {
-    return usage ? { prompt: usage.input_tokens, result: usage.output_tokens, total: usage.total_tokens } : undefined;
+    return usage
+        ? {
+              prompt: usage.input_tokens,
+              prompt_new: usage.input_tokens,
+              result: usage.output_tokens,
+              result_image: usage.output_tokens,
+              total: usage.total_tokens,
+          }
+        : undefined;
 }
 
 function responseTools(

@@ -4,12 +4,9 @@ import type {
     OpenAiAudioOptionsSchema,
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
-<<<<<<< HEAD
-    OpenAiSpeechOptionsSchema,
-=======
     OpenAiImageGenerationMaskSchema,
     OpenAiImageGenerationOptionsSchema,
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
+    OpenAiSpeechOptionsSchema,
     OpenAiTextOptionsSchema,
     OpenAiThinkingOptionsSchema,
     OpenAiTranscriptionOptionsSchema,
@@ -508,14 +505,10 @@ export function getOpenAiCompatibleOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile, Providers.openai_compatible);
-<<<<<<< HEAD
     if (profile.family === 'speech' || profile.family === 'transcription') return options;
-    const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
-=======
     const compatibleOptions = options.options.filter(
         (item) => item.name !== 'service_tier' && item.name !== 'image_generation',
     );
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     const maxOutputTokens = profile.max_output_tokens;
     const profileEffortLevels = profile.reasoning_effort_levels?.length
         ? new Set(profile.reasoning_effort_levels)

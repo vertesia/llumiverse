@@ -1,15 +1,10 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import type { TokenCredential } from '@azure/identity';
 import { PromptRole } from '@llumiverse/core';
-<<<<<<< HEAD
-=======
 import OpenAI from 'openai';
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
-import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
-import { AzureFoundryDriver, toAzureInferenceRequest } from './azure_foundry.js';
+import { type OpenAIChatCompletionsPayload, toOpenAINonStreamingPayload } from '../openai/openai_chat_completions.js';
+import { AzureFoundryDriver } from './azure_foundry.js';
 
 const credential: TokenCredential = {
     getToken: vi.fn(async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 60_000 })),
@@ -32,22 +27,19 @@ function createDriver(): AzureFoundryDriver {
 
 describe('AzureFoundryDriver protocol composition', () => {
     it('preserves required tool choice when adapting an OpenAI chat request', () => {
-        const body = toAzureInferenceRequest(
-            {
-                model: 'deployment',
-                messages: [{ role: 'user', content: 'Act now.' }],
-                tools: [
-                    {
-                        type: 'function',
-                        function: { name: 'write_artifact', parameters: { type: 'object', properties: {} } },
-                    },
-                ],
-                tool_choice: { type: 'function', function: { name: 'write_artifact' } },
-                parallel_tool_calls: false,
-                stream: false,
-            } satisfies OpenAIChatCompletionsPayload,
-            false,
-        );
+        const body = toOpenAINonStreamingPayload({
+            model: 'deployment',
+            messages: [{ role: 'user', content: 'Act now.' }],
+            tools: [
+                {
+                    type: 'function',
+                    function: { name: 'write_artifact', parameters: { type: 'object', properties: {} } },
+                },
+            ],
+            tool_choice: { type: 'function', function: { name: 'write_artifact' } },
+            parallel_tool_calls: false,
+            stream: false,
+        } satisfies OpenAIChatCompletionsPayload);
 
         expect(body.tool_choice).toEqual({ type: 'function', function: { name: 'write_artifact' } });
         expect(body.parallel_tool_calls).toBe(false);
@@ -178,16 +170,8 @@ describe('AzureFoundryDriver protocol composition', () => {
             tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' } }],
         });
 
-<<<<<<< HEAD
-        expect(path).toHaveBeenCalledWith('/chat/completions');
-        expect(post).toHaveBeenCalledWith({
-            timeout: 900_000,
-            headers: { 'extra-parameters': 'pass-through' },
-            body: expect.objectContaining({
-=======
         expect(post).toHaveBeenCalledWith(
             expect.objectContaining({
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
                 model: 'llama-deployment',
                 stream: false,
                 max_tokens: 16,
@@ -216,9 +200,6 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(completion.original_response).toBe(nativeResponse);
     });
 
-<<<<<<< HEAD
-    it('sends authenticated Responses requests and caches deployment discovery', async ({ onTestFinished }) => {
-=======
     it('streams non-OpenAI inference without unsupported usage options', async () => {
         const driver = createDriver();
         driver.service = {
@@ -254,7 +235,6 @@ describe('AzureFoundryDriver protocol composition', () => {
     it('memoizes the OpenAI Responses adapter and deployment decision', async () => {
         const driver = createDriver();
         const deploymentGet = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         const response = {
             id: 'response-1',
             object: 'response',
@@ -282,42 +262,6 @@ describe('AzureFoundryDriver protocol composition', () => {
             top_p: 1,
             usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
         };
-<<<<<<< HEAD
-        const requests: Array<{ url?: string; authorization?: string; body: string }> = [];
-        const server = createServer((req, res) => {
-            let body = '';
-            req.setEncoding('utf8');
-            req.on('data', (chunk: string) => {
-                body += chunk;
-            });
-            req.on('end', () => {
-                requests.push({ url: req.url, authorization: req.headers.authorization, body });
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(response));
-            });
-        });
-        onTestFinished(async () => {
-            server.closeAllConnections();
-            await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-        });
-        await new Promise<void>((resolve, reject) => {
-            server.once('error', reject);
-            server.listen(0, '127.0.0.1', resolve);
-        });
-        const { port } = server.address() as AddressInfo;
-        const driver = new AzureFoundryDriver({
-            endpoint: `http://127.0.0.1:${port}/projects/demo/`,
-            azureADTokenProvider: credential,
-        });
-        onTestFinished(() => driver.destroy());
-        const deploymentGet = vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
-            type: 'ModelDeployment',
-            name: 'gpt-deployment',
-            modelName: 'gpt-5',
-            modelVersion: '1',
-            modelPublisher: 'OpenAI',
-        });
-=======
         const requests: { body: unknown; headers: Headers; url: string }[] = [];
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
             requests.push({
@@ -334,7 +278,6 @@ describe('AzureFoundryDriver protocol composition', () => {
             deployments: { get: deploymentGet },
             getOpenAIClient,
         } as unknown as AzureFoundryDriver['service'];
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
             model: 'gpt-deployment::gpt-5',
         });
@@ -361,25 +304,14 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect.objectContaining({ result: [{ type: 'text', value: 'ok' }] }),
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
-<<<<<<< HEAD
-        expect(requests).toHaveLength(2);
-        for (const request of requests) {
-            expect(request.url).toBe('/projects/demo/openai/v1/responses');
-            expect(request.authorization).toBe('Bearer test-token');
-        }
-        expect(credential.getToken).toHaveBeenCalledWith(['https://ai.azure.com/.default'], expect.anything());
-        const payload = JSON.parse(requests[0].body);
-        expect(payload).not.toHaveProperty('temperature');
-        expect(payload).not.toHaveProperty('top_p');
-        expect(payload).toEqual(
-=======
         expect(getOpenAIClient).toHaveBeenCalledOnce();
         expect(requests).toHaveLength(2);
         expect(requests[0].url).toBe('https://foundry.example.test/openai/v1/responses');
         expect(requests[0].headers.get('authorization')).toBe('Bearer test-token');
         expect(requests[0].headers.has('x-ms-oai-image-generation-deployment')).toBe(false);
+        expect(requests[0].body).not.toHaveProperty('temperature');
+        expect(requests[0].body).not.toHaveProperty('top_p');
         expect(requests[0].body).toEqual(
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
             expect.objectContaining({
                 model: 'gpt-deployment',
                 stream: false,

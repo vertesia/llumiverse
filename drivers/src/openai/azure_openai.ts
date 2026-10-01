@@ -1,17 +1,6 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
-<<<<<<< HEAD
-import { type AIModel, isEmbeddingModel, Providers } from '@llumiverse/core';
-import type OpenAI from 'openai';
-import { AzureOpenAI } from 'openai';
-import type { AzureOpenAIDriverOptions } from '../driver-options.js';
-import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { OpenAIResponsesDriverBase } from './index.js';
-
-export type { AzureOpenAIDriverOptions } from '../driver-options.js';
-=======
 import {
     type AIModel,
-    type DriverOptions,
     type ExecutionOptions,
     isEmbeddingModel,
     ModelType,
@@ -22,24 +11,9 @@ import OpenAI, { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
-export interface AzureOpenAIDriverOptions extends DriverOptions {
-    /**
-     * The credentials to use to access Azure OpenAI
-     */
-    azureADTokenProvider?: (options?: unknown) => Promise<string>;
+export type { AzureOpenAIDriverOptions } from '../driver-options.js';
 
-    apiKey?: string;
-
-    endpoint?: string;
-
-    apiVersion?: string;
-
-    deployment?: string;
-
-    /** Source model for deployments whose names do not identify the image family. */
-    sourceModel?: string;
-}
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
+import type { AzureOpenAIDriverOptions } from '../driver-options.js';
 
 export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
     service: AzureOpenAI;

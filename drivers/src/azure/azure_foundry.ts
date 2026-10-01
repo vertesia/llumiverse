@@ -1,20 +1,5 @@
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
-<<<<<<< HEAD
-import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
-import type {
-    ModelClient as AzureInferenceClient,
-    ChatCompletionsOutput,
-    ChatCompletionsResponseFormat,
-    ChatCompletionsToolCall,
-    ChatCompletionsToolDefinition,
-    ChatRequestMessage,
-    GetChatCompletionsParameters,
-} from '@azure-rest/ai-inference';
-import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
-=======
-import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import {
     type AIModel,
     type Completion,
@@ -38,13 +23,9 @@ import {
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-<<<<<<< HEAD
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
-=======
-import OpenAI from 'openai';
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     normalizeOpenAIChatCompletionsResponse,
@@ -128,23 +109,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         _options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-<<<<<<< HEAD
-        const response = await this.service.path('/chat/completions').post({
-            body: toAzureInferenceRequest(payload, false),
-            headers: { 'extra-parameters': 'pass-through' },
-            timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
-            ...(signal ? { abortSignal: signal } : {}),
-        });
-        if (response.status !== '200') {
-            throw new AzureFoundryHTTPError(
-                `Chat completion request failed with status ${response.status}: ${JSON.stringify(response.body)}`,
-                response.status,
-                response.body,
-            );
-        }
-        const original = response.body as ChatCompletionsOutput;
-        return preserveOpenAIChatCompletionsOriginalResponse(normalizeAzureInferenceResponse(original), original);
-=======
         const response = await this.service.chat.completions.create(
             toOpenAINonStreamingPayload(payload),
             this.getDriverRequestOptions(_options, signal),
@@ -153,7 +117,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
             normalizeOpenAIChatCompletionsResponse(response),
             response,
         );
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     }
 
     async _postChatCompletionStream(
@@ -161,30 +124,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-<<<<<<< HEAD
-        const response = await this.service
-            .path('/chat/completions')
-            .post({
-                body: toAzureInferenceRequest(payload, true),
-                headers: { 'extra-parameters': 'pass-through' },
-                timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
-                ...(signal ? { abortSignal: signal } : {}),
-            })
-            .asNodeStream();
-        const stream = response.body as NodeJSReadableStream;
-        if (!stream) {
-            throw new Error('The Azure Foundry response stream is undefined');
-        }
-        if (response.status !== '200') {
-            stream.destroy();
-            throw new AzureFoundryHTTPError(
-                `Failed to get chat completions, HTTP operation failed with ${response.status} code`,
-                response.status,
-            );
-        }
-        return openAIChatCompletionsStreamToSSE(normalizeAzureInferenceStream(createSseStream(stream)), () =>
-            stream.destroy(),
-=======
         const request = toOpenAIStreamingPayload(payload);
         // Preserve the inference transport contract: some Foundry models reject OpenAI usage options.
         delete request.stream_options;
@@ -194,7 +133,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         );
         return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
             stream.controller.abort(),
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
         );
     }
 
@@ -211,22 +149,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     }
 }
 
-<<<<<<< HEAD
-=======
-export interface AzureFoundryDriverOptions extends DriverOptions {
-    /**
-     * The credentials to use to access Azure AI Foundry
-     */
-    azureADTokenProvider?: TokenCredential;
-
-    endpoint?: string;
-
-    apiVersion?: string;
-
-    sourceModel?: string;
-}
-
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 export interface AzureFoundryInferencePrompt {
     messages: OpenAIChatCompletionsPayload['messages'];
 }
@@ -305,16 +227,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
-<<<<<<< HEAD
-        const endpoint = opts.endpoint.endsWith('/') ? opts.endpoint.slice(0, -1) : opts.endpoint;
-        this.service = new AIProjectClient(endpoint, opts.azureADTokenProvider);
-        this.inferenceClient = ModelClient(endpoint, opts.azureADTokenProvider, {
-            apiVersion: this.INFERENCE_API_VERSION,
-        });
-        this.inferenceProtocolDriver = new AzureFoundryInferenceProtocolDriver(this.inferenceClient, opts);
-=======
         this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     }
 
     /**
@@ -371,9 +284,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 defaultQuery: this.options.apiVersion ? { 'api-version': this.options.apiVersion } : undefined,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
-<<<<<<< HEAD
-            }) as unknown as OpenAI,
-=======
                 maxRetries: 0,
             });
         }
@@ -394,7 +304,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private getInferenceProtocolDriver(): AzureFoundryInferenceProtocolDriver {
         this.inferenceProtocolDriver ??= new AzureFoundryInferenceProtocolDriver(
             this.getInferenceClient(),
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
             this.options,
         );
         return this.inferenceProtocolDriver;
@@ -732,62 +641,6 @@ function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: st
     };
 }
 
-<<<<<<< HEAD
-type AzureInferenceRequestBody = GetChatCompletionsParameters['body'] & {
-    parallel_tool_calls?: boolean;
-};
-
-function toAzureToolChoice(
-    toolChoice: OpenAIChatCompletionsPayload['tool_choice'],
-): GetChatCompletionsParameters['body']['tool_choice'] {
-    if (typeof toolChoice === 'string') return toolChoice;
-    if (toolChoice?.type === 'function' && 'function' in toolChoice) {
-        return { type: 'function', function: { name: toolChoice.function.name } };
-    }
-    return undefined;
-}
-
-export function toAzureInferenceRequest(
-    payload: OpenAIChatCompletionsPayload,
-    stream: boolean,
-): AzureInferenceRequestBody {
-    const responseFormat = payload.response_format
-        ? ({ ...payload.response_format } satisfies ChatCompletionsResponseFormat)
-        : undefined;
-    const tools = payload.tools?.flatMap((tool): ChatCompletionsToolDefinition[] =>
-        tool.type === 'function'
-            ? [
-                  {
-                      type: 'function',
-                      function: {
-                          name: tool.function.name,
-                          description: tool.function.description,
-                          parameters: tool.function.parameters,
-                      },
-                  },
-              ]
-            : [],
-    );
-    return {
-        model: payload.model,
-        messages: payload.messages.map(toAzureInferenceMessage),
-        max_tokens: payload.max_tokens ?? undefined,
-        temperature: payload.temperature ?? undefined,
-        top_p: payload.top_p ?? undefined,
-        frequency_penalty: payload.frequency_penalty ?? undefined,
-        presence_penalty: payload.presence_penalty ?? undefined,
-        stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
-        seed: payload.seed ?? undefined,
-        response_format: responseFormat,
-        tools,
-        tool_choice: toAzureToolChoice(payload.tool_choice),
-        parallel_tool_calls: payload.parallel_tool_calls,
-        stream,
-    } satisfies AzureInferenceRequestBody;
-}
-
-=======
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 function parseCapabilityFlag(value: unknown): boolean | undefined {
     if (typeof value === 'boolean') return value;
     if (typeof value !== 'string') return undefined;
@@ -806,12 +659,9 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 }
 
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
-<<<<<<< HEAD
     if (deployment.modelPublisher?.toLowerCase() === 'openai' && openAIAudioTask(deployment.modelName)) return true;
-=======
     // Foundry Anthropic deployments require the Messages API rather than this driver's OpenAI transport.
     if (deployment.modelPublisher.toLowerCase() === 'anthropic') return false;
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
     if (sourceModel.includes('dall-e')) return false;
@@ -831,115 +681,6 @@ function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
     return parseCapabilityFlag(deployment.capabilities.chat_completion) !== false;
 }
 
-<<<<<<< HEAD
-function toAzureInferenceMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatRequestMessage {
-    const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
-    switch (message.role) {
-        case 'system':
-        case 'developer':
-            return { role: message.role, content: textContent ?? '' };
-        case 'assistant':
-            return {
-                role: 'assistant',
-                content: textContent ?? undefined,
-                tool_calls: message.tool_calls?.map((toolCall) => ({
-                    id: toolCall.id,
-                    type: 'function',
-                    function: {
-                        name: toolCall.function.name,
-                        arguments: toolCall.function.arguments,
-                    },
-                })),
-            };
-        case 'tool':
-            return { role: 'tool', content: textContent ?? '', tool_call_id: message.tool_call_id ?? '' };
-        default:
-            return {
-                role: 'user',
-                content:
-                    typeof message.content === 'string'
-                        ? message.content
-                        : (message.content?.map((part) =>
-                              part.type === 'input_audio'
-                                  ? unsupportedAudioPart()
-                                  : part.type === 'text'
-                                    ? { type: 'text' as const, text: part.text }
-                                    : { type: 'image_url' as const, image_url: part.image_url },
-                          ) ?? ''),
-            };
-    }
-}
-
-function normalizeAzureInferenceResponse(response: ChatCompletionsOutput): OpenAIChatCompletionsResponse {
-    return {
-        id: response.id,
-        object: 'chat.completion',
-        created: response.created,
-        model: response.model,
-        choices: response.choices.map((choice) => ({
-            index: choice.index,
-            finish_reason: choice.finish_reason,
-            message: {
-                role: 'assistant',
-                content: choice.message.content,
-                tool_calls: choice.message.tool_calls?.map((toolCall) => ({
-                    id: toolCall.id,
-                    type: 'function',
-                    function: toolCall.function,
-                })),
-            },
-        })),
-        usage: response.usage,
-    };
-}
-
-type AzureInferenceStreamChunk = Pick<ChatCompletionsOutput, 'id' | 'created' | 'model'> & {
-    choices: Array<{
-        index: number;
-        delta: {
-            role?: string;
-            content?: string | null;
-            tool_calls?: Array<ChatCompletionsToolCall & { index?: number }>;
-        };
-        finish_reason?: string | null;
-    }>;
-    usage?: ChatCompletionsOutput['usage'];
-};
-
-async function* normalizeAzureInferenceStream(
-    stream: AsyncIterable<SSEMessage>,
-): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
-    for await (const event of stream) {
-        if (!event.data || event.data === '[DONE]') {
-            continue;
-        }
-        const chunk = JSON.parse(event.data) as AzureInferenceStreamChunk;
-        yield {
-            id: chunk.id,
-            object: 'chat.completion.chunk',
-            created: chunk.created,
-            model: chunk.model,
-            choices: chunk.choices.map((choice) => ({
-                index: choice.index,
-                finish_reason: choice.finish_reason,
-                delta: {
-                    role: choice.delta.role,
-                    content: choice.delta.content,
-                    tool_calls: choice.delta.tool_calls?.map((toolCall) => ({
-                        index: toolCall.index,
-                        id: toolCall.id,
-                        type: toolCall.type,
-                        function: toolCall.function,
-                    })),
-                },
-            })),
-            usage: chunk.usage,
-        };
-    }
-}
-
-=======
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 // Helper functions to parse the composite ID
 export function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
     const parts = compositeId.split('::');
@@ -959,8 +700,4 @@ export function parseAzureFoundryModelId(compositeId: string): { deploymentName:
 
 export function isCompositeModelId(modelId: string): boolean {
     return modelId.includes('::');
-}
-
-function unsupportedAudioPart(): never {
-    throw new Error('This inference endpoint does not support audio input');
 }

@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-import { PromptRole, Providers } from '@llumiverse/core';
-=======
 import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
->>>>>>> e6d93ac (feat: support OpenAI image generation and editing (#722))
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
