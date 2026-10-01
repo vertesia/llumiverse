@@ -3,7 +3,6 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -25,7 +24,6 @@ import Replicate, { type Model, type Prediction, type Training } from 'replicate
 import type { ReplicateDriverOptions } from './driver-options.js';
 import {
     executeReplicateCanonical,
-    streamReplicateCanonical,
     streamReplicateCanonicalEvents,
     validateReplicateCanonicalInput,
 } from './replicate-canonical.js';
@@ -147,18 +145,6 @@ export class ReplicateDriver extends AbstractDriver<ReplicateDriverOptions, stri
         const prompt = await this.createPrompt(segments, options);
         signal?.throwIfAborted();
         return executeReplicateCanonical({ driver: this, segments, prompt, options, signal });
-    }
-
-    override async streamCanonical(
-        segments: PromptSegment[],
-        options: CanonicalExecutionInputOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        validateReplicateCanonicalInput(segments, options);
-        signal?.throwIfAborted();
-        const prompt = await this.createPrompt(segments, options);
-        signal?.throwIfAborted();
-        return streamReplicateCanonical({ driver: this, segments, prompt, options, signal });
     }
 
     override async streamCanonicalEvents(

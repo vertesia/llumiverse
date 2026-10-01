@@ -16,7 +16,6 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionStream,
@@ -237,20 +236,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return super.executeCanonical(segments, options, signal);
     }
 
-    override async streamCanonical(
-        segments: PromptSegment[],
-        options: CanonicalExecutionInputOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (
-            openAIAudioTask(options.model) &&
-            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
-        ) {
-            return this.getOpenAIProtocolDriver().streamCanonical(segments, options, signal);
-        }
-        return super.streamCanonical(segments, options, signal);
-    }
-
     override async streamCanonicalEvents(
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
@@ -363,21 +348,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().requestCanonicalTextCompletion(prompt, options, signal);
         }
         return this.inferenceProtocolDriver.requestCanonicalTextCompletion(
-            toAzureFoundryChatPrompt(prompt),
-            toAzureFoundryChatOptions(options),
-            signal,
-        );
-    }
-
-    override async requestCanonicalTextCompletionStream(
-        prompt: ResponseInputItem[],
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout)) {
-            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletionStream(prompt, options, signal);
-        }
-        return this.inferenceProtocolDriver.requestCanonicalTextCompletionStream(
             toAzureFoundryChatPrompt(prompt),
             toAzureFoundryChatOptions(options),
             signal,

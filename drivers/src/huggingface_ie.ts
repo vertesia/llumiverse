@@ -5,7 +5,6 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type CompletionChunkObject,
     type DriverCompletionStream,
@@ -18,11 +17,7 @@ import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import type { HuggingFaceIEDriverOptions } from './driver-options.js';
-import {
-    executeHuggingFaceCanonical,
-    streamHuggingFaceCanonical,
-    streamHuggingFaceCanonicalEvents,
-} from './huggingface_ie.canonical.js';
+import { executeHuggingFaceCanonical, streamHuggingFaceCanonicalEvents } from './huggingface_ie.canonical.js';
 
 export type { HuggingFaceIEDriverOptions } from './driver-options.js';
 
@@ -101,15 +96,6 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         return super.executeCanonical(segments, options, signal);
     }
 
-    override streamCanonical(
-        segments: PromptSegment[],
-        options: CanonicalExecutionInputOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        this.validateCanonicalPromptSegments(segments);
-        return super.streamCanonical(segments, options, signal);
-    }
-
     override streamCanonicalEvents(
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
@@ -126,14 +112,6 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         return executeHuggingFaceCanonical({ driver: this, prompt, options, signal });
-    }
-
-    async requestCanonicalTextCompletionStream(
-        prompt: string,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        return streamHuggingFaceCanonical({ driver: this, prompt, options, signal });
     }
 
     async requestCanonicalTextCompletionEventStream(

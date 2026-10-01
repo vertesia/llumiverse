@@ -16,9 +16,7 @@ import {
 import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
-    type CompletionChunkObject,
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
@@ -27,10 +25,6 @@ import {
 } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from '../conversation/canonical-execution-stream.js';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
@@ -71,12 +65,6 @@ function payload(driver: WatsonxDriver, prompt: string, options: ExecutionOption
         },
         project_id: driver.projectId,
     };
-}
-
-function finishReason(reason: string | undefined): string | undefined {
-    if (reason === 'eos_token') return 'stop';
-    if (reason === 'max_tokens') return 'length';
-    return reason;
 }
 
 interface WatsonxCanonicalOutcome {
@@ -516,31 +504,6 @@ function watsonxStreamPosition(): NativeStreamPosition {
     return { protocol: WATSONX_TEXT_PROTOCOL, path: ['results', 0, 'generated_text'] };
 }
 
-class WatsonxCanonicalDriverStream implements CanonicalFinalizingDriverStream {
-    constructor(
-        private readonly source: AsyncIterable<WatsonxTextGenerationResponse>,
-        private readonly accumulator: WatsonxNativeStreamAccumulator,
-        private readonly finalizeResponse: (
-            response: WatsonxTextGenerationResponse,
-        ) => Promise<CanonicalExecutionResponse>,
-    ) {}
-
-    async *[Symbol.asyncIterator](): AsyncIterator<CompletionChunkObject> {
-        for await (const response of this.source) {
-            const fragment = this.accumulator.accept(response);
-            const nativeResult = response.results[0];
-            yield {
-                result: fragment.length === 0 ? [] : [{ type: 'text', value: fragment }],
-                finish_reason: finishReason(nativeResult?.stop_reason),
-            };
-        }
-    }
-
-    async finalizeCanonicalExecution(): Promise<CanonicalExecutionResponse> {
-        return this.finalizeResponse(this.accumulator.response());
-    }
-}
-
 async function openWatsonxNativeStream(input: {
     driver: WatsonxDriver;
     request: WatsonxTextGenerationPayload;
@@ -552,51 +515,6 @@ async function openWatsonxNativeStream(input: {
         signal: input.signal,
     })) as ReadableStream<ServerSentEvent>;
     return watsonxNativeSSE(stream);
-}
-
-export async function streamWatsonxCanonical(input: {
-    driver: WatsonxDriver;
-    prompt: string;
-    options: ExecutionOptions;
-    signal?: AbortSignal;
-}): Promise<CanonicalExecutionStream> {
-    const prepared = await prepareWatsonxCanonical(input);
-    assertRecoverableWatsonxResponse(prepared, input.options);
-    if (prepared.accepted_response !== undefined) {
-        const completion = await recoverCanonicalExecutionResponse(prepared, input.options);
-        return {
-            completion,
-            cancel: async () => {},
-            async *[Symbol.asyncIterator]() {
-                // Accepted recovery has no new provider bytes to project.
-            },
-        };
-    }
-    await publishCanonicalPreparedRequest(prepared, input.options);
-    const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(input.signal?.reason);
-    if (input.signal?.aborted) forwardAbort();
-    else input.signal?.addEventListener('abort', forwardAbort, { once: true });
-    try {
-        const source = await openWatsonxNativeStream({
-            driver: input.driver,
-            request: prepared.request,
-            signal: abortController.signal,
-        });
-        const accumulator = new WatsonxNativeStreamAccumulator();
-        const stream = new WatsonxCanonicalDriverStream(
-            source,
-            accumulator,
-            async (response) => (await finalizeWatsonxCanonical(prepared, response, input.options)).response,
-        );
-        return canonicalExecutionStreamFromDriver(stream, {
-            abort: () => abortController.abort(),
-            close: () => input.signal?.removeEventListener('abort', forwardAbort),
-        });
-    } catch (error: unknown) {
-        input.signal?.removeEventListener('abort', forwardAbort);
-        throw error;
-    }
 }
 
 export async function streamWatsonxCanonicalEvents(input: {

@@ -2,7 +2,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -20,7 +19,6 @@ import {
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
     isClaudeErrorRetryable,
-    streamCanonicalClaudeCompletion,
     streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../../shared/claude-messages.js';
@@ -154,25 +152,6 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return streamClaudeCompletion(
-            client,
-            prompt,
-            options,
-            driver.logger,
-            driver.provider,
-            signal ? { signal } : undefined,
-            transport.identity,
-        );
-    }
-
-    async requestCanonicalTextCompletionStream(
-        driver: VertexAIDriver,
-        prompt: ClaudePrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        const transport = vertexClaudeTransport(driver, options);
-        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
-        return streamCanonicalClaudeCompletion(
             client,
             prompt,
             options,

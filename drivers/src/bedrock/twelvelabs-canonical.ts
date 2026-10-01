@@ -22,9 +22,7 @@ import {
 import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
-    type CompletionChunkObject,
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
@@ -32,10 +30,6 @@ import {
     PromptRole,
 } from '@llumiverse/core';
 import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from '../conversation/canonical-execution-stream.js';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
@@ -668,80 +662,6 @@ export class TwelvelabsPegasusNativeStreamAccumulator {
 
 function streamPosition(): NativeStreamPosition {
     return { protocol: TWELVELABS_PEGASUS_PROTOCOL, path: ['body', 'message'] };
-}
-
-class TwelvelabsPegasusCanonicalDriverStream implements CanonicalFinalizingDriverStream {
-    constructor(
-        private readonly source: AsyncIterable<TwelvelabsPegasusStreamEvent>,
-        private readonly accumulator: TwelvelabsPegasusNativeStreamAccumulator,
-        private readonly responseMetadata: { provider_response_id?: string; service_tier?: string },
-        private readonly finalizeResponse: (
-            response: TwelvelabsPegasusNativeResponse,
-        ) => Promise<CanonicalExecutionResponse>,
-    ) {}
-
-    async *[Symbol.asyncIterator](): AsyncIterator<CompletionChunkObject> {
-        for await (const event of this.source) {
-            const chunk = this.accumulator.accept(event);
-            yield {
-                result: chunk.fragment.length === 0 ? [] : [{ type: 'text', value: chunk.fragment }],
-                finish_reason: chunk.finish_reason,
-                service_tier: this.responseMetadata.service_tier,
-            };
-        }
-    }
-
-    async finalizeCanonicalExecution(): Promise<CanonicalExecutionResponse> {
-        return this.finalizeResponse(this.accumulator.response(this.responseMetadata));
-    }
-}
-
-export async function streamTwelvelabsPegasusCanonical(input: {
-    provider: string;
-    region: string;
-    prompt: TwelvelabsPegasusCanonicalPrompt;
-    options: ExecutionOptions;
-    signal?: AbortSignal;
-    transport: TwelvelabsPegasusTransport;
-}): Promise<CanonicalExecutionStream> {
-    const prepared = await prepareTwelvelabsPegasusCanonical(input);
-    assertRecoverableTwelvelabsPegasus(prepared, input.options);
-    if (prepared.accepted_response !== undefined) {
-        const completion = await recoverCanonicalExecutionResponse(prepared, input.options);
-        return {
-            completion,
-            cancel: async () => {},
-            async *[Symbol.asyncIterator]() {},
-        };
-    }
-    await publishCanonicalPreparedRequest(prepared, input.options);
-    const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(input.signal?.reason);
-    if (input.signal?.aborted) forwardAbort();
-    else input.signal?.addEventListener('abort', forwardAbort, { once: true });
-    try {
-        const opened = await input.transport.stream(prepared.request, abortController.signal);
-        const accumulator = new TwelvelabsPegasusNativeStreamAccumulator();
-        return canonicalExecutionStreamFromDriver(
-            new TwelvelabsPegasusCanonicalDriverStream(
-                opened.body,
-                accumulator,
-                {
-                    provider_response_id: opened.provider_response_id,
-                    service_tier: opened.service_tier,
-                },
-                async (response) =>
-                    (await finalizeTwelvelabsPegasusCanonical(prepared, response, input.options)).response,
-            ),
-            {
-                abort: () => abortController.abort(),
-                close: () => input.signal?.removeEventListener('abort', forwardAbort),
-            },
-        );
-    } catch (error: unknown) {
-        input.signal?.removeEventListener('abort', forwardAbort);
-        throw error;
-    }
 }
 
 export async function streamTwelvelabsPegasusCanonicalEvents(input: {

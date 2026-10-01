@@ -10,7 +10,6 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -25,7 +24,6 @@ import {
     type ExecutionResponse,
     type ExecutionTokenUsage,
     FallbackCanonicalExecutionEventStream,
-    FallbackCanonicalExecutionStream,
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
@@ -34,6 +32,7 @@ import {
     type JSONSchema,
     legacyCompletionFromCanonicalExecution,
     ModelType,
+    markCanonicalAcceptedRecovery,
     normalizeCompletionResult,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
@@ -53,10 +52,6 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from '../conversation/canonical-execution-stream.js';
 import {
     assertAcceptedCanonicalRequest,
     canonicalConversationTurnNumber,
@@ -1099,10 +1094,7 @@ function recoverOpenAICompletion(
     };
 }
 
-function recoveredOpenAIStream(
-    completion: Completion,
-    canonical: CanonicalExecutionResponse,
-): CanonicalFinalizingDriverStream {
+function recoveredOpenAIStream(completion: Completion): DriverCompletionStream {
     const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
         yield {
             result: completion.result,
@@ -1112,10 +1104,11 @@ function recoveredOpenAIStream(
             service_tier: completion.service_tier,
         };
     })();
-    return Object.assign(stream, {
-        finalizeConversation: () => completion.conversation,
-        finalizeCanonicalExecution: async () => canonical,
-    });
+    return markCanonicalAcceptedRecovery(
+        Object.assign(stream, {
+            finalizeConversation: () => completion.conversation,
+        }),
+    );
 }
 
 interface OpenAIChatRequestBinding {
@@ -1427,7 +1420,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             const canonical = await recoverCanonicalExecutionResponse(canonicalState, options);
             return recoveredOpenAIStream(
                 legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
-                canonical,
             );
         }
         const prepared = await finalizeOpenAIChatPreparedRequest(
@@ -1529,9 +1521,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             } satisfies CompletionChunkObject;
         });
 
-        let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
-        const finalizeCanonicalExecution = () => {
-            canonicalCompletion ??= (async () => {
+        let finalizedConversation: Promise<unknown> | undefined;
+        const finalizeConversation = () => {
+            finalizedConversation ??= (async () => {
                 const assistantMessage = {
                     role: 'assistant' as const,
                     content: nativeContent || null,
@@ -1581,47 +1573,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                         options,
                         include_thoughts: includeThoughts,
                     })
-                ).response;
+                ).response.conversation;
             })();
-            return canonicalCompletion;
+            return finalizedConversation;
         };
-        return Object.assign(stream, {
-            finalizeConversation: async () => (await finalizeCanonicalExecution()).conversation,
-            finalizeCanonicalExecution,
-        });
-    }
-
-    async requestCanonicalTextCompletionStream(
-        driver: DriverT,
-        prompt: OpenAIChatCompletionsPrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        const abortController = new AbortController();
-        const forwardAbort = () => abortController.abort(signal?.reason);
-        if (signal?.aborted) forwardAbort();
-        else signal?.addEventListener('abort', forwardAbort, { once: true });
-        let source: CanonicalFinalizingDriverStream;
-        try {
-            source = (await this.requestTextCompletionStream(
-                driver,
-                prompt,
-                options,
-                abortController.signal,
-            )) as CanonicalFinalizingDriverStream;
-        } catch (error: unknown) {
-            signal?.removeEventListener('abort', forwardAbort);
-            throw error;
-        }
-        if (typeof source.finalizeCanonicalExecution !== 'function') {
-            abortController.abort();
-            signal?.removeEventListener('abort', forwardAbort);
-            throw new Error(`Chat Completions model ${options.model} did not provide canonical stream finalization`);
-        }
-        return canonicalExecutionStreamFromDriver(source, {
-            abort: () => abortController.abort(),
-            close: () => signal?.removeEventListener('abort', forwardAbort),
-        });
+        return Object.assign(stream, { finalizeConversation });
     }
 
     async requestCanonicalTextCompletionEventStream(
@@ -2372,14 +2328,6 @@ export abstract class OpenAIChatCompletionsDriverBase<
         return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
-    requestCanonicalTextCompletionStream(
-        prompt: OpenAIChatCompletionsPrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        return this.chatCompletionsProtocol.requestCanonicalTextCompletionStream(this, prompt, options, signal);
-    }
-
     requestCanonicalTextCompletionEventStream(
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
@@ -2461,21 +2409,6 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             options,
             (streamSignal) =>
                 this.execute(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
-        );
-    }
-
-    override async streamCanonical(
-        segments: PromptSegment[],
-        options: CanonicalExecutionInputOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (!openAIAudioTask(options.model)) return super.streamCanonical(segments, options, signal);
-        return new FallbackCanonicalExecutionStream((fallbackSignal: AbortSignal) =>
-            this.executeCanonical(
-                segments,
-                options,
-                signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
-            ),
         );
     }
 

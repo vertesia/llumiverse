@@ -462,6 +462,21 @@ function legacyFinishReason(fragment: ConversationAcceptedOutputFragment, hasToo
     }
 }
 
+/** Scalar accounting for canonical hosts; semantic blocks are never projected to Completion. */
+export function canonicalExecutionAccounting(
+    response: CanonicalExecutionResponse,
+): Pick<Completion, 'token_usage' | 'finish_reason'> {
+    const fragment = response.accepted_output;
+    const tokenUsage = legacyUsage(fragment, response);
+    const hasTools = fragment.turn.blocks.some(
+        (block) => block.type === 'tool_call' && block.executor === 'application',
+    );
+    return {
+        ...(tokenUsage === undefined ? {} : { token_usage: tokenUsage }),
+        finish_reason: legacyFinishReason(fragment, hasTools),
+    };
+}
+
 function ownString(value: unknown, key: string): string | undefined {
     const record = ownRecord(value);
     return typeof record?.[key] === 'string' ? record[key] : undefined;

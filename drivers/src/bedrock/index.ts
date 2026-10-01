@@ -41,7 +41,6 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -65,6 +64,7 @@ import {
     type LlumiverseErrorContext,
     legacyCompletionFromCanonicalExecution,
     type ModelOptions,
+    markCanonicalAcceptedRecovery,
     type NovaCanvasOptions,
     normalizeCompletionResult,
     type PromptSegment,
@@ -131,7 +131,6 @@ import {
 } from './twelvelabs.js';
 import {
     executeTwelvelabsPegasusCanonical,
-    streamTwelvelabsPegasusCanonical,
     streamTwelvelabsPegasusCanonicalEvents,
     type TwelvelabsPegasusInvokeRequest,
     TwelvelabsPegasusNativeStreamAccumulator,
@@ -268,10 +267,7 @@ function bedrockAnswerResults(message: Message | undefined): CompletionResult[] 
     );
 }
 
-function recoveredBedrockStream(
-    completion: Completion,
-    canonical: CanonicalExecutionResponse,
-): BedrockCanonicalDriverStream {
+function recoveredBedrockStream(completion: Completion): DriverCompletionStream {
     const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
         yield {
             result: completion.result,
@@ -281,110 +277,11 @@ function recoveredBedrockStream(
             service_tier: completion.service_tier,
         };
     })();
-    return Object.assign(stream, {
-        finalizeConversation: () => completion.conversation,
-        finalizeCanonicalExecution: async () => canonical,
-        cancelCanonicalExecution: async () => {},
-    });
-}
-
-type BedrockCanonicalDriverStream = DriverCompletionStream & {
-    finalizeCanonicalExecution(): Promise<CanonicalExecutionResponse>;
-    cancelCanonicalExecution(): Promise<void>;
-};
-
-function completionChunkPreview(chunk: CompletionChunkObject): string {
-    return chunk.result
-        .map((result) => {
-            switch (result.type) {
-                case 'text':
-                case 'thoughts':
-                    return result.value;
-                case 'json':
-                    return JSON.stringify(result.value);
-                case 'image':
-                    return '[Image]';
-                case 'audio':
-                    return '[Audio]';
-                case 'video':
-                    return '[Video]';
-                default: {
-                    const _exhaustive: never = result;
-                    return String(_exhaustive);
-                }
-            }
-        })
-        .join('');
-}
-
-function canonicalBedrockStream(
-    source: BedrockCanonicalDriverStream,
-    abortProvider: () => void,
-    detachCallerSignal: () => void,
-): CanonicalExecutionStream {
-    const sourceIterator = source[Symbol.asyncIterator]();
-    let completion: CanonicalExecutionResponse | undefined;
-    let iteratorCreated = false;
-    let chunks = 0;
-    let cancelled = false;
-    const startedAt = Date.now();
-    const stream: CanonicalExecutionStream = {
-        get completion() {
-            return completion;
-        },
-        async cancel() {
-            if (cancelled) return;
-            cancelled = true;
-            abortProvider();
-            try {
-                await sourceIterator.return?.();
-            } finally {
-                try {
-                    await source.cancelCanonicalExecution();
-                } finally {
-                    detachCallerSignal();
-                }
-            }
-        },
-        [Symbol.asyncIterator]() {
-            if (iteratorCreated) throw new Error('Canonical execution stream can only be consumed once');
-            iteratorCreated = true;
-            return (async function* () {
-                try {
-                    while (true) {
-                        const next = await sourceIterator.next();
-                        if (next.done) break;
-                        const preview = completionChunkPreview(next.value);
-                        if (preview.length > 0) {
-                            chunks += 1;
-                            yield preview;
-                        }
-                    }
-                    const accepted = await source.finalizeCanonicalExecution();
-                    completion = {
-                        ...accepted,
-                        execution_time: accepted.execution_time ?? Date.now() - startedAt,
-                        chunks,
-                    };
-                    detachCallerSignal();
-                } finally {
-                    if (completion === undefined) {
-                        abortProvider();
-                        try {
-                            await sourceIterator.return?.();
-                        } finally {
-                            try {
-                                await source.cancelCanonicalExecution();
-                            } finally {
-                                detachCallerSignal();
-                            }
-                        }
-                    }
-                }
-            })();
-        },
-    };
-    return stream;
+    return markCanonicalAcceptedRecovery(
+        Object.assign(stream, {
+            finalizeConversation: () => completion.conversation,
+        }),
+    );
 }
 
 export function excludesBedrockReasoningReplay(model: string): boolean {
@@ -811,22 +708,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             );
         }
         return super.executeCanonical(segments, options, signal);
-    }
-
-    override async streamCanonical(
-        segments: PromptSegment[],
-        options: CanonicalExecutionInputOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (options.model.includes('twelvelabs.pegasus')) {
-            validateTwelvelabsPegasusCanonicalInput(segments, options);
-            return super.streamCanonical(
-                segments,
-                { ...options, [TWELVELABS_PEGASUS_CANONICAL_FORMAT]: true } as PegasusCanonicalExecutionOptions,
-                signal,
-            );
-        }
-        return super.streamCanonical(segments, options, signal);
     }
 
     override async streamCanonicalEvents(
@@ -1723,7 +1604,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         (options.model.includes('deepseek') && options.model.includes('r1')) ||
                         (options.model_options as BedrockClaudeOptions | undefined)?.include_thoughts === true,
                 }),
-                canonical,
             );
         }
         const prepared = await finalizeBedrockConversePreparedRequest(
@@ -1768,9 +1648,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
                 });
                 const scoped = withBedrockRuntimeScope(transformedStream, executorScope);
-                let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
-                const finalizeCanonicalExecution = () => {
-                    canonicalCompletion ??= (async () => {
+                let finalizedConversation: Promise<unknown> | undefined;
+                const finalizeConversation = () => {
+                    finalizedConversation ??= (async () => {
                         if (stopReason === undefined) {
                             throw new Error('Bedrock Converse stream ended without a terminal stop reason');
                         }
@@ -1808,67 +1688,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         if (normalized?.status === 'invalid') {
                             decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
                         }
-                        const document = appendBedrockConverseCanonicalResponse(prepared, decoded);
-                        return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
-                            ...(serviceTier?.type === undefined ? {} : { service_tier: serviceTier.type }),
-                        });
+                        return appendBedrockConverseCanonicalResponse(prepared, decoded);
                     })();
-                    return canonicalCompletion;
+                    return finalizedConversation;
                 };
-                return Object.assign(scoped, {
-                    finalizeConversation: async () => (await finalizeCanonicalExecution()).conversation,
-                    finalizeCanonicalExecution,
-                    cancelCanonicalExecution: async () => executorScope.close(),
-                });
+                return Object.assign(scoped, { finalizeConversation });
             })
             .catch((err) => {
                 executorScope.close();
                 this.logger.error({ error: err }, '[Bedrock] Failed to stream');
                 throw err;
             });
-    }
-
-    async requestCanonicalTextCompletionStream(
-        prompt: BedrockPrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (options.model.includes('twelvelabs.pegasus')) {
-            return streamTwelvelabsPegasusCanonical({
-                provider: this.provider,
-                region: this.options.region,
-                prompt: prompt as TwelvelabsPegasusCanonicalPrompt,
-                options,
-                signal,
-                transport: this.twelvelabsPegasusTransport(options),
-            });
-        }
-        const abortController = new AbortController();
-        const forwardAbort = () => abortController.abort(signal?.reason);
-        if (signal?.aborted) forwardAbort();
-        else signal?.addEventListener('abort', forwardAbort, { once: true });
-        let source: BedrockCanonicalDriverStream;
-        try {
-            source = (await this.requestTextCompletionStream(
-                prompt,
-                options,
-                abortController.signal,
-            )) as BedrockCanonicalDriverStream;
-        } catch (error: unknown) {
-            signal?.removeEventListener('abort', forwardAbort);
-            throw error;
-        }
-        if (typeof source.finalizeCanonicalExecution !== 'function') {
-            abortController.abort();
-            await source[Symbol.asyncIterator]().return?.();
-            signal?.removeEventListener('abort', forwardAbort);
-            throw new Error(`Bedrock model ${options.model} did not provide canonical stream finalization`);
-        }
-        return canonicalBedrockStream(
-            source,
-            () => abortController.abort(),
-            () => signal?.removeEventListener('abort', forwardAbort),
-        );
     }
 
     async requestCanonicalTextCompletionEventStream(

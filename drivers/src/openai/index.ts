@@ -9,7 +9,6 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -26,7 +25,6 @@ import {
     type ExecutionResponse,
     type ExecutionTokenUsage,
     FallbackCanonicalExecutionEventStream,
-    FallbackCanonicalExecutionStream,
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
@@ -35,6 +33,7 @@ import {
     LlumiverseError,
     legacyCompletionFromCanonicalExecution,
     ModelType,
+    markCanonicalAcceptedRecovery,
     normalizeCompletionResult,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
@@ -61,10 +60,6 @@ import {
     type CanonicalNativeStreamWriter,
     canonicalNativeExecutionEventStream,
 } from '../conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from '../conversation/canonical-execution-stream.js';
 import {
     assertAcceptedCanonicalRequest,
     canonicalConversationTurnNumber,
@@ -362,10 +357,7 @@ function canonicalResponsesServiceTier(
     return typeof serviceTier === 'string' ? serviceTier : undefined;
 }
 
-function recoveredOpenAIResponsesStream(
-    completion: Completion,
-    canonical: CanonicalExecutionResponse,
-): CanonicalFinalizingDriverStream {
+function recoveredOpenAIResponsesStream(completion: Completion): DriverCompletionStream {
     const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
         yield {
             result: completion.result,
@@ -375,10 +367,11 @@ function recoveredOpenAIResponsesStream(
             service_tier: completion.service_tier,
         };
     })();
-    return Object.assign(stream, {
-        finalizeConversation: () => completion.conversation,
-        finalizeCanonicalExecution: async () => canonical,
-    });
+    return markCanonicalAcceptedRecovery(
+        Object.assign(stream, {
+            finalizeConversation: () => completion.conversation,
+        }),
+    );
 }
 
 interface OpenAIResponsesCanonicalDraft {
@@ -592,7 +585,6 @@ export class OpenAIResponsesProtocol {
             });
             return recoveredOpenAIResponsesStream(
                 legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
-                canonical,
             );
         }
         const prepared = await finalizeOpenAIResponsesPreparedRequest(
@@ -617,48 +609,14 @@ export class OpenAIResponsesProtocol {
         });
         const finalize = mapped.finalizeConversation;
         if (finalize === undefined) throw new Error('OpenAI Responses stream has no canonical finalizer');
-        let finalized: Promise<CanonicalExecutionResponse> | undefined;
-        const finalizeCanonicalExecution = () => {
-            finalized ??= Promise.resolve(finalize()).then((response) => response as CanonicalExecutionResponse);
-            return finalized;
+        let finalizedConversation: Promise<unknown> | undefined;
+        const finalizeConversation = () => {
+            finalizedConversation ??= Promise.resolve(finalize()).then(
+                (response) => (response as CanonicalExecutionResponse).conversation,
+            );
+            return finalizedConversation;
         };
-        return Object.assign(mapped, {
-            finalizeConversation: async () => (await finalizeCanonicalExecution()).conversation,
-            finalizeCanonicalExecution,
-        });
-    }
-
-    async requestCanonicalTextCompletionStream(
-        driver: OpenAIResponsesDriverBase,
-        prompt: ResponseInputItem[],
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        const abortController = new AbortController();
-        const forwardAbort = () => abortController.abort(signal?.reason);
-        if (signal?.aborted) forwardAbort();
-        else signal?.addEventListener('abort', forwardAbort, { once: true });
-        let source: CanonicalFinalizingDriverStream;
-        try {
-            source = (await this.requestTextCompletionStream(
-                driver,
-                prompt,
-                options,
-                abortController.signal,
-            )) as CanonicalFinalizingDriverStream;
-        } catch (error: unknown) {
-            signal?.removeEventListener('abort', forwardAbort);
-            throw error;
-        }
-        if (typeof source.finalizeCanonicalExecution !== 'function') {
-            abortController.abort();
-            signal?.removeEventListener('abort', forwardAbort);
-            throw new Error(`OpenAI Responses model ${options.model} did not provide canonical stream finalization`);
-        }
-        return canonicalExecutionStreamFromDriver(source, {
-            abort: () => abortController.abort(),
-            close: () => signal?.removeEventListener('abort', forwardAbort),
-        });
+        return Object.assign(mapped, { finalizeConversation });
     }
 
     async requestCanonicalTextCompletionEventStream(
@@ -1355,21 +1313,6 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         );
     }
 
-    override async streamCanonical(
-        segments: PromptSegment[],
-        options: CanonicalExecutionInputOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (!this.isFileAudioModel(options.model)) return super.streamCanonical(segments, options, signal);
-        return new FallbackCanonicalExecutionStream((fallbackSignal: AbortSignal) =>
-            this.executeCanonical(
-                segments,
-                options,
-                signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
-            ),
-        );
-    }
-
     override async streamCanonicalEvents(
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
@@ -1453,17 +1396,6 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
-    }
-
-    requestCanonicalTextCompletionStream(
-        prompt: ResponseInputItem[],
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        if (this.isFileAudioModel(options.model)) {
-            throw new Error(`OpenAI Responses audio model ${options.model} does not support canonical streaming`);
-        }
-        return this.responsesProtocol.requestCanonicalTextCompletionStream(this, prompt, options, signal);
     }
 
     requestCanonicalTextCompletionEventStream(

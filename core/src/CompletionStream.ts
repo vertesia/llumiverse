@@ -768,15 +768,6 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             prompt_cache_diagnostic: stream?.finalizePromptCacheDiagnostic?.(),
         });
 
-        const canonicalFinalizer = (
-            stream as
-                | (DriverCompletionStream & {
-                      finalizeCanonicalExecution?: () => Promise<CanonicalExecutionResponse>;
-                  })
-                | undefined
-        )?.finalizeCanonicalExecution;
-        const canonical = canonicalFinalizer === undefined ? undefined : await canonicalFinalizer.call(stream);
-
         // Build conversation context for multi-turn support
         const conversation = stream?.finalizeConversation
             ? await stream.finalizeConversation()
@@ -784,7 +775,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         if (conversation !== undefined) {
             this.completion.conversation = stripAudioPayloads(conversation);
         }
-        if (isCanonicalAcceptedRecovery(canonical)) markCanonicalAcceptedRecovery(this.completion);
+        if (isCanonicalAcceptedRecovery(stream)) markCanonicalAcceptedRecovery(this.completion);
 
         try {
             if (this.completion) {

@@ -54,7 +54,6 @@ import {
 import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -84,10 +83,6 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from '../conversation/canonical-execution-stream.js';
 import {
     assertAcceptedCanonicalRequest,
     CANONICAL_TOOL_SELECTION_TARGET_OPTION,
@@ -1238,16 +1233,6 @@ function recoveredClaudeStream(completion: Completion): DriverCompletionStream {
     return Object.assign(stream, { finalizeConversation: () => completion.conversation });
 }
 
-function recoveredCanonicalClaudeStream(response: CanonicalExecutionResponse): CanonicalExecutionStream {
-    const stream = (async function* (): AsyncIterable<string> {
-        // Accepted responses are already durable. Streaming recovery has no provider bytes to replay.
-    })();
-    return Object.assign(stream, {
-        completion: response,
-        cancel: async () => {},
-    });
-}
-
 function assertClaudeAcceptedTargetOptions(
     state: Pick<
         PreparedClaudeConversation,
@@ -1555,23 +1540,6 @@ export async function streamClaudeCompletion(
         decodedFinalResponse ??= computeDecodedFinalResponse();
         return decodedFinalResponse;
     };
-    let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
-    const finalizeCanonicalExecution = () => {
-        canonicalCompletion ??= (async () => {
-            const { decoded: rawDecoded, finalMessage, normalized } = await decodeFinalResponse();
-            const decoded =
-                normalized?.status === 'invalid'
-                    ? rejectDecodedStructuredOutput(rawDecoded, normalized.error)
-                    : rawDecoded;
-            const document = appendClaudeCanonicalResponse(prepared, decoded);
-            return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
-                service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
-                ...(options.include_original_response ? { original_response: finalMessage } : {}),
-            });
-        })();
-        return canonicalCompletion;
-    };
-
     const driverStream: DriverCompletionStream = {
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
@@ -1579,77 +1547,7 @@ export async function streamClaudeCompletion(
             return appendClaudeCanonicalResponse(prepared, decoded);
         },
     };
-    return Object.assign(driverStream, { finalizeCanonicalExecution });
-}
-
-/** Execute a streaming Claude Messages request into the canonical stream contract. */
-export async function streamCanonicalClaudeCompletion(
-    client: ClaudeMessagesClient,
-    prompt: ClaudePrompt,
-    options: ExecutionOptions,
-    logger?: Logger,
-    provider = 'anthropic',
-    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
-    transport?: ClaudeTransportIdentity,
-): Promise<CanonicalExecutionStream> {
-    const canonicalState = await prepareClaudeCanonicalState({
-        conversation: options.conversation,
-        prompt,
-        options,
-        provider,
-        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
-    });
-    if (canonicalState.accepted_response !== undefined) {
-        const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-        const { payload } = getClaudePayload(options, conversation, provider, 'stream', transport);
-        await assertAcceptedCanonicalRequest(
-            canonicalState,
-            { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
-            providerJsonValue({ ...payload, stream: true }),
-        );
-        assertClaudeAcceptedTargetOptions(canonicalState);
-        if (options.include_original_response) {
-            throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
-        }
-        return recoveredCanonicalClaudeStream(
-            await recoverCanonicalExecutionResponse(canonicalState, options, {
-                service_tier: canonicalClaudeServiceTier(canonicalState),
-            }),
-        );
-    }
-
-    const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
-    if (transportOptions?.signal?.aborted) forwardAbort();
-    else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
-
-    let source: CanonicalFinalizingDriverStream;
-    try {
-        source = (await streamClaudeCompletion(
-            client,
-            prompt,
-            options,
-            logger,
-            provider,
-            {
-                ...transportOptions,
-                signal: abortController.signal,
-            },
-            transport,
-        )) as CanonicalFinalizingDriverStream;
-    } catch (error: unknown) {
-        transportOptions?.signal?.removeEventListener('abort', forwardAbort);
-        throw error;
-    }
-    if (typeof source.finalizeCanonicalExecution !== 'function') {
-        abortController.abort();
-        transportOptions?.signal?.removeEventListener('abort', forwardAbort);
-        throw new Error(`Claude Messages model ${options.model} did not provide canonical stream finalization`);
-    }
-    return canonicalExecutionStreamFromDriver(source, {
-        abort: () => abortController.abort(),
-        close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
-    });
+    return driverStream;
 }
 
 interface ClaudeCanonicalDraft {

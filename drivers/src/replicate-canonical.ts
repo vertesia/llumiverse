@@ -24,9 +24,7 @@ import {
 import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
-    type CompletionChunkObject,
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
@@ -39,10 +37,6 @@ import { EventStream } from '@llumiverse/core/async';
 import { EventSource } from 'eventsource';
 import type { Prediction } from 'replicate';
 import { canonicalNativeExecutionEventStream } from './conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from './conversation/canonical-execution-stream.js';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
@@ -859,78 +853,8 @@ class ReplicateStreamAccumulator {
     }
 }
 
-class ReplicateCanonicalDriverStream implements CanonicalFinalizingDriverStream {
-    constructor(
-        private readonly source: AsyncIterable<ReplicateSseEvent>,
-        private readonly accumulator: ReplicateStreamAccumulator,
-        private readonly finalizeResponse: () => Promise<CanonicalExecutionResponse>,
-    ) {}
-
-    async *[Symbol.asyncIterator](): AsyncIterator<CompletionChunkObject> {
-        for await (const event of this.source) {
-            const fragment = this.accumulator.accept(event);
-            if (fragment.length > 0) yield { result: [{ type: 'text', value: fragment }] };
-        }
-    }
-
-    finalizeCanonicalExecution(): Promise<CanonicalExecutionResponse> {
-        return this.finalizeResponse();
-    }
-}
-
 function streamPosition(): NativeStreamPosition {
     return { protocol: REPLICATE_PREDICTIONS_PROTOCOL, path: ['output'] };
-}
-
-export async function streamReplicateCanonical(input: {
-    driver: ReplicateDriver;
-    segments: PromptSegment[];
-    prompt: string;
-    options: ExecutionOptions;
-    signal?: AbortSignal;
-}): Promise<CanonicalExecutionStream> {
-    const prepared = await prepareReplicateCanonical(input);
-    assertRecoverable(prepared, input.options);
-    if (prepared.accepted_response !== undefined) {
-        const completion = await recoverCanonicalExecutionResponse(prepared, input.options);
-        return { completion, cancel: async () => {}, async *[Symbol.asyncIterator]() {} };
-    }
-    await publishCanonicalPreparedRequest(prepared, input.options);
-    const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(input.signal?.reason);
-    if (input.signal?.aborted) forwardAbort();
-    else input.signal?.addEventListener('abort', forwardAbort, { once: true });
-    const session = new ReplicateStreamingSession(input.driver, prepared.request, abortController.signal);
-    try {
-        const source = await session.open();
-        const accumulator = new ReplicateStreamAccumulator();
-        return canonicalExecutionStreamFromDriver(
-            new ReplicateCanonicalDriverStream(source, accumulator, async () => {
-                const final = await session.final();
-                return (
-                    await finalizeReplicateCanonical(
-                        prepared,
-                        final,
-                        input.options,
-                        input.driver,
-                        abortController.signal,
-                    )
-                ).response;
-            }),
-            {
-                abort: () => abortController.abort(),
-                close: async () => {
-                    input.signal?.removeEventListener('abort', forwardAbort);
-                    await session.close();
-                },
-            },
-        );
-    } catch (error: unknown) {
-        input.signal?.removeEventListener('abort', forwardAbort);
-        abortController.abort(error);
-        await session.close();
-        throw error;
-    }
 }
 
 export async function streamReplicateCanonicalEvents(input: {

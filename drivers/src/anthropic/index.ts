@@ -4,7 +4,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -30,7 +29,6 @@ import {
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
-    streamCanonicalClaudeCompletion,
     streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
@@ -107,21 +105,6 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return streamClaudeCompletion(
-            this.client,
-            prompt,
-            options,
-            this.logger,
-            this.provider,
-            this.getDriverRequestOptions(options, signal),
-        );
-    }
-
-    async requestCanonicalTextCompletionStream(
-        prompt: ClaudePrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        return streamCanonicalClaudeCompletion(
             this.client,
             prompt,
             options,

@@ -2,7 +2,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -18,7 +17,7 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import type { WatsonxDriverOptions } from '../driver-options.js';
-import { executeWatsonxCanonical, streamWatsonxCanonical, streamWatsonxCanonicalEvents } from './canonical.js';
+import { executeWatsonxCanonical, streamWatsonxCanonicalEvents } from './canonical.js';
 import type {
     GenerateEmbeddingPayload,
     GenerateEmbeddingResponse,
@@ -63,14 +62,6 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         return executeWatsonxCanonical({ driver: this, prompt, options, signal });
-    }
-
-    async requestCanonicalTextCompletionStream(
-        prompt: string,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        return streamWatsonxCanonical({ driver: this, prompt, options, signal });
     }
 
     async requestCanonicalTextCompletionEventStream(

@@ -5,7 +5,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
@@ -484,18 +483,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             throw new Error(`Vertex AI model ${options.model} does not support direct canonical execution`);
         }
         return definition.requestCanonicalTextCompletion(this, prompt, options, signal);
-    }
-
-    async requestCanonicalTextCompletionStream(
-        prompt: VertexAIPrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        const definition = getModelDefinition(options.model);
-        if (definition.requestCanonicalTextCompletionStream === undefined) {
-            throw new Error(`Vertex AI model ${options.model} does not support direct canonical streaming`);
-        }
-        return definition.requestCanonicalTextCompletionStream(this, prompt, options, signal);
     }
 
     async requestCanonicalTextCompletionEventStream(

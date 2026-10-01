@@ -24,7 +24,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
@@ -787,15 +786,6 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         return executeOmniVideoCanonical({ driver, model_id: this.modelId, prompt, options, signal });
-    }
-
-    requestCanonicalTextCompletionStream(
-        _driver: VertexAIDriver,
-        _prompt: OmniVideoPrompt,
-        _options: ExecutionOptions,
-        _signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        return Promise.reject(new OmniVideoTerminalError('Gemini Omni video uses finite canonical streaming'));
     }
 
     requestCanonicalTextCompletionEventStream(

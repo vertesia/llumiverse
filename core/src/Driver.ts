@@ -881,14 +881,6 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical execution`);
     }
 
-    async requestCanonicalTextCompletionStream(
-        _prompt: PromptT,
-        options: CanonicalExecutionOptions,
-        _signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical streaming`);
-    }
-
     async requestCanonicalTextCompletionEventStream(
         _prompt: PromptT,
         options: CanonicalExecutionOptions,

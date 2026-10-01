@@ -210,7 +210,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const addAbortListener = vi.spyOn(controller.signal, 'addEventListener');
         const removeAbortListener = vi.spyOn(controller.signal, 'removeEventListener');
         await expect(
-            modelDef.requestCanonicalTextCompletionStream(
+            modelDef.requestCanonicalTextCompletionEventStream(
                 changedRouteDriver,
                 { messages: [{ role: 'user', content: [{ type: 'text', text: 'Route this.' }] }] },
                 {
@@ -222,6 +222,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
                     },
                 },
                 controller.signal,
+                { stream_id: 'stream:vertex:claude:routed:changed-direct' },
             ),
         ).rejects.toThrow(/incompatible request routing/);
         expect(addAbortListener).not.toHaveBeenCalled();

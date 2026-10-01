@@ -4,7 +4,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -39,7 +38,6 @@ import {
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
-    streamCanonicalClaudeCompletion,
     streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
@@ -284,39 +282,6 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                     undefined,
                     'bedrock-mantle',
-                    this.getDriverRequestOptions(options, signal),
-                );
-            default:
-                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
-        }
-    }
-
-    requestCanonicalTextCompletionStream(
-        prompt: BedrockMantlePrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        switch (getBedrockMantleProtocol(options.model)) {
-            case 'responses':
-                return this.responsesDelegate.requestCanonicalTextCompletionStream(
-                    requireResponsesPrompt(prompt),
-                    options,
-                    signal,
-                );
-            case 'chat_completions':
-                return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletionStream(
-                    this,
-                    requireChatCompletionsPrompt(prompt),
-                    options,
-                    signal,
-                );
-            case 'messages':
-                return streamCanonicalClaudeCompletion(
-                    this.anthropicService,
-                    requireClaudePrompt(prompt),
-                    options,
-                    undefined,
-                    this.provider,
                     this.getDriverRequestOptions(options, signal),
                 );
             default:

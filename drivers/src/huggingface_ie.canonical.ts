@@ -17,9 +17,7 @@ import {
 import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
-    type CompletionChunkObject,
     createCanonicalExecutionResponse,
     type ExecutionOptions,
     FallbackCanonicalExecutionEventStream,
@@ -27,10 +25,6 @@ import {
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { canonicalNativeExecutionEventStream } from './conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from './conversation/canonical-execution-stream.js';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
@@ -85,11 +79,6 @@ function payload(prompt: string, options: ExecutionOptions): HuggingFaceTextGene
             return_full_text: false,
         },
     };
-}
-
-function finishReason(reason: string | undefined): string | undefined {
-    if (reason === 'eos_token') return 'stop';
-    return reason;
 }
 
 interface HuggingFaceCanonicalOutcome {
@@ -506,84 +495,12 @@ function huggingFaceStreamPosition(): NativeStreamPosition {
     return { protocol: HUGGING_FACE_TEXT_PROTOCOL, path: ['token'] };
 }
 
-class HuggingFaceCanonicalDriverStream implements CanonicalFinalizingDriverStream {
-    constructor(
-        private readonly source: AsyncIterable<TextGenerationStreamOutput>,
-        private readonly accumulator: HuggingFaceNativeStreamAccumulator,
-        private readonly finalizeResponse: (
-            response: HuggingFaceCanonicalNativeResponse,
-        ) => Promise<CanonicalExecutionResponse>,
-    ) {}
-
-    async *[Symbol.asyncIterator](): AsyncIterator<CompletionChunkObject> {
-        for await (const event of this.source) {
-            const fragment = this.accumulator.accept(event);
-            yield {
-                result: fragment.length === 0 ? [] : [{ type: 'text', value: fragment }],
-                finish_reason: finishReason(event.details?.finish_reason),
-                token_usage: event.details
-                    ? { prompt: streamInputTokens(event.details), result: event.details.generated_tokens }
-                    : undefined,
-            };
-        }
-    }
-
-    async finalizeCanonicalExecution(): Promise<CanonicalExecutionResponse> {
-        return this.finalizeResponse(this.accumulator.response());
-    }
-}
-
 async function openHuggingFaceNativeStream(input: {
     executor: InferenceClient;
     request: HuggingFaceTextGenerationRequest;
     signal: AbortSignal;
 }): Promise<AsyncIterable<TextGenerationStreamOutput>> {
     return input.executor.textGenerationStream(input.request, { signal: input.signal });
-}
-
-export async function streamHuggingFaceCanonical(input: {
-    driver: HuggingFaceIEDriver;
-    prompt: string;
-    options: ExecutionOptions;
-    signal?: AbortSignal;
-}): Promise<CanonicalExecutionStream> {
-    const prepared = await prepareHuggingFaceCanonical(input);
-    assertRecoverableHuggingFaceResponse(prepared, input.options);
-    if (prepared.accepted_response !== undefined) {
-        const completion = await recoverCanonicalExecutionResponse(prepared, input.options);
-        return {
-            completion,
-            cancel: async () => {},
-            async *[Symbol.asyncIterator]() {
-                // Accepted recovery has no new provider bytes to project.
-            },
-        };
-    }
-    await publishCanonicalPreparedRequest(prepared, input.options);
-    const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(input.signal?.reason);
-    if (input.signal?.aborted) forwardAbort();
-    else input.signal?.addEventListener('abort', forwardAbort, { once: true });
-    try {
-        const source = await openHuggingFaceNativeStream({
-            executor: preparedExecutor(prepared),
-            request: prepared.request,
-            signal: abortController.signal,
-        });
-        const accumulator = new HuggingFaceNativeStreamAccumulator();
-        const stream = new HuggingFaceCanonicalDriverStream(
-            source,
-            accumulator,
-            async (response) => (await finalizeHuggingFaceCanonical(prepared, response, input.options)).response,
-        );
-        return canonicalExecutionStreamFromDriver(stream, {
-            abort: () => abortController.abort(),
-            close: () => input.signal?.removeEventListener('abort', forwardAbort),
-        });
-    } catch (error: unknown) {
-        input.signal?.removeEventListener('abort', forwardAbort);
-        throw error;
-    }
 }
 
 export async function streamHuggingFaceCanonicalEvents(input: {

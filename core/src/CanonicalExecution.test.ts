@@ -10,11 +10,13 @@ import {
     type DecodedConversationResponse,
     externalizeToolCallArguments,
     prepareToolArgumentExternalization,
+    validateConversationDocument,
 } from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
 import {
     CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
+    canonicalExecutionAccounting,
     createCanonicalExecutionResponse,
     FallbackCanonicalExecutionStream,
     isCanonicalAcceptedRecovery,
@@ -477,6 +479,69 @@ describe('canonical execution response', () => {
             provider_cost_usd: 0.125,
         });
     });
+
+    it('reads scalar accounting without materializing malformed tool arguments or media', () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const call = response.accepted_output.turn.blocks.find((block) => block.type === 'tool_call');
+        if (call?.type !== 'tool_call') throw new Error('Expected application call');
+        call.arguments = { type: 'invalid', raw: '{' };
+        response.accepted_output.turn.blocks.push({ id: 'missing', type: 'image', asset_id: 'missing' });
+        expect(canonicalExecutionAccounting(response)).toMatchObject({
+            token_usage: { prompt: 5, result: 3 },
+            finish_reason: 'tool_use',
+        });
+        expect(() => legacyCompletionFromCanonicalExecution(response)).toThrow();
+        expect(canonicalExecutionAccounting(response)).not.toHaveProperty('result');
+    });
+
+    it.each(['aws.bedrock.converse', 'openai.images.generate'])(
+        'preserves %s accounting across accepted recovery',
+        (protocol) => {
+            const document = acceptedDocument({ media: true });
+            const generation = document.generations.generation;
+            if (!generation?.usage) throw new Error('Expected generation usage');
+            generation.protocol = protocol;
+            generation.usage.input_tokens = 20;
+            generation.usage.total_tokens = 23;
+            generation.usage.cache_read_tokens = 4;
+            generation.usage.cache_write_tokens = 7;
+            generation.usage.accounting_provenance ??= {};
+            generation.usage.accounting_provenance.cache_read_tokens = {
+                method: 'reported',
+                accounting_basis: 'provider',
+            };
+            generation.usage.accounting_provenance.cache_write_tokens = {
+                method: 'reported',
+                accounting_basis: 'provider',
+            };
+            generation.usage.reported_usage = [
+                {
+                    source: 'provider',
+                    protocol,
+                    payload: {
+                        cacheDetails: [
+                            { ttl: '5m', inputTokens: 5 },
+                            { ttl: '1h', inputTokens: 2 },
+                        ],
+                        output_tokens_details: { image_tokens: 3 },
+                    },
+                },
+            ];
+            generation.usage.cost = { amount: '0.125', currency: 'USD', provenance: 'reported' };
+            const validation = validateConversationDocument(document);
+            expect(validation.diagnostics).toEqual([]);
+            const response = createCanonicalExecutionResponse(document, 'response-operation');
+            const expected = legacyCompletionFromCanonicalExecution(response);
+            const scalar = canonicalExecutionAccounting(response);
+            expect(scalar).toEqual({ token_usage: expected.token_usage, finish_reason: expected.finish_reason });
+            expect(canonicalExecutionAccounting(markCanonicalAcceptedRecovery(response))).toEqual(scalar);
+            expect(scalar.token_usage).toMatchObject(
+                protocol === 'aws.bedrock.converse'
+                    ? { prompt_cached: 4, prompt_cache_write: 7, prompt_cache_write_1h: 2, provider_cost_usd: 0.125 }
+                    : { result_image: 3, provider_cost_usd: 0.125 },
+            );
+        },
+    );
 
     it('does not resolve inherited asset record keys', () => {
         const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');

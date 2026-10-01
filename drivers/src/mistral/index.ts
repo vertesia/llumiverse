@@ -2,7 +2,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
@@ -110,19 +109,6 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         return this.canonicalProtocol.requestCanonicalTextCompletion(
-            this,
-            mistralPromptToOpenAI(prompt),
-            canonicalMistralOptions(options),
-            signal,
-        );
-    }
-
-    async requestCanonicalTextCompletionStream(
-        prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        return this.canonicalProtocol.requestCanonicalTextCompletionStream(
             this,
             mistralPromptToOpenAI(prompt),
             canonicalMistralOptions(options),

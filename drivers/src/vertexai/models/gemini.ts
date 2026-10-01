@@ -36,7 +36,6 @@ import {
     type AIModel,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
-    type CanonicalExecutionStream,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -47,7 +46,6 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     FallbackCanonicalExecutionEventStream,
-    FallbackCanonicalExecutionStream,
     isGeminiModelVersionGte,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -67,10 +65,6 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { canonicalNativeExecutionEventStream } from '../../conversation/canonical-execution-event-stream.js';
-import {
-    type CanonicalFinalizingDriverStream,
-    canonicalExecutionStreamFromDriver,
-} from '../../conversation/canonical-execution-stream.js';
 import {
     acceptedCanonicalResponse,
     assertAcceptedCanonicalRequest,
@@ -561,16 +555,6 @@ function recoveredGeminiStream(completion: Completion): DriverCompletionStream {
         };
     })();
     return Object.assign(stream, { finalizeConversation: () => completion.conversation });
-}
-
-function recoveredCanonicalGeminiStream(response: CanonicalExecutionResponse): CanonicalExecutionStream {
-    const stream = (async function* (): AsyncIterable<string> {
-        // The accepted response is already durable, so recovery performs no provider streaming.
-    })();
-    return Object.assign(stream, {
-        completion: response,
-        cancel: async () => {},
-    });
 }
 
 function appendGeminiStreamPart(target: Part[], part: Part): number {
@@ -1849,100 +1833,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             decodedFinalResponse ??= computeDecodedFinalResponse();
             return decodedFinalResponse;
         };
-        let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
-        const finalizeCanonicalExecution = () => {
-            canonicalCompletion ??= (async () => {
-                const { decoded: rawDecoded, finalResponse, normalized } = await decodeFinalResponse();
-                const decoded =
-                    normalized?.status === 'invalid'
-                        ? rejectDecodedStructuredOutput(rawDecoded, normalized.error)
-                        : rawDecoded;
-                const document = appendGeminiCanonicalResponse(prepared, decoded);
-                return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
-                    service_tier: normalizeVertexAIResolvedServiceTier(finalUsageMetadata?.trafficType),
-                    prompt_cache_diagnostic: cacheExecution.diagnostic,
-                    ...(requestedOptions.include_original_response ? { original_response: finalResponse } : {}),
-                });
-            })();
-            return canonicalCompletion;
-        };
         return Object.assign(stream, {
             finalizePromptCacheDiagnostic: () => cacheExecution.diagnostic,
             finalizeConversation: async () => {
                 const { decoded } = await decodeFinalResponse();
                 return appendGeminiCanonicalResponse(prepared, decoded);
             },
-            finalizeCanonicalExecution,
-        });
-    }
-
-    async requestCanonicalTextCompletionStream(
-        driver: VertexAIDriver,
-        prompt: GenerateContentPrompt,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<CanonicalExecutionStream> {
-        const modelName = options.model.split('/').at(-1) ?? options.model;
-        if (isFileAudioModel(modelName)) {
-            return new FallbackCanonicalExecutionStream((fallbackSignal: AbortSignal) =>
-                this.requestCanonicalTextCompletion(
-                    driver,
-                    prompt,
-                    options,
-                    signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
-                ),
-            );
-        }
-        const canonicalState = await prepareGeminiCanonicalState({
-            conversation: options.conversation,
-            prompt,
-            options,
-            provider: geminiProvider(driver),
-        });
-        if (canonicalState.accepted_response !== undefined) {
-            const modelName = options.model.split('/').at(-1) ?? options.model;
-            const transportOptions = { ...options, model: modelName };
-            const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, options);
-            const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
-            await assertAcceptedCanonicalRequest(
-                canonicalState,
-                { provider: geminiProvider(driver), protocol: GEMINI_GENERATE_CONTENT_PROTOCOL, model: options.model },
-                providerJsonValue(payload),
-            );
-            if (options.include_original_response) {
-                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
-            }
-            return recoveredCanonicalGeminiStream(
-                await recoverCanonicalExecutionResponse(canonicalState, options, {
-                    service_tier: canonicalGeminiServiceTier(canonicalState),
-                }),
-            );
-        }
-
-        const abortController = new AbortController();
-        const forwardAbort = () => abortController.abort(signal?.reason);
-        if (signal?.aborted) forwardAbort();
-        else signal?.addEventListener('abort', forwardAbort, { once: true });
-        let source: CanonicalFinalizingDriverStream;
-        try {
-            source = (await this.requestTextCompletionStream(
-                driver,
-                prompt,
-                options,
-                abortController.signal,
-            )) as CanonicalFinalizingDriverStream;
-        } catch (error: unknown) {
-            signal?.removeEventListener('abort', forwardAbort);
-            throw error;
-        }
-        if (typeof source.finalizeCanonicalExecution !== 'function') {
-            abortController.abort();
-            signal?.removeEventListener('abort', forwardAbort);
-            throw new Error(`Gemini model ${options.model} did not provide canonical stream finalization`);
-        }
-        return canonicalExecutionStreamFromDriver(source, {
-            abort: () => abortController.abort(),
-            close: () => signal?.removeEventListener('abort', forwardAbort),
         });
     }
 
