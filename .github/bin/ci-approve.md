@@ -28,6 +28,13 @@ through every open PR, and every read is retried twice (after 2s and 5s) on a 5x
 or dropped connection. Writes are not retried: a write answered with a 5xx may
 already have been applied, and the next event reconciles it.
 
+GitHub can deliver `workflow_run.completed` before the run's jobs are fully visible
+through the jobs API. Completion-triggered reconciliation therefore re-runs the
+full CI verifier every 10 seconds for up to 180 seconds. It publishes no status or
+review changes while waiting, stops as soon as CI is visible, and abandons the
+event without writing if the PR head or base revision moves. Other triggers remain
+immediate.
+
 During a same-commit rerun, an existing approval can remain until CI finishes.
 Runner queues can delay withdrawal after a push. A delayed push event preserves
 an approval already granted for the current commit. If the target branch advances
@@ -38,7 +45,8 @@ merging until the PR branch is brought up to date and checks pass again.
 
 Approval writes explicitly name the tested commit. PR metadata and CI are read
 again before publication and after a new review is submitted. Events are serialized
-per repository, and delayed events always evaluate the latest PR state.
+per head branch, and delayed events always evaluate the latest PR state. Unrelated
+branches can reconcile concurrently.
 
 `human-review-required` opts a PR out of automatic review. All file paths are eligible,
 including dependency manifests, lockfiles, workflows, and build/test configuration.

@@ -6,6 +6,8 @@ import { main as verifyCi } from './automerge-ci.mjs';
 export const CONTEXT = 'PR approval gate';
 export const MARKER = '<!-- vertesia-ci-approval:v1 -->';
 export const APP_LOGIN = 'vertesia-automerge[bot]';
+export const CI_SETTLE_TIMEOUT_MS = 180_000;
+export const CI_SETTLE_POLL_MS = 10_000;
 
 export function supportedBase(ref) {
     return ref === 'main' || /^release\/\d+\.\d+$/.test(ref);
@@ -55,9 +57,40 @@ function sameRevision(a, b) {
     return a.head.sha === b.head.sha && a.base.sha === b.base.sha && a.base.ref === b.base.ref;
 }
 
-export async function reconcile(api, number, ci, { pushed = false } = {}) {
+const sleepAsync = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function waitForCiToSettle(
+    api,
+    number,
+    expected,
+    ci,
+    { timeoutMs = CI_SETTLE_TIMEOUT_MS, pollMs = CI_SETTLE_POLL_MS, sleep = sleepAsync } = {},
+) {
+    const retries = Math.ceil(timeoutMs / pollMs);
+    let current = expected;
+    for (let attempt = 0; ; attempt++) {
+        if (await ci(current)) return { passed: true, changed: false };
+        if (attempt >= retries) return { passed: false, changed: false };
+        await sleep(pollMs);
+        current = await api.pr(number);
+        if (!sameRevision(expected, current)) return { passed: false, changed: true };
+    }
+}
+
+export async function reconcile(api, number, ci, { pushed = false, settle = false, settleOptions } = {}) {
     // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
+    let settled;
+    if (settle && !pushed) {
+        settled = await waitForCiToSettle(api, number, pr, ci, settleOptions);
+        if (settled.changed) {
+            return {
+                state: 'pending',
+                approve: false,
+                reason: 'PR changed while waiting for CI data; waiting for another completion event.',
+            };
+        }
+    }
     // Only the marked reviews from this App are ever candidates for dismissal.
     let standing = [];
     async function withdraw(reason, all = true) {
@@ -74,7 +107,15 @@ export async function reconcile(api, number, ci, { pushed = false } = {}) {
             // A delayed push event must preserve a newer approval and its successful status.
             return { reason: 'Removed old-commit approvals; CI completion handles approval.' };
         }
-        let result = await evaluate(api, pr, ci);
+        let firstEvaluation = true;
+        const evaluateCi = (current) => {
+            if (firstEvaluation && settled) {
+                firstEvaluation = false;
+                return settled.passed;
+            }
+            return ci(current);
+        };
+        let result = await evaluate(api, pr, evaluateCi);
         if (!result.approve) await withdraw(result.reason);
         if (result.approve) {
             const fresh = await api.pr(number);
@@ -269,6 +310,7 @@ export async function main(env) {
         try {
             const result = await reconcile(api, number, ci, {
                 pushed: env.GITHUB_EVENT_NAME === 'pull_request_target' && event.action === 'synchronize',
+                settle: env.GITHUB_EVENT_NAME === 'workflow_run',
             });
             const summary = `PR #${number}: ${result.reason}`;
             console.log(summary);

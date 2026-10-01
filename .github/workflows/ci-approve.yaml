@@ -29,9 +29,9 @@ jobs:
     runs-on: ubuntu-slim
     environment: renovate-automerge
     timeout-minutes: 15
-    # Serialize approval publishers, including pending runs.
+    # Serialize approval publishers for the same branch, including pending runs.
     concurrency:
-      group: ci-approve-${{ github.repository }}
+      group: ci-approve-${{ github.repository }}-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
       cancel-in-progress: false
       queue: max
     steps:

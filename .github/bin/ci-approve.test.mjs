@@ -4,6 +4,8 @@ import test from 'node:test';
 import { verifyWorkflow } from './automerge-ci.mjs';
 import {
     APP_LOGIN,
+    CI_SETTLE_POLL_MS,
+    CI_SETTLE_TIMEOUT_MS,
     CONTEXT,
     evaluate,
     githubApi,
@@ -15,6 +17,7 @@ import {
     requiresHuman,
     targets,
     verifyPrCi,
+    waitForCiToSettle,
 } from './ci-approve.mjs';
 
 const sha = 'a'.repeat(40);
@@ -110,6 +113,59 @@ test('failed or running CI on the same SHA withdraws its approval', async () => 
     await reconcile(api, 12, () => false);
     assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === 1));
     assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+});
+
+test('workflow completion waits for temporarily incomplete CI without publishing intermediate writes', async () => {
+    const api = fixture();
+    const verdicts = [false, false, true, true, true];
+    const sleeps = [];
+    const result = await reconcile(api, 12, () => verdicts.shift(), {
+        settle: true,
+        settleOptions: { timeoutMs: 20, pollMs: 10, sleep: async (ms) => sleeps.push(ms) },
+    });
+    assert.equal(result.approve, true);
+    assert.deepEqual(sleeps, [10, 10]);
+    assert.deepEqual(
+        api.writes.map(([kind]) => kind),
+        ['approve', 'status'],
+    );
+});
+
+test('workflow completion publishes pending only after the CI settle deadline', async () => {
+    const api = fixture({ reviews: [approval] });
+    const sleeps = [];
+    const result = await reconcile(api, 12, () => false, {
+        settle: true,
+        settleOptions: { timeoutMs: 20, pollMs: 10, sleep: async (ms) => sleeps.push(ms) },
+    });
+    assert.equal(result.approve, false);
+    assert.deepEqual(sleeps, [10, 10]);
+    assert.deepEqual(
+        api.writes.map(([kind]) => kind),
+        ['dismiss', 'status'],
+    );
+});
+
+for (const [name, update] of [
+    ['head', { head: { ...pr.head, sha: newer } }],
+    ['base', { base: { ...pr.base, sha: 'new-base' } }],
+]) {
+    test(`workflow completion abandons reconciliation when the ${name} moves during settling`, async () => {
+        const api = fixture({ pulls: [pr, { ...pr, ...update }], reviews: [approval] });
+        const result = await reconcile(api, 12, () => false, {
+            settle: true,
+            settleOptions: { timeoutMs: 10, pollMs: 10, sleep: async () => {} },
+        });
+        assert.equal(result.approve, false);
+        assert.match(result.reason, /changed while waiting/);
+        assert.deepEqual(api.writes, []);
+    });
+}
+
+test('CI settle defaults match the established three-minute automerge convergence window', () => {
+    assert.equal(CI_SETTLE_TIMEOUT_MS, 180_000);
+    assert.equal(CI_SETTLE_POLL_MS, 10_000);
+    assert.equal(typeof waitForCiToSettle, 'function');
 });
 
 for (const [name, change] of [
@@ -360,6 +416,8 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.doesNotMatch(workflow, /permission-contents: write|pull_request_review|checkout.*head|npm install/);
     assert.match(workflow, /cancel-in-progress: false/);
     assert.match(workflow, /queue: max/);
+    assert.match(workflow, /github\.event\.workflow_run\.head_branch/);
+    assert.match(workflow, /github\.event\.pull_request\.head\.ref/);
 });
 
 test('additive ruleset requires CI without changing human review or thread rules', () => {
