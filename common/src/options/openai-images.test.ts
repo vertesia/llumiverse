@@ -28,6 +28,30 @@ describe('GPT Image versions and options', () => {
             }
         }
     });
+    it('keeps the previous ChatGPT image alias on legacy size and quality controls', () => {
+        const options = getOpenAiOptions('chatgpt-image-latest').options;
+        expect(options.some((option) => option.name === 'width' || option.name === 'height')).toBe(false);
+        const quality = options.find((option) => option.name === 'image_quality');
+        expect(quality?.type).toBe(OptionType.enum);
+        if (quality?.type === OptionType.enum) {
+            expect(Object.values(quality.enum)).not.toContain('max');
+            expect(Object.values(quality.enum)).not.toContain('xhigh');
+        }
+    });
+    it.each([-1, 101, 0.5])('rejects invalid compression %s in direct and tool options', (output_compression) => {
+        expect(OpenAiGptImageOptionsSchema.safeParse({ output_compression }).success).toBe(false);
+        expect(
+            OpenAiTextOptionsSchema.safeParse({ image_generation: { model: 'gpt-image-2', output_compression } })
+                .success,
+        ).toBe(false);
+    });
+    it.each([0, 100])('preserves compression boundary %s', (output_compression) => {
+        expect(OpenAiGptImageOptionsSchema.parse({ output_compression }).output_compression).toBe(output_compression);
+        expect(
+            OpenAiTextOptionsSchema.parse({ image_generation: { model: 'gpt-image-2', output_compression } })
+                .image_generation?.output_compression,
+        ).toBe(output_compression);
+    });
     it('publishes custom sizes and requires the opt-in tool model', () => {
         expect(
             OpenAiGptImageOptionsSchema.safeParse({
