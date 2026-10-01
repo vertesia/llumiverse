@@ -11,6 +11,11 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type ResponseInputContent = OpenAI.Responses.ResponseInputContent;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 
+const imageMasks = new WeakMap<ResponseInputItem[], OpenAI.Responses.ResponseInputImage[]>();
+export function getImageMasks(prompt: ResponseInputItem[]): OpenAI.Responses.ResponseInputImage[] {
+    return imageMasks.get(prompt) ?? [];
+}
+
 function isResponseInputContent(value: unknown): value is ResponseInputContent {
     return (
         typeof value === 'object' &&
@@ -123,6 +128,7 @@ export async function formatOpenAILikeMultimodalPrompt(
     const system: ResponseInputItem[] = [];
     const safety: ResponseInputItem[] = [];
     const others: ResponseInputItem[] = [];
+    const masks: OpenAI.Responses.ResponseInputImage[] = [];
 
     for (const msg of segments) {
         const fileParts: ResponseInputContent[] = [];
@@ -135,6 +141,10 @@ export async function formatOpenAILikeMultimodalPrompt(
             }
         }
 
+        if (msg.role === PromptRole.mask) {
+            for (const part of fileParts) if (part.type === 'input_image') masks.push(part);
+            continue;
+        }
         const parts: ResponseInputContent[] = [...fileParts];
 
         if (msg.content) {
@@ -144,6 +154,10 @@ export async function formatOpenAILikeMultimodalPrompt(
             });
         }
 
+        if (opts.imageGeneration) {
+            if (msg.role !== PromptRole.negative) others.push({ role: 'user', content: parts });
+            continue;
+        }
         if (msg.role === PromptRole.system) {
             // For system messages, filter to only text parts
             const textParts = inputTextParts(parts);
@@ -202,7 +216,7 @@ export async function formatOpenAILikeMultimodalPrompt(
                         : msg.content || '',
             };
             others.push(toolOutputMsg);
-        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
+        } else if (msg.role !== PromptRole.negative) {
             const inputMsg: EasyInputMessage = {
                 type: 'message',
                 role: msg.role === 'assistant' ? 'assistant' : 'user',
@@ -232,10 +246,13 @@ export async function formatOpenAILikeMultimodalPrompt(
     }
 
     // put system messages first and safety last
-    return ([] as ResponseInputItem[]).concat(system).concat(others).concat(safety);
+    const result = ([] as ResponseInputItem[]).concat(system).concat(others).concat(safety);
+    imageMasks.set(result, masks);
+    return result;
 }
 
 export interface OpenAIPromptFormatterOptions {
+    imageGeneration?: boolean;
     multimodal?: boolean;
     useToolForFormatting?: boolean;
     schema?: object;
@@ -338,7 +355,7 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
             const output = item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
             messages.push({
                 role: 'tool',
-                tool_call_id: output.call_id,
+                tool_call_id: output.call_id ?? output.id ?? '',
                 content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
             });
             continue;

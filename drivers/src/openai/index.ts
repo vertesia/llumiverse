@@ -15,6 +15,7 @@ import {
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
+    isOpenAIImageVersionGTE,
     type JSONSchema,
     LlumiverseError,
     ModelType,
@@ -22,9 +23,12 @@ import {
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
+    type OpenAiImageGenerationOptions,
     type PromptOptions,
     type PromptSegment,
     Providers,
+    resolveModelProfile,
+    setConversationMeta,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -42,8 +46,9 @@ import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
+import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
-import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
 
 // Response API types
@@ -51,6 +56,7 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type OpenAIResponseServiceTier = OpenAI.Responses.ResponseCreateParams['service_tier'];
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
+    image_generation?: OpenAiImageGenerationOptions;
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
@@ -238,6 +244,25 @@ export class OpenAIResponsesProtocol {
         ) => { signal?: AbortSignal; timeout?: number } | undefined,
     ) {}
 
+    private getRequestOptions(
+        driver: OpenAIResponsesDriverBase,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): OpenAI.RequestOptions | undefined {
+        const base = this.resolveRequestOptions(options, signal);
+        const imageTool = (options.model_options as OpenAIRequestOptions | undefined)?.image_generation;
+        if (!imageTool || (driver.provider !== Providers.azure_foundry && driver.provider !== Providers.azure_openai)) {
+            return base;
+        }
+        return {
+            ...base,
+            headers: {
+                'x-ms-oai-image-generation-deployment': driver.getResponsesRequestModel(imageTool.model),
+                api_version: 'preview',
+            },
+        };
+    }
+
     async requestTextCompletionStream(
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
@@ -319,7 +344,8 @@ export class OpenAIResponsesProtocol {
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
+                tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
+                tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -329,13 +355,16 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
-        const requestOptions = this.resolveRequestOptions(options, signal);
+        const requestOptions = this.getRequestOptions(driver, options, signal);
         const stream = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
 
-        return mapResponseStream(stream, includeThoughts, (response) =>
-            finalizeOpenAIResponsesConversation(conversation, response.output, options),
+        return mapResponseStream(
+            stream,
+            includeThoughts,
+            (response) => finalizeOpenAIResponsesConversation(conversation, response.output, options),
+            model_options?.image_generation?.output_format,
         );
     }
 
@@ -418,7 +447,8 @@ export class OpenAIResponsesProtocol {
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
+                tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
+                tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -428,7 +458,7 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
-        const requestOptions = this.resolveRequestOptions(options, signal);
+        const requestOptions = this.getRequestOptions(driver, options, signal);
         const res = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
@@ -469,6 +499,13 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        if (this.isImageModel(options.model)) {
+            return formatOpenAILikeMultimodalPrompt(segments, {
+                ...options,
+                imageGeneration: true,
+                result_schema: undefined,
+            });
+        }
         const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
         const resultSchema =
             supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
@@ -491,7 +528,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         // Collect all parts in order (text and images)
         const includeThoughts =
             (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
-        const allResults = extractCompletionResults(result.output, includeThoughts);
+        const allResults = extractCompletionResults(
+            result.output,
+            includeThoughts,
+            (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
+        );
 
         if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
@@ -512,6 +553,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (this.isImageModel(options.model)) return this.requestImageStream(prompt, options, signal);
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
@@ -520,13 +562,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (this.isImageModel(options.model)) return this.requestImageGeneration(prompt, options, signal);
         return this.responsesProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        // Image generation models don't support streaming
+        // GPT Image supports completed-image streaming; legacy image endpoints use the fallback.
         if (this.isImageModel(_options.model)) {
-            return Promise.resolve(false);
+            return Promise.resolve(this.getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'));
         }
 
         if (_options.model.includes('o1') && !(_options.model.includes('mini') || _options.model.includes('preview'))) {
@@ -661,7 +704,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
             return (
-                !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
+                !unsupportedEndpointPattern.test(m.id.toLowerCase()) &&
+                !m.id.toLowerCase().includes('dall-e') &&
+                (this.isImageModel(m.id) || !isDedicatedInferenceModel(m.id, this.provider))
             );
         });
 
@@ -676,7 +721,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
                 // Determine model type based on capabilities
                 let modelType = ModelType.Text;
-                if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
+                if (this.isImageModel(m.id)) {
                     modelType = ModelType.Image;
                 }
 
@@ -741,116 +786,93 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         }
     }
 
-    imageModels = ['dall-e', 'gpt-image', 'chatgpt-image'];
-
-    /**
-     * Determine if a model is specifically an image generation model (not conversational image model)
-     */
     isImageModel(model: string): boolean {
-        // DALL-E models are standalone image generation
-        // gpt-image models can generate images in conversations, not standalone
-        return this.imageModels.some((imageModel) => model.includes(imageModel));
+        return resolveModelProfile(this.getImageSourceModel(model), this.provider).family === 'image';
     }
 
     /**
      * Request image generation from standalone Images API
-     * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
+     * Reference images select the edit operation; text-only prompts select generation.
      */
     async requestImageGeneration(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
-
-        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
-
-        // Extract prompt text from ResponseInputItem[]
-        let promptText = '';
-        for (const item of prompt) {
-            if ('content' in item && typeof item.content === 'string') {
-                promptText += `${item.content}\\n`;
-            } else if ('content' in item && Array.isArray(item.content)) {
-                // Extract text from content array
-                for (const part of item.content) {
-                    if ('type' in part && part.type === 'input_text' && 'text' in part) {
-                        promptText += `${part.text}\\n`;
-                    }
-                }
-            }
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
+            this.getImageSourceModel(options.model),
+            signal,
+        );
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = request.edit
+            ? await this.getImageService().images.edit(request.edit, requestOptions)
+            : await this.getImageService().images.generate(request.generate, requestOptions);
+        if (!response.data?.some((image) => image.b64_json || image.url)) {
+            throw new Error('Image response did not contain a completed image');
         }
-        promptText = promptText.trim();
+        const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        return {
+            result: (response.data ?? []).flatMap((image): CompletionResult[] =>
+                image.b64_json
+                    ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
+                    : image.url
+                      ? [{ type: 'image', value: image.url }]
+                      : [],
+            ),
+            token_usage: imageUsage(response.usage),
+            original_response: options.include_original_response ? response : undefined,
+        };
+    }
 
-        try {
-            const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
-                model: options.model,
-                prompt: promptText,
-                size: model_options?.size || '1024x1024',
-            };
+    getImageSourceModel(model: string): string {
+        return model;
+    }
 
-            // Add DALL-E specific options
-            if (options.model.includes('dall-e') || model_options?._option_id === 'openai-dalle') {
-                const dalleOptions = model_options as OpenAiDalleOptions | undefined;
-                generateParams.n = dalleOptions?.n || 1;
-                generateParams.response_format = dalleOptions?.response_format || 'b64_json';
+    getImageService(): OpenAI {
+        return this.service;
+    }
 
-                if (options.model.includes('dall-e-3')) {
-                    generateParams.quality = dalleOptions?.image_quality || 'standard';
-                    if (dalleOptions?.style) {
-                        generateParams.style = dalleOptions.style;
-                    }
+    async requestImageStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | undefined,
+            this.getImageSourceModel(options.model),
+            signal,
+        );
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        const stream = request.edit
+            ? await this.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
+            : await this.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
+        return {
+            async *[Symbol.asyncIterator]() {
+                let completed = false;
+                for await (const event of stream) {
+                    if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
+                    completed = true;
+                    yield {
+                        result: [
+                            {
+                                type: 'image',
+                                value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
+                            },
+                        ],
+                        token_usage: imageUsage(event.usage),
+                    } satisfies CompletionChunkObject;
                 }
-            } else {
-                // Default for other models
-                generateParams.n = 1;
-            }
-
-            const response = signal
-                ? await this.service.images.generate(generateParams, { signal })
-                : await this.service.images.generate(generateParams);
-
-            // Convert response to CompletionResults
-            const results: CompletionResult[] = [];
-
-            if (response.data) {
-                for (const image of response.data) {
-                    let imageValue: string;
-
-                    if (image.b64_json) {
-                        // Base64 format
-                        imageValue = `data:image/png;base64,${image.b64_json}`;
-                    } else if (image.url) {
-                        // URL format
-                        imageValue = image.url;
-                    } else {
-                        continue;
-                    }
-
-                    results.push({
-                        type: 'image',
-                        value: imageValue,
-                    });
-                }
-            }
-
-            return {
-                result: results,
-            };
-        } catch (error: unknown) {
-            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
-            const generationError = error instanceof Error ? error : new Error(String(error));
-            const errorCode =
-                (error as { code?: unknown })?.code === 'content_policy_violation'
-                    ? 'content_policy_violation'
-                    : 'validation_error';
-            return {
-                result: [],
-                error: {
-                    message: generationError.message,
-                    code: errorCode,
-                },
-            };
-        }
+                if (!completed) throw new Error('Image stream ended without a completed image');
+            },
+        };
     }
 }
 
@@ -987,6 +1009,7 @@ export function mapResponseStream(
     stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
     includeThoughts = false,
     finalize?: (response: OpenAI.Responses.Response) => unknown | Promise<unknown>,
+    requestedFormat?: string,
 ): DriverCompletionStream {
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
     let finalResponse: OpenAI.Responses.Response | undefined;
@@ -995,6 +1018,7 @@ export function mapResponseStream(
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';
+            const emittedImages = new Set<string>();
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -1038,9 +1062,15 @@ export function mapResponseStream(
                     // Just update metadata, don't yield (arguments already accumulated from delta events)
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
-                    const tool_name = metadata?.name ?? event.name ?? '';
+                    const tool_name = metadata?.name ?? '';
                     if (event.item_id) {
                         toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
+                    }
+                } else if (event.type === 'response.output_item.done' && event.item.type === 'image_generation_call') {
+                    const results = extractCompletionResults([event.item], false, requestedFormat);
+                    if (results.length && !emittedImages.has(event.item.id)) {
+                        emittedImages.add(event.item.id);
+                        yield { result: results } satisfies CompletionChunkObject;
                     }
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
@@ -1080,7 +1110,12 @@ export function mapResponseStream(
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     yield {
-                        result: [],
+                        result: event.response.output.flatMap((item): CompletionResult[] => {
+                            if (item.type !== 'image_generation_call' || emittedImages.has(item.id)) return [];
+                            const results = extractCompletionResults([item], false, requestedFormat);
+                            if (results.length) emittedImages.add(item.id);
+                            return results;
+                        }),
                         finish_reason: responseFinishReason(event.response, finalTools),
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
@@ -1229,6 +1264,7 @@ function finalizeOpenAIResponsesConversation(
     const currentTurn = getConversationMeta(completed).turnNumber;
     const preserveSubtree = (value: unknown): boolean => {
         if (!value || typeof value !== 'object') return false;
+        if ('type' in value && value.type === 'image_generation_call') return true;
         const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
         return typeof encryptedContent === 'string' && encryptedContent.length > 0;
     };
@@ -1238,8 +1274,24 @@ function finalizeOpenAIResponsesConversation(
         textMaxTokens: options.stripTextMaxTokens,
         preserveSubtree,
     };
+    if (currentTurn >= (options.stripImagesAfterTurns ?? Infinity)) {
+        const items = unwrapConversationArray<ResponseInputItem>(completed) ?? completed;
+        completed = setConversationMeta(
+            items.map((item) =>
+                'type' in item && item.type === 'image_generation_call' && item.id
+                    ? { type: 'item_reference', id: item.id }
+                    : item,
+            ),
+            getConversationMeta(completed),
+        ) as ResponseInputItem[];
+    }
     let processed = stripBase64ImagesFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
+    processed = truncateLargeTextInConversation(processed, {
+        ...stripOptions,
+        preserveSubtree: (value) =>
+            preserveSubtree(value) ||
+            (!!value && typeof value === 'object' && 'type' in value && value.type === 'input_image'),
+    });
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
@@ -1277,6 +1329,7 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
 function extractCompletionResults(
     output?: OpenAI.Responses.ResponseOutputItem[],
     includeThoughts = true,
+    requestedFormat?: string,
 ): CompletionResult[] {
     if (!output) {
         return [];
@@ -1300,11 +1353,11 @@ function extractCompletionResults(
                     });
                 }
             }
-        } else if (item.type === 'image_generation_call' && 'result' in item && item.result) {
+        } else if (item.type === 'image_generation_call' && item.status === 'completed' && item.result) {
             // GPT-image models return base64 encoded images in result field
             const base64Data = item.result;
             // Format as data URL for consistency with other image outputs
-            const imageUrl = base64Data.startsWith('data:') ? base64Data : `data:image/png;base64,${base64Data}`;
+            const imageUrl = imageDataUrl(base64Data, item.output_format, requestedFormat);
             results.push({
                 type: 'image',
                 value: imageUrl,
@@ -1350,7 +1403,7 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     const outputCallIds = new Set<string>();
     for (const item of items) {
         if ('type' in item && item.type === 'function_call_output') {
-            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+            if (item.call_id) outputCallIds.add(item.call_id);
         }
     }
 
@@ -1416,7 +1469,7 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-            return callIds.has(item.call_id);
+            return !!item.call_id && callIds.has(item.call_id);
         }
         return true;
     });
@@ -1431,4 +1484,42 @@ function safeJsonParse(value: unknown): unknown {
     } catch {
         return value;
     }
+}
+
+function imageUsage(usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+}): ExecutionTokenUsage | undefined {
+    return usage ? { prompt: usage.input_tokens, result: usage.output_tokens, total: usage.total_tokens } : undefined;
+}
+
+function responseTools(
+    prompt: ResponseInputItem[],
+    config: OpenAiImageGenerationOptions | undefined,
+    functions: OpenAI.Responses.Tool[],
+): OpenAI.Responses.Tool[] | undefined {
+    if (!config) return functions.length ? functions : undefined;
+    if (!config.model) throw new Error('Image generation tool requires an image model');
+    const { force: _force, ...settings } = config;
+    const masks = getImageMasks(prompt);
+    if (masks.length > 1 || (masks.length && settings.input_image_mask))
+        throw new Error('Only one image mask is supported');
+    const mask = masks[0];
+    const model = settings.model.split('::').pop() ?? settings.model;
+    return [
+        ...functions,
+        {
+            ...settings,
+            model,
+            type: 'image_generation',
+            input_fidelity:
+                isOpenAIImageVersionGTE(model, 2) && !isOpenAIImageVersionGTE(model, 2, 5)
+                    ? undefined
+                    : settings.input_fidelity,
+            input_image_mask: mask
+                ? { image_url: mask.image_url ?? undefined, file_id: mask.file_id ?? undefined }
+                : settings.input_image_mask,
+        },
+    ];
 }
