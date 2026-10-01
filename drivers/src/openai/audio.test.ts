@@ -1,4 +1,4 @@
-import type { ConversationPreparedRequest } from '@llumiverse/conversation';
+import { type ConversationPreparedRequest, parseConversationDocument } from '@llumiverse/conversation';
 import {
     type DataSource,
     type ExecutionOptions,
@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { boundedAudioStream } from './audio.js';
 import { OpenAIDriver } from './openai.js';
+import type { ChatCompletionsUsage } from './usage.js';
 
 const bytes = new Uint8Array([82, 73, 70, 70, 1, 2, 3]);
 function source(): DataSource {
@@ -63,6 +64,101 @@ describe('OpenAI file audio', () => {
         expect(result.prompt).toEqual([]);
         expect(result.conversation).toBeUndefined();
         expect(file.getURL).not.toHaveBeenCalled();
+    });
+
+    it('records installed SDK transcription output and usage as canonical evidence', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        let multipart = '';
+        driver.service = driver.service.withOptions({
+            fetch: async (url, init) => {
+                expect(String(url)).toContain('/audio/transcriptions');
+                multipart = await new Response(init?.body).text();
+                return Response.json({
+                    text: 'Canonical transcript.',
+                    usage: {
+                        type: 'tokens',
+                        input_tokens: 8,
+                        output_tokens: 2,
+                        total_tokens: 10,
+                        input_token_details: { audio_tokens: 7, text_tokens: 1 },
+                    },
+                });
+            },
+        });
+
+        const result = await driver.executeCanonical([{ role: PromptRole.user, content: '', files: [source()] }], {
+            model: 'gpt-transcribe',
+            model_options: { _option_id: 'openai-transcription', language: 'en' },
+            conversation_runtime: canonicalRuntime('transcription-evidence'),
+        });
+
+        expect(multipart).toContain('filename="recording.wav"');
+        expect(result).not.toHaveProperty('result');
+        expect(result.accepted_output.turn.blocks).toEqual([
+            expect.objectContaining({ type: 'text', text: 'Canonical transcript.', format: 'plain' }),
+        ]);
+        expect(result.accepted_output.generation.usage).toEqual({
+            input_tokens: 8,
+            output_tokens: 2,
+            total_tokens: 10,
+            accounting_provenance: {
+                input_tokens: { method: 'reported', accounting_basis: 'openai_transcription_tokens' },
+                output_tokens: { method: 'reported', accounting_basis: 'openai_transcription_tokens' },
+                total_tokens: { method: 'reported', accounting_basis: 'openai_transcription_tokens' },
+            },
+        });
+        const retainedGeneration = parseConversationDocument(result.conversation).generations[
+            result.accepted_output.generation.id
+        ];
+        expect(retainedGeneration?.usage?.reported_usage).toEqual([
+            {
+                source: 'provider',
+                protocol: 'openai.audio.transcription',
+                accounting_basis: 'openai_transcription_tokens',
+                payload: {
+                    type: 'tokens',
+                    input_tokens: 8,
+                    output_tokens: 2,
+                    total_tokens: 10,
+                    input_token_details: { audio_tokens: 7, text_tokens: 1 },
+                },
+            },
+        ]);
+    });
+
+    it('retains duration-billed provider usage without inventing token accounting', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        driver.service = driver.service.withOptions({
+            fetch: async () =>
+                Response.json({
+                    text: 'Duration transcript.',
+                    usage: { type: 'duration', seconds: 1.25 },
+                }),
+        });
+        const legacy = await driver.execute([{ role: PromptRole.user, content: '', files: [source()] }], {
+            model: 'gpt-transcribe',
+        });
+        expect(legacy.result).toEqual([{ type: 'text', value: 'Duration transcript.' }]);
+        expect(legacy.token_usage).toBeUndefined();
+
+        const canonical = await driver.executeCanonical([{ role: PromptRole.user, content: '', files: [source()] }], {
+            model: 'gpt-transcribe',
+            conversation_runtime: canonicalRuntime('transcription-duration-evidence'),
+        });
+        expect(canonical.accepted_output.generation.usage).toBeUndefined();
+        const retainedGeneration = parseConversationDocument(canonical.conversation).generations[
+            canonical.accepted_output.generation.id
+        ];
+        expect(retainedGeneration?.usage).toEqual({
+            reported_usage: [
+                {
+                    source: 'provider',
+                    protocol: 'openai.audio.transcription',
+                    accounting_basis: 'openai_transcription_duration',
+                    payload: { type: 'duration', seconds: 1.25 },
+                },
+            ],
+        });
     });
 
     it.each(['mp3', 'wav'] as const)(
@@ -147,6 +243,14 @@ describe('OpenAI file audio', () => {
 
     it.each(['blocking', 'fallback'] as const)('preserves PCM format and usage in %s audio results', async (mode) => {
         const driver = new OpenAIDriver({ apiKey: 'test' });
+        const usage = {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 4, cache_write_tokens: 1 },
+            cost: 0.125,
+            is_byok: false,
+        } satisfies ChatCompletionsUsage;
         vi.spyOn(driver.service.chat.completions, 'create').mockResolvedValue({
             id: 'completion',
             object: 'chat.completion',
@@ -170,7 +274,7 @@ describe('OpenAI file audio', () => {
                     },
                 },
             ],
-            usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+            usage,
         });
         const options: ExecutionOptions = {
             model: 'gpt-audio',
@@ -195,8 +299,10 @@ describe('OpenAI file audio', () => {
             prompt: 10,
             result: 20,
             total: 30,
-            prompt_cached: undefined,
-            prompt_new: 10,
+            prompt_cached: 4,
+            prompt_cache_write: 1,
+            prompt_new: 5,
+            provider_cost_usd: 0.125,
         });
         expect(result?.result).toContainEqual({
             type: 'audio',

@@ -7,7 +7,9 @@ import type OpenAI from 'openai';
  */
 export type ChatCompletionsUsage = Omit<OpenAI.CompletionUsage, 'prompt_tokens_details'> & {
     prompt_tokens_details?:
-        | (OpenAI.CompletionUsage.PromptTokensDetails & { cache_write_tokens?: number | null })
+        | (Omit<OpenAI.CompletionUsage.PromptTokensDetails, 'cache_write_tokens'> & {
+              cache_write_tokens?: number | null;
+          })
         | null;
     cost?: number | null;
     is_byok?: boolean | null;

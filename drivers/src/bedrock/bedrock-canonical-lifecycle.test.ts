@@ -5,8 +5,12 @@ import type {
     ConverseStreamOutput,
 } from '@aws-sdk/client-bedrock-runtime';
 import {
+    appendConversationRecords,
     type ConversationDocument,
     type ConversationStreamEvent,
+    createConversationDocument,
+    createTextBlock,
+    createUserTurn,
     fingerprintJson,
     parseConversationDocument,
     resolveToolExecutionRequest,
@@ -63,6 +67,64 @@ async function collectCanonicalEvents(
 }
 
 describe('Bedrock canonical driver lifecycle', () => {
+    it('prepares retained canonical context with no new segments while legacy empty input stays rejected', async () => {
+        const initial = createConversationDocument({
+            id: 'conversation:retained-empty-input',
+            created_at: '2026-09-30T00:00:00.000Z',
+        });
+        const turn = createUserTurn({
+            id: 'turn:retained',
+            authority: 'ordinary',
+            status: 'completed',
+            timestamps: { recorded_at: initial.created_at },
+            model_visibility: 'include',
+            provenance: { type: 'received' },
+            blocks: [
+                createTextBlock({ id: 'block:retained', text: 'Retained canonical user input.', format: 'plain' }),
+            ],
+        });
+        const document = appendConversationRecords(
+            initial,
+            { turns: [turn], context_entries: [{ id: 'context:retained', type: 'source_turn', turn_id: turn.id }] },
+            {
+                expected_revision: 0,
+                operation_id: 'input:retained',
+                payload_fingerprint: await fingerprintJson(turn),
+                recorded_at: initial.created_at,
+            },
+        ).document;
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const converse = vi.fn(() => {
+            throw new Error('Transport must not start before prepared persistence');
+        });
+        Object.defineProperty(driver, 'getExecutor', { value: () => ({ converse, destroy: vi.fn() }) });
+        const prepared = vi.fn(
+            async (
+                value: Parameters<NonNullable<CanonicalExecutionInputOptions['on_canonical_request_prepared']>>[0],
+            ) => {
+                expect(value.document.turns).toEqual(document.turns);
+                expect(value.record.source.revision).toBe(document.revision + 1);
+                throw new Error('Prepared persistence gate');
+            },
+        );
+        const options: CanonicalExecutionInputOptions = {
+            ...runtimeOptions({ flow: 'retained-empty-input', operation: 'next', conversation: document }),
+            on_canonical_request_prepared: prepared,
+        };
+        try {
+            await expect(driver.execute([], options)).rejects.toThrow('Prompt must contain at least one message');
+            expect(prepared).not.toHaveBeenCalled();
+            await expect(driver.executeCanonical([], options)).rejects.toThrow('Prepared persistence gate');
+            expect(prepared).toHaveBeenCalledOnce();
+            await expect(driver.executeCanonical([], { ...options, conversation: initial })).rejects.toThrow(
+                'Prompt must contain at least one message',
+            );
+            expect(converse).not.toHaveBeenCalled();
+        } finally {
+            await driver.destroy();
+        }
+    });
+
     it('executes directly into a canonical response and recovers the accepted operation without another request', async () => {
         const converse = vi.fn(
             async (): Promise<ConverseResponse> => ({

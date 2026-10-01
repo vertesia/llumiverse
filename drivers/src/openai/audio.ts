@@ -1,5 +1,5 @@
 import { boundedAudioStream, canonicalAudioAssetStorage, storeAudioResult } from '../shared/audio.js';
-import { mapOpenAIChatCompletionsUsage, mapOpenAITranscriptionUsage } from './usage.js';
+import type { ChatCompletionsUsage } from './usage.js';
 
 export { boundedAudioStream } from '../shared/audio.js';
 
@@ -14,6 +14,7 @@ import {
     appendDecodedConversationResponse,
     deriveConversationId,
     fingerprintJson,
+    type GenerationUsage,
     hashContentBytes,
     isConversationDocumentFormat,
     type JsonValue,
@@ -31,6 +32,7 @@ import {
     type DataSource,
     type ExecutionOptions,
     type ExecutionResponse,
+    type ExecutionTokenUsage,
     FallbackCanonicalExecutionEventStream,
     type PromptSegment,
     Providers,
@@ -57,16 +59,172 @@ import {
 const OPENAI_AUDIO_ADAPTER_VERSION = '2026-09-30.canonical.1';
 
 interface OpenAIAudioNativeExecution {
-    result: CompletionResult[];
+    blocks: AgentContentBlock[];
+    assets: Asset[];
+    completed_at: string;
     finish_reason?: string | null;
-    token_usage?: Completion['token_usage'];
+    usage?: GenerationUsage;
     original_response?: unknown;
     response_fingerprint_payload: JsonValue;
-    audio_evidence?: Array<{
-        value: string;
-        byte_length: number;
-        content_hash: string;
-    }>;
+}
+
+interface OpenAIAudioOutputIdentity {
+    response_operation_id: string;
+    generation_id: string;
+    response_turn_id: string;
+    completed_at?: string;
+    asset_storage: (value: string) => Asset['storage'];
+}
+
+type DecodedOpenAIAudioItem =
+    | { type: 'text'; text: string }
+    | { type: 'json'; value: JsonValue }
+    | {
+          type: 'audio';
+          audio: AudioResult;
+          byte_length: number;
+          content_hash: string;
+      };
+
+const OPENAI_AUDIO_CHAT_PROTOCOL = 'openai.chat.completions.audio';
+const OPENAI_AUDIO_TOKEN_BASIS = 'openai_audio_tokens';
+const OPENAI_TRANSCRIPTION_TOKEN_BASIS = 'openai_transcription_tokens';
+const OPENAI_TRANSCRIPTION_DURATION_BASIS = 'openai_transcription_duration';
+
+function decimalAmount(value: number): string {
+    if (!Number.isFinite(value) || value < 0) throw new Error('OpenAI audio response contains invalid usage cost');
+    const source = String(value);
+    if (!/[eE]/.test(source)) return source;
+    const [coefficient, exponentText] = source.toLowerCase().split('e');
+    const exponent = Number(exponentText);
+    const negative = coefficient.startsWith('-');
+    const unsigned = negative ? coefficient.slice(1) : coefficient;
+    const [integer, fraction = ''] = unsigned.split('.');
+    const digits = `${integer}${fraction}`;
+    const decimalIndex = integer.length + exponent;
+    const expanded =
+        decimalIndex <= 0
+            ? `0.${'0'.repeat(-decimalIndex)}${digits}`
+            : decimalIndex >= digits.length
+              ? `${digits}${'0'.repeat(decimalIndex - digits.length)}`
+              : `${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+    return negative ? `-${expanded}` : expanded;
+}
+
+function openAIChatAudioUsage(usage: ChatCompletionsUsage | null | undefined): GenerationUsage | undefined {
+    if (usage === undefined || usage === null) return undefined;
+    const reportedCacheReadTokens = usage.prompt_tokens_details?.cached_tokens;
+    const reportedCacheWriteTokens = usage.prompt_tokens_details?.cache_write_tokens;
+    const cacheReadTokens = reportedCacheReadTokens ?? 0;
+    const cacheWriteTokens = reportedCacheWriteTokens ?? 0;
+    const inputNewTokens = Math.max(0, usage.prompt_tokens - cacheReadTokens - cacheWriteTokens);
+    const providerCost = usage.is_byok !== true && typeof usage.cost === 'number' ? usage.cost : undefined;
+    return {
+        input_tokens: usage.prompt_tokens,
+        input_new_tokens: inputNewTokens,
+        cache_read_tokens: cacheReadTokens,
+        cache_write_tokens: cacheWriteTokens,
+        output_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        accounting_provenance: {
+            input_tokens: { method: 'reported', accounting_basis: OPENAI_AUDIO_TOKEN_BASIS },
+            input_new_tokens: { method: 'derived', accounting_basis: OPENAI_AUDIO_TOKEN_BASIS },
+            cache_read_tokens: {
+                method: reportedCacheReadTokens == null ? 'derived' : 'reported',
+                accounting_basis: OPENAI_AUDIO_TOKEN_BASIS,
+            },
+            cache_write_tokens: {
+                method: reportedCacheWriteTokens == null ? 'derived' : 'reported',
+                accounting_basis: OPENAI_AUDIO_TOKEN_BASIS,
+            },
+            output_tokens: { method: 'reported', accounting_basis: OPENAI_AUDIO_TOKEN_BASIS },
+            total_tokens: { method: 'reported', accounting_basis: OPENAI_AUDIO_TOKEN_BASIS },
+        },
+        input_partition: { type: 'complete_disjoint', cache_write_bucket: 'included' },
+        reported_usage: [
+            {
+                source: 'provider',
+                protocol: OPENAI_AUDIO_CHAT_PROTOCOL,
+                accounting_basis: OPENAI_AUDIO_TOKEN_BASIS,
+                payload: providerJsonValue(usage),
+            },
+        ],
+        ...(providerCost === undefined
+            ? {}
+            : { cost: { amount: decimalAmount(providerCost), currency: 'USD', provenance: 'reported' as const } }),
+    };
+}
+
+function openAITranscriptionUsage(usage: OpenAI.Audio.Transcription['usage']): GenerationUsage | undefined {
+    if (usage === undefined) return undefined;
+    const accountingBasis =
+        usage.type === 'tokens' ? OPENAI_TRANSCRIPTION_TOKEN_BASIS : OPENAI_TRANSCRIPTION_DURATION_BASIS;
+    const reported_usage: NonNullable<GenerationUsage['reported_usage']> = [
+        {
+            source: 'provider',
+            protocol: 'openai.audio.transcription',
+            accounting_basis: accountingBasis,
+            payload: providerJsonValue(usage),
+        },
+    ];
+    if (usage.type !== 'tokens') return { reported_usage };
+    return {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        accounting_provenance: {
+            input_tokens: { method: 'reported', accounting_basis: accountingBasis },
+            output_tokens: { method: 'reported', accounting_basis: accountingBasis },
+            total_tokens: { method: 'reported', accounting_basis: accountingBasis },
+        },
+        reported_usage,
+    };
+}
+
+async function canonicalOpenAIAudioOutput(
+    items: DecodedOpenAIAudioItem[],
+    identity: OpenAIAudioOutputIdentity,
+): Promise<Pick<OpenAIAudioNativeExecution, 'blocks' | 'assets' | 'completed_at'>> {
+    const completedAt = identity.completed_at ?? new Date().toISOString();
+    const blocks: AgentContentBlock[] = [];
+    const assets: Asset[] = [];
+    for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        const blockId = await deriveConversationId('block', identity.response_operation_id, String(index));
+        if (item.type === 'text') {
+            blocks.push({ id: blockId, type: 'text', text: item.text, format: 'plain' });
+            continue;
+        }
+        if (item.type === 'json') {
+            blocks.push({ id: blockId, type: 'json', value: item.value });
+            continue;
+        }
+        const assetId = await deriveConversationId('asset', identity.response_operation_id, String(index));
+        assets.push({
+            id: assetId,
+            kind: 'audio',
+            mime_type: item.audio.mime_type,
+            storage: identity.asset_storage(item.audio.value),
+            provenance: {
+                type: 'generated',
+                generation_id: identity.generation_id,
+                source_turn_id: identity.response_turn_id,
+            },
+            created_at: completedAt,
+            byte_length: item.byte_length,
+            content_hash: item.content_hash,
+            media: {
+                ...(item.audio.container === undefined ? {} : { container: item.audio.container }),
+                ...(item.audio.codec === undefined ? {} : { codec: item.audio.codec }),
+                ...(item.audio.sample_rate === undefined ? {} : { sample_rate: item.audio.sample_rate }),
+                ...(item.audio.channels === undefined ? {} : { channels: item.audio.channels }),
+                ...(item.audio.sample_encoding === undefined ? {} : { sample_encoding: item.audio.sample_encoding }),
+                ...(item.audio.byte_order === undefined ? {} : { byte_order: item.audio.byte_order }),
+            },
+        });
+        blocks.push({ id: blockId, type: 'audio', asset_id: assetId });
+    }
+    return { blocks, assets, completed_at: completedAt };
 }
 
 export async function openAIInputAudioPart(
@@ -232,6 +390,7 @@ export async function executeOpenAIAudioNative(
     segments: PromptSegment[],
     options: ExecutionOptions,
     requestOptions: { signal?: AbortSignal; timeout?: number } | undefined,
+    outputIdentity: OpenAIAudioOutputIdentity,
     requestModel = options.model,
 ): Promise<OpenAIAudioNativeExecution> {
     const signal = requestOptions?.signal;
@@ -269,24 +428,26 @@ export async function executeOpenAIAudioNative(
             options,
             signal,
         );
-        return {
-            result: [
+        const output = await canonicalOpenAIAudioOutput(
+            [
                 ...(message.content || message.audio.transcript
-                    ? [{ type: 'text' as const, value: message.content ?? message.audio.transcript }]
+                    ? [{ type: 'text' as const, text: message.content ?? message.audio.transcript }]
                     : []),
-                audio,
-            ],
-            finish_reason: result.choices[0]?.finish_reason,
-            token_usage: mapOpenAIChatCompletionsUsage(result.usage),
-            original_response: options.include_original_response ? result : undefined,
-            response_fingerprint_payload: providerJsonValue(result),
-            audio_evidence: [
                 {
-                    value: audio.value,
+                    type: 'audio' as const,
+                    audio,
                     byte_length: audioBytes.byteLength,
                     content_hash: (await hashContentBytes(audioBytes)).content_hash,
                 },
             ],
+            outputIdentity,
+        );
+        return {
+            ...output,
+            finish_reason: result.choices[0]?.finish_reason,
+            usage: openAIChatAudioUsage(result.usage),
+            original_response: options.include_original_response ? result : undefined,
+            response_fingerprint_payload: providerJsonValue(result),
         };
     }
     if (task === 'transcription') {
@@ -312,9 +473,9 @@ export async function executeOpenAIAudioNative(
                     requestOptions,
                 )) as OpenAI.Audio.TranscriptionDiarized; // SDK overload omits its exported diarized response type.
                 signal?.throwIfAborted();
-                return {
-                    result: [
-                        { type: 'text', value: result.text },
+                const output = await canonicalOpenAIAudioOutput(
+                    [
+                        { type: 'text', text: result.text },
                         {
                             type: 'json',
                             value: {
@@ -328,8 +489,12 @@ export async function executeOpenAIAudioNative(
                             },
                         },
                     ],
+                    outputIdentity,
+                );
+                return {
+                    ...output,
                     finish_reason: 'stop',
-                    token_usage: mapOpenAITranscriptionUsage(result.usage),
+                    usage: openAITranscriptionUsage(result.usage),
                     original_response: options.include_original_response ? result : undefined,
                     response_fingerprint_payload: providerJsonValue(result),
                 };
@@ -345,10 +510,11 @@ export async function executeOpenAIAudioNative(
                 requestOptions,
             );
             signal?.throwIfAborted();
+            const output = await canonicalOpenAIAudioOutput([{ type: 'text', text: result.text }], outputIdentity);
             return {
-                result: [{ type: 'text', value: result.text }],
+                ...output,
                 finish_reason: 'stop',
-                token_usage: mapOpenAITranscriptionUsage(result.usage),
+                usage: openAITranscriptionUsage(result.usage),
                 original_response: options.include_original_response ? result : undefined,
                 response_fingerprint_payload: providerJsonValue(result),
             };
@@ -378,8 +544,19 @@ export async function executeOpenAIAudioNative(
         await new Response(boundedAudioStream(response.body, 50_000_000, signal)).arrayBuffer(),
     );
     const audio = await storeAudioResult(new Blob([audioBytes]).stream(), openAIAudioMetadata(format), options, signal);
+    const output = await canonicalOpenAIAudioOutput(
+        [
+            {
+                type: 'audio',
+                audio,
+                byte_length: audioBytes.byteLength,
+                content_hash: (await hashContentBytes(audioBytes)).content_hash,
+            },
+        ],
+        outputIdentity,
+    );
     return {
-        result: [audio],
+        ...output,
         finish_reason: 'stop',
         original_response: options.include_original_response ? response : undefined,
         response_fingerprint_payload: {
@@ -388,13 +565,6 @@ export async function executeOpenAIAudioNative(
                 data: Buffer.from(audioBytes).toString('base64'),
             },
         },
-        audio_evidence: [
-            {
-                value: audio.value,
-                byte_length: audioBytes.byteLength,
-                content_hash: (await hashContentBytes(audioBytes)).content_hash,
-            },
-        ],
     };
 }
 
@@ -405,42 +575,92 @@ export async function executeOpenAIAudio(
     requestOptions: { signal?: AbortSignal; timeout?: number } | undefined,
     requestModel = options.model,
 ): Promise<Completion> {
-    const {
-        response_fingerprint_payload: _responseFingerprintPayload,
-        audio_evidence: _audioEvidence,
-        ...result
-    } = await executeOpenAIAudioNative(service, segments, options, requestOptions, requestModel);
+    const native = await executeOpenAIAudioNative(
+        service,
+        segments,
+        options,
+        requestOptions,
+        {
+            response_operation_id: 'legacy-openai-audio-response',
+            generation_id: 'legacy-openai-audio-generation',
+            response_turn_id: 'legacy-openai-audio-response-turn',
+            asset_storage: (value) => ({
+                type: 'external',
+                resolver: 'legacy_audio_result',
+                locator: { uri: value },
+            }),
+        },
+        requestModel,
+    );
+    const tokenUsage = legacyOpenAIAudioUsage(native.usage);
     return {
-        ...result,
-        ...(result.finish_reason == null ? { finish_reason: undefined } : { finish_reason: result.finish_reason }),
+        result: legacyOpenAIAudioResults(native),
+        ...(tokenUsage === undefined ? {} : { token_usage: tokenUsage }),
+        ...(native.finish_reason == null ? { finish_reason: undefined } : { finish_reason: native.finish_reason }),
+        ...(native.original_response === undefined ? {} : { original_response: native.original_response }),
     };
 }
 
-function generationUsage(
-    usage: Completion['token_usage'],
-): import('@llumiverse/conversation').GenerationUsage | undefined {
+function legacyOpenAIAudioUsage(usage: GenerationUsage | undefined): ExecutionTokenUsage | undefined {
     if (usage === undefined) return undefined;
-    const basis = 'openai_audio_tokens';
+    const providerCostUsd = usage.cost?.currency === 'USD' ? Number(usage.cost.amount) : undefined;
+    const hasScalarUsage =
+        usage.input_tokens !== undefined ||
+        usage.input_new_tokens !== undefined ||
+        usage.cache_read_tokens !== undefined ||
+        usage.cache_write_tokens !== undefined ||
+        usage.output_tokens !== undefined ||
+        usage.total_tokens !== undefined;
+    if (!hasScalarUsage && (providerCostUsd === undefined || !Number.isFinite(providerCostUsd))) return undefined;
+    const isChatAudio = usage.reported_usage?.some((reported) => reported.protocol === OPENAI_AUDIO_CHAT_PROTOCOL);
     return {
-        ...(usage.prompt === undefined ? {} : { input_tokens: usage.prompt }),
-        ...(usage.prompt_new === undefined ? {} : { input_new_tokens: usage.prompt_new }),
-        ...(usage.prompt_cached === undefined ? {} : { cache_read_tokens: usage.prompt_cached }),
-        ...(usage.prompt_cache_write === undefined ? {} : { cache_write_tokens: usage.prompt_cache_write }),
-        ...(usage.result === undefined ? {} : { output_tokens: usage.result }),
-        ...(usage.total === undefined ? {} : { total_tokens: usage.total }),
-        accounting_provenance: Object.fromEntries(
-            [
-                ['input_tokens', usage.prompt],
-                ['input_new_tokens', usage.prompt_new],
-                ['cache_read_tokens', usage.prompt_cached],
-                ['cache_write_tokens', usage.prompt_cache_write],
-                ['output_tokens', usage.result],
-                ['total_tokens', usage.total],
-            ].flatMap(([key, value]) =>
-                value === undefined ? [] : [[key, { method: 'reported' as const, accounting_basis: basis }]],
-            ),
-        ),
+        prompt: usage.input_tokens,
+        ...(isChatAudio
+            ? {
+                  prompt_new: usage.input_new_tokens,
+                  prompt_cached: usage.cache_read_tokens || undefined,
+                  prompt_cache_write: usage.cache_write_tokens || undefined,
+              }
+            : {}),
+        result: usage.output_tokens,
+        total: usage.total_tokens,
+        ...(providerCostUsd === undefined || !Number.isFinite(providerCostUsd)
+            ? {}
+            : { provider_cost_usd: providerCostUsd }),
     };
+}
+
+function legacyOpenAIAudioAssetValue(asset: Asset): string {
+    if (asset.storage.type !== 'external') throw new Error(`Canonical audio asset ${asset.id} is not external`);
+    const uri = asset.storage.locator.uri;
+    if (typeof uri === 'string' && uri.length > 0) return uri;
+    const url = asset.storage.locator.url;
+    if (typeof url === 'string' && url.length > 0) return url;
+    throw new Error(`Canonical audio asset ${asset.id} has no legacy value`);
+}
+
+/** Explicit compatibility projection used only by legacy file-audio execute and stream APIs. */
+function legacyOpenAIAudioResults(native: OpenAIAudioNativeExecution): CompletionResult[] {
+    return native.blocks.map((block): CompletionResult => {
+        if (block.type === 'text') return { type: 'text', value: block.text };
+        if (block.type === 'json') return { type: 'json', value: block.value };
+        if (block.type === 'audio') {
+            const asset = native.assets.find((candidate) => candidate.id === block.asset_id);
+            if (asset === undefined) throw new Error(`Canonical audio output is missing asset ${block.asset_id}`);
+            return {
+                type: 'audio',
+                value: legacyOpenAIAudioAssetValue(asset),
+                mime_type: asset.mime_type,
+                ...(asset.media?.container === undefined ? {} : { container: asset.media.container }),
+                ...(asset.media?.codec === undefined ? {} : { codec: asset.media.codec }),
+                ...(asset.media?.sample_rate === undefined ? {} : { sample_rate: asset.media.sample_rate }),
+                ...(asset.media?.channels === undefined ? {} : { channels: asset.media.channels }),
+                ...(asset.media?.sample_encoding === undefined ? {} : { sample_encoding: asset.media.sample_encoding }),
+                ...(asset.media?.byte_order === undefined ? {} : { byte_order: asset.media.byte_order }),
+            };
+        }
+        throw new Error(`OpenAI audio produced unsupported canonical ${block.type} output`);
+    });
 }
 
 async function readAudioSource(file: DataSource, signal?: AbortSignal): Promise<{ bytes: Uint8Array; data: string }> {
@@ -639,61 +859,15 @@ export async function executeOpenAIAudioCanonical(input: {
         transportSegments,
         { ...input.options, conversation: undefined, include_original_response: true },
         input.request_options,
+        {
+            response_operation_id: runtime.response_operation_id,
+            generation_id: identities.generation_id,
+            response_turn_id: identities.response_turn_id,
+            ...(runtime.completed_at === undefined ? {} : { completed_at: runtime.completed_at }),
+            asset_storage: canonicalAudioAssetStorage,
+        },
         input.request_model,
     );
-    const completedAt = runtime.completed_at ?? new Date().toISOString();
-    const responseAssets: Asset[] = [];
-    const responseBlocks: AgentContentBlock[] = [];
-    const remainingAudioEvidence = [...(native.audio_evidence ?? [])];
-    for (let index = 0; index < native.result.length; index += 1) {
-        const result = native.result[index];
-        const blockId = await deriveConversationId('block', runtime.response_operation_id, String(index));
-        if (result.type === 'text')
-            responseBlocks.push({ id: blockId, type: 'text', text: result.value, format: 'plain' });
-        else if (result.type === 'json')
-            responseBlocks.push({ id: blockId, type: 'json', value: result.value as JsonValue });
-        else if (result.type === 'audio') {
-            const assetId = await deriveConversationId('asset', runtime.response_operation_id, String(index));
-            const evidenceIndex = remainingAudioEvidence.findIndex((candidate) => candidate.value === result.value);
-            const evidence = evidenceIndex < 0 ? undefined : remainingAudioEvidence.splice(evidenceIndex, 1)[0];
-            responseAssets.push({
-                id: assetId,
-                kind: 'audio',
-                mime_type: result.mime_type,
-                storage: canonicalAudioAssetStorage(result.value),
-                provenance: {
-                    type: 'generated',
-                    generation_id: identities.generation_id,
-                    source_turn_id: identities.response_turn_id,
-                },
-                created_at: completedAt,
-                ...(evidence === undefined
-                    ? {}
-                    : { byte_length: evidence.byte_length, content_hash: evidence.content_hash }),
-                media: {
-                    ...(result.container === undefined ? {} : { container: result.container }),
-                    ...(result.codec === undefined ? {} : { codec: result.codec }),
-                    ...(result.sample_rate === undefined ? {} : { sample_rate: result.sample_rate }),
-                    ...(result.channels === undefined ? {} : { channels: result.channels }),
-                    ...(result.sample_encoding === undefined ? {} : { sample_encoding: result.sample_encoding }),
-                    ...(result.byte_order === undefined ? {} : { byte_order: result.byte_order }),
-                },
-                metadata: {
-                    audio_result: {
-                        value: result.value,
-                        mime_type: result.mime_type,
-                        ...(result.container === undefined ? {} : { container: result.container }),
-                        ...(result.codec === undefined ? {} : { codec: result.codec }),
-                        ...(result.sample_rate === undefined ? {} : { sample_rate: result.sample_rate }),
-                        ...(result.channels === undefined ? {} : { channels: result.channels }),
-                        ...(result.sample_encoding === undefined ? {} : { sample_encoding: result.sample_encoding }),
-                        ...(result.byte_order === undefined ? {} : { byte_order: result.byte_order }),
-                    },
-                },
-            });
-            responseBlocks.push({ id: blockId, type: 'audio', asset_id: assetId });
-        }
-    }
     const generation = await createExecutedGeneration({
         id: identities.generation_id,
         runtime,
@@ -704,15 +878,15 @@ export async function executeOpenAIAudioCanonical(input: {
         requested_model: input.options.model,
         resolved_model: input.request_model ?? input.options.model,
         finish_reason: native.finish_reason ?? undefined,
-        usage: generationUsage(native.token_usage),
+        usage: native.usage,
     });
     const responseTurn = {
         id: identities.response_turn_id,
         kind: 'agent' as const,
         authority: 'ordinary' as const,
-        blocks: responseBlocks,
+        blocks: native.blocks,
         status: 'completed' as const,
-        timestamps: { recorded_at: completedAt, completed_at: completedAt },
+        timestamps: { recorded_at: native.completed_at, completed_at: native.completed_at },
         model_visibility: 'include' as const,
         provenance: { type: 'generated' as const },
         generation_id: generation.id,
@@ -728,14 +902,14 @@ export async function executeOpenAIAudioCanonical(input: {
         },
         {
             turns: [responseTurn],
-            assets: responseAssets,
+            assets: native.assets,
             generation,
             diagnostics: [],
             payload_fingerprint: await fingerprintJson(native.response_fingerprint_payload),
         },
         {
             operation_id: runtime.response_operation_id,
-            recorded_at: completedAt,
+            recorded_at: native.completed_at,
         },
     ).document;
     return createCanonicalExecutionResponse(finalDocument, runtime.response_operation_id, {

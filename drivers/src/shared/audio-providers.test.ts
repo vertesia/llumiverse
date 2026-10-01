@@ -21,6 +21,7 @@ import {
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
     prepareOpenAIChatCanonicalState,
 } from '../openai/openai-chat-conversation-adapter.js';
+import type { ChatCompletionsUsage } from '../openai/usage.js';
 import { VertexAIDriver } from '../vertexai/index.js';
 
 vi.mock('@aws/bedrock-token-generator', () => ({ getTokenProvider: vi.fn(() => async () => 'test') }));
@@ -479,13 +480,77 @@ describe('primary provider file audio', () => {
         },
     );
 
+    it.each([
+        [null, 'derived'],
+        [0, 'reported'],
+    ] as const)(
+        'distinguishes absent and reported zero cache usage for audio (%s)',
+        async (cacheWriteTokens, method) => {
+            const driver = new OpenAIDriver({ apiKey: 'test' });
+            const usage = {
+                prompt_tokens: 6,
+                completion_tokens: 3,
+                total_tokens: 9,
+                prompt_tokens_details: { cache_write_tokens: cacheWriteTokens },
+                cost: 1e-7,
+                is_byok: false,
+            } satisfies ChatCompletionsUsage;
+            driver.service = driver.service.withOptions({
+                fetch: async () =>
+                    Response.json({
+                        ...chatResponse('gpt-audio', { data: base64, transcript: 'A greeting.' }),
+                        usage,
+                    }),
+            });
+            try {
+                const response = await driver.executeCanonical(
+                    [{ role: PromptRole.user, content: 'Describe', files: [file()] }],
+                    {
+                        model: 'gpt-audio',
+                        store_audio: store,
+                        conversation_runtime: {
+                            conversation_id: 'conversation:audio-cache',
+                            request_id: 'request:audio-cache',
+                            attempt_id: 'attempt:audio-cache',
+                            input_operation_id: 'input:audio-cache',
+                            response_operation_id: 'response:audio-cache',
+                            recorded_at: '2026-09-29T00:10:00.000Z',
+                        },
+                    },
+                );
+                expect(response.accepted_output.generation.usage).toMatchObject({
+                    input_tokens: 6,
+                    input_new_tokens: 6,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                    accounting_provenance: {
+                        cache_read_tokens: { method: 'derived' },
+                        cache_write_tokens: { method },
+                    },
+                    cost: { amount: '0.0000001', currency: 'USD', provenance: 'reported' },
+                });
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
+
     it.each(['text', 'audio_bytes', 'voice', 'tools'] as const)(
         'executes OpenAI audio understanding durably and rejects changed %s on accepted retry',
         async (changed) => {
             const driver = new OpenAIDriver({ apiKey: 'test' });
-            const create = vi
-                .spyOn(driver.service.chat.completions, 'create')
-                .mockResolvedValue(chatResponse('gpt-audio', { data: base64, transcript: 'A greeting.' }));
+            const usage = {
+                prompt_tokens: 6,
+                completion_tokens: 3,
+                total_tokens: 9,
+                prompt_tokens_details: { cached_tokens: 2 },
+                cost: 0.125,
+                is_byok: false,
+            } satisfies ChatCompletionsUsage;
+            const create = vi.spyOn(driver.service.chat.completions, 'create').mockResolvedValue({
+                ...chatResponse('gpt-audio', { data: base64, transcript: 'A greeting.' }),
+                usage,
+            });
             const runtime = {
                 conversation_id: 'conversation:openai-audio',
                 request_id: 'request:openai-audio',
@@ -529,6 +594,21 @@ describe('primary provider file audio', () => {
                     expect.objectContaining({ type: 'audio' }),
                 ]),
             );
+            expect(first.accepted_output.generation.usage).toMatchObject({
+                input_tokens: 6,
+                input_new_tokens: 4,
+                cache_read_tokens: 2,
+                output_tokens: 3,
+                total_tokens: 9,
+                cost: { amount: '0.125', currency: 'USD', provenance: 'reported' },
+            });
+            expect(document.generations[first.accepted_output.generation.id]?.usage?.reported_usage).toEqual([
+                expect.objectContaining({
+                    source: 'provider',
+                    protocol: 'openai.chat.completions.audio',
+                    accounting_basis: 'openai_audio_tokens',
+                }),
+            ]);
 
             if (changed === 'text') {
                 const mismatchedFile = file();

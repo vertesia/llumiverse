@@ -31,6 +31,7 @@ import {
     isConversationDocumentFormat,
     type JsonValue,
     type NativeStreamPosition,
+    parseConversationDocument,
     toolArgumentsForModel,
 } from '@llumiverse/conversation';
 import {
@@ -163,6 +164,11 @@ export {
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 const TWELVELABS_PEGASUS_CANONICAL_FORMAT = Symbol('twelvelabs.pegasus.canonical_format');
+const BEDROCK_CANONICAL_CONTEXT_FORMAT = Symbol('bedrock.canonical_context_format');
+
+type BedrockCanonicalContextOptions = CanonicalExecutionInputOptions & {
+    [BEDROCK_CANONICAL_CONTEXT_FORMAT]?: true;
+};
 const TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES = 25 * 1024 * 1024;
 type PegasusCanonicalExecutionOptions = CanonicalExecutionInputOptions & {
     [TWELVELABS_PEGASUS_CANONICAL_FORMAT]?: true;
@@ -703,7 +709,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 signal,
             );
         }
-        return super.executeCanonical(segments, options, signal);
+        const canonicalOptions: BedrockCanonicalContextOptions = {
+            ...options,
+            [BEDROCK_CANONICAL_CONTEXT_FORMAT]: true,
+        };
+        return super.executeCanonical(segments, canonicalOptions, signal);
     }
 
     override async streamCanonicalEvents(
@@ -721,7 +731,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 open,
             );
         }
-        return super.streamCanonicalEvents(segments, options, signal, open);
+        const canonicalOptions: BedrockCanonicalContextOptions = {
+            ...options,
+            [BEDROCK_CANONICAL_CONTEXT_FORMAT]: true,
+        };
+        return super.streamCanonicalEvents(segments, canonicalOptions, signal, open);
     }
 
     protected override supportsCanonicalImageGeneration(options: ExecutionOptions): boolean {
@@ -844,6 +858,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ? { max_video_bytes: TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES }
                     : {},
             );
+        }
+        if (
+            segments.length === 0 &&
+            (opts as BedrockCanonicalContextOptions)[BEDROCK_CANONICAL_CONTEXT_FORMAT] === true &&
+            isConversationDocumentFormat(opts.conversation)
+        ) {
+            const document = parseConversationDocument(opts.conversation);
+            if (document.context.entries.length > 0) {
+                // These are empty newly authored records; the canonical adapter compiles the retained context.
+                // The private entry-point marker keeps ordinary legacy empty prompts rejected.
+                return { modelId: undefined, messages: [] };
+            }
         }
         return await formatConversePrompt(segments, opts);
     }
