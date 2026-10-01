@@ -145,7 +145,8 @@ export async function reconcile(api, number, ci, { pushed = false, settle = fals
             }
         }
         if (result.approve && standing.length === 0) {
-            const review = await api.approve(
+            const review = await submitApproval(
+                api,
                 number,
                 pr.head.sha,
                 `${MARKER}\nApproved after lint, build, and selected tests passed for ${pr.head.sha}.`,
@@ -195,6 +196,44 @@ export function isTransientApiError(error) {
     return /HTTP 5\d\d|error connecting to|connection reset|i\/o timeout|unexpected EOF/i.test(
         `${error?.stderr ?? ''}\n${error?.message ?? ''}`,
     );
+}
+
+export function isAmbiguousApprovalError(error) {
+    if (isTransientApiError(error)) return true;
+    // GitHub can create the review and still return this internal-error response.
+    try {
+        const response = JSON.parse(String(error?.stdout ?? ''));
+        return (
+            Number(response.status) === 422 &&
+            Array.isArray(response.errors) &&
+            response.errors.includes('An internal error occurred, please try again.')
+        );
+    } catch {
+        return false;
+    }
+}
+
+export async function submitApproval(api, number, sha, body, { sleep = sleepAsync } = {}) {
+    try {
+        return await api.approve(number, sha, body);
+    } catch (error) {
+        if (!isAmbiguousApprovalError(error)) throw error;
+        // Never replay the POST: a failed response does not imply a failed write.
+        for (let attempt = 0; ; attempt++) {
+            let reviews;
+            try {
+                reviews = await api.reviews(number);
+            } catch (readError) {
+                throw new AggregateError([error, readError], 'Could not confirm approval after an ambiguous response');
+            }
+            const review = reviews.find(
+                (candidate) => ownsReview(candidate) && candidate.commit_id === sha && candidate.body === body,
+            );
+            if (review) return review;
+            if (attempt >= READ_RETRY_DELAYS_MS.length) throw error;
+            await sleep(READ_RETRY_DELAYS_MS[attempt]);
+        }
+    }
 }
 
 function sleepSync(ms) {
