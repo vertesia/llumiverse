@@ -637,6 +637,8 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 }
 
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
+    // Foundry Anthropic deployments require the Messages API rather than this driver's OpenAI transport.
+    if (deployment.modelPublisher.toLowerCase() === 'anthropic') return false;
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
     if (sourceModel.includes('dall-e')) return false;

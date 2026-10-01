@@ -34,6 +34,10 @@ describe('AzureFoundryDriver protocol composition', () => {
             modelDeployment('embedding', 'text-embedding-4', { chat_completion: 'true' }),
             modelDeployment('flux', 'FLUX.1-Kontext-pro', {}),
             modelDeployment('future-flux', 'FLUX-9-pro', { chat_completion: 'true' }),
+            {
+                ...modelDeployment('anthropic', 'claude-future', { chat_completion: 'true' }),
+                modelPublisher: 'Anthropic',
+            },
             modelDeployment('speech', 'gpt-4o-mini-tts', { chat_completion: 'true' }),
             {
                 ...modelDeployment('image', 'gpt-image-2.5-flare', { chat_completion: 'false' }),
