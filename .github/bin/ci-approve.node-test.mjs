@@ -43,16 +43,21 @@ function fixture({ pulls = [pr], reviews = [], files = [] } = {}) {
     let reads = 0;
     let stored = [...reviews];
     const writes = [];
+    const opened = [];
     return {
         repo: 'vertesia/studio',
         writes,
+        opened,
         pr: async () => ({
             ...structuredClone(pulls[Math.min(reads++, pulls.length - 1)]),
             changed_files: files.length,
         }),
         reviews: async () => structuredClone(stored),
         files: async () => files,
-        open: async () => pulls,
+        open: async (branch) => {
+            opened.push(branch);
+            return pulls.filter((pull) => !branch || pull.head.ref === branch);
+        },
         status: async (...args) => writes.push(['status', ...args]),
         dismiss: async (_number, id) => {
             writes.push(['dismiss', id]);
@@ -333,6 +338,21 @@ test('API transport paginates reviews and scopes approval writes to the App toke
     assert.equal(JSON.parse(calls[1].options.input).commit_id, sha);
 });
 
+test('API transport scopes branch queries without constraining bulk discovery', async () => {
+    const calls = [];
+    const api = githubApi({ GITHUB_REPOSITORY: 'vertesia/composableai', GH_TOKEN: 'read' }, (_cmd, args) => {
+        calls.push(args);
+        return '[[]]';
+    });
+    await api.open('feature/approval');
+    assert.equal(
+        calls[0][1],
+        'repos/vertesia/composableai/pulls?state=open&head=vertesia%3Afeature%2Fapproval&per_page=100',
+    );
+    await api.open();
+    assert.equal(calls[1][1], 'repos/vertesia/composableai/pulls?state=open&per_page=100');
+});
+
 test('workflow executes only trusted scripts and observes pushes and CI completion', () => {
     const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
     assert.match(workflow, /ref: \$\{\{ github.workflow_sha \}\}/);
@@ -516,9 +536,11 @@ test('manual dispatch resolves a selected PR to its actual branch', async () => 
 });
 
 test('bulk manual dispatch deduplicates branch jobs and scopes discovery to the locked branch', async () => {
-    const api = fixture({ pulls: [pr, { ...pr, number: 13 }] });
-    assert.deepEqual(await targetBranches(api, {}, 'workflow_dispatch'), ['feature']);
-    await targets(api, {}, 'workflow_dispatch', 'feature');
+    const api = fixture({
+        pulls: [pr, { ...pr, number: 13 }, { ...pr, number: 14, head: { ...pr.head, ref: 'other' } }],
+    });
+    assert.deepEqual(await targetBranches(api, {}, 'workflow_dispatch'), ['feature', 'other']);
+    assert.deepEqual(await targets(api, {}, 'workflow_dispatch', 'feature'), [12, 13]);
     assert.equal(api.opened.at(-1), 'feature');
 });
 

@@ -209,7 +209,10 @@ export function githubApi(env, call = execFileSync) {
         repo,
         pages,
         pr: (number) => request(`repos/${repo}/pulls/${number}`),
-        open: () => list(`repos/${repo}/pulls?state=open`),
+        open: (branch) =>
+            list(
+                `repos/${repo}/pulls?state=open${branch ? `&head=${encodeURIComponent(`${repo.split('/')[0]}:${branch}`)}` : ''}`,
+            ),
         reviews: (number) => list(`repos/${repo}/pulls/${number}/reviews`),
         dismiss: (number, id, message) =>
             request(`repos/${repo}/pulls/${number}/reviews/${id}/dismissals`, {
