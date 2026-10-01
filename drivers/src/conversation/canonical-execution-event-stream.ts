@@ -253,6 +253,8 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         const reservedTerminalBytes = Math.max(
             serializedBytes(terminatedEvent(identity, terminalSequence, 'cancelled')),
             serializedBytes(terminatedEvent(identity, terminalSequence, 'failed')),
+            serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', false)),
+            serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', true)),
             serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'delivery')),
         );
         if (maxEventBytes < reservedTerminalBytes) {

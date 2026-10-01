@@ -8,6 +8,7 @@ import {
 import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type CanonicalStreamTerminalEvent,
     createCanonicalExecutionResponse,
 } from '@llumiverse/core';
@@ -524,6 +525,82 @@ describe('canonical native execution event stream', () => {
             }),
         ).toThrow('cannot resume');
         expect(openSource).not.toHaveBeenCalled();
+    });
+
+    it('reserves the classified provider terminal at the exact event and total byte bounds', async () => {
+        const providerFailureSource = () => ({
+            [Symbol.asyncIterator]() {
+                return {
+                    next: async () => {
+                        throw new Error('private provider failure');
+                    },
+                };
+            },
+        });
+        const collectFailure = async (open: CanonicalStreamOpenOptions) => {
+            const stream = canonicalNativeExecutionEventStream({
+                identity,
+                open,
+                classifyFailure: () => false,
+                openSource: providerFailureSource,
+                map: vi.fn(),
+                finalize: vi.fn(),
+                abort: vi.fn(),
+                close: vi.fn(),
+            });
+            const events: ConversationStreamEvent[] = [];
+            for await (const event of stream) events.push(event);
+            return events;
+        };
+        const streamId = 'stream:classified-bounds';
+        const baseline = await collectFailure({ stream_id: streamId, max_events: 2 });
+        const eventBytes = (event: ConversationStreamEvent) =>
+            new TextEncoder().encode(JSON.stringify(event)).byteLength;
+        const terminal = baseline.at(-1);
+        if (terminal?.type !== 'stream_terminated') throw new Error('Expected a classified failed terminal');
+        const terminalBytes = eventBytes(terminal);
+        const totalBytes = baseline.reduce((total, event) => total + eventBytes(event), 0);
+
+        const boundedStream = (open: CanonicalStreamOpenOptions) =>
+            canonicalNativeExecutionEventStream({
+                identity,
+                open,
+                classifyFailure: () => false,
+                openSource: providerFailureSource,
+                map: vi.fn(),
+                finalize: vi.fn(),
+                abort: vi.fn(),
+                close: vi.fn(),
+            });
+        expect(() =>
+            boundedStream({
+                stream_id: streamId,
+                max_events: 2,
+                max_event_bytes: terminalBytes - 1,
+                max_total_bytes: totalBytes,
+            }),
+        ).toThrow('max_event_bytes');
+        expect(() =>
+            boundedStream({
+                stream_id: streamId,
+                max_events: 2,
+                max_event_bytes: terminalBytes,
+                max_total_bytes: terminalBytes - 1,
+            }),
+        ).toThrow('max_total_bytes');
+
+        const exact = await collectFailure({
+            stream_id: streamId,
+            max_events: 2,
+            max_event_bytes: terminalBytes,
+            max_total_bytes: totalBytes,
+        });
+
+        expect(exact.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'PROVIDER_STREAM_FAILED', retryable: false },
+        });
     });
 
     it('delivers provider failure while retaining ownership through delayed cleanup', async () => {
