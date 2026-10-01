@@ -16,6 +16,8 @@ export interface AnthropicDriverOptions extends DriverOptions {
 }
 
 export interface AzureFoundryDriverOptions extends DriverOptions {
+    /** Source model for opaque image deployment names. */
+    sourceModel?: string;
     /**
      * The credentials to use to access Azure AI Foundry
      */
@@ -69,6 +71,8 @@ export interface MistralAIDriverOptions extends OpenAIChatCompletionsDriverOptio
 }
 
 export interface AzureOpenAIDriverOptions extends DriverOptions {
+    /** Source model for opaque image deployment names. */
+    sourceModel?: string;
     /**
      * The credentials to use to access Azure OpenAI
      */
