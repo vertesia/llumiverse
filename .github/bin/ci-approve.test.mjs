@@ -9,12 +9,14 @@ import {
     CONTEXT,
     evaluate,
     githubApi,
+    isAmbiguousApprovalError,
     isTransientApiError,
     MARKER,
     ownsReview,
     READ_RETRY_DELAYS_MS,
     reconcile,
     requiresHuman,
+    submitApproval,
     targetBranches,
     targets,
     verifyPrCi,
@@ -344,6 +346,185 @@ test('API transport paginates reviews and scopes approval writes to the App toke
 function ghFailure(stderr) {
     return Object.assign(new Error('Command failed: gh api'), { status: 1, stderr });
 }
+
+function internalApprovalError() {
+    return Object.assign(ghFailure('gh: Unprocessable Entity (HTTP 422)'), {
+        stdout: JSON.stringify({
+            status: '422',
+            errors: ['An internal error occurred, please try again.'],
+        }),
+    });
+}
+
+test('only internal or transport failures qualify for approval read-back', () => {
+    assert.equal(isAmbiguousApprovalError(internalApprovalError()), true);
+    assert.equal(isAmbiguousApprovalError(ghFailure('gh: Server Error (HTTP 502)')), true);
+    assert.equal(isAmbiguousApprovalError(ghFailure('connection reset')), true);
+    assert.equal(isAmbiguousApprovalError(ghFailure('gh: Forbidden (HTTP 403)')), false);
+    assert.equal(isAmbiguousApprovalError(ghFailure('gh: Validation Failed (HTTP 422)')), false);
+    const validation = Object.assign(ghFailure('gh: Unprocessable Entity (HTTP 422)'), {
+        stdout: JSON.stringify({ status: '422', errors: ['Can not approve your own pull request'] }),
+    });
+    assert.equal(isAmbiguousApprovalError(validation), false);
+});
+
+for (const error of [
+    internalApprovalError(),
+    ghFailure('gh: Server Error (HTTP 502)'),
+    ghFailure('connection reset'),
+]) {
+    test(`approval applied despite ${error.stderr} is recovered without another POST`, async () => {
+        const api = fixture();
+        const approve = api.approve;
+        api.approve = async (...args) => {
+            await approve(...args);
+            throw error;
+        };
+        const result = await reconcile(api, 12, () => true);
+        assert.equal(result.approve, true);
+        assert.deepEqual(
+            api.writes.map(([kind]) => kind),
+            ['approve', 'status'],
+        );
+        assert.equal(api.writes.at(-1)[2], 'success');
+    });
+}
+
+test('approval read-back waits for visibility without replaying the POST', async () => {
+    const sleeps = [];
+    let posts = 0;
+    let reads = 0;
+    const api = {
+        approve: async () => {
+            posts++;
+            throw internalApprovalError();
+        },
+        reviews: async () => (++reads < 3 ? [] : [approval]),
+    };
+    assert.deepEqual(
+        await submitApproval(api, 12, sha, approval.body, { sleep: async (ms) => sleeps.push(ms) }),
+        approval,
+    );
+    assert.equal(posts, 1);
+    assert.equal(reads, 3);
+    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS);
+});
+
+test('unconfirmed approval fails after bounded reads and never retries its write', async () => {
+    const error = internalApprovalError();
+    let posts = 0;
+    let reads = 0;
+    const api = {
+        approve: async () => {
+            posts++;
+            throw error;
+        },
+        reviews: async () => {
+            reads++;
+            return [];
+        },
+    };
+    await assert.rejects(
+        submitApproval(api, 12, sha, approval.body, { sleep: async () => {} }),
+        (caught) => caught === error,
+    );
+    assert.equal(posts, 1);
+    assert.equal(reads, READ_RETRY_DELAYS_MS.length + 1);
+});
+
+test('read-back cannot adopt another identity, commit, body, or review state', async () => {
+    const error = internalApprovalError();
+    const unrelated = [
+        { ...approval, user: { login: APP_LOGIN, type: 'User' } },
+        { ...approval, user: { login: 'other[bot]', type: 'Bot' } },
+        { ...approval, commit_id: newer },
+        { ...approval, body: `${MARKER}\nDifferent approval` },
+        { ...approval, state: 'DISMISSED' },
+    ];
+    await assert.rejects(
+        submitApproval(
+            {
+                approve: async () => {
+                    throw error;
+                },
+                reviews: async () => unrelated,
+            },
+            12,
+            sha,
+            approval.body,
+            { sleep: async () => {} },
+        ),
+        (caught) => caught === error,
+    );
+});
+
+test('approval validation failures do not read back reviews', async () => {
+    const error = ghFailure('gh: Validation Failed (HTTP 422)');
+    await assert.rejects(
+        submitApproval(
+            {
+                approve: async () => {
+                    throw error;
+                },
+                reviews: async () => assert.fail('validation errors must not trigger recovery'),
+            },
+            12,
+            sha,
+            approval.body,
+        ),
+        (caught) => caught === error,
+    );
+});
+
+test('a read-back failure publishes an error and keeps both API errors for diagnosis', async () => {
+    const api = fixture();
+    const writeError = internalApprovalError();
+    const readError = new Error('review read unavailable');
+    api.approve = async () => {
+        api.reviews = async () => {
+            throw readError;
+        };
+        throw writeError;
+    };
+    await assert.rejects(
+        reconcile(api, 12, () => true),
+        (error) => error instanceof AggregateError && error.errors[0] === writeError && error.errors[1] === readError,
+    );
+    assert.equal(api.writes.at(-1)[2], 'error');
+});
+
+test('a head move after recovering an ambiguous approval dismisses it', async () => {
+    const api = fixture({ pulls: [pr, pr, { ...pr, head: { ...pr.head, sha: newer } }] });
+    const approve = api.approve;
+    api.approve = async (...args) => {
+        await approve(...args);
+        throw internalApprovalError();
+    };
+    const result = await reconcile(api, 12, () => true);
+    assert.equal(result.approve, false);
+    assert.deepEqual(
+        api.writes.map(([kind]) => kind),
+        ['approve', 'dismiss', 'status'],
+    );
+    assert.deepEqual(api.writes.at(-1).slice(1, 3), [newer, 'pending']);
+});
+
+test('CI restarting after recovered approval withdraws it through the normal recheck', async () => {
+    const api = fixture();
+    const approve = api.approve;
+    let checks = 0;
+    api.approve = async (...args) => {
+        await approve(...args);
+        throw internalApprovalError();
+    };
+    const result = await reconcile(api, 12, () => ++checks < 3);
+    assert.equal(result.approve, false);
+    assert.deepEqual(
+        api.writes.map(([kind]) => kind),
+        ['approve', 'dismiss', 'status'],
+    );
+    assert.equal(api.writes.at(-1)[2], 'pending');
+});
 
 function flakyApi(failures) {
     const calls = [];

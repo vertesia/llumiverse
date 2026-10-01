@@ -28,6 +28,14 @@ through every open PR, and every read is retried twice (after 2s and 5s) on a 5x
 or dropped connection. Writes are not retried: a write answered with a 5xx may
 already have been applied, and the next event reconciles it.
 
+Approval creation has a read-back recovery path for dropped connections, 5xx
+responses, and GitHub's specific 422 internal-error response. The POST is sent only
+once. The gate reads reviews immediately, then after 2s and 5s if needed, and accepts
+only an APPROVED review from this App with the exact submitted body and tested
+commit. It then runs the normal post-submission PR/CI checks before publishing
+success. Validation and permission errors are not recovered this way. An unconfirmed
+write or failed read-back still fails the gate through the normal cleanup handler.
+
 GitHub can deliver `workflow_run.completed` before the run's jobs are fully visible
 through the jobs API. Completion-triggered reconciliation therefore re-runs the
 full CI verifier every 10 seconds for up to 180 seconds. It publishes no status or
