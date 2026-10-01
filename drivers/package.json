@@ -121,6 +121,7 @@
     },
     "dependencies": {
         "@anthropic-ai/bedrock-sdk": "^0.34.0",
+        "@anthropic-ai/foundry-sdk": "0.5.2",
         "@anthropic-ai/sdk": "^0.129.0",
         "@anthropic-ai/vertex-sdk": "^0.20.0",
         "@aws-sdk/client-bedrock": "^3.1109.0",
