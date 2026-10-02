@@ -107,16 +107,23 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
             const results: CompletionResult[] = [];
 
             for (const image of response.data ?? []) {
-                if (image.b64_json) {
+                if (!image) continue;
+                if (typeof image.b64_json === 'string' && image.b64_json.trim()) {
                     results.push({
                         type: 'image',
                         value: `data:${image.mime_type ?? 'image/jpeg'};base64,${image.b64_json}`,
                     });
-                } else if (image.url) {
+                } else if (typeof image.url === 'string' && image.url.trim()) {
                     results.push({ type: 'image', value: image.url });
                 }
             }
 
+            if (results.length === 0) {
+                return {
+                    result: [],
+                    error: { code: 'validation_error', message: 'Image generation returned no usable images' },
+                };
+            }
             return { result: results };
         } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
