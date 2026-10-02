@@ -432,16 +432,15 @@ export class ImagenModelDefinition {
             throw new Error('No predictions found');
         }
 
-        // Extract base64 encoded images from predictions
-        const images: string[] = predictions.map(
-            (prediction) => prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? '',
-        );
-
+        const requestedMime = (options.model_options as ImagenOptions | undefined)?.image_file_type;
         return {
-            result: images.map((image) => ({
-                type: 'image' as const,
-                value: image,
-            })),
+            result: predictions.flatMap((prediction) => {
+                const fields = prediction.structValue?.fields;
+                const data = fields?.bytesBase64Encoded?.stringValue;
+                if (!data) return [];
+                const mime = fields?.mimeType?.stringValue ?? requestedMime ?? 'image/png';
+                return [{ type: 'image' as const, value: `data:${mime};base64,${data}` }];
+            }),
         };
     }
 }

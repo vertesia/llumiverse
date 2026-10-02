@@ -106,11 +106,33 @@ describe('Bedrock service tiers', () => {
         };
         const controller = new AbortController();
 
-        await driver.requestImageGeneration(prompt, options, controller.signal);
+        const completion = await driver.requestImageGeneration(prompt, options, controller.signal);
+        expect(completion.result).toEqual([{ type: 'image', value: 'data:image/png;base64,image' }]);
 
         expect(invokeModel).toHaveBeenCalledWith(expect.any(Object), {
             abortSignal: controller.signal,
             requestTimeout: 900_000,
         });
+    });
+
+    it('preserves a Nova Canvas provider error without requiring an images array', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({
+                invokeModel: vi.fn().mockResolvedValue({
+                    body: new TextEncoder().encode(JSON.stringify({ error: 'Image generation was blocked' })),
+                }),
+                destroy: vi.fn(),
+            }),
+        });
+        const prompt: NovaMessagesPrompt = {
+            messages: [{ role: 'user', content: [{ text: 'Draw a tree' }] }],
+        };
+        const result = await driver.requestImageGeneration(prompt, {
+            model: 'amazon.nova-canvas-v1:0',
+            model_options: { _option_id: 'bedrock-nova-canvas', taskType: 'TEXT_IMAGE' },
+        });
+        expect(result.error).toBe('Image generation was blocked');
+        expect(result.result).toEqual([]);
     });
 });

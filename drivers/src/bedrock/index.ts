@@ -1707,9 +1707,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         return {
             error: bedrockResult.error,
-            result: bedrockResult.images.map((image: string) => ({
+            result: (bedrockResult.images ?? []).map((image: string) => ({
                 type: 'image' as const,
-                value: image,
+                value: `data:image/png;base64,${image}`,
             })),
         };
     }

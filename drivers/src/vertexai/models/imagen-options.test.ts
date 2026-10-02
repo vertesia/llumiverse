@@ -223,3 +223,29 @@ describe('Imagen option serialization', () => {
         },
     );
 });
+
+describe('Imagen output MIME metadata', () => {
+    it.each(['image/png', 'image/jpeg'])('preserves returned %s metadata on each image', async (mime) => {
+        const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });
+        const predictions = ['YQ==', 'Yg=='].map((data) =>
+            helpers.toValue({ bytesBase64Encoded: data, mimeType: mime }),
+        );
+        const predict = vi.fn().mockResolvedValue([{ predictions }]);
+        vi.spyOn(driver, 'getImagenClient').mockResolvedValue({ predict } as unknown as Awaited<
+            ReturnType<VertexAIDriver['getImagenClient']>
+        >);
+        const model = 'imagen-3.0-generate-002';
+        const completion = await new ImagenModelDefinition(model).requestImageGeneration(
+            driver,
+            { prompt: 'A tree' },
+            {
+                model,
+                model_options: { _option_id: 'vertexai-imagen', image_file_type: 'image/png' },
+            },
+        );
+        expect(completion.result).toEqual([
+            { type: 'image', value: `data:${mime};base64,YQ==` },
+            { type: 'image', value: `data:${mime};base64,Yg==` },
+        ]);
+    });
+});
