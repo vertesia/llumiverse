@@ -8,18 +8,20 @@ import {
     type ExecutionOptions,
     LlumiverseError,
     type LlumiverseErrorContext,
+    type Logger,
     type ModelSearchPayload,
 } from '@llumiverse/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { errorWith, getProp } from '../test/__helpers__/test-utils.js';
 import { AbstractDriver } from './Driver.js';
 
 // Simple test driver implementation
 class TestDriver extends AbstractDriver<DriverOptions, string> {
     provider = 'test-provider';
+    requestError: unknown = new Error('Not implemented');
 
     async requestTextCompletion(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
-        throw new Error('Not implemented');
+        throw this.requestError;
     }
 
     async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
@@ -283,5 +285,26 @@ describe('AbstractDriver Error Formatting', () => {
             expect(formatted.code).toBe(500);
             expect(formatted.retryable).toBe(true);
         });
+    });
+});
+
+describe('AbstractDriver execution logging', () => {
+    it('normalizes provider errors without logging the prompt at the driver layer', async () => {
+        const logger = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+        } as unknown as Logger;
+        const driver = new TestDriver({ logger });
+        driver.requestError = errorWith('Rate limit exceeded', { status: 429 });
+
+        await expect(driver._execute('full secret prompt', { model: 'test-model' })).rejects.toMatchObject({
+            code: 429,
+            retryable: true,
+        });
+        expect(logger.error).not.toHaveBeenCalled();
+        expect(logger.warn).not.toHaveBeenCalled();
+        expect(logger.info).not.toHaveBeenCalled();
     });
 });
