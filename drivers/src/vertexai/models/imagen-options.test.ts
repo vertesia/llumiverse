@@ -255,6 +255,7 @@ describe('Imagen output MIME metadata', () => {
         const completion = await generate([
             { bytesBase64Encoded: 'YQ==', mimeType: 'image/png' },
             { raiFilteredReason: 'Filtered image' },
+            { bytesBase64Encoded: '   ' },
         ]);
         expect(completion.error).toBeUndefined();
         expect(completion.result).toEqual([{ type: 'image', value: 'data:image/png;base64,YQ==' }]);
@@ -266,10 +267,13 @@ describe('Imagen output MIME metadata', () => {
         expect(completion.result).toEqual([]);
     });
 
-    it('reports an empty predictions response as a generation failure', async () => {
-        const completion = await generate([]);
-        expect(completion.error).toEqual({ code: 'validation_error', message: 'No images returned by Imagen' });
-    });
+    it.each([{ predictions: [] }, { predictions: [{ bytesBase64Encoded: '   ' }] }])(
+        'reports unusable predictions %j as a generation failure',
+        async ({ predictions }) => {
+            const completion = await generate(predictions);
+            expect(completion.error).toEqual({ code: 'validation_error', message: 'No images returned by Imagen' });
+        },
+    );
 
     it.each(['image/png', 'image/jpeg'])('preserves returned %s metadata on each image', async (mime) => {
         const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });

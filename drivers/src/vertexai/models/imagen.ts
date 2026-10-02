@@ -436,7 +436,7 @@ export class ImagenModelDefinition {
         const result = predictions.flatMap((prediction) => {
             const fields = prediction.structValue?.fields;
             const data = fields?.bytesBase64Encoded?.stringValue;
-            if (!data) return [];
+            if (!data?.trim()) return [];
             const mime = fields?.mimeType?.stringValue || requestedMime || 'image/png';
             return [{ type: 'image' as const, value: `data:${mime};base64,${data}` }];
         });
