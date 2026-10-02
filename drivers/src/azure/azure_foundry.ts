@@ -374,7 +374,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     public formatDebugPrompt(prompt: FoundryExecutionPrompt): FoundryExecutionPrompt {
         return Array.isArray(prompt) ? formatOpenAIDebugPrompt(prompt) : formatClaudeDebugPrompt(prompt);
     }
-
     protected isImageModel(model: string): boolean {
         const family = resolveModelProfile(model, this.provider).family;
         const source = model.includes('::') || family !== 'generic' ? model : (this.options.sourceModel ?? model);

@@ -5,6 +5,15 @@
   "labels": ["dependencies"],
   "customManagers": [
     {
+      "description": "Update the Renovate version used to validate this configuration",
+      "customType": "regex",
+      "managerFilePatterns": ["/^package\\.json$/"],
+      "matchStrings": ["renovate@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "renovate",
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "npm"
+    },
+    {
       "description": "Update the zizmor version pinned in its GitHub Actions workflow",
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/zizmor\\.ya?ml$/"],

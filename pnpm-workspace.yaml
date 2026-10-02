@@ -22,6 +22,10 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/sdk@0.129.0'
   - '@anthropic-ai/vertex-sdk@0.20.0'
   - '@anthropic-ai/bedrock-sdk@0.34.0'
+  # Security fixes published inside the 3-day cooldown.
+  - brace-expansion@5.0.12
+  - fast-uri@3.1.8
+  - '@grpc/grpc-js@1.14.5'
 
 catalog:
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from
@@ -51,10 +55,11 @@ overrides:
   # ============================
   # Dependabot alerts #77/#78: Vite dev-server Windows path disclosure issues.
   vite: ^8.0.16
-  "brace-expansion@>=3.0.0 <5.0.8": 5.0.9
+  "brace-expansion@>=3.0.0 <5.0.12": 5.0.12
   # GHSA-7p8r-x3mc-p8w7, GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc,
   # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, and GHSA-58mr-gqgx-xq4g.
-  "fast-uri@>=3.0.0 <3.1.7": 3.1.7
+  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  "@grpc/grpc-js@>=1.14.0 <1.14.5": 1.14.5
   # GHSA-2v37-7h3g-55p8: zero-sized custom generators can loop indefinitely.
   "nanoid@<3.3.17": 3.3.18
   # GHSA path traversal in sourceMappingURL auto-loading. Reached via vitest > vite > postcss.
