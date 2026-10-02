@@ -1,3 +1,4 @@
+import { AnthropicFoundry } from '@anthropic-ai/foundry-sdk';
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
 import {
@@ -15,6 +16,7 @@ import {
     type LlumiverseErrorContext,
     ModelType,
     normalizeEmbeddingsOptions,
+    type PromptSegment,
     Providers,
     resolveModelProfile,
     type TextEmbeddingInput,
@@ -41,6 +43,15 @@ import {
     formatOpenAIDebugPrompt,
     formatOpenAILikeMultimodalPrompt,
 } from '../openai/openai_format.js';
+import {
+    buildClaudeStreamingConversation,
+    type ClaudePrompt,
+    executeClaudeCompletion,
+    formatAnthropicLlumiverseError,
+    formatClaudeDebugPrompt,
+    formatClaudePrompt,
+    streamClaudeCompletion,
+} from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -57,7 +68,8 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
 
     constructor(
         service: OpenAI,
-        private readonly foundryOptions: AzureFoundryDriverOptions,
+        foundryOptions: AzureFoundryDriverOptions,
+        private readonly resolveSourceModel: (model: string) => string,
     ) {
         super(foundryOptions);
         this.service = service;
@@ -75,8 +87,7 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     }
 
     getImageSourceModel(model: string): string {
-        if (model.includes('::') || resolveModelProfile(model, this.provider).family !== 'generic') return model;
-        return this.foundryOptions.sourceModel ?? model;
+        return this.resolveSourceModel(model);
     }
 
     async listModels(): Promise<AIModel[]> {
@@ -163,15 +174,30 @@ export interface AzureFoundryOpenAIPrompt {
     messages: ResponseInputItem[];
 }
 
-export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt;
+export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt | ClaudePrompt;
+type FoundryExecutionPrompt = ResponseInputItem[] | ClaudePrompt;
+type FoundryProtocol = 'responses' | 'chat_completions' | 'messages';
 
-export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
+function requireOpenAIPrompt(prompt: FoundryExecutionPrompt): ResponseInputItem[] {
+    if (!Array.isArray(prompt)) throw new TypeError('Foundry OpenAI transport requires an OpenAI prompt');
+    return prompt;
+}
+
+function requireClaudePrompt(prompt: FoundryExecutionPrompt): ClaudePrompt {
+    if (Array.isArray(prompt)) throw new TypeError('Foundry Messages transport requires a Claude prompt');
+    return prompt;
+}
+
+export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, FoundryExecutionPrompt> {
     service: AIProjectClient;
     private inferenceClient?: OpenAI;
     private resourceClient?: OpenAI;
     private inferenceProtocolDriver?: AzureFoundryInferenceProtocolDriver;
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
-    private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
+    private readonly deploymentProtocols = new Map<string, FoundryProtocol>();
+    private readonly deploymentSources = new Map<string, string>();
+    private anthropicClient?: AnthropicFoundry;
+    private readonly endpoint: string;
     readonly provider = Providers.azure_foundry;
 
     OPENAI_API_VERSION = '2025-01-01-preview';
@@ -179,16 +205,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
 
-        this.formatPrompt = (segments, options) =>
-            formatOpenAILikeMultimodalPrompt(segments, {
-                ...options,
-                imageGeneration: this.isImageModel(options.model),
-                result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
-            });
-
         if (!opts.endpoint) {
             throw new Error('Azure AI Foundry endpoint is required');
         }
+
+        this.endpoint = opts.endpoint;
 
         try {
             if (!opts.azureADTokenProvider) {
@@ -217,24 +238,86 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return azureADTokenProvider;
     }
 
-    async isOpenAIDeployment(
+    private getSourceModel(model: string): string {
+        const { deploymentName, baseModel } = parseAzureFoundryModelId(model);
+        if (model.includes('::')) return baseModel;
+        return this.options.sourceModel ?? this.deploymentSources.get(deploymentName) ?? baseModel;
+    }
+
+    private async getDeploymentProtocol(
         model: string,
         signal?: AbortSignal,
         httpTimeout?: ExecutionOptions['httpTimeout'],
-    ): Promise<boolean> {
+    ): Promise<FoundryProtocol> {
+        signal?.throwIfAborted();
         const { deploymentName } = parseAzureFoundryModelId(model);
         const cached = this.deploymentProtocols.get(deploymentName);
-        if (cached) {
-            return cached === 'responses';
+        if (cached) return cached;
+        if (resolveModelProfile(this.getSourceModel(model), this.provider).family === 'claude') {
+            this.deploymentProtocols.set(deploymentName, 'messages');
+            return 'messages';
         }
         const deployment = (await this.service.deployments.get(deploymentName, {
             ...(signal ? { abortSignal: signal } : {}),
             requestOptions: { timeout: this.getDriverRequestTimeoutMs(httpTimeout) },
         })) as ModelDeployment;
-        const protocol = deployment.modelPublisher.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
+        signal?.throwIfAborted();
+        const publisher = deployment.modelPublisher.toLowerCase();
+        const protocol =
+            publisher === 'anthropic' ? 'messages' : publisher === 'openai' ? 'responses' : 'chat_completions';
+        this.deploymentSources.set(deploymentName, deployment.modelName);
         this.deploymentProtocols.set(deploymentName, protocol);
-        this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} uses ${protocol}`);
-        return protocol === 'responses';
+        return protocol;
+    }
+
+    async isOpenAIDeployment(
+        model: string,
+        signal?: AbortSignal,
+        httpTimeout?: ExecutionOptions['httpTimeout'],
+    ): Promise<boolean> {
+        return (await this.getDeploymentProtocol(model, signal, httpTimeout)) === 'responses';
+    }
+
+    protected async formatPrompt(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<FoundryExecutionPrompt> {
+        // Explicit image sources keep the direct Images path independent of publisher discovery.
+        const explicitImageSource =
+            (options.model.includes('::') || this.options.sourceModel !== undefined) &&
+            this.isImageModel(options.model);
+        if (
+            !explicitImageSource &&
+            (await this.getDeploymentProtocol(options.model, signal, options.httpTimeout)) === 'messages'
+        ) {
+            return formatClaudePrompt(segments, { ...options, model: this.getSourceModel(options.model) }, this.logger);
+        }
+        return formatOpenAILikeMultimodalPrompt(segments, {
+            ...options,
+            imageGeneration: this.isImageModel(options.model),
+            result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
+        });
+    }
+
+    private getAnthropicClient(): AnthropicFoundry {
+        if (!this.anthropicClient) {
+            const url = new URL(this.endpoint);
+            url.pathname = '/anthropic/';
+            url.search = '';
+            url.hash = '';
+            this.anthropicClient = new AnthropicFoundry({
+                baseURL: url.toString(),
+                azureADTokenProvider: getBearerTokenProvider(
+                    this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
+                    'https://ai.azure.com/.default',
+                ),
+                fetch: this.getDriverFetch(),
+                timeout: this.getDriverRequestTimeoutMs(),
+                maxRetries: 0,
+            });
+        }
+        return this.anthropicClient;
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -275,7 +358,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
-        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.getInferenceClient(), this.options);
+        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(
+            this.getInferenceClient(),
+            this.options,
+            (model) => this.getSourceModel(model),
+        );
         return this.openAIProtocolDriver;
     }
 
@@ -292,37 +379,46 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         this.inferenceProtocolDriver?.destroy();
     }
 
-    public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
-        return formatOpenAIDebugPrompt(prompt);
+    public formatDebugPrompt(prompt: FoundryExecutionPrompt): FoundryExecutionPrompt {
+        return Array.isArray(prompt) ? formatOpenAIDebugPrompt(prompt) : formatClaudeDebugPrompt(prompt);
     }
-
     protected isImageModel(model: string): boolean {
-        const family = resolveModelProfile(model, this.provider).family;
-        const source = model.includes('::') || family !== 'generic' ? model : (this.options.sourceModel ?? model);
-        return resolveModelProfile(source, this.provider).family === 'image';
+        return resolveModelProfile(this.getSourceModel(model), this.provider).family === 'image';
     }
 
     requestImageGeneration(
-        prompt: ResponseInputItem[],
+        prompt: FoundryExecutionPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        return this.getOpenAIProtocolDriver().requestImageGeneration(prompt, options, signal);
+        return this.getOpenAIProtocolDriver().requestImageGeneration(requireOpenAIPrompt(prompt), options, signal);
     }
 
     async requestTextCompletion(
-        prompt: ResponseInputItem[],
+        prompt: FoundryExecutionPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        if (this.isImageModel(options.model)) return this.requestImageGeneration(prompt, options, signal);
+        if (this.isImageModel(options.model))
+            return this.requestImageGeneration(requireOpenAIPrompt(prompt), options, signal);
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
+        const protocol = await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
 
-        if (isOpenAI) {
-            return this.getOpenAIProtocolDriver().requestTextCompletion(prompt, options, signal);
+        if (protocol === 'messages') {
+            return executeClaudeCompletion(
+                this.getAnthropicClient(),
+                requireClaudePrompt(prompt),
+                { ...options, model: this.getSourceModel(options.model) },
+                this.logger,
+                this.provider,
+                this.getDriverRequestOptions(options, signal),
+                deploymentName,
+            );
         }
-        const chatPrompt = toAzureFoundryChatPrompt(prompt);
+        if (protocol === 'responses') {
+            return this.getOpenAIProtocolDriver().requestTextCompletion(requireOpenAIPrompt(prompt), options, signal);
+        }
+        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
         return this.getInferenceProtocolDriver().requestTextCompletion(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
@@ -331,20 +427,35 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async requestTextCompletionStream(
-        prompt: ResponseInputItem[],
+        prompt: FoundryExecutionPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         if (this.isImageModel(options.model)) {
-            return this.getOpenAIProtocolDriver().requestImageStream(prompt, options, signal);
+            return this.getOpenAIProtocolDriver().requestImageStream(requireOpenAIPrompt(prompt), options, signal);
         }
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
+        const protocol = await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
 
-        if (isOpenAI) {
-            return this.getOpenAIProtocolDriver().requestTextCompletionStream(prompt, options, signal);
+        if (protocol === 'messages') {
+            return streamClaudeCompletion(
+                this.getAnthropicClient(),
+                requireClaudePrompt(prompt),
+                { ...options, model: this.getSourceModel(options.model) },
+                this.logger,
+                this.provider,
+                this.getDriverRequestOptions(options, signal),
+                deploymentName,
+            );
         }
-        const chatPrompt = toAzureFoundryChatPrompt(prompt);
+        if (protocol === 'responses') {
+            return this.getOpenAIProtocolDriver().requestTextCompletionStream(
+                requireOpenAIPrompt(prompt),
+                options,
+                signal,
+            );
+        }
+        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
         return this.getInferenceProtocolDriver().requestTextCompletionStream(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
@@ -353,19 +464,27 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     buildStreamingConversation(
-        prompt: ResponseInputItem[],
+        prompt: FoundryExecutionPrompt,
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): unknown | undefined {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
+        if (protocol === 'messages') {
+            return buildClaudeStreamingConversation(requireClaudePrompt(prompt), result, toolUse, options);
+        }
         if (protocol === 'responses' && this.openAIProtocolDriver) {
-            return this.openAIProtocolDriver.buildStreamingConversation(prompt, result, toolUse, options);
+            return this.openAIProtocolDriver.buildStreamingConversation(
+                requireOpenAIPrompt(prompt),
+                result,
+                toolUse,
+                options,
+            );
         }
         if (protocol === 'chat_completions') {
             return this.getInferenceProtocolDriver().buildStreamingConversation(
-                toAzureFoundryChatPrompt(prompt),
+                toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt)),
                 result,
                 toolUse,
                 toAzureFoundryChatOptions(options, deploymentName),
@@ -394,6 +513,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         const { deploymentName } = parseAzureFoundryModelId(context.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
+        if (
+            protocol === 'messages' ||
+            resolveModelProfile(this.getSourceModel(context.model), this.provider).family === 'claude'
+        ) {
+            return formatAnthropicLlumiverseError(error, context);
+        }
         if ((protocol === 'responses' || this.isImageModel(context.model)) && this.openAIProtocolDriver) {
             return this.openAIProtocolDriver.formatLlumiverseError(error, context);
         }
@@ -637,8 +762,7 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 }
 
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
-    // Foundry Anthropic deployments require the Messages API rather than this driver's OpenAI transport.
-    if (deployment.modelPublisher.toLowerCase() === 'anthropic') return false;
+    if (deployment.modelPublisher.toLowerCase() === 'anthropic') return true;
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
     if (sourceModel.includes('dall-e')) return false;

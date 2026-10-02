@@ -354,6 +354,7 @@ function applyProviderOverlay(
         const providerCapabilities = getModelCapabilitiesAzureFoundry(model);
         return {
             capabilities: [
+                'claude',
                 'embedding',
                 'moderation',
                 'image',

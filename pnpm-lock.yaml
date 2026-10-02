@@ -101,6 +101,9 @@ importers:
       '@anthropic-ai/bedrock-sdk':
         specifier: ^0.34.0
         version: 0.34.0(zod@4.6.5)
+      '@anthropic-ai/foundry-sdk':
+        specifier: 0.5.2
+        version: 0.5.2(zod@4.6.5)
       '@anthropic-ai/sdk':
         specifier: ^0.129.0
         version: 0.129.0(zod@4.6.5)
@@ -219,6 +222,9 @@ packages:
 
   '@anthropic-ai/bedrock-sdk@0.34.0':
     resolution: {integrity: sha512-B7eWuX75B/CLpJnuP+qT/BD3J2Qw/ui7dRhWGuhDT8YAzw5Se48gRjiCEjWbuUvVw7D/4SPlfeN/Wh8GFfz6ew==}
+
+  '@anthropic-ai/foundry-sdk@0.5.2':
+    resolution: {integrity: sha512-+6ECjnTncBD06kw+TW/QDwLlU1xjVpKFYLqc8Oy3oOTwlf0aOLlu98mKYBWLp5lgZtKd2hD7022JoKdFf6xOQw==}
 
   '@anthropic-ai/sdk@0.129.0':
     resolution: {integrity: sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw==}
@@ -1925,6 +1931,12 @@ snapshots:
       '@smithy/smithy-client': 2.5.1
       '@smithy/types': 2.12.0
       '@smithy/util-base64': 2.3.0
+    transitivePeerDependencies:
+      - zod
+
+  '@anthropic-ai/foundry-sdk@0.5.2(zod@4.6.5)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
     transitivePeerDependencies:
       - zod
 
