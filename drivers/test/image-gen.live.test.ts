@@ -66,7 +66,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
         expect(res).toBeDefined();
         expect(res.result).toHaveLength(1);
         expect(res.result[0]).toHaveProperty('value');
-        saveImagesToOutput(
+        await saveImagesToOutput(
             res.result.filter((r) => r.type === 'image').map((r) => r.value),
             `text-to-image-${model}`,
         );
@@ -88,7 +88,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
         expect(res).toBeDefined();
         expect(res.result).toHaveLength(1);
         expect(res.result[0]).toHaveProperty('value');
-        saveImagesToOutput(
+        await saveImagesToOutput(
             res.result.filter((r) => r.type === 'image').map((r) => r.value),
             `text-to-image-guidance-${model}`,
         );
@@ -108,23 +108,20 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
         expect(res).toBeDefined();
         expect(res.result).toHaveLength(1);
         expect(res.result[0]).toHaveProperty('value');
-        saveImagesToOutput(
+        await saveImagesToOutput(
             res.result.filter((r) => r.type === 'image').map((r) => r.value),
             `text-to-image-variation-${model}`,
         );
     });
 });
 
-function saveImagesToOutput(images: string[] = [], name: string) {
-    if (!fs.existsSync('output')) {
-        fs.mkdirSync('output');
-    }
-    if (images.length === 0) {
-        return;
-    }
-    images.forEach((image, i) => {
+async function saveImagesToOutput(images: string[] = [], name: string) {
+    await fs.promises.mkdir('output', { recursive: true });
+    for (const [i, image] of images.entries()) {
         const filename = `output/${name}-${i}.png`;
         console.log(`Saving image to ${filename}`);
-        fs.writeFileSync(filename, image, 'base64');
-    });
+        const response = await fetch(image);
+        if (!response.ok) throw new Error(`Failed to read generated image: HTTP ${response.status}`);
+        await fs.promises.writeFile(filename, Buffer.from(await response.arrayBuffer()));
+    }
 }
