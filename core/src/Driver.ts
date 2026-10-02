@@ -69,7 +69,7 @@ export interface Driver<PromptT = unknown> {
      */
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string>;
 
-    createPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<PromptT>;
+    createPrompt(segments: PromptSegment[], opts: ExecutionOptions, signal?: AbortSignal): Promise<PromptT>;
 
     execute(
         segments: PromptSegment[],
@@ -330,7 +330,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ExecutionResponse<PromptT>> {
-        const prompt = await this.createPrompt(segments, options);
+        const prompt = await this.createPrompt(segments, options, signal);
         return await this._execute(prompt, options, signal).catch((error: unknown) => {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
@@ -409,7 +409,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             options,
             `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
         );
-        const prompt = await this.createPrompt(segments, options);
+        const prompt = await this.createPrompt(segments, options, signal);
         signal?.throwIfAborted();
         if (await this.canStream(options, signal)) {
             signal?.throwIfAborted();
@@ -425,14 +425,21 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @param options
      * @returns
      */
-    protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
+    protected async formatPrompt(
+        segments: PromptSegment[],
+        opts: PromptOptions,
+        _signal?: AbortSignal,
+    ): Promise<PromptT> {
         return formatTextPrompt(segments, opts.result_schema) as PromptT;
     }
 
-    public async createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
-        return await (opts.format
+    public async createPrompt(segments: PromptSegment[], opts: PromptOptions, signal?: AbortSignal): Promise<PromptT> {
+        signal?.throwIfAborted();
+        const prompt = await (opts.format
             ? (opts.format(segments, opts.result_schema) as PromptT)
-            : this.formatPrompt(segments, opts));
+            : this.formatPrompt(segments, opts, signal));
+        signal?.throwIfAborted();
+        return prompt;
     }
 
     /**

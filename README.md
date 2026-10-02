@@ -60,7 +60,10 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 
 ## Azure Foundry SDKs
 
-Foundry uses `@azure/ai-projects` for project/deployment discovery and OpenAI SDK 7 for inference.
+Foundry uses `@azure/ai-projects` for project/deployment discovery, OpenAI SDK 7 for OpenAI-compatible
+inference, and `@anthropic-ai/foundry-sdk` for Anthropic deployments. Claude Messages requests use the
+resource `/anthropic/v1/messages` endpoint and the existing Entra credential. Claude source model IDs
+select the shared Anthropic options and behavior; the deployment name is sent in the API request.
 Chat Completions, Responses, embeddings, and image requests use the OpenAI v1 endpoint resolved by
 Projects. Projects retains its own declared OpenAI dependency; no dependency override is required.
 The retired Azure AI Inference beta transport is no longer used. Deployments must support OpenAI v1
