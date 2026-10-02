@@ -115,12 +115,16 @@ describe('Bedrock service tiers', () => {
         });
     });
 
-    it('preserves a Nova Canvas provider error without requiring an images array', async () => {
+    it.each([
+        [{ error: 'Image generation was blocked' }, 'Image generation was blocked'],
+        [{ images: [] }, 'No images returned by Nova Canvas'],
+        [{}, 'No images returned by Nova Canvas'],
+    ])('reports a Nova Canvas failure without image output %j', async (body, error) => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         Object.defineProperty(driver, 'getExecutor', {
             value: () => ({
                 invokeModel: vi.fn().mockResolvedValue({
-                    body: new TextEncoder().encode(JSON.stringify({ error: 'Image generation was blocked' })),
+                    body: new TextEncoder().encode(JSON.stringify(body)),
                 }),
                 destroy: vi.fn(),
             }),
@@ -132,7 +136,10 @@ describe('Bedrock service tiers', () => {
             model: 'amazon.nova-canvas-v1:0',
             model_options: { _option_id: 'bedrock-nova-canvas', taskType: 'TEXT_IMAGE' },
         });
-        expect(result.error).toBe('Image generation was blocked');
+        expect(result.error).toEqual({
+            code: 'error' in body ? 'content_policy_violation' : 'validation_error',
+            message: error,
+        });
         expect(result.result).toEqual([]);
     });
 });

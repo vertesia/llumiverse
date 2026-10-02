@@ -433,14 +433,25 @@ export class ImagenModelDefinition {
         }
 
         const requestedMime = (options.model_options as ImagenOptions | undefined)?.image_file_type;
-        return {
-            result: predictions.flatMap((prediction) => {
-                const fields = prediction.structValue?.fields;
-                const data = fields?.bytesBase64Encoded?.stringValue;
-                if (!data) return [];
-                const mime = fields?.mimeType?.stringValue ?? requestedMime ?? 'image/png';
-                return [{ type: 'image' as const, value: `data:${mime};base64,${data}` }];
-            }),
-        };
+        const result = predictions.flatMap((prediction) => {
+            const fields = prediction.structValue?.fields;
+            const data = fields?.bytesBase64Encoded?.stringValue;
+            if (!data) return [];
+            const mime = fields?.mimeType?.stringValue || requestedMime || 'image/png';
+            return [{ type: 'image' as const, value: `data:${mime};base64,${data}` }];
+        });
+        if (!result.length) {
+            const reason = predictions.find(
+                (prediction) => prediction.structValue?.fields?.raiFilteredReason?.stringValue,
+            )?.structValue?.fields?.raiFilteredReason?.stringValue;
+            return {
+                result,
+                error: {
+                    code: reason ? 'content_policy_violation' : 'validation_error',
+                    message: reason || 'No images returned by Imagen',
+                },
+            };
+        }
+        return { result };
     }
 }
