@@ -103,12 +103,13 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
             const results: CompletionResult[] = [];
 
             for (const image of response.data ?? []) {
-                if (image.b64_json) {
+                if (!image) continue;
+                if (typeof image.b64_json === 'string' && image.b64_json.trim()) {
                     results.push({
                         type: 'image',
                         value: `data:${image.mime_type ?? 'image/jpeg'};base64,${image.b64_json}`,
                     });
-                } else if (image.url) {
+                } else if (typeof image.url === 'string' && image.url.trim()) {
                     results.push({ type: 'image', value: image.url });
                 }
             }
@@ -116,6 +117,9 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
             const costTicks = response.usage?.cost_in_usd_ticks;
             return {
                 result: results,
+                ...(results.length === 0 && {
+                    error: { code: 'validation_error', message: 'Image generation returned no usable images' },
+                }),
                 ...(typeof costTicks === 'number' && {
                     token_usage: { provider_cost_usd: costTicks / XAI_USD_TICKS },
                 }),

@@ -223,3 +223,75 @@ describe('Imagen option serialization', () => {
         },
     );
 });
+
+describe('Imagen output MIME metadata', () => {
+    async function generate(predictions: Record<string, string>[], mime?: 'image/png' | 'image/jpeg') {
+        const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });
+        const predict = vi
+            .fn()
+            .mockResolvedValue([{ predictions: predictions.map((value) => helpers.toValue(value)) }]);
+        vi.spyOn(driver, 'getImagenClient').mockResolvedValue({ predict } as unknown as Awaited<
+            ReturnType<VertexAIDriver['getImagenClient']>
+        >);
+        return new ImagenModelDefinition('imagen-3.0-generate-002').requestImageGeneration(
+            driver,
+            { prompt: 'A tree' },
+            {
+                model: 'imagen-3.0-generate-002',
+                model_options: { _option_id: 'vertexai-imagen', image_file_type: mime },
+            },
+        );
+    }
+
+    it.each([
+        [undefined, 'image/png'],
+        ['image/jpeg', 'image/jpeg'],
+    ] as const)('falls back to requested format %s or PNG without response MIME', async (requested, expected) => {
+        const completion = await generate([{ bytesBase64Encoded: 'YQ==' }], requested);
+        expect(completion.result).toEqual([{ type: 'image', value: `data:${expected};base64,YQ==` }]);
+    });
+
+    it('preserves successful images in a partially filtered response', async () => {
+        const completion = await generate([
+            { bytesBase64Encoded: 'YQ==', mimeType: 'image/png' },
+            { raiFilteredReason: 'Filtered image' },
+        ]);
+        expect(completion.error).toBeUndefined();
+        expect(completion.result).toEqual([{ type: 'image', value: 'data:image/png;base64,YQ==' }]);
+    });
+
+    it('reports filtering instead of completing with no images', async () => {
+        const completion = await generate([{ raiFilteredReason: 'All images were filtered' }]);
+        expect(completion.error).toEqual({ code: 'content_policy_violation', message: 'All images were filtered' });
+        expect(completion.result).toEqual([]);
+    });
+
+    it('reports an empty predictions response as a generation failure', async () => {
+        const completion = await generate([]);
+        expect(completion.error).toEqual({ code: 'validation_error', message: 'No images returned by Imagen' });
+    });
+
+    it.each(['image/png', 'image/jpeg'])('preserves returned %s metadata on each image', async (mime) => {
+        const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });
+        const predictions = ['YQ==', 'Yg=='].map((data) =>
+            helpers.toValue({ bytesBase64Encoded: data, mimeType: mime }),
+        );
+        const predict = vi.fn().mockResolvedValue([{ predictions }]);
+        vi.spyOn(driver, 'getImagenClient').mockResolvedValue({ predict } as unknown as Awaited<
+            ReturnType<VertexAIDriver['getImagenClient']>
+        >);
+        const model = 'imagen-3.0-generate-002';
+        const completion = await new ImagenModelDefinition(model).requestImageGeneration(
+            driver,
+            { prompt: 'A tree' },
+            {
+                model,
+                model_options: { _option_id: 'vertexai-imagen', image_file_type: 'image/png' },
+            },
+        );
+        expect(completion.result).toEqual([
+            { type: 'image', value: `data:${mime};base64,YQ==` },
+            { type: 'image', value: `data:${mime};base64,Yg==` },
+        ]);
+    });
+});

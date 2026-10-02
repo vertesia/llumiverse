@@ -1734,10 +1734,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const bedrockResult = JSON.parse(body);
 
         return {
-            error: bedrockResult.error,
-            result: bedrockResult.images.map((image: string) => ({
+            error: bedrockResult.error
+                ? { code: 'content_policy_violation', message: bedrockResult.error }
+                : !bedrockResult.images?.length
+                  ? { code: 'validation_error', message: 'No images returned by Nova Canvas' }
+                  : undefined,
+            result: (bedrockResult.images ?? []).map((image: string) => ({
                 type: 'image' as const,
-                value: image,
+                value: `data:image/png;base64,${image}`,
             })),
         };
     }
