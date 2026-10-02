@@ -210,3 +210,26 @@ describe('xAI image generation', () => {
         });
     });
 });
+
+describe('xAI empty image responses', () => {
+    it.each([{}, { data: [] }, { data: [{}] }, { data: [{ b64_json: '', url: ' ' }] }])(
+        'rejects a response with no usable images: %j',
+        async (response) => {
+            const driver = new xAIDriver({ apiKey: 'test-key' });
+            driver.xai_service = { post: vi.fn().mockResolvedValue(response) } as unknown as FetchClient;
+            await expect(driver.requestImageGeneration([], { model: 'grok-imagine-image' })).resolves.toMatchObject({
+                result: [],
+                error: { code: 'validation_error', message: expect.stringContaining('no usable images') },
+            });
+        },
+    );
+    it('retains usable images from a partial batch', async () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        driver.xai_service = {
+            post: vi.fn().mockResolvedValue({ data: [null, {}, { url: 'https://example.com/image.jpeg' }] }),
+        } as unknown as FetchClient;
+        await expect(driver.requestImageGeneration([], { model: 'grok-imagine-image' })).resolves.toEqual({
+            result: [{ type: 'image', value: 'https://example.com/image.jpeg' }],
+        });
+    });
+});

@@ -106,11 +106,62 @@ describe('Bedrock service tiers', () => {
         };
         const controller = new AbortController();
 
-        await driver.requestImageGeneration(prompt, options, controller.signal);
+        const completion = await driver.requestImageGeneration(prompt, options, controller.signal);
+        expect(completion.result).toEqual([{ type: 'image', value: 'data:image/png;base64,image' }]);
 
         expect(invokeModel).toHaveBeenCalledWith(expect.any(Object), {
             abortSignal: controller.signal,
             requestTimeout: 900_000,
         });
     });
+
+    it.each([
+        [{ error: 'Image generation was blocked' }, 'Image generation was blocked'],
+        [{ images: [] }, 'No images returned by Nova Canvas'],
+        [{ images: ['', '   ', null] }, 'No images returned by Nova Canvas'],
+        [{}, 'No images returned by Nova Canvas'],
+    ])('reports a Nova Canvas failure without image output %j', async (body, error) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({
+                invokeModel: vi.fn().mockResolvedValue({
+                    body: new TextEncoder().encode(JSON.stringify(body)),
+                }),
+                destroy: vi.fn(),
+            }),
+        });
+        const prompt: NovaMessagesPrompt = {
+            messages: [{ role: 'user', content: [{ text: 'Draw a tree' }] }],
+        };
+        const result = await driver.requestImageGeneration(prompt, {
+            model: 'amazon.nova-canvas-v1:0',
+            model_options: { _option_id: 'bedrock-nova-canvas', taskType: 'TEXT_IMAGE' },
+        });
+        expect(result.error).toEqual({
+            code: 'error' in body ? 'content_policy_violation' : 'validation_error',
+            message: error,
+        });
+        expect(result.result).toEqual([]);
+    });
+});
+
+it('retains only usable images from a partial Nova Canvas batch', async () => {
+    const driver = new BedrockDriver({ region: 'us-east-1' });
+    Object.defineProperty(driver, 'getExecutor', {
+        value: () => ({
+            invokeModel: vi.fn().mockResolvedValue({
+                body: new TextEncoder().encode(JSON.stringify({ images: ['', 'YQ==', null, '   '] })),
+            }),
+            destroy: vi.fn(),
+        }),
+    });
+    const result = await driver.requestImageGeneration(
+        { messages: [{ role: 'user', content: [{ text: 'Draw a tree' }] }] },
+        {
+            model: 'amazon.nova-canvas-v1:0',
+            model_options: { _option_id: 'bedrock-nova-canvas', taskType: 'TEXT_IMAGE' },
+        },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual([{ type: 'image', value: 'data:image/png;base64,YQ==' }]);
 });
