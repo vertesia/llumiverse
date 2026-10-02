@@ -34,7 +34,14 @@ function response(content: Message['content'] = [{ type: 'text', text: 'Green', 
         },
     ];
     content.forEach((block, index) => {
-        events.push({ type: 'content_block_start', index, content_block: block });
+        events.push({
+            type: 'content_block_start',
+            index,
+            content_block: block.type === 'text' ? { ...block, text: '' } : block,
+        });
+        if (block.type === 'text') {
+            events.push({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } });
+        }
         events.push({ type: 'content_block_stop', index });
     });
     events.push(
@@ -143,6 +150,119 @@ describe('Foundry Claude Messages', () => {
             driver.destroy();
         }
     });
+
+    it.each([
+        ['gpt-replacement', undefined],
+        ['gpt-image-replacement', undefined],
+        ['gpt-replacement', 'claude-opus-6'],
+        ['gpt-image-replacement', 'claude-opus-6'],
+    ] as const)('uses the Claude source rather than deployment name %s with hint %s', async (model, source) => {
+        const { driver, metadata, requests } = setup(source);
+        try {
+            const result = await driver.execute(segments, { model });
+            expect(result.prompt).toHaveProperty('messages');
+            const stream = await driver.stream(segments, { model });
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(chunk);
+            expect(chunks.join('')).toContain('Green');
+            expect(stream.completion?.prompt).toHaveProperty('messages');
+            expect(metadata).toHaveBeenCalledTimes(source ? 0 : 1);
+            expect(requests).toHaveLength(2);
+            expect(requests.every((request) => request.body.model === model)).toBe(true);
+            expect(requests.every((request) => !('temperature' in request.body))).toBe(true);
+            expect(requests.every((request) => request.url.endsWith('/anthropic/v1/messages'))).toBe(true);
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('gives a qualified source priority over a conflicting driver hint', async () => {
+        const { driver, metadata, requests } = setup('gpt-5');
+        try {
+            await driver.execute(segments, { model: 'gpt-replacement::claude-opus-6' });
+            expect(metadata).not.toHaveBeenCalled();
+            expect(requests[0].body.model).toBe('gpt-replacement');
+            expect(requests[0].url).toContain('/anthropic/v1/messages');
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('uses an OpenAI source hint for a Claude-named deployment', async () => {
+        const { driver, metadata } = setup('gpt-5');
+        metadata.mockResolvedValue({
+            type: 'ModelDeployment',
+            name: 'claude-replacement',
+            modelName: 'gpt-5',
+            modelPublisher: 'OpenAI',
+            modelVersion: '1',
+            capabilities: { chat_completion: 'true' },
+        });
+        try {
+            expect(await driver.createPrompt(segments, { model: 'claude-replacement' })).toBeInstanceOf(Array);
+            expect(await driver.isOpenAIDeployment('claude-replacement')).toBe(true);
+            expect(metadata).toHaveBeenCalledOnce();
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it.each(['execute', 'stream', 'createPrompt'] as const)(
+        'cancels publisher discovery during %s without caching the failed lookup',
+        async (operation) => {
+            const { driver, metadata, requests } = setup();
+            const controller = new AbortController();
+            metadata.mockImplementationOnce(
+                async (_name, options) =>
+                    new Promise((_resolve, reject) => {
+                        options?.abortSignal?.addEventListener('abort', () => reject(controller.signal.reason), {
+                            once: true,
+                        });
+                    }),
+            );
+            const reason = new DOMException('Cancelled', 'AbortError');
+            try {
+                const pending = driver[operation](
+                    segments,
+                    { model: 'gpt-replacement', httpTimeout: { headersTimeout: 40, bodyTimeout: 40 } },
+                    controller.signal,
+                );
+                const rejected = expect(pending).rejects.toBe(reason);
+                await vi.waitFor(() => expect(metadata).toHaveBeenCalledOnce());
+                expect(metadata).toHaveBeenCalledWith('gpt-replacement', {
+                    abortSignal: controller.signal,
+                    requestOptions: { timeout: 40 },
+                });
+                controller.abort(reason);
+                await rejected;
+                expect(requests).toHaveLength(0);
+                await driver.execute(segments, { model: 'gpt-replacement' });
+                expect(metadata).toHaveBeenCalledTimes(2);
+                expect(requests).toHaveLength(1);
+            } finally {
+                controller.abort();
+                driver.destroy();
+            }
+        },
+    );
+
+    it.each(['execute', 'stream', 'createPrompt'] as const)(
+        'skips discovery for an already aborted %s',
+        async (operation) => {
+            const { driver, metadata, requests } = setup();
+            const controller = new AbortController();
+            controller.abort();
+            try {
+                await expect(driver[operation](segments, { model: 'deployment' }, controller.signal)).rejects.toBe(
+                    controller.signal.reason,
+                );
+                expect(metadata).not.toHaveBeenCalled();
+                expect(requests).toHaveLength(0);
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
 
     it('does not cache failed publisher lookups', async () => {
         const { driver, metadata } = setup();

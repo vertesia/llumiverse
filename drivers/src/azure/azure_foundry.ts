@@ -68,7 +68,8 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
 
     constructor(
         service: OpenAI,
-        private readonly foundryOptions: AzureFoundryDriverOptions,
+        foundryOptions: AzureFoundryDriverOptions,
+        private readonly resolveSourceModel: (model: string) => string,
     ) {
         super(foundryOptions);
         this.service = service;
@@ -86,8 +87,7 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     }
 
     getImageSourceModel(model: string): string {
-        if (model.includes('::') || resolveModelProfile(model, this.provider).family !== 'generic') return model;
-        return this.foundryOptions.sourceModel ?? model;
+        return this.resolveSourceModel(model);
     }
 
     async listModels(): Promise<AIModel[]> {
@@ -240,8 +240,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     private getSourceModel(model: string): string {
         const { deploymentName, baseModel } = parseAzureFoundryModelId(model);
-        if (model.includes('::') || resolveModelProfile(baseModel, this.provider).family !== 'generic')
-            return baseModel;
+        if (model.includes('::')) return baseModel;
         return this.options.sourceModel ?? this.deploymentSources.get(deploymentName) ?? baseModel;
     }
 
@@ -250,6 +249,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         signal?: AbortSignal,
         httpTimeout?: ExecutionOptions['httpTimeout'],
     ): Promise<FoundryProtocol> {
+        signal?.throwIfAborted();
         const { deploymentName } = parseAzureFoundryModelId(model);
         const cached = this.deploymentProtocols.get(deploymentName);
         if (cached) return cached;
@@ -261,6 +261,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             ...(signal ? { abortSignal: signal } : {}),
             requestOptions: { timeout: this.getDriverRequestTimeoutMs(httpTimeout) },
         })) as ModelDeployment;
+        signal?.throwIfAborted();
         const publisher = deployment.modelPublisher.toLowerCase();
         const protocol =
             publisher === 'anthropic' ? 'messages' : publisher === 'openai' ? 'responses' : 'chat_completions';
@@ -280,12 +281,15 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     protected async formatPrompt(
         segments: PromptSegment[],
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<FoundryExecutionPrompt> {
-        const family = resolveModelProfile(this.getSourceModel(options.model), this.provider).family;
+        // Explicit image sources keep the direct Images path independent of publisher discovery.
+        const explicitImageSource =
+            (options.model.includes('::') || this.options.sourceModel !== undefined) &&
+            this.isImageModel(options.model);
         if (
-            family === 'claude' ||
-            (family === 'generic' &&
-                (await this.getDeploymentProtocol(options.model, undefined, options.httpTimeout)) === 'messages')
+            !explicitImageSource &&
+            (await this.getDeploymentProtocol(options.model, signal, options.httpTimeout)) === 'messages'
         ) {
             return formatClaudePrompt(segments, { ...options, model: this.getSourceModel(options.model) }, this.logger);
         }
@@ -354,7 +358,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
-        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.getInferenceClient(), this.options);
+        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(
+            this.getInferenceClient(),
+            this.options,
+            (model) => this.getSourceModel(model),
+        );
         return this.openAIProtocolDriver;
     }
 
@@ -375,9 +383,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return Array.isArray(prompt) ? formatOpenAIDebugPrompt(prompt) : formatClaudeDebugPrompt(prompt);
     }
     protected isImageModel(model: string): boolean {
-        const family = resolveModelProfile(model, this.provider).family;
-        const source = model.includes('::') || family !== 'generic' ? model : (this.options.sourceModel ?? model);
-        return resolveModelProfile(source, this.provider).family === 'image';
+        return resolveModelProfile(this.getSourceModel(model), this.provider).family === 'image';
     }
 
     requestImageGeneration(
