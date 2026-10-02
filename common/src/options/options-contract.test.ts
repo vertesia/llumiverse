@@ -31,6 +31,8 @@ const routes: Record<Providers, readonly (readonly [string, ModelOptions['_optio
         ['openai/gpt-oss-120b', 'openai-text'],
     ],
     azure_foundry: [
+        ['opaque::claude-opus-5-5', 'anthropic-claude'],
+        ['opaque::claude-sonnet-6', 'anthropic-claude'],
         ['deployment::gpt-5.6-sol', 'openai-thinking'],
         ['DeepSeek-R1', 'azure-foundry-chat'],
     ],

@@ -74,6 +74,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         } as unknown as AzureFoundryDriver['service'];
 
         expect((await driver.listModels()).map((model) => model.id)).toEqual([
+            'anthropic::claude-future',
             'explicit-chat::Llama-5',
             'future-chat::Future-Chat-7',
             'image::gpt-image-2.5-flare',
