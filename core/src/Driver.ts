@@ -34,7 +34,7 @@ import {
     FallbackCompletionStream,
     leaseCompletionStream,
 } from './CompletionStream.js';
-import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
+import { stripAudioFromCompletion } from './conversation-utils.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
     createAgentBackedFetch,
@@ -375,19 +375,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     if (LlumiverseError.isLlumiverseError(error)) {
                         throw error;
                     }
-                    // Log the original error for debugging
-                    this.logger.error(
-                        {
-                            err: error,
-                            data: {
-                                provider: this.provider,
-                                model: options.model,
-                                operation: 'execute',
-                                prompt: stripAudioPayloads(prompt),
-                            },
-                        },
-                        `Error during execution in provider ${this.provider}:`,
-                    );
+                    // Normalize here; the request/run boundary logs the resulting error once with
+                    // the final severity and correlation context. In particular, never log prompts.
                     throw this.formatLlumiverseError(error, {
                         provider: this.provider,
                         model: options.model,
