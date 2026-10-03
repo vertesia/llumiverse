@@ -4,6 +4,28 @@ import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { xAIDriver } from './index.js';
 
+describe('xAI endpoint configuration', () => {
+    it.each([
+        ['nested path', 'https://xai.test/prefix//v1', 'https://xai.test/prefix//v1'],
+        ['short suffix', 'https://xai.test/prefix//v1///', 'https://xai.test/prefix//v1'],
+        ['long suffix', `https://xai.test/prefix//v1${'/'.repeat(65536)}`, 'https://xai.test/prefix//v1'],
+        ['long interior', `https://xai.test/${'/'.repeat(65536)}v1`, `https://xai.test/${'/'.repeat(65536)}v1`],
+        ['empty endpoint', '', ''],
+        ['slash-only endpoint', '////', ''],
+    ])('removes only the trailing slash suffix: %s', (_name, endpoint, expected) => {
+        const driver = new xAIDriver({ apiKey: 'test-key', endpoint });
+        // The OpenAI SDK retains its existing default when configured with an empty endpoint.
+        expect(driver.service.baseURL).toBe(expected || 'https://api.openai.com/v1');
+        expect(driver.xai_service.baseUrl).toBe(expected);
+    });
+
+    it('retains the default endpoint when no endpoint is configured', () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        expect(driver.service.baseURL).toBe('https://api.x.ai/v1');
+        expect(driver.xai_service.baseUrl).toBe('https://api.x.ai/v1');
+    });
+});
+
 describe('xAI model listing', () => {
     it('uses verified catalog capabilities instead of runtime modality claims', async () => {
         const driver = new xAIDriver({ apiKey: 'test-key' });

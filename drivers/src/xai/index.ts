@@ -44,7 +44,10 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
         if (!opts.apiKey) {
             throw new Error('apiKey is required');
         }
-        this.imageEndpoint = (opts.endpoint ?? this.DEFAULT_ENDPOINT).replace(/\/+$/, '');
+        const endpoint = opts.endpoint ?? this.DEFAULT_ENDPOINT;
+        let endpointEnd = endpoint.length;
+        while (endpointEnd > 0 && endpoint[endpointEnd - 1] === '/') endpointEnd--;
+        this.imageEndpoint = endpoint.slice(0, endpointEnd);
 
         this.service = new OpenAI({
             apiKey: opts.apiKey,
