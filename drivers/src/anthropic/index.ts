@@ -9,6 +9,7 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalHostCapabilities,
+    type CanonicalModelSwitchCountResult,
     type CanonicalModelSwitchProjectionControls,
     type CanonicalStreamOpenOptions,
     type Completion,
@@ -45,6 +46,8 @@ import {
     CLAUDE_MESSAGES_PROTOCOL,
 } from '../shared/claude-messages-conversation-adapter.js';
 
+import { countAnthropicModelSwitchRequest } from './canonical-model-switch-count.js';
+
 export type { AnthropicDriverOptions } from '../driver-options.js';
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
@@ -64,6 +67,14 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         });
     }
 
+    override async countCanonicalModelSwitchNativeRequest(
+        nativeRequest: unknown,
+        target: ModelTarget,
+        signal?: AbortSignal,
+    ): Promise<CanonicalModelSwitchCountResult> {
+        return countAnthropicModelSwitchRequest(this.client, nativeRequest, target, signal);
+    }
+
     override async projectCanonicalModelSwitchRequest(
         document: ConversationDocument,
         target: ModelTarget,
@@ -79,15 +90,24 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         if (ownedTarget.provider !== this.provider) {
             return { status: 'unsupported', reason: 'Model switch target provider differs from configured driver' };
         }
-        const { compileClaudeModelSwitchRequest } = await import('../shared/claude-model-switch.js');
-        return {
-            status: 'compiled',
-            native_request: await compileClaudeModelSwitchRequest({
-                document: ownedDocument,
-                target: ownedTarget,
-                operation: ownedOperation,
-            }),
-        };
+        const { compileClaudeModelSwitchRequest, ClaudeModelSwitchUnsupportedError } = await import(
+            '../shared/claude-model-switch.js'
+        );
+        try {
+            return {
+                status: 'compiled',
+                native_request: await compileClaudeModelSwitchRequest({
+                    document: ownedDocument,
+                    target: ownedTarget,
+                    operation: ownedOperation,
+                }),
+            };
+        } catch (error: unknown) {
+            if (error instanceof ClaudeModelSwitchUnsupportedError) {
+                return { status: 'unsupported', reason: error.message };
+            }
+            throw error;
+        }
     }
 
     protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {

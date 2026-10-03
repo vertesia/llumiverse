@@ -793,6 +793,7 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
     on_canonical_request_projected?: (
         projection: CanonicalRequestProjection,
         compiler: CanonicalRequestProjectionCompiler,
+        signal?: AbortSignal,
     ) => Promise<CanonicalProjectedRequestMeasurement | undefined>;
     /**
      * Runtime-only durability barrier invoked after an adopted adapter has finalized its exact native

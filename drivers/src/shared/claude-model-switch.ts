@@ -6,7 +6,7 @@ import {
     parseConversationDocument,
 } from '@llumiverse/conversation';
 import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
-import type { ExecutionOptions } from '@llumiverse/core';
+import { type ExecutionOptions, isClaudeVersionGTE } from '@llumiverse/core';
 import {
     canonicalConversationTurnNumber,
     providerJsonValue,
@@ -18,6 +18,14 @@ import {
     CLAUDE_MESSAGES_PROTOCOL,
     compileClaudeMessagesConversation,
 } from './claude-messages-conversation-adapter.js';
+
+/** A known selected-context policy mismatch; the host presents this as a blocked plan. */
+export class ClaudeModelSwitchUnsupportedError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'ClaudeModelSwitchUnsupportedError';
+    }
+}
 
 /**
  * Dry compatible-only Claude projection through the transport's actual adapter and payload builder.
@@ -40,21 +48,26 @@ export async function compileClaudeModelSwitchRequest(input: {
         if (!definition) throw new Error(`Claude Messages model switch tool ${id} is unavailable`);
         return definition;
     });
-    const unsupported = new Set([
-        'image',
-        'document',
-        'audio',
-        'video',
-        'extension',
-        'native_replay',
-        'external_reference',
-    ]);
+    const unsupported = new Set(['image', 'document', 'audio', 'video', 'extension', 'external_reference']);
     for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
         for (const block of turn.blocks) {
             if (unsupported.has(block.type))
-                throw new Error(`Claude Messages model switch requires an explicit ${block.type} policy`);
+                throw new ClaudeModelSwitchUnsupportedError(
+                    `Claude Messages model switch requires an explicit ${block.type} policy`,
+                );
+            if (
+                block.type === 'native_replay' &&
+                (block.protocol === CLAUDE_MESSAGES_PROTOCOL ||
+                    block.dependency_policy !== 'discard_on_dependency_change')
+            ) {
+                throw new ClaudeModelSwitchUnsupportedError(
+                    'Claude Messages model switch requires an explicit native_replay policy',
+                );
+            }
             if (block.type === 'tool_result' && block.content.some((item) => unsupported.has(item.type)))
-                throw new Error('Claude Messages model switch requires an explicit nested media policy');
+                throw new ClaudeModelSwitchUnsupportedError(
+                    'Claude Messages model switch requires an explicit nested media policy',
+                );
         }
     }
     const modelOptions = target.options === undefined ? undefined : ModelOptionsSchema.parse(target.options);
@@ -88,9 +101,20 @@ export async function compileClaudeModelSwitchRequest(input: {
     );
     if (requestOptions !== undefined)
         throw new Error('Claude Messages model switch requires an explicit transport-header policy');
+    const projectedMessagesHash = await fingerprintJson(providerJsonValue(projected.messages));
+    const nativeMessagesHash = await fingerprintJson(providerJsonValue(payload.messages));
+    // Claude 4.6+ cannot accept an assistant prefill. The real payload builder appends exactly this
+    // native-only continuation when a dry retained source ends with an assistant response. A new
+    // user input makes that suffix unnecessary; the final prepared body is counted independently.
+    const trailingContinuation =
+        isClaudeVersionGTE(resolvedModel, 4, 6) &&
+        projected.messages.at(-1)?.role === 'assistant' &&
+        payload.messages.length === projected.messages.length + 1 &&
+        (await fingerprintJson(providerJsonValue(payload.messages.slice(0, -1)))) === projectedMessagesHash &&
+        (await fingerprintJson(providerJsonValue(payload.messages.at(-1)))) ===
+            (await fingerprintJson({ role: 'user', content: [{ type: 'text', text: 'Continue.' }] }));
     if (
-        (await fingerprintJson(providerJsonValue(payload.messages))) !==
-            (await fingerprintJson(providerJsonValue(projected.messages))) ||
+        (nativeMessagesHash !== projectedMessagesHash && !trailingContinuation) ||
         (await fingerprintJson(providerJsonValue(payload.system ?? []))) !==
             (await fingerprintJson(providerJsonValue(projected.system ?? [])))
     )

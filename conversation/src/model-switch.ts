@@ -187,6 +187,7 @@ export async function prepareModelSwitch(
         target,
         target_fingerprint: targetFingerprint,
         ...(request.measurement_policy === undefined ? {} : { measurement_policy: request.measurement_policy }),
+        ...(request.measurement_mode === undefined ? {} : { measurement_mode: request.measurement_mode }),
         options_fingerprint: optionsFingerprint,
         active_tool_definition_ids: toolIds,
         tool_set_fingerprint: toolSetFingerprint,
@@ -221,6 +222,7 @@ export async function applyModelSwitch(
             expected_context_revision: plan.expected_context_revision,
             target: plan.target,
             ...(plan.measurement_policy === undefined ? {} : { measurement_policy: plan.measurement_policy }),
+            ...(plan.measurement_mode === undefined ? {} : { measurement_mode: plan.measurement_mode }),
         },
         runtime,
     );
@@ -230,6 +232,7 @@ export async function applyModelSwitch(
         refreshed.context_fingerprint !== plan.context_fingerprint ||
         refreshed.target_fingerprint !== plan.target_fingerprint ||
         refreshed.measurement_policy !== plan.measurement_policy ||
+        refreshed.measurement_mode !== plan.measurement_mode ||
         refreshed.options_fingerprint !== plan.options_fingerprint ||
         refreshed.active_tool_definition_ids.length !== plan.active_tool_definition_ids.length ||
         refreshed.active_tool_definition_ids.some((id, index) => id !== plan.active_tool_definition_ids[index]) ||
@@ -256,6 +259,7 @@ export async function applyModelSwitch(
         target: refreshed.target,
         target_fingerprint: refreshed.target_fingerprint,
         ...(refreshed.measurement_policy === undefined ? {} : { measurement_policy: refreshed.measurement_policy }),
+        ...(refreshed.measurement_mode === undefined ? {} : { measurement_mode: refreshed.measurement_mode }),
         options_fingerprint: refreshed.options_fingerprint,
         active_tool_definition_ids: refreshed.active_tool_definition_ids,
         tool_set_fingerprint: refreshed.tool_set_fingerprint,

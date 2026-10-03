@@ -16,6 +16,7 @@ export const ConversationModelSwitchRequestSchema = z
         expected_context_revision: NonnegativeSafeIntegerSchema,
         target: ModelTargetSchema,
         measurement_policy: z.enum(['exact_only', 'identified_estimate']).optional(),
+        measurement_mode: z.enum(['local', 'provider']).optional(),
     })
     .meta({ id: 'ConversationModelSwitchRequest' });
 
@@ -58,6 +59,7 @@ export const ConversationModelSwitchPlanSchema = z
         target_fingerprint: ContentHashSchema,
         /** The requested policy; an existing source exact-only budget remains authoritative. */
         measurement_policy: z.enum(['exact_only', 'identified_estimate']).optional(),
+        measurement_mode: z.enum(['local', 'provider']).optional(),
         options_fingerprint: ContentHashSchema,
         active_tool_definition_ids: z.array(IdentifierSchema),
         tool_set_fingerprint: ContentHashSchema,
@@ -85,6 +87,7 @@ export const ConversationModelSwitchNextRequestChangeSchema = z
         target: ModelTargetSchema,
         target_fingerprint: ContentHashSchema,
         measurement_policy: z.enum(['exact_only', 'identified_estimate']).optional(),
+        measurement_mode: z.enum(['local', 'provider']).optional(),
         options_fingerprint: ContentHashSchema,
         active_tool_definition_ids: z.array(IdentifierSchema),
         tool_set_fingerprint: ContentHashSchema,

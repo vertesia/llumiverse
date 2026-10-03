@@ -73,6 +73,35 @@ function request(document = source()) {
 }
 
 describe('revision-bound model switch proposal', () => {
+    it('binds provider-count opt-in to plan, apply and JSON contract without weakening source checks', async () => {
+        const document = source();
+        const runtime = await runtimeFor(document);
+        const plan = await prepareModelSwitch(
+            document,
+            { ...request(document), measurement_mode: 'provider' },
+            runtime,
+        );
+        expect(plan.measurement_mode).toBe('provider');
+        const change = await applyModelSwitch(
+            document,
+            plan,
+            { operation_id: 'switch:provider-count', recorded_at: at },
+            runtime,
+        );
+        expect(change.measurement_mode).toBe('provider');
+        const changedSource = { ...document, id: 'switch:changed-source' };
+        await expect(
+            applyModelSwitch(
+                changedSource,
+                plan,
+                { operation_id: 'switch:stale-provider-count', recorded_at: at },
+                runtime,
+            ),
+        ).rejects.toThrow('changed before apply');
+        expect(
+            ConversationModelSwitchPlanSchema.safeParse({ ...plan, measurement_mode: 'remote-inference' }).success,
+        ).toBe(false);
+    });
     it('exports the frozen JSON lookup and preserves Zod/JSON Schema round trips', async () => {
         const named = {
             conversation_model_switch_request: ConversationModelSwitchRequestJsonSchema,

@@ -38,6 +38,8 @@ import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-
 import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import {
     AGENT_PROMPT_CACHE_KEY_PREFIX,
+    type CanonicalProjectedRequestMeasurement,
+    type CanonicalRequestProjectionCompiler,
     getClaudeMaxTokensLimit,
     JSON_SCHEMA_INSTRUCTION_PREFIX,
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
@@ -47,9 +49,11 @@ import {
     canonicalJsonContentString,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
+    fingerprintJson,
     type JsonObject,
     type JsonValue,
     type NativeStreamPosition,
+    parseConversationDocument,
     toolArgumentsForModel,
 } from '@llumiverse/conversation';
 import {
@@ -99,6 +103,7 @@ import {
     normalizeDecodedStructuredOutputForSchema,
     rejectDecodedStructuredOutput,
 } from '../conversation/structured-output.js';
+import { projectCanonicalRequestMeasurement } from '../openai/canonical-request-measurement.js';
 import {
     appendClaudeCanonicalResponseWithProcessing,
     type CanonicalClaudeToolResultBlockParam,
@@ -1366,6 +1371,39 @@ export async function executeCanonicalClaudeContext(
     );
 }
 
+/** Validate the exact sent Messages body against a host-supplied count before publication or transport. */
+async function projectClaudeCanonicalMeasurement(
+    prepared: PreparedClaudeConversation,
+    payload: MessageCreateParamsBase | MessageStreamParams,
+    options: ExecutionOptions,
+    signal?: AbortSignal,
+): Promise<CanonicalProjectedRequestMeasurement | undefined> {
+    if (!options.on_canonical_request_projected && !prepared.document.processing.enabled) return undefined;
+    const document = parseConversationDocument(prepared.document);
+    const nativeRequest = providerJsonValue(structuredClone(payload));
+    const sourceHash = await fingerprintJson(document);
+    const compiler: CanonicalRequestProjectionCompiler = {
+        compileDocument: async (input, compileSignal) => {
+            compileSignal?.throwIfAborted();
+            if ((await fingerprintJson(parseConversationDocument(input))) !== sourceHash)
+                throw new Error('Claude projection of a changed document is unavailable');
+            return structuredClone(nativeRequest);
+        },
+        compileProspective: async () => ({ status: 'unavailable' }),
+    };
+    return projectCanonicalRequestMeasurement(
+        {
+            document,
+            runtime: structuredClone(prepared.runtime),
+            target: structuredClone(prepared.receipt.target),
+            native_request: nativeRequest,
+        },
+        compiler,
+        options.on_canonical_request_projected,
+        signal,
+    );
+}
+
 async function executePreparedCanonicalClaudeCompletion(
     client: ClaudeMessagesClient,
     canonicalState: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
@@ -1399,11 +1437,16 @@ async function executePreparedCanonicalClaudeCompletion(
             service_tier: canonicalClaudeServiceTier(canonicalState),
         });
     }
-    const prepared = await finalizeClaudePreparedRequest(
+    const finalized = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
         payload,
     );
-    await publishCanonicalPreparedRequest(prepared, options);
+    const counted = await projectClaudeCanonicalMeasurement(finalized, payload, options, transportOptions?.signal);
+    const prepared =
+        counted === undefined
+            ? finalized
+            : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
+    await publishCanonicalPreparedRequest(prepared, options, counted);
     const responseStream = await streamClaudeMessages(
         client,
         payload as MessageStreamParams,
@@ -1470,11 +1513,16 @@ export async function executeClaudeCompletion(
     if (canonicalState.accepted_response !== undefined) {
         return recoverClaudeCompletion(canonicalState, options, includeThoughts);
     }
-    const prepared = await finalizeClaudePreparedRequest(
+    const finalized = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
         payload,
     );
-    await publishCanonicalPreparedRequest(prepared, options);
+    const counted = await projectClaudeCanonicalMeasurement(finalized, payload, options, transportOptions?.signal);
+    const prepared =
+        counted === undefined
+            ? finalized
+            : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
+    await publishCanonicalPreparedRequest(prepared, options, counted);
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1548,11 +1596,21 @@ export async function streamClaudeCompletion(
     if (canonicalState.accepted_response !== undefined) {
         return recoveredClaudeStream(recoverClaudeCompletion(canonicalState, options, includeThoughts));
     }
-    const prepared = await finalizeClaudePreparedRequest(
+    const finalized = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
         streamingPayload as unknown as MessageCreateParamsBase,
     );
-    await publishCanonicalPreparedRequest(prepared, options);
+    const counted = await projectClaudeCanonicalMeasurement(
+        finalized,
+        streamingPayload,
+        options,
+        transportOptions?.signal,
+    );
+    const prepared =
+        counted === undefined
+            ? finalized
+            : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
+    await publishCanonicalPreparedRequest(prepared, options, counted);
 
     const response_stream = await streamClaudeMessages(
         client,
@@ -1849,10 +1907,20 @@ async function streamPreparedCanonicalClaudeEvents(
         );
     }
 
-    const prepared = await finalizeClaudePreparedRequest(
+    const finalized = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
         streamingPayload as unknown as MessageCreateParamsBase,
     );
+    const counted = await projectClaudeCanonicalMeasurement(
+        finalized,
+        streamingPayload,
+        options,
+        transportOptions?.signal,
+    );
+    const prepared =
+        counted === undefined
+            ? finalized
+            : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
     const abortController = new AbortController();
     const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
     let responseStream: ClaudeMessageStream | undefined;
@@ -2124,7 +2192,7 @@ async function streamPreparedCanonicalClaudeEvents(
         },
         close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
     });
-    await publishCanonicalPreparedRequest(prepared, options);
+    await publishCanonicalPreparedRequest(prepared, options, counted);
     if (transportOptions?.signal?.aborted) forwardAbort();
     else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
     return eventStream;

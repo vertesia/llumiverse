@@ -17,6 +17,7 @@ import {
 import {
     appendConversationRecords,
     createConversationDocument,
+    type ModelTarget,
     parseConversationDocument,
 } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
@@ -39,7 +40,7 @@ import {
     FallbackCanonicalExecutionEventStream,
 } from './CanonicalStreaming.js';
 import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS, leaseCompletionStream } from './CompletionStream.js';
-import { AbstractDriver } from './Driver.js';
+import { AbstractDriver, type CanonicalModelSwitchCountResult } from './Driver.js';
 
 class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     provider = 'lifecycle-test';
@@ -132,6 +133,22 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
 class CanonicalLifecycleTestDriver extends LifecycleTestDriver {
     protected override supportsCanonicalConversation(_options: ExecutionOptions): boolean {
         return true;
+    }
+}
+
+class CountingLifecycleTestDriver extends LifecycleTestDriver {
+    count: Promise<CanonicalModelSwitchCountResult> = Promise.resolve({
+        status: 'counted',
+        input_tokens: 1,
+        profile: 'test-count',
+    });
+
+    override async countCanonicalModelSwitchNativeRequest(
+        _nativeRequest: unknown,
+        _target: ModelTarget,
+        _signal?: AbortSignal,
+    ): Promise<CanonicalModelSwitchCountResult> {
+        return this.count;
     }
 }
 
@@ -1101,6 +1118,53 @@ describe('AbstractDriver lifecycle', () => {
         expect(cleanup).not.toHaveBeenCalled();
         resolveCompletion({ result: [{ type: 'text', value: 'done' }] });
         await execution;
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('holds the configured token-count lease until a successful count settles', async () => {
+        let resolveCount!: (value: CanonicalModelSwitchCountResult) => void;
+        const cleanup = vi.fn();
+        const driver = new CountingLifecycleTestDriver(cleanup);
+        driver.count = new Promise((resolve) => {
+            resolveCount = resolve;
+        });
+        const target: ModelTarget = {
+            provider: 'lifecycle-test',
+            protocol: 'messages',
+            model: 'test-model',
+            adapter_version: 'test-v1',
+        };
+
+        const counting = driver.countCanonicalModelSwitchNativeRequest({ messages: [] }, target);
+        driver.destroy();
+        expect(cleanup).not.toHaveBeenCalled();
+        resolveCount({ status: 'counted', input_tokens: 7, profile: 'test-count' });
+        await expect(counting).resolves.toEqual({ status: 'counted', input_tokens: 7, profile: 'test-count' });
+        expect(cleanup).toHaveBeenCalledOnce();
+        await expect(driver.countCanonicalModelSwitchNativeRequest({ messages: [] }, target)).rejects.toThrow(
+            'Cannot use destroyed lifecycle-test driver',
+        );
+    });
+
+    it('releases the configured token-count lease when the counter rejects', async () => {
+        let rejectCount!: (reason: Error) => void;
+        const cleanup = vi.fn();
+        const driver = new CountingLifecycleTestDriver(cleanup);
+        driver.count = new Promise((_resolve, reject) => {
+            rejectCount = reject;
+        });
+        const target: ModelTarget = {
+            provider: 'lifecycle-test',
+            protocol: 'messages',
+            model: 'test-model',
+            adapter_version: 'test-v1',
+        };
+
+        const counting = driver.countCanonicalModelSwitchNativeRequest({ messages: [] }, target);
+        driver.destroy();
+        expect(cleanup).not.toHaveBeenCalled();
+        rejectCount(new Error('counter unavailable'));
+        await expect(counting).rejects.toThrow('counter unavailable');
         expect(cleanup).toHaveBeenCalledOnce();
     });
 

@@ -53,7 +53,7 @@ export async function projectCanonicalRequestMeasurement(
     let result: CanonicalProjectedRequestMeasurement | undefined;
     try {
         result = await boundedCanonicalProjectionOperation(
-            () => callback(structuredClone(projection), compiler),
+            (ownedSignal) => callback(structuredClone(projection), compiler, ownedSignal),
             signal,
             30000,
         );

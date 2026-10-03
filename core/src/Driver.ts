@@ -79,6 +79,11 @@ import { normalizeCompletionResult } from './validation.js';
 
 export { createLogger } from './logger.js';
 
+/** A configured, non-generation provider counter; unavailable is the fail-closed default. */
+export type CanonicalModelSwitchCountResult =
+    | { status: 'unavailable'; reason: string }
+    | { status: 'counted'; input_tokens: number; profile: string };
+
 /** Host-owned transport controls that can change the actual native body outside target.model_options. */
 export type CanonicalModelSwitchProjectionControls = Pick<
     ExecutionOptions,
@@ -232,6 +237,13 @@ export interface Driver<PromptT = unknown> {
         controls?: CanonicalModelSwitchProjectionControls,
     ): Promise<ConversationModelSwitchProjection>;
 
+    /** Count an exact native body through a configured provider's non-generation endpoint, when supported. */
+    countCanonicalModelSwitchNativeRequest(
+        nativeRequest: unknown,
+        target: ModelTarget,
+        signal?: AbortSignal,
+    ): Promise<CanonicalModelSwitchCountResult>;
+
     startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob>;
 
     cancelTraining(jobId: string): Promise<TrainingJob>;
@@ -279,6 +291,7 @@ const lifecycleGuardedOperationNames = [
     'supportsCanonicalContextExecution',
     'resolveCanonicalModelSwitchTarget',
     'projectCanonicalModelSwitchRequest',
+    'countCanonicalModelSwitchNativeRequest',
     'startTraining',
     'cancelTraining',
     'getTrainingJob',
@@ -365,6 +378,14 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _controls?: CanonicalModelSwitchProjectionControls,
     ): Promise<ConversationModelSwitchProjection> {
         return { status: 'unsupported', reason: 'This configured driver cannot dry-project a model switch' };
+    }
+
+    async countCanonicalModelSwitchNativeRequest(
+        _nativeRequest: unknown,
+        _target: ModelTarget,
+        _signal?: AbortSignal,
+    ): Promise<CanonicalModelSwitchCountResult> {
+        return { status: 'unavailable', reason: 'This configured driver has no non-generation token counter' };
     }
 
     async resolveCanonicalModelSwitchTarget(
