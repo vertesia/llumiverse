@@ -3,6 +3,7 @@ export * from './builders.js';
 export * from './content-integrity.js';
 export * from './context-change.js';
 export * from './context-selection.js';
+export { resolveActiveContextSelection } from './context-selection-resolution.js';
 export * from './conversation-delete.js';
 export * from './conversation-edit.js';
 export { applyConversationSliceEdit, planConversationSliceEdit } from './conversation-slice-edit.js';
