@@ -1,3 +1,4 @@
+import { LlumiverseError } from '@llumiverse/common';
 import {
     appendConversationRecords,
     CONVERSATION_EXPERIMENTAL_REVISION,
@@ -17,12 +18,15 @@ import {
     CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
     canonicalExecutionAccounting,
+    canonicalHostCallbackFailure,
     createCanonicalExecutionResponse,
     FallbackCanonicalExecutionStream,
     isCanonicalAcceptedRecovery,
     legacyCompletionFromAcceptedOutput,
     legacyCompletionFromCanonicalExecution,
     markCanonicalAcceptedRecovery,
+    markCanonicalHostCallbackFailure,
+    rethrowCanonicalHostCallbackFailure,
 } from './CanonicalExecution.js';
 import {
     CANONICAL_FORBIDDEN_TOOL_CALL,
@@ -40,6 +44,47 @@ import {
 import { MalformedStreamingToolArgumentsError } from './CompletionStream.js';
 
 const RECORDED_AT = '2026-09-30T00:00:00Z';
+
+describe('canonical host callback provenance', () => {
+    it('recovers the exact frozen host error through provider wrappers', () => {
+        const hostError = Object.freeze(new Error('durability barrier rejected'));
+        const marked = markCanonicalHostCallbackFailure(hostError);
+        const providerWrapper = new LlumiverseError(
+            '[provider] callback failed',
+            false,
+            { provider: 'provider', model: 'model', operation: 'execute' },
+            marked,
+            502,
+        );
+
+        expect(canonicalHostCallbackFailure(providerWrapper)?.failure).toBe(hostError);
+        expect(() => rethrowCanonicalHostCallbackFailure(providerWrapper)).toThrow(hostError);
+    });
+
+    it('does not classify an arbitrary provider error as a host callback failure', () => {
+        const providerError = new LlumiverseError(
+            '[provider] unavailable',
+            true,
+            { provider: 'provider', model: 'model', operation: 'execute' },
+            new Error('provider unavailable'),
+            503,
+        );
+
+        expect(canonicalHostCallbackFailure(providerError)).toBeUndefined();
+        expect(() => rethrowCanonicalHostCallbackFailure(providerError)).not.toThrow();
+    });
+
+    it('retains non-Error callback values without stringifying them', () => {
+        const marked = markCanonicalHostCallbackFailure(false);
+        expect(canonicalHostCallbackFailure(marked)?.failure).toBe(false);
+        try {
+            rethrowCanonicalHostCallbackFailure(marked);
+            throw new Error('Expected callback failure');
+        } catch (error: unknown) {
+            expect(error).toBe(false);
+        }
+    });
+});
 
 function streamEvent(
     sequence: number,

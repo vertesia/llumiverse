@@ -1,15 +1,19 @@
-import { canonicalJsonContentString, hashCanonicalJsonContent } from './content-integrity.js';
+import { canonicalJsonContentString } from './content-integrity.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
+import { processingAppendAcceptance, stageProcessingAppend } from './processing.js';
+import { ConversationAppendChangeSchema } from './schemas/change.js';
 import {
     AppendConversationRecordsOptionsSchema,
     AppendConversationRecordsResultSchema,
+    AppendConversationRecordsWithProcessingResultSchema,
     ConversationRecordBatchSchema,
     DecodedConversationResponseSchema,
 } from './schemas/index.js';
 import type {
     AppendConversationRecordsOptions,
     AppendConversationRecordsResult,
+    AppendConversationRecordsWithProcessingResult,
     ConversationDiagnostic,
     ConversationDocument,
     ConversationRecordBatch,
@@ -50,6 +54,33 @@ export interface NativeConversationAdapter<
 }
 
 const stableJson = canonicalJsonContentString;
+
+function appendChange(receipt: OperationReceipt, batch: ConversationRecordBatch) {
+    return ConversationAppendChangeSchema.parse({
+        operation_id: receipt.id,
+        conversation_id: receipt.conversation_id,
+        base_revision: receipt.base_revision,
+        result_revision: receipt.result_revision,
+        diagnostics: [],
+        operations: [
+            {
+                kind: 'append',
+                payload_fingerprint: receipt.payload_fingerprint,
+                ...(receipt.accepted_tool_selection === undefined
+                    ? {}
+                    : { tool_selection: receipt.accepted_tool_selection }),
+                accepted_turn_ids: receipt.accepted_turn_ids ?? acceptedIds(batch.turns),
+                accepted_generation_ids: receipt.accepted_generation_ids ?? acceptedIds(batch.generations),
+                accepted_asset_ids: receipt.accepted_asset_ids ?? acceptedIds(batch.assets),
+                accepted_tool_definition_ids:
+                    receipt.accepted_tool_definition_ids ?? acceptedIds(batch.tool_definitions),
+                accepted_execution_receipt_ids:
+                    receipt.accepted_execution_receipt_ids ?? acceptedIds(batch.execution_receipts),
+                accepted_context_entry_ids: receipt.accepted_context_entry_ids ?? acceptedIds(batch.context_entries),
+            },
+        ],
+    });
+}
 
 function checkedNextRevision(revision: number): number {
     const next = revision + 1;
@@ -131,6 +162,20 @@ function assertExactRetry(
     batch: ConversationRecordBatch,
     receipt: OperationReceipt,
 ): { turn_ids: string[]; generation_ids: string[] } {
+    if (batch.turns?.some((turn) => document.deleted_turns && Object.hasOwn(document.deleted_turns, turn.id))) {
+        throw new Error('Accepted turn source was logically deleted; recover its authenticated predecessor revision');
+    }
+    const toolSelection =
+        batch.active_tool_definition_ids === undefined
+            ? { kind: 'unchanged' }
+            : { kind: 'replace', definition_ids: [...batch.active_tool_definition_ids] };
+    if (receipt.accepted_tool_selection !== undefined) {
+        if (stableJson(toolSelection) !== stableJson(receipt.accepted_tool_selection)) {
+            throw new Error('Conversation operation retry changes accepted active tool selection');
+        }
+    } else if (batch.active_tool_definition_ids !== undefined) {
+        throw new Error('Historical append receipt cannot prove its accepted active tool selection');
+    }
     const turnIds = assertAcceptedIds('turns', acceptedIds(batch.turns), receipt.accepted_turn_ids, (id) =>
         document.turns.some((turn) => turn.id === id),
     );
@@ -155,8 +200,9 @@ function assertExactRetry(
         receipt.accepted_execution_receipt_ids,
         (id) => Object.hasOwn(document.execution_receipts, id),
     );
+    const acceptedEntries = receipt.accepted_context_entries ?? document.context.entries;
     assertAcceptedIds('context entries', acceptedIds(batch.context_entries), receipt.accepted_context_entry_ids, (id) =>
-        document.context.entries.some((entry) => entry.id === id),
+        acceptedEntries.some((entry) => entry.id === id),
     );
     assertAcceptedRecords('turn', batch.turns, (id) => document.turns.find((turn) => turn.id === id));
     assertAcceptedRecords('generation', batch.generations, (id) =>
@@ -172,9 +218,40 @@ function assertExactRetry(
         Object.hasOwn(document.execution_receipts, id) ? document.execution_receipts[id] : undefined,
     );
     assertAcceptedRecords('context entry', batch.context_entries, (id) =>
-        document.context.entries.find((entry) => entry.id === id),
+        acceptedEntries.find((entry) => entry.id === id),
     );
     return { turn_ids: turnIds, generation_ids: generationIds };
+}
+
+/** Internal shared assembly; caller owns publication, revision and operation-family receipt. */
+export function assembleConversationRecordBatch(document: ConversationDocument, batch: ConversationRecordBatch) {
+    const generationRecords = recordById(batch.generations);
+    const assetRecords = recordById(batch.assets);
+    const definitionRecords = recordById(batch.tool_definitions);
+    const executionRecords = recordById(batch.execution_receipts);
+    for (const id of Object.keys(generationRecords)) {
+        if (Object.hasOwn(document.generations, id)) throw new Error(`Generation ${id} already exists`);
+    }
+    for (const id of Object.keys(assetRecords)) {
+        if (Object.hasOwn(document.assets, id)) throw new Error(`Asset ${id} already exists`);
+    }
+    for (const id of Object.keys(executionRecords)) {
+        if (Object.hasOwn(document.execution_receipts, id)) throw new Error(`Execution receipt ${id} already exists`);
+    }
+    for (const [id, definition] of Object.entries(definitionRecords)) {
+        const retained = Object.hasOwn(document.tool_definitions, id) ? document.tool_definitions[id] : undefined;
+        if (retained !== undefined && stableJson(retained) !== stableJson(definition)) {
+            throw new Error(`Tool definition ${id} conflicts with the retained definition`);
+        }
+    }
+
+    return {
+        generationRecords,
+        assetRecords,
+        definitionRecords,
+        executionRecords,
+        turns: [...document.turns, ...(batch.turns ?? [])],
+    };
 }
 
 /**
@@ -184,7 +261,7 @@ function assertExactRetry(
  * process existing content. Operation receipts make exact retry delivery idempotent; conflicting
  * payloads under the same operation identity are rejected.
  */
-export function appendConversationRecords(
+function appendConversationRecordsUnchecked(
     input: ConversationDocument,
     batchInput: ConversationRecordBatch,
     optionsInput: AppendConversationRecordsOptions,
@@ -210,6 +287,11 @@ export function appendConversationRecords(
         ? document.operation_receipts[options.operation_id]
         : undefined;
     if (priorReceipt !== undefined) {
+        if (priorReceipt.operation_kind !== undefined) {
+            throw new Error(
+                `Conversation operation ${options.operation_id} belongs to ${priorReceipt.operation_kind === 'context_change' ? 'a context change' : 'a named mutation kind'}`,
+            );
+        }
         if (priorReceipt.payload_fingerprint !== options.payload_fingerprint) {
             throw new Error(`Conversation operation ${options.operation_id} was already used with a different payload`);
         }
@@ -217,6 +299,7 @@ export function appendConversationRecords(
         return AppendConversationRecordsResultSchema.parse({
             document,
             applied: false,
+            change: appendChange(priorReceipt, batch),
             accepted_turn_ids: accepted.turn_ids,
             accepted_generation_ids: accepted.generation_ids,
         });
@@ -227,28 +310,11 @@ export function appendConversationRecords(
         );
     }
 
-    const generationRecords = recordById(batch.generations);
-    const assetRecords = recordById(batch.assets);
-    const definitionRecords = recordById(batch.tool_definitions);
-    const executionRecords = recordById(batch.execution_receipts);
-    for (const id of Object.keys(generationRecords)) {
-        if (Object.hasOwn(document.generations, id)) throw new Error(`Generation ${id} already exists`);
-    }
-    for (const id of Object.keys(assetRecords)) {
-        if (Object.hasOwn(document.assets, id)) throw new Error(`Asset ${id} already exists`);
-    }
-    for (const id of Object.keys(executionRecords)) {
-        if (Object.hasOwn(document.execution_receipts, id)) throw new Error(`Execution receipt ${id} already exists`);
-    }
-    for (const [id, definition] of Object.entries(definitionRecords)) {
-        const retained = Object.hasOwn(document.tool_definitions, id) ? document.tool_definitions[id] : undefined;
-        if (retained !== undefined && stableJson(retained) !== stableJson(definition)) {
-            throw new Error(`Tool definition ${id} conflicts with the retained definition`);
-        }
-    }
+    const records = assembleConversationRecordBatch(document, batch);
+    const { generationRecords, assetRecords, definitionRecords, executionRecords } = records;
 
     const resultRevision = checkedNextRevision(document.revision);
-    const operationReceipt = {
+    const operationReceipt: OperationReceipt = {
         id: options.operation_id,
         conversation_id: document.id,
         payload_fingerprint: options.payload_fingerprint,
@@ -261,7 +327,12 @@ export function appendConversationRecords(
         accepted_tool_definition_ids: acceptedIds(batch.tool_definitions),
         accepted_execution_receipt_ids: acceptedIds(batch.execution_receipts),
         accepted_context_entry_ids: acceptedIds(batch.context_entries),
-    } as const;
+        accepted_context_entries: [...(batch.context_entries ?? [])],
+        accepted_tool_selection:
+            batch.active_tool_definition_ids === undefined
+                ? { kind: 'unchanged' }
+                : { kind: 'replace', definition_ids: [...batch.active_tool_definition_ids] },
+    };
 
     const updated = {
         ...document,
@@ -293,16 +364,51 @@ export function appendConversationRecords(
     return AppendConversationRecordsResultSchema.parse({
         document: parseConversationDocument(updated),
         applied: true,
+        change: appendChange(operationReceipt, batch),
         accepted_turn_ids: acceptedIds(batch.turns),
         accepted_generation_ids: acceptedIds(batch.generations),
     });
 }
 
-export function appendDecodedConversationResponse<NativePayload>(
+/** Existing synchronous append remains valid only for documents without an enabled processing policy. */
+export function appendConversationRecords(
+    input: ConversationDocument,
+    batchInput: ConversationRecordBatch,
+    optionsInput: AppendConversationRecordsOptions,
+): AppendConversationRecordsResult {
+    if (parseConversationDocument(input).processing.enabled) {
+        throw new Error('Enabled processing policy requires appendConversationRecordsWithProcessing');
+    }
+    return appendConversationRecordsUnchecked(input, batchInput, optionsInput);
+}
+
+/** Prepare an append and its on_append outbox jobs as one document for the caller's exact-head CAS. */
+export async function appendConversationRecordsWithProcessing(
+    input: ConversationDocument,
+    batchInput: ConversationRecordBatch,
+    optionsInput: AppendConversationRecordsOptions,
+): Promise<AppendConversationRecordsWithProcessingResult> {
+    const result = appendConversationRecordsUnchecked(input, batchInput, optionsInput);
+    const operationId = optionsInput.operation_id;
+    const acceptedEntryIds = batchInput.context_entries?.map((entry) => entry.id) ?? [];
+    // An asset publication is an input to an existing processing job, not a new model-visible addition.
+    const assetOnly = batchInput.assets !== undefined && Object.keys(batchInput).every((key) => key === 'assets');
+    const document =
+        !result.applied || !result.document.processing.enabled || assetOnly
+            ? result.document
+            : await stageProcessingAppend(result.document, operationId, acceptedEntryIds);
+    return AppendConversationRecordsWithProcessingResultSchema.parse({
+        ...result,
+        document,
+        acceptance: processingAppendAcceptance(document, operationId),
+    });
+}
+
+function decodedResponseAppend<NativePayload>(
     prepared: PreparedConversationRequest<NativePayload>,
     decodedInput: DecodedConversationResponse,
     optionsInput: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
-): AppendConversationRecordsResult {
+): { batch: ConversationRecordBatch; options: AppendConversationRecordsOptions } {
     const optionsPreflight = preflightJsonInput(optionsInput);
     if (!optionsPreflight.success) {
         throw new ConversationValidationError(
@@ -358,23 +464,26 @@ export function appendDecodedConversationResponse<NativePayload>(
         ...(decoded.assets === undefined ? {} : { assets: decoded.assets }),
         ...(decoded.execution_receipts === undefined ? {} : { execution_receipts: decoded.execution_receipts }),
     };
+    return { batch, options };
+}
+
+export function appendDecodedConversationResponse<NativePayload>(
+    prepared: PreparedConversationRequest<NativePayload>,
+    decodedInput: DecodedConversationResponse,
+    optionsInput: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
+): AppendConversationRecordsResult {
+    const { batch, options } = decodedResponseAppend(prepared, decodedInput, optionsInput);
     return appendConversationRecords(prepared.document, batch, options);
 }
 
-/** Produce a browser-safe SHA-256 fingerprint for JSON-safe canonical or native data. */
-export async function fingerprintJson(value: unknown): Promise<string> {
-    try {
-        return (await hashCanonicalJsonContent(value)).content_hash;
-    } catch (error: unknown) {
-        if (error instanceof ConversationValidationError) {
-            throw new ConversationValidationError('Fingerprint input failed JSON preflight', error.diagnostics);
-        }
-        throw error;
-    }
+/** Stage an accepted native response and its on-append jobs in one exact-head document. */
+export async function appendDecodedConversationResponseWithProcessing<NativePayload>(
+    prepared: PreparedConversationRequest<NativePayload>,
+    decodedInput: DecodedConversationResponse,
+    optionsInput: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
+): Promise<AppendConversationRecordsWithProcessingResult> {
+    const { batch, options } = decodedResponseAppend(prepared, decodedInput, optionsInput);
+    return appendConversationRecordsWithProcessing(prepared.document, batch, options);
 }
 
-/** Derive a compact deterministic entity ID from a stable request/import identity. */
-export async function deriveConversationId(kind: string, ...identity: string[]): Promise<string> {
-    const fingerprint = await fingerprintJson([kind, ...identity]);
-    return `${kind}_${fingerprint.slice('sha256:'.length, 'sha256:'.length + 32)}`;
-}
+export { deriveConversationId, fingerprintJson } from './identity.js';

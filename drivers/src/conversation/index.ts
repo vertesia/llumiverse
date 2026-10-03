@@ -48,10 +48,12 @@ export {
 } from '../bedrock/bedrock-converse-conversation-adapter.js';
 
 export {
+    compileOpenAIChatProspectiveJsonMinification,
     exportLegacyOpenAIChatCompletionsConversation,
     importOpenAIChatCompletionsHistory,
     OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    type OpenAIChatProspectiveJsonMinificationProjection,
 } from '../openai/openai-chat-conversation-adapter.js';
 export {
     exportLegacyOpenAIResponsesConversation,

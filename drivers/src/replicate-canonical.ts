@@ -1,7 +1,7 @@
 import {
     type AgentContentBlock,
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     buildConversationTurn,
     type ConversationTurn,
     createGeneratedAgentTurn,
@@ -684,17 +684,19 @@ async function finalizeReplicateCanonical(
             }
         }
     }
-    const final = appendDecodedConversationResponse(
-        {
-            document: prepared.document,
-            generation_id: prepared.generation_id,
-            response_turn_id: prepared.response_turn_id,
-            receipt: prepared.receipt,
-            payload: prepared.request_json,
-            diagnostics: [],
-        },
-        decoded,
-        { operation_id: prepared.runtime.response_operation_id, recorded_at: completedAt },
+    const final = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document: prepared.document,
+                generation_id: prepared.generation_id,
+                response_turn_id: prepared.response_turn_id,
+                receipt: prepared.receipt,
+                payload: prepared.request_json,
+                diagnostics: [],
+            },
+            decoded,
+            { operation_id: prepared.runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return {
         raw_decoded: rawDecoded,

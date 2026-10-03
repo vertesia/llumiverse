@@ -21,6 +21,8 @@ import {
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     canonicalExecutionPreview,
+    canonicalHostCallbackFailure,
+    rethrowCanonicalHostCallbackFailure,
 } from './CanonicalExecution.js';
 import {
     CANONICAL_FORBIDDEN_TOOL_CALL,
@@ -665,7 +667,8 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
                 this.channel.fail(error);
                 return;
             }
-            this.failure = error;
+            const hostFailure = canonicalHostCallbackFailure(error);
+            this.failure = hostFailure === undefined || hostFailure.failure === undefined ? error : hostFailure.failure;
             if (!this.settled) {
                 try {
                     const failureKind = this.completion === undefined ? 'execution' : 'delivery';
@@ -770,7 +773,10 @@ export class LegacyCanonicalExecutionEventProjection implements CanonicalExecuti
                         );
                         if (preview.length > 0) yield preview;
                     } else if (event.type === 'stream_terminated') {
-                        if (self.source.failure !== undefined) throw self.source.failure;
+                        if (self.source.failure !== undefined) {
+                            rethrowCanonicalHostCallbackFailure(self.source.failure);
+                            throw self.source.failure;
+                        }
                         throw new Error(
                             event.outcome === 'cancelled'
                                 ? 'Canonical execution stream was cancelled before response acceptance'

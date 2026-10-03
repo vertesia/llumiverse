@@ -1,10 +1,21 @@
 import type { ExecutionOptions, ToolDefinition as LegacyToolDefinition } from '@llumiverse/common';
 import {
+    CanonicalProjectedRequestMeasurementSchema,
+    deriveCanonicalProjectedMeasurementIdentity,
+} from '@llumiverse/common/schemas';
+import {
     type AppendConversationRecordsOptions,
     type AppendConversationRecordsResult,
+    type AppendConversationRecordsWithProcessingResult,
     type Asset,
-    appendConversationRecords,
+    acceptsProcessingMeasurement,
+    adoptConversationPreparedRequestRecord,
+    appendConversationRecordsWithProcessing,
     appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
+    assertAcceptedResponseMatchesPreparedRecord,
+    assertProcessingReady,
+    type ContentBlock,
     type ContextEntry,
     type ConversationAcceptedOutputFragment,
     type ConversationDocument,
@@ -26,23 +37,31 @@ import {
     type JsonValue,
     type NativeItemMapping,
     type PreparedConversationRequest,
+    ProcessingReadinessError,
     parseConversationDocument,
     parseConversationPreparedRequest,
+    preflightJsonInput,
+    processingContextFingerprint,
     type RequestReceipt,
     type ResolvedConversationRuntimeContext,
     type ToolDefinition,
+    validateToolExecutionResult,
 } from '@llumiverse/conversation';
+import { ConversationToolExecutionResultSchema } from '@llumiverse/conversation/schemas';
 import {
     assertDecodedCanonicalToolSelection,
     CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionResponse,
     type CanonicalToolSelectionPolicy,
+    canonicalRetainedPreparedRequest,
     canonicalToolDefinitions,
     canonicalToolSelectionPolicy,
     createCanonicalExecutionResponse,
     markCanonicalAcceptedRecovery,
+    markCanonicalHostCallbackFailure,
     parseCanonicalToolSelectionPolicy,
+    resolveCanonicalExecutionContextOptions,
 } from '@llumiverse/core';
 
 export type { ResolvedConversationRuntimeContext } from '@llumiverse/conversation';
@@ -143,8 +162,8 @@ function selectedAssetIds(turns: readonly ConversationTurn[]): Set<string> {
     return assetIds;
 }
 
-async function requestContextFingerprint(
-    document: ConversationDocument,
+export async function requestContextFingerprint(
+    document: CanonicalTurnSelectionSource & Pick<ConversationDocument, 'assets'>,
     protocol: string,
 ): Promise<{ fingerprint: string; assets: Asset[] }> {
     const selected = selectedCanonicalTurns(document, { allow_interrupted_with_replay_protocol: protocol });
@@ -243,11 +262,33 @@ export function appendCanonicalDecodedResponse<NativePayload>(
     return appendDecodedConversationResponse(prepared, decoded, options);
 }
 
+/** Preserve response-selection validation while staging the response and processing jobs together. */
+export async function appendCanonicalDecodedResponseWithProcessing<NativePayload>(
+    prepared: PreparedConversationRequest<NativePayload> &
+        Pick<CanonicalPreparedStateBase, 'response_selection_policy'>,
+    decoded: DecodedConversationResponse,
+    options: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
+): Promise<AppendConversationRecordsWithProcessingResult> {
+    assertDecodedCanonicalToolSelection(decoded, prepared.response_selection_policy);
+    return appendDecodedConversationResponseWithProcessing(prepared, decoded, options);
+}
+
 /** Await the host durability barrier for an exact finalized provider request. */
 export async function publishCanonicalPreparedRequest(
     state: CanonicalPreparedStateBase,
     options: ExecutionOptions,
+    projection?: import('@llumiverse/common').CanonicalProjectedRequestMeasurement,
 ): Promise<ConversationPreparedRequest | undefined> {
+    let ownedProjection = projection;
+    if (state.document.processing.enabled && projection !== undefined) {
+        try {
+            if (!preflightJsonInput(projection, { max_bytes: 64 * 1024 }).success)
+                throw new RangeError('Canonical processing projection exceeds its bounded envelope');
+            ownedProjection = CanonicalProjectedRequestMeasurementSchema.parse(structuredClone(projection));
+        } catch (error: unknown) {
+            throw markCanonicalHostCallbackFailure(error);
+        }
+    }
     const prepared = await parseConversationPreparedRequest({
         document: state.document,
         record: {
@@ -258,18 +299,67 @@ export async function publishCanonicalPreparedRequest(
             response_turn_id: state.response_turn_id,
         },
     });
-    await options.on_canonical_request_prepared?.(prepared);
-    const recovered = await options.load_recovered_canonical_output?.({
-        conversation_id: prepared.document.id,
-        response_operation_id: prepared.record.runtime.response_operation_id,
-        prepared_request: prepared.record,
-    });
+    let recovered: CanonicalRecoveredOutput;
+    let accepted = prepared;
+    try {
+        if (!prepared.document.processing.enabled) {
+            // Disabled policy still drains accepted jobs. This shared branch ignores measurement/target
+            // fingerprints; empty arguments assert no count authority and require no projection.
+            await assertProcessingReady(prepared.document, '', '');
+        }
+        if (prepared.document.processing.enabled) {
+            if (ownedProjection?.readiness === undefined)
+                throw new ProcessingReadinessError(
+                    'PROCESSING_PENDING',
+                    'Current input requires appendConversationRecordsWithProcessing and fresh host processing readiness',
+                );
+            const readiness = ownedProjection.readiness;
+            const owned = ownedProjection;
+            const identity = await deriveCanonicalProjectedMeasurementIdentity(
+                owned,
+                prepared.record.request_receipt.target,
+            );
+            if (
+                owned.measurement.input_tokens > readiness.context_limit - readiness.output_reserve_tokens ||
+                owned.measurement.source_fingerprint !== (await processingContextFingerprint(prepared.document)) ||
+                (await fingerprintJson(owned.measurement)) !==
+                    (await fingerprintJson(prepared.record.request_receipt.measurement)) ||
+                (prepared.document.processing.budget !== undefined &&
+                    !acceptsProcessingMeasurement(prepared.document.processing.budget, owned.measurement))
+            )
+                throw new ProcessingReadinessError(
+                    'PROCESSING_BLOCKED',
+                    'Current processing measurement conflicts with prepared source or policy',
+                );
+            await assertProcessingReady(
+                prepared.document,
+                await fingerprintJson(prepared.record.request_receipt.target),
+                identity,
+            );
+        }
+
+        const returned = await options.on_canonical_request_prepared?.(
+            structuredClone(prepared),
+            ownedProjection === undefined ? undefined : structuredClone(ownedProjection),
+        );
+        if (returned !== undefined) {
+            accepted = await adoptConversationPreparedRequestRecord(prepared, returned);
+        }
+        state.receipt = accepted.record.request_receipt;
+        recovered = await options.load_recovered_canonical_output?.({
+            conversation_id: accepted.document.id,
+            response_operation_id: accepted.record.runtime.response_operation_id,
+            prepared_request: structuredClone(accepted.record),
+        });
+    } catch (error: unknown) {
+        throw markCanonicalHostCallbackFailure(error);
+    }
     if (recovered !== undefined) {
         throw new CanonicalAcceptedOutputRecovered(
             'accepted_output' in recovered ? recovered : { accepted_output: recovered },
         );
     }
-    return prepared;
+    return accepted;
 }
 
 /** Recover one already accepted response, optionally using a verified host-retained output fragment. */
@@ -279,10 +369,15 @@ export async function recoverCanonicalExecutionResponse(
     metadata: Parameters<typeof createCanonicalExecutionResponse>[2] = {},
 ): Promise<CanonicalExecutionResponse> {
     if (state.accepted_response === undefined) throw new Error('No accepted canonical response is available');
-    const recoveredOutput = await options.load_recovered_canonical_output?.({
-        conversation_id: state.document.id,
-        response_operation_id: state.runtime.response_operation_id,
-    });
+    let recoveredOutput: CanonicalRecoveredOutput;
+    try {
+        recoveredOutput = await options.load_recovered_canonical_output?.({
+            conversation_id: state.document.id,
+            response_operation_id: state.runtime.response_operation_id,
+        });
+    } catch (error: unknown) {
+        throw markCanonicalHostCallbackFailure(error);
+    }
     return markCanonicalAcceptedRecovery(
         createCanonicalExecutionResponse(
             state.document,
@@ -347,8 +442,15 @@ export function canonicalConversationTurnNumber(document: ConversationDocument):
     return Number.isSafeInteger(total) ? total : Number.MAX_SAFE_INTEGER;
 }
 
+/** Only the selected turn lookup is needed here; a sparse source is not a ConversationDocument. */
+export interface CanonicalTurnSelectionSource {
+    turns: readonly ConversationTurn[];
+    context: { entries: readonly ContextEntry[] };
+    compactions: Record<string, { replacement_turns: readonly ConversationTurn[] }>;
+}
+
 export function selectedCanonicalTurns(
-    document: ConversationDocument,
+    document: CanonicalTurnSelectionSource,
     options?: {
         allow_interrupted_with_replay_protocol?: string;
         allow_interrupted_with_complete_tool_calls?: boolean;
@@ -436,6 +538,108 @@ export function selectedCanonicalTurns(
         }
     }
     return selected;
+}
+
+export interface CanonicalContextProjectionPolicy {
+    label: string;
+    program_authorities: readonly ConversationTurn['authority'][];
+    preserve_media_caption?: (
+        block: Extract<ContentBlock, { type: 'image' | 'document' | 'audio' | 'video' }>,
+        owner: ConversationTurn,
+    ) => boolean;
+}
+
+/**
+ * Reject selected semantics that a native request would otherwise lower or silently discard.
+ *
+ * Read-only legacy projections deliberately do not use this guard. Current canonical compilers call
+ * it with their exact native authority capabilities before publishing a prepared request. Replay
+ * dependencies are included because protected native payloads cannot make unsupported semantic
+ * media fields safe merely by hiding their source block from the active top-level selection.
+ */
+export function assertCanonicalContextProjection(
+    document: CanonicalTurnSelectionSource,
+    selectedTurns: readonly ConversationTurn[],
+    policy: CanonicalContextProjectionPolicy,
+): void {
+    const supportedProgramAuthorities = new Set(policy.program_authorities);
+    const blocks = new Map<string, ContentBlock>();
+    const blockOwners = new Map<string, ConversationTurn>();
+    const indexBlock = (block: ContentBlock, turn: ConversationTurn): void => {
+        blocks.set(block.id, block);
+        blockOwners.set(block.id, turn);
+        if (block.type === 'tool_result') {
+            for (const nested of block.content) indexBlock(nested, turn);
+        }
+    };
+    const indexedTurns = [
+        ...document.turns,
+        ...Object.values(document.compactions).flatMap((compaction) => compaction.replacement_turns),
+    ];
+    const turns = new Map(indexedTurns.map((turn) => [turn.id, turn]));
+    for (const turn of indexedTurns) {
+        for (const block of turn.blocks) indexBlock(block, turn);
+    }
+
+    const assertTurnAuthority = (turn: ConversationTurn): void => {
+        if (turn.kind === 'program') {
+            if (!supportedProgramAuthorities.has(turn.authority)) {
+                throw new TypeError(
+                    `${policy.label} cannot preserve program turn ${turn.id} authority ${turn.authority}`,
+                );
+            }
+        } else if (turn.authority !== 'ordinary') {
+            throw new TypeError(
+                `${policy.label} cannot preserve ${turn.kind} turn ${turn.id} authority ${turn.authority}`,
+            );
+        }
+    };
+    for (const turn of selectedTurns) {
+        assertTurnAuthority(turn);
+    }
+
+    const visited = new Set<string>();
+    const assertBlock = (block: ContentBlock): void => {
+        if (visited.has(block.id)) return;
+        visited.add(block.id);
+        if (block.type === 'image' || block.type === 'document' || block.type === 'audio' || block.type === 'video') {
+            const owner = blockOwners.get(block.id);
+            if (
+                block.caption !== undefined &&
+                (owner === undefined || policy.preserve_media_caption?.(block, owner) !== true)
+            ) {
+                throw new TypeError(`${policy.label} cannot preserve ${block.type} block ${block.id} caption`);
+            }
+            if (block.selection !== undefined) {
+                throw new TypeError(`${policy.label} cannot preserve ${block.type} block ${block.id} selection`);
+            }
+            return;
+        }
+        if (block.type === 'tool_result') {
+            for (const nested of block.content) assertBlock(nested);
+            return;
+        }
+        if (block.type === 'native_replay') {
+            for (const turnId of block.dependencies.turn_ids) {
+                const dependency = turns.get(turnId);
+                if (dependency !== undefined) {
+                    assertTurnAuthority(dependency);
+                    for (const dependencyBlock of dependency.blocks) assertBlock(dependencyBlock);
+                }
+            }
+            for (const blockId of block.dependencies.block_ids) {
+                const dependency = blocks.get(blockId);
+                if (dependency !== undefined) {
+                    const owner = blockOwners.get(blockId);
+                    if (owner !== undefined) assertTurnAuthority(owner);
+                    assertBlock(dependency);
+                }
+            }
+        }
+    };
+    for (const turn of selectedTurns) {
+        for (const block of turn.blocks) assertBlock(block);
+    }
 }
 
 /**
@@ -543,6 +747,36 @@ function assertMaterializedInputRecords(
     }
 }
 
+/** Native retained input must preserve exact application call/result evidence, not only turn IDs. */
+async function assertMaterializedToolExecutions(
+    document: ConversationDocument,
+    proof: NonNullable<ResolvedConversationRuntimeContext['materialized_input']>,
+): Promise<void> {
+    const receipt = document.operation_receipts[proof.operation_id];
+    const executionIds = new Set(receipt?.accepted_execution_receipt_ids ?? []);
+    const matched = new Set<string>();
+    for (const turnId of receipt?.accepted_turn_ids ?? []) {
+        const turn = document.turns.find((candidate) => candidate.id === turnId);
+        if (turn?.kind !== 'tool') continue;
+        const execution = turn.execution_id === undefined ? undefined : document.execution_receipts[turn.execution_id];
+        if (execution?.executor !== 'application' || !executionIds.has(execution.id) || matched.has(execution.id)) {
+            throw new Error('Materialized canonical tool input has unbound application execution evidence');
+        }
+        await validateToolExecutionResult(
+            document,
+            ConversationToolExecutionResultSchema.parse({
+                source: execution.call_source,
+                turn,
+                execution_receipt: execution,
+            }),
+        );
+        matched.add(execution.id);
+    }
+    if (matched.size !== executionIds.size) {
+        throw new Error('Materialized canonical input contains unmatched application execution evidence');
+    }
+}
+
 async function materializedToolSetFingerprint(
     proof: NonNullable<ResolvedConversationRuntimeContext['materialized_input']>,
     toolDefinitions: readonly ToolDefinition[],
@@ -647,7 +881,7 @@ export async function appendCanonicalPrompt(
                 `Materialized canonical input revision ${proof.result_revision} does not match current revision ${document.revision}`,
             );
         }
-        const appended = appendConversationRecords(
+        const appended = await appendConversationRecordsWithProcessing(
             document,
             {
                 tool_definitions: toolDefinitions,
@@ -678,7 +912,38 @@ export async function appendCanonicalPrompt(
         prompt: semanticPayload,
         tools: toolDefinitions,
     });
-    const appended = appendConversationRecords(
+    const inputReceipt = Object.hasOwn(document.operation_receipts, runtime.input_operation_id)
+        ? document.operation_receipts[runtime.input_operation_id]
+        : undefined;
+    const historicalAcceptedRetry = inputReceipt !== undefined && inputReceipt.accepted_tool_selection === undefined;
+    if (historicalAcceptedRetry) {
+        const acceptedResponse = acceptedCanonicalResponse(document, runtime.response_operation_id);
+        const responseReceipt = Object.hasOwn(document.operation_receipts, runtime.response_operation_id)
+            ? document.operation_receipts[runtime.response_operation_id]
+            : undefined;
+        const acceptedRequest = acceptedResponse?.generation.request_receipt;
+        const toolIds = toolDefinitions.map((tool) => tool.id);
+        if (
+            inputReceipt.conversation_id !== document.id ||
+            inputReceipt.payload_fingerprint !== payloadFingerprint ||
+            inputReceipt.operation_kind !== undefined ||
+            acceptedResponse?.generation.request_id !== runtime.request_id ||
+            acceptedResponse.generation.record_source !== 'executed' ||
+            acceptedResponse.generation.source.conversation_id !== document.id ||
+            acceptedResponse.generation.source.revision !== inputReceipt.result_revision ||
+            acceptedRequest?.request_id !== runtime.request_id ||
+            acceptedRequest.source.conversation_id !== document.id ||
+            acceptedRequest.source.revision !== inputReceipt.result_revision ||
+            responseReceipt?.conversation_id !== document.id ||
+            responseReceipt.base_revision !== inputReceipt.result_revision ||
+            responseReceipt.result_revision > document.revision ||
+            acceptedRequest.tool_definition_ids.length !== toolIds.length ||
+            acceptedRequest.tool_definition_ids.some((id, index) => id !== toolIds[index])
+        ) {
+            throw new Error('Historical canonical input cannot prove its exact accepted response and tool selection');
+        }
+    }
+    const appended = await appendConversationRecordsWithProcessing(
         document,
         {
             turns: records.turns,
@@ -686,7 +951,7 @@ export async function appendCanonicalPrompt(
             tool_definitions: toolDefinitions,
             context_entries: records.context_entries,
             ...(records.execution_receipts === undefined ? {} : { execution_receipts: records.execution_receipts }),
-            active_tool_definition_ids: toolDefinitions.map((tool) => tool.id),
+            ...(historicalAcceptedRetry ? {} : { active_tool_definition_ids: toolDefinitions.map((tool) => tool.id) }),
         },
         {
             expected_revision: document.revision,
@@ -695,6 +960,9 @@ export async function appendCanonicalPrompt(
             recorded_at: runtime.recorded_at,
         },
     );
+    if (historicalAcceptedRetry && appended.applied) {
+        throw new Error('Historical canonical input recovery unexpectedly appended a new operation');
+    }
     return { document: appended.document, tool_definitions: toolDefinitions };
 }
 
@@ -708,24 +976,34 @@ export async function prepareCanonicalContext(input: {
     protocol: string;
     adapter_version: string;
 }): Promise<CanonicalContextPreparation> {
-    const document = parseConversationDocument(input.options.conversation);
-    const runtime = input.options.conversation_runtime;
+    // Capture native input and host-selected record before the first await. Direct adapter callers
+    // receive the same ownership guarantee as the public Driver context boundary.
+    const options = resolveCanonicalExecutionContextOptions(input.options);
+    const document = options.conversation;
+    const runtime = options.conversation_runtime;
+    const retained = canonicalRetainedPreparedRequest(options);
+    const model = options.model;
+    const { provider, protocol, adapter_version: adapterVersion } = input;
     if (runtime.conversation_id !== document.id) {
         throw new Error('conversation_runtime.conversation_id does not match the canonical document');
     }
     const toolDefinitions = await resolveCanonicalToolDefinitions(document, undefined);
     if (runtime.materialized_input !== undefined) {
         assertMaterializedInputRecords(document, runtime.materialized_input);
+        await assertMaterializedToolExecutions(document, runtime.materialized_input);
     }
     const acceptedResponse = acceptedCanonicalResponse(document, runtime.response_operation_id);
+    if (retained !== undefined && acceptedResponse === undefined) {
+        throw new Error('Retained canonical prepared recovery requires its accepted response operation');
+    }
     if (acceptedResponse !== undefined) {
         const requestReceipt = acceptedResponse.generation.request_receipt;
         if (
             acceptedResponse.generation.request_id !== runtime.request_id ||
-            acceptedResponse.generation.provider !== input.provider ||
-            acceptedResponse.generation.protocol !== input.protocol ||
-            acceptedResponse.generation.adapter_version !== input.adapter_version ||
-            acceptedResponse.generation.requested_model !== input.options.model ||
+            acceptedResponse.generation.provider !== provider ||
+            acceptedResponse.generation.protocol !== protocol ||
+            acceptedResponse.generation.adapter_version !== adapterVersion ||
+            acceptedResponse.generation.requested_model !== model ||
             requestReceipt.request_id !== runtime.request_id ||
             requestReceipt.source.conversation_id !== document.id
         ) {
@@ -733,7 +1011,32 @@ export async function prepareCanonicalContext(input: {
                 `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
             );
         }
-        if (runtime.materialized_input !== undefined) {
+        if (retained !== undefined) {
+            if (
+                (await fingerprintJson(retained.runtime)) !== (await fingerprintJson(runtime)) ||
+                retained.source.conversation_id !== document.id ||
+                retained.source.revision < (runtime.materialized_input?.result_revision ?? 0)
+            ) {
+                throw new Error('Retained canonical prepared record changed its exact materialized runtime');
+            }
+            await assertAcceptedResponseMatchesPreparedRecord(document, retained);
+            // Full receipt equality above includes source_view, native/target/context fingerprints,
+            // ordered tools and assets. The adapters also recompile and compare actual native bytes
+            // before their existing accepted-output recovery branch can run.
+            if (
+                retained.request_receipt.tool_definition_ids.length !== toolDefinitions.length ||
+                retained.request_receipt.tool_definition_ids.some((id, index) => id !== toolDefinitions[index]?.id) ||
+                !(await retainedToolDefinitionsMatch(
+                    document,
+                    toolDefinitions,
+                    retained.request_receipt.tool_definition_ids,
+                ))
+            ) {
+                throw new Error('Retained canonical prepared record changed its materialized tool definitions');
+            }
+        } else if (runtime.materialized_input !== undefined) {
+            // Authored compatibility still requires its exact tool-set operation. No record or
+            // ancestry-only assertion can silently bypass that branch.
             await assertAcceptedMaterializedResponse(document, runtime, toolDefinitions);
         }
     }
@@ -743,7 +1046,7 @@ export async function prepareCanonicalContext(input: {
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
             : { generation_id: acceptedResponse.generation.id, response_turn_id: acceptedResponse.turn.id };
-    const responseSelectionPolicy = canonicalToolSelectionPolicy(input.options);
+    const responseSelectionPolicy = canonicalToolSelectionPolicy(options);
     return {
         document,
         request_document: requestDocument,
@@ -764,7 +1067,30 @@ export async function createRequestReceipt(
     itemMappings: readonly NativeItemMapping[],
     toolDefinitions: readonly ToolDefinition[],
 ): Promise<RequestReceipt> {
-    const selected = selectedCanonicalTurns(document, { allow_interrupted_with_replay_protocol: target.protocol });
+    return createRequestReceiptFromSelectedSource(
+        {
+            ...document,
+            source_tail_turn_id: document.turns.at(-1)?.id,
+        },
+        runtime,
+        target,
+        nativePayload,
+        itemMappings,
+        toolDefinitions,
+    );
+}
+
+/** The same receipt builder for an authenticated selected working set, without a sparse document cast. */
+export async function createRequestReceiptFromSelectedSource(
+    source: CanonicalTurnSelectionSource &
+        Pick<ConversationDocument, 'id' | 'revision' | 'assets'> & { source_tail_turn_id?: string },
+    runtime: ResolvedConversationRuntimeContext,
+    target: { provider: string; protocol: string; model: string; adapter_version: string; options?: JsonObject },
+    nativePayload: JsonValue,
+    itemMappings: readonly NativeItemMapping[],
+    toolDefinitions: readonly ToolDefinition[],
+): Promise<RequestReceipt> {
+    const selected = selectedCanonicalTurns(source, { allow_interrupted_with_replay_protocol: target.protocol });
     const turnIds = new Set(selected.map((turn) => turn.id));
     const blockIds = new Set<string>();
     const callIds = new Set<string>();
@@ -789,15 +1115,15 @@ export async function createRequestReceipt(
             throw new Error(`Request mapping references unselected ${mapping.kind} ${mapping.canonical_id}`);
         }
     }
-    const { fingerprint: contextFingerprint, assets } = await requestContextFingerprint(document, target.protocol);
+    const { fingerprint: contextFingerprint, assets } = await requestContextFingerprint(source, target.protocol);
     const toolSetFingerprint = await fingerprintJson(toolDefinitions);
     const requestFingerprint = await fingerprintJson(nativePayload);
     return {
         id: await deriveConversationId('request_receipt', runtime.request_id, runtime.attempt_id),
         request_id: runtime.request_id,
         attempt_id: runtime.attempt_id,
-        source: { conversation_id: document.id, revision: document.revision },
-        ...(document.turns.length === 0 ? {} : { source_tail_turn_id: document.turns.at(-1)?.id }),
+        source: { conversation_id: source.id, revision: source.revision },
+        ...(source.source_tail_turn_id === undefined ? {} : { source_tail_turn_id: source.source_tail_turn_id }),
         context_fingerprint: contextFingerprint,
         tool_set_fingerprint: toolSetFingerprint,
         request_fingerprint: requestFingerprint,

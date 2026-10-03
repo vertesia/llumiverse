@@ -9,6 +9,7 @@ import {
 } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
+import { exposePrivate } from '../../test/__helpers__/test-utils.js';
 import { AnthropicDriver } from '../anthropic/index.js';
 import { AzureFoundryDriver } from '../azure/azure_foundry.js';
 import { formatConversePrompt } from '../bedrock/converse.js';
@@ -85,6 +86,9 @@ describe('primary provider file audio', () => {
             deployments: { get: async () => ({ modelPublisher: 'OpenAI' }) },
             getOpenAIClient: () => service,
         } as unknown as AzureFoundryDriver['service'];
+        vi.spyOn(exposePrivate<{ getInferenceClient: () => OpenAI }>(driver), 'getInferenceClient').mockReturnValue(
+            service,
+        );
         const result = await driver.execute(prompt, {
             model: 'speech-deployment::gpt-4o-mini-tts',
             store_audio: store,

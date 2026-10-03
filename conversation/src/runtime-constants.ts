@@ -17,3 +17,9 @@ export const CONVERSATION_USAGE_METRICS = [
     'cache_write_tokens',
     'input_new_tokens',
 ] as const;
+
+/** Browser-safe processing work bounds; schemas and semantic validation share these exact values. */
+export const MAX_PROCESSING_OUTPUT_BYTES = 1024 * 1024;
+export const MAX_PROCESSOR_CONFIGURATION_BYTES = 64 * 1024;
+/** RFC 6901 grammar, shared by the public schema and schema-free runtime validation. */
+export const JSON_POINTER_PATTERN_SOURCE = '^(?:/(?:[^~]|~[01])*)?$';

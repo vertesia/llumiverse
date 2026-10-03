@@ -15,6 +15,7 @@ import {
     createTextBlock,
     createUserTurn,
     fingerprintJson,
+    hashContentBytes,
     parseConversationDocument,
     resolveToolExecutionRequest,
 } from '@llumiverse/conversation';
@@ -182,6 +183,50 @@ function retainedContextDocument(flow: string, withTools = true, schemaLookingSy
                       active_tool_definition_ids: ['tool-definition:write:v2', 'tool-definition:lookup:v1'],
                   }
                 : { active_tool_definition_ids: [] }),
+        },
+        {
+            expected_revision: initial.revision,
+            operation_id: `input:${flow}:materialized`,
+            payload_fingerprint: `sha256:${flow}:materialized`,
+            recorded_at: recordedAt,
+        },
+    ).document;
+}
+
+async function retainedAudioContextDocument(flow: string): Promise<ConversationDocument> {
+    const recordedAt = '2026-10-01T00:35:00.000Z';
+    const initial = createConversationDocument({ id: `conversation:${flow}`, created_at: recordedAt });
+    const audio = new TextEncoder().encode('retained-audio-bytes');
+    const assetId = `asset:${flow}:audio`;
+    const turn = createUserTurn({
+        id: `turn:${flow}:input`,
+        authority: 'ordinary',
+        status: 'completed',
+        timestamps: { recorded_at: recordedAt },
+        model_visibility: 'include',
+        provenance: { type: 'received' },
+        blocks: [
+            createTextBlock({ id: `block:${flow}:prompt`, text: 'Transcribe retained audio.', format: 'plain' }),
+            { id: `block:${flow}:audio`, type: 'audio', asset_id: assetId },
+        ],
+    });
+    return appendConversationRecords(
+        initial,
+        {
+            turns: [turn],
+            assets: [
+                {
+                    id: assetId,
+                    kind: 'audio',
+                    mime_type: 'audio/wav',
+                    storage: { type: 'inline_base64', data: Buffer.from(audio).toString('base64') },
+                    provenance: { type: 'received', source_turn_id: turn.id },
+                    created_at: recordedAt,
+                    ...(await hashContentBytes(audio)),
+                },
+            ],
+            context_entries: [{ id: `context:${flow}:input`, type: 'source_turn', turn_id: turn.id }],
+            active_tool_definition_ids: [],
         },
         {
             expected_revision: initial.revision,
@@ -503,6 +548,98 @@ describe('Gemini canonical lifecycle', () => {
         );
         expect(generateStream).toHaveBeenCalledOnce();
         expect(document.revision).toBe(1);
+    });
+
+    it('executes retained inline audio through the finite typed path and exact-recovers it', async () => {
+        const flow = 'retained-audio-context';
+        const document = await retainedAudioContextDocument(flow);
+        const nativeResponse = response({
+            id: 'response-retained-audio-context',
+            content: {
+                role: 'model',
+                parts: [
+                    {
+                        audioTranscription: {
+                            text: 'Retained audio transcript.',
+                            languageCode: 'en',
+                        },
+                    },
+                ],
+            },
+        });
+        const generate = vi.fn<Generate>(async () => nativeResponse);
+        const driver = new TestGeminiDriver(generate);
+        const options = {
+            ...runtimeOptions({
+                flow,
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-10-01T00:36:00.000Z',
+                conversation: document,
+            }),
+            model: 'gemini-3.5-transcribe-preview',
+            conversation: document,
+        };
+
+        expect(await driver.supportsCanonicalContextExecution(options)).toBe(true);
+        const stream = await driver.streamCanonicalContextEvents(options, undefined, {
+            stream_id: 'stream:gemini:retained-audio-context',
+        });
+        const events = await collectCanonicalEvents(stream);
+        const request = generate.mock.calls[0]?.[0];
+        const parts = requestContents(request as GenerateContentParameters).flatMap((content) => content.parts ?? []);
+
+        expect(events).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'live_transport', sequence: 0 }),
+        ]);
+        expect(parts).toContainEqual({ text: 'Transcribe retained audio.' });
+        expect(parts).toContainEqual({
+            inlineData: {
+                mimeType: 'audio/wav',
+                data: Buffer.from('retained-audio-bytes').toString('base64'),
+            },
+        });
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Retained audio transcript.' }),
+        );
+        expect(generate).toHaveBeenCalledOnce();
+
+        const accepted = stream.completion;
+        if (accepted === undefined) throw new Error('Expected accepted retained audio response');
+        const recovered = await driver.executeCanonicalContext({ ...options, conversation: accepted.conversation });
+        expect(recovered.accepted_output).toEqual(accepted.accepted_output);
+        expect(generate).toHaveBeenCalledOnce();
+    });
+
+    it('rejects unsupported retained audio controls before provider transport', async () => {
+        const flow = 'retained-audio-tools';
+        const document = await retainedAudioContextDocument(flow);
+        document.tool_definitions['tool:unsupported'] = {
+            id: 'tool:unsupported',
+            name: 'unsupported',
+            version: 'v1',
+            input_schema: { type: 'object' },
+            result_capabilities: ['text'],
+        };
+        document.context.active_tool_definition_ids.push('tool:unsupported');
+        const generate = vi.fn<Generate>(async () => {
+            throw new Error('provider must not run');
+        });
+
+        await expect(
+            new TestGeminiDriver(generate).executeCanonicalContext({
+                ...runtimeOptions({
+                    flow,
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-10-01T00:37:00.000Z',
+                    conversation: document,
+                }),
+                model: 'gemini-3.5-transcribe-preview',
+                conversation: document,
+            }),
+        ).rejects.toThrow('does not support tool definitions');
+        expect(generate).not.toHaveBeenCalled();
     });
 
     it('validates structured sync output, preserves usage, and durably recovers an accepted response', async () => {

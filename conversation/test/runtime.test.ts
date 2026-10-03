@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
     appendConversationRecords,
+    applyContextChange,
     ConversationValidationError,
     createConversationDocument,
     createTextBlock,
     createUserTurn,
+    parseConversationDocument,
+    planContextChange,
 } from '../src/index.js';
 
 const firstRecordedAt = '2026-09-11T00:00:00.000Z';
@@ -79,6 +82,134 @@ describe('canonical ingestion runtime', () => {
         expect(retried.document).toEqual(advanced.document);
         expect(retried.document.context.active_tool_definition_ids).toEqual(['tool:lookup:v1']);
         expect(retried.accepted_turn_ids).toEqual(['turn:user:1']);
+    });
+
+    it('recovers accepted entries after exclusion and JSON reload without trusting a reused caller fingerprint', async () => {
+        const batch = {
+            turns: [userTurn('original')],
+            context_entries: [
+                {
+                    id: 'accepted-entry',
+                    type: 'source_turn' as const,
+                    turn_id: 'turn:user:1',
+                    block_ids: ['block:user:1'],
+                },
+            ],
+        };
+        const options = {
+            expected_revision: 0,
+            operation_id: 'accepted',
+            payload_fingerprint: 'sha256:caller',
+            recorded_at: firstRecordedAt,
+        };
+        const first = appendConversationRecords(
+            createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt }),
+            batch,
+            options,
+        );
+        const plan = await planContextChange(first.document, {
+            expected_revision: 1,
+            expected_context_revision: 1,
+            entry_ids: ['accepted-entry'],
+        });
+        const excluded = await applyContextChange(first.document, {
+            operation_id: 'exclude',
+            expected_revision: 1,
+            expected_context_revision: 1,
+            entry_ids: ['accepted-entry'],
+            expected_source_fingerprint: plan.source_fingerprint,
+            recorded_at: retryRecordedAt,
+            proposal: { kind: 'exclude' },
+        });
+        const loaded = parseConversationDocument(JSON.parse(JSON.stringify(excluded.document)));
+        expect(loaded.context.entries).toEqual([]);
+        const retry = appendConversationRecords(loaded, batch, options);
+        expect(retry.applied).toBe(false);
+        expect(retry.change).toEqual(first.change);
+        expect(retry.document).toEqual(loaded);
+        expect(() =>
+            appendConversationRecords(loaded, { ...batch, turns: [userTurn('conflicting')] }, options),
+        ).toThrow('changes accepted turn');
+        expect(() =>
+            appendConversationRecords(
+                loaded,
+                { ...batch, context_entries: [{ ...batch.context_entries[0], block_ids: ['another'] }] },
+                options,
+            ),
+        ).toThrow();
+        const missing = structuredClone(loaded);
+        delete missing.operation_receipts.accepted.accepted_context_entries;
+        expect(() => appendConversationRecords(missing, batch, options)).toThrow(
+            'cannot resolve accepted context entries',
+        );
+        const drift = structuredClone(loaded);
+        drift.operation_receipts.accepted.accepted_context_entries![0].block_ids = ['missing'];
+        expect(() => parseConversationDocument(drift)).toThrow('validation');
+        const reordered = structuredClone(loaded);
+        reordered.operation_receipts.accepted.accepted_context_entry_ids = ['another'];
+        expect(() => parseConversationDocument(reordered)).toThrow('validation');
+    });
+
+    it('binds omitted versus explicit active-tool requests without restoring a later selection', () => {
+        const options = {
+            expected_revision: 0,
+            operation_id: 'tools',
+            payload_fingerprint: 'sha256:same',
+            recorded_at: firstRecordedAt,
+        };
+        const definition = { id: 'def', name: 'lookup', version: '1', input_schema: { type: 'object' } };
+        const batch = { tool_definitions: [definition], active_tool_definition_ids: ['def'] };
+        const first = appendConversationRecords(
+            createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt }),
+            batch,
+            options,
+        );
+        const later = appendConversationRecords(
+            first.document,
+            { active_tool_definition_ids: [] },
+            { ...options, expected_revision: 1, operation_id: 'tools:later' },
+        );
+        const retry = appendConversationRecords(later.document, batch, options);
+        expect(retry.applied).toBe(false);
+        expect(retry.document.context.active_tool_definition_ids).toEqual([]);
+        expect(retry.change).toEqual(first.change);
+        expect(() =>
+            appendConversationRecords(later.document, { ...batch, active_tool_definition_ids: [] }, options),
+        ).toThrow('changes accepted active tool selection');
+        expect(() => appendConversationRecords(later.document, { tool_definitions: [definition] }, options)).toThrow(
+            'changes accepted active tool selection',
+        );
+        const unchanged = appendConversationRecords(
+            createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt }),
+            {},
+            options,
+        );
+        expect(() =>
+            appendConversationRecords(unchanged.document, { active_tool_definition_ids: [] }, options),
+        ).toThrow('changes accepted active tool selection');
+        const empty = appendConversationRecords(
+            createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt }),
+            { active_tool_definition_ids: [] },
+            options,
+        );
+        expect(() => appendConversationRecords(empty.document, {}, options)).toThrow(
+            'changes accepted active tool selection',
+        );
+        const historical = structuredClone(first.document);
+        delete historical.operation_receipts.tools.accepted_tool_selection;
+        // The current catalog happens to match the request, but is not evidence of the old operation's selection.
+        expect(historical.context.active_tool_definition_ids).toEqual(batch.active_tool_definition_ids);
+        expect(() => appendConversationRecords(historical, batch, options)).toThrow(
+            'Historical append receipt cannot prove',
+        );
+        const historicalAfterLater = structuredClone(later.document);
+        delete historicalAfterLater.operation_receipts.tools.accepted_tool_selection;
+        expect(() => appendConversationRecords(historicalAfterLater, batch, options)).toThrow(
+            'Historical append receipt cannot prove',
+        );
+        const drift = structuredClone(first.document);
+        drift.operation_receipts.tools.accepted_tool_selection = { kind: 'replace', definition_ids: ['missing'] };
+        expect(() => parseConversationDocument(drift)).toThrow('validation');
     });
 
     it('rejects changed semantic records even when IDs and a caller fingerprint are reused', () => {

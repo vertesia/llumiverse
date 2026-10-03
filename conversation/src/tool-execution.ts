@@ -10,6 +10,7 @@ import {
     hydrateToolCallArguments,
     type ResolveToolArgumentTextAsset,
 } from './tool-arguments.js';
+import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
 import type {
     AppendConversationRecordsOptions,
     AppendConversationRecordsResult,
@@ -140,10 +141,7 @@ async function validatedToolExecutionRecords(
     ) {
         throw new Error(`Tool execution result does not match application call ${result.source.call_id}`);
     }
-    const resultFingerprint = await fingerprintJson(resultBlock);
-    if (receipt.result_fingerprint !== resultFingerprint) {
-        throw new Error(`Tool execution receipt ${receipt.id} result fingerprint does not match its result block`);
-    }
+    await assertToolResultReceiptFingerprint(resultBlock, receipt);
     return { document, result };
 }
 

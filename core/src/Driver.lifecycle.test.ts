@@ -8,6 +8,7 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    LlumiverseError,
     type ModelSearchPayload,
     type PromptOptions,
     PromptRole,
@@ -26,7 +27,10 @@ import {
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionOptions,
     type CanonicalExecutionStream,
+    type CanonicalHostCapabilities,
+    canonicalHostCallbackFailure,
     createCanonicalExecutionResponse,
+    markCanonicalHostCallbackFailure,
 } from './CanonicalExecution.js';
 import {
     type CanonicalExecutionEventStream,
@@ -175,6 +179,7 @@ class CanonicalOptionSnapshotDriver extends CanonicalLifecycleTestDriver {
 
 class CanonicalContextSnapshotDriver extends CanonicalLifecycleTestDriver {
     capturedOptions: CanonicalExecutionContextOptions | undefined;
+    capturedHostCapabilities: CanonicalHostCapabilities | undefined;
     canonicalContextEventCalls = 0;
 
     protected override supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
@@ -183,8 +188,11 @@ class CanonicalContextSnapshotDriver extends CanonicalLifecycleTestDriver {
 
     override async requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
+        _signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<ReturnType<typeof createCanonicalExecutionResponse>> {
         this.capturedOptions = options;
+        this.capturedHostCapabilities = hostCapabilities;
         return createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
     }
 
@@ -192,8 +200,10 @@ class CanonicalContextSnapshotDriver extends CanonicalLifecycleTestDriver {
         options: CanonicalExecutionContextOptions,
         _signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         this.capturedOptions = options;
+        this.capturedHostCapabilities = hostCapabilities;
         this.canonicalContextEventCalls += 1;
         const response = createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
         return new FallbackCanonicalExecutionEventStream(
@@ -207,6 +217,18 @@ class CanonicalContextSnapshotDriver extends CanonicalLifecycleTestDriver {
             async () => response,
             open,
         );
+    }
+}
+
+class FailingCanonicalContextDriver extends CanonicalContextSnapshotDriver {
+    failure: unknown;
+
+    override async requestCanonicalContextCompletion(): Promise<never> {
+        throw this.failure;
+    }
+
+    override async requestCanonicalContextCompletionEventStream(): Promise<never> {
+        throw this.failure;
     }
 }
 
@@ -500,6 +522,109 @@ function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
 }
 
 describe('AbstractDriver lifecycle', () => {
+    it('preserves an exact provider-wrapped host failure through finite and typed context boundaries', async () => {
+        const hostError = Object.freeze(Object.assign(new Error('host durability rejected'), { status: 409 }));
+        const marked = markCanonicalHostCallbackFailure(hostError);
+        const providerWrapped = new LlumiverseError(
+            '[provider] callback failed',
+            true,
+            { provider: 'lifecycle-test', model: 'test-model', operation: 'execute' },
+            marked,
+            502,
+        );
+        const driver = new FailingCanonicalContextDriver(vi.fn());
+        driver.failure = providerWrapped;
+
+        await expect(driver.executeCanonicalContext(canonicalContextOptions())).rejects.toBe(hostError);
+        await expect(
+            driver.streamCanonicalContextEvents(canonicalContextOptions(), undefined, canonicalStreamOpen),
+        ).rejects.toBe(hostError);
+    });
+
+    it('preserves an exact host failure through finite typed and legacy projected delivery', async () => {
+        const hostError = Object.freeze(Object.assign(new Error('host recovery lookup rejected'), { status: 413 }));
+        const driver = new FailingCanonicalContextDriver(vi.fn());
+        driver.failure = markCanonicalHostCallbackFailure(hostError);
+        driver.streaming = false;
+
+        const typed = await driver.streamCanonicalContextEvents(
+            canonicalContextOptions(),
+            undefined,
+            canonicalStreamOpen,
+        );
+        const typedEvents = [];
+        for await (const event of typed) typedEvents.push(event);
+        expect(typedEvents).toEqual([expect.objectContaining({ type: 'stream_terminated', outcome: 'failed' })]);
+        expect(typed.failure).toBe(hostError);
+
+        const projected = await driver.streamCanonicalContext(canonicalContextOptions());
+        const consume = async () => {
+            for await (const _chunk of projected) {
+                // The finite failure emits no compatibility chunks.
+            }
+        };
+        await expect(consume()).rejects.toBe(hostError);
+    });
+
+    it('preserves a primitive host failure through the finite context boundary', async () => {
+        const driver = new FailingCanonicalContextDriver(vi.fn());
+        driver.failure = markCanonicalHostCallbackFailure(false);
+
+        try {
+            await driver.executeCanonicalContext(canonicalContextOptions());
+            throw new Error('Expected primitive host failure');
+        } catch (error: unknown) {
+            expect(error).toBe(false);
+        }
+    });
+
+    it('preserves an undefined host failure through finite typed and legacy projected delivery', async () => {
+        const driver = new FailingCanonicalContextDriver(vi.fn());
+        driver.failure = markCanonicalHostCallbackFailure(undefined);
+        driver.streaming = false;
+
+        const typed = await driver.streamCanonicalContextEvents(
+            canonicalContextOptions(),
+            undefined,
+            canonicalStreamOpen,
+        );
+        for await (const _event of typed) {
+            // Consume the finite terminal so its private failure is available to compatibility projection.
+        }
+        expect(canonicalHostCallbackFailure(typed.failure)).toEqual({ failure: undefined });
+
+        const projected = await driver.streamCanonicalContext(canonicalContextOptions());
+        let rejected = false;
+        try {
+            for await (const _chunk of projected) {
+                // A failed host callback cannot publish compatibility output.
+            }
+        } catch (error: unknown) {
+            rejected = true;
+            expect(error).toBeUndefined();
+        }
+        expect(rejected).toBe(true);
+    });
+
+    it.each([
+        { status: 401, retryable: false },
+        { status: 429, retryable: true },
+        { status: 503, retryable: true },
+    ])('retains provider $status classification when no host provenance exists', async ({ status, retryable }) => {
+        const providerError = Object.assign(new Error(`provider ${status}`), { status });
+        const driver = new FailingCanonicalContextDriver(vi.fn());
+        driver.failure = providerError;
+
+        try {
+            await driver.executeCanonicalContext(canonicalContextOptions());
+            throw new Error('Expected provider failure');
+        } catch (error: unknown) {
+            expect(error).toBeInstanceOf(LlumiverseError);
+            expect(error).not.toBe(providerError);
+            expect(error).toMatchObject({ code: status, retryable });
+        }
+    });
+
     it('does not wrap a host accepted-output recovery as a provider failure', async () => {
         const driver = new RecoveredCanonicalLifecycleTestDriver(vi.fn());
         const response = createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
@@ -771,6 +896,8 @@ describe('AbstractDriver lifecycle', () => {
         contextOptions.result_schema = resultSchema;
         contextOptions.model_options = { temperature: 0.2 };
         contextOptions.labels = { purpose: 'context-snapshot' };
+        const resolveCanonicalAsset = vi.fn();
+        contextOptions.resolve_canonical_asset = resolveCanonicalAsset;
 
         const execution = driver.executeCanonicalContext(contextOptions);
         conversation.id = 'conversation:mutated';
@@ -786,12 +913,57 @@ describe('AbstractDriver lifecycle', () => {
             result_schema: { properties: { answer: { type: 'string' } } },
             model_options: { temperature: 0.2 },
             labels: { purpose: 'context-snapshot' },
+            resolve_canonical_asset: resolveCanonicalAsset,
         });
         expect(driver.capturedOptions?.conversation).not.toBe(conversation);
         expect(driver.capturedOptions?.conversation_runtime).not.toBe(contextOptions.conversation_runtime);
         expect(driver.createPromptCalls).toBe(0);
         expect(driver.requestTextCompletionCalls).toBe(0);
         expect(driver.requestTextCompletionStreamCalls).toBe(0);
+    });
+
+    it('owns the explicit asset capability at call start and rejects caller lookalikes', async () => {
+        const driver = new CanonicalContextSnapshotDriver(vi.fn());
+        const firstResolver: NonNullable<CanonicalHostCapabilities['resolve_canonical_asset']> = async function* () {
+            yield new Uint8Array([1]);
+        };
+        const secondResolver: NonNullable<CanonicalHostCapabilities['resolve_canonical_asset']> = async function* () {
+            yield new Uint8Array([2]);
+        };
+        const shared = { resolve_canonical_asset: firstResolver };
+        const callerOptions = canonicalContextOptions();
+        const forgedOptions = canonicalContextOptions() as CanonicalExecutionContextInputOptions & {
+            host_capabilities?: CanonicalHostCapabilities;
+        };
+        forgedOptions.host_capabilities = shared;
+
+        await expect(driver.executeCanonicalContext(forgedOptions)).rejects.toThrow(
+            'Canonical host capabilities must be supplied through the internal per-call parameter',
+        );
+        expect(driver.capturedHostCapabilities).toBeUndefined();
+
+        const firstExecution = driver.executeCanonicalContext(callerOptions, undefined, shared);
+        shared.resolve_canonical_asset = secondResolver;
+        await firstExecution;
+        expect(driver.capturedHostCapabilities?.resolve_canonical_asset).toBe(firstResolver);
+        expect(driver.capturedHostCapabilities).not.toBe(shared);
+        expect(Object.isFrozen(driver.capturedHostCapabilities)).toBe(true);
+        expect(driver.capturedOptions).not.toHaveProperty('host_capabilities');
+
+        await driver.streamCanonicalContextEvents(callerOptions, undefined, canonicalStreamOpen, shared);
+        expect(driver.capturedHostCapabilities?.resolve_canonical_asset).toBe(secondResolver);
+
+        await driver.executeCanonicalContext(callerOptions);
+        expect(driver.capturedHostCapabilities).toBeUndefined();
+
+        const accessor = Object.defineProperty({}, 'resolve_canonical_asset', {
+            get: vi.fn(() => firstResolver),
+            enumerable: true,
+        });
+        await expect(driver.executeCanonicalContext(callerOptions, undefined, accessor)).rejects.toThrow(
+            'must be own data properties',
+        );
+        expect(Object.getOwnPropertyDescriptor(accessor, 'resolve_canonical_asset')?.get).not.toHaveBeenCalled();
     });
 
     it('rejects native history and legacy authoring policy before canonical context provider dispatch', async () => {

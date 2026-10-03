@@ -1,9 +1,11 @@
 import { z } from 'zod';
+import { ConversationAppendChangeSchema } from './change.js';
 import { AssetSchema, ConversationTurnSchema, ToolDefinitionSchema } from './content.js';
 import { ConversationDiagnosticSchema } from './diagnostics.js';
 import { ContextEntrySchema, ConversationDocumentSchema } from './document.js';
 import { ExecutedGenerationSchema, ExecutionReceiptSchema, GenerationSchema } from './execution.js';
 import { ContentHashSchema, IdentifierSchema, NonnegativeSafeIntegerSchema, TimestampSchema } from './primitives.js';
+import { ProcessingAppendAcceptanceSchema } from './processing.js';
 import { ConversationStreamDecodeEvidenceSchema } from './streaming.js';
 
 /** Concrete JSON additions; cross-record integrity is checked against the resulting document. */
@@ -32,10 +34,15 @@ export const AppendConversationRecordsResultSchema = z
     .strictObject({
         document: ConversationDocumentSchema,
         applied: z.boolean(),
+        change: ConversationAppendChangeSchema,
         accepted_turn_ids: z.array(IdentifierSchema),
         accepted_generation_ids: z.array(IdentifierSchema),
     })
     .meta({ id: 'AppendConversationRecordsResult' });
+
+export const AppendConversationRecordsWithProcessingResultSchema = AppendConversationRecordsResultSchema.extend({
+    acceptance: ProcessingAppendAcceptanceSchema,
+}).meta({ id: 'AppendConversationRecordsWithProcessingResult' });
 
 /** Completed decoder output, before the request/response identity and dependency checks. */
 export const DecodedConversationResponseSchema = z

@@ -11,18 +11,24 @@ import {
 import {
     type AgentContentBlock,
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
+    type ConversationDocument,
     deriveConversationId,
     fingerprintJson,
     type GenerationUsage,
     hashContentBytes,
+    inlineAssetContentIntegrity,
     isConversationDocumentFormat,
     type JsonValue,
+    type NativeItemMapping,
     parseConversationDocument,
+    type RequestReceipt,
+    type ResolvedConversationRuntimeContext,
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import {
     type AudioResult,
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -46,14 +52,18 @@ import { toStreamingFile } from 'openai';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
+    assertAcceptedCanonicalRequest,
+    assertCanonicalContextProjection,
     canonicalResponseIdentities,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
+    prepareCanonicalContext,
     providerJsonValue,
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
     resolveConversationRuntime,
+    selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
 
 const OPENAI_AUDIO_ADAPTER_VERSION = '2026-09-30.canonical.1';
@@ -75,6 +85,14 @@ interface OpenAIAudioOutputIdentity {
     completed_at?: string;
     asset_storage: (value: string) => Asset['storage'];
 }
+
+interface OpenAIAudioInputFile {
+    name: string;
+    mime_type: string;
+    getStream(): Promise<ReadableStream<Uint8Array | string>>;
+}
+
+type OpenAIAudioExecutionOptions = ExecutionOptions | CanonicalExecutionContextOptions;
 
 type DecodedOpenAIAudioItem =
     | { type: 'text'; text: string }
@@ -228,7 +246,7 @@ async function canonicalOpenAIAudioOutput(
 }
 
 export async function openAIInputAudioPart(
-    file: DataSource,
+    file: Pick<DataSource, 'mime_type' | 'getStream'>,
     signal?: AbortSignal,
     unsupportedFormatMessage = 'Chat audio input requires MP3 or WAV',
 ): Promise<OpenAI.Chat.ChatCompletionContentPartInputAudio> {
@@ -291,21 +309,12 @@ const OPENAI_TRANSCRIPTION_MIME_TYPES = new Set([
 
 interface ValidatedOpenAIAudioInput {
     task: NonNullable<ReturnType<typeof openAIAudioTask>>;
-    files: DataSource[];
+    files: OpenAIAudioInputFile[];
     text: string;
 }
 
-function validateOpenAIAudioInput(segments: PromptSegment[], model: string): ValidatedOpenAIAudioInput {
-    const task = openAIAudioTask(model);
-    if (task === undefined) throw new Error(`Model ${model} is not an OpenAI file audio model`);
-    if (segments.some((segment) => segment.role === 'tool' || segment.role === 'assistant')) {
-        throw new Error('File audio operations accept only user and system input');
-    }
-    const files = segments.flatMap((segment) => segment.files ?? []);
-    const text = segments
-        .map((segment) => segment.content ?? '')
-        .join('\n')
-        .trim();
+function validateOpenAIAudioValues(input: ValidatedOpenAIAudioInput): ValidatedOpenAIAudioInput {
+    const { task, files, text } = input;
     if (task === 'understanding') {
         if (files.length > 1) throw new Error('Audio understanding accepts at most one audio file');
         if (!files.length && !text) throw new Error('Audio understanding requires text or an audio file');
@@ -324,7 +333,21 @@ function validateOpenAIAudioInput(segments: PromptSegment[], model: string): Val
         if (files.length) throw new Error('Speech synthesis accepts text only');
         if (!text || text.length > 4096) throw new Error('Speech synthesis requires 1–4096 characters');
     }
-    return { task, files, text };
+    return input;
+}
+
+function validateOpenAIAudioInput(segments: PromptSegment[], model: string): ValidatedOpenAIAudioInput {
+    const task = openAIAudioTask(model);
+    if (task === undefined) throw new Error(`Model ${model} is not an OpenAI file audio model`);
+    if (segments.some((segment) => segment.role === 'tool' || segment.role === 'assistant')) {
+        throw new Error('File audio operations accept only user and system input');
+    }
+    const files = segments.flatMap((segment) => segment.files ?? []);
+    const text = segments
+        .map((segment) => segment.content ?? '')
+        .join('\n')
+        .trim();
+    return validateOpenAIAudioValues({ task, files, text });
 }
 
 function validateOpenAIAudioCanonicalInput(segments: PromptSegment[], options: ExecutionOptions) {
@@ -400,7 +423,27 @@ export async function executeOpenAIAudioNative(
             'File audio operations do not accept conversation, tools, result schemas, or custom formatting',
         );
     }
-    const { task, files, text } = validateOpenAIAudioInput(segments, options.model);
+    return executeValidatedOpenAIAudioNative(
+        service,
+        validateOpenAIAudioInput(segments, options.model),
+        options,
+        requestOptions,
+        outputIdentity,
+        requestModel,
+    );
+}
+
+async function executeValidatedOpenAIAudioNative(
+    service: OpenAI,
+    input: ValidatedOpenAIAudioInput,
+    options: OpenAIAudioExecutionOptions,
+    requestOptions: { signal?: AbortSignal; timeout?: number } | undefined,
+    outputIdentity: OpenAIAudioOutputIdentity,
+    requestModel = options.model,
+): Promise<OpenAIAudioNativeExecution> {
+    const signal = requestOptions?.signal;
+    signal?.throwIfAborted();
+    const { task, files, text } = input;
     if (task === 'understanding') {
         const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [{ type: 'text', text }];
         if (files[0]) {
@@ -673,6 +716,172 @@ async function readAudioSource(file: DataSource, signal?: AbortSignal): Promise<
     }
 }
 
+interface CanonicalOpenAIAudioInput {
+    validated: ValidatedOpenAIAudioInput;
+    item_mappings: NativeItemMapping[];
+    segments: Array<{
+        role: 'user';
+        content: string;
+        files: Array<{ asset_id: string; name: string; mime_type: string; content_hash: string }>;
+    }>;
+}
+
+async function canonicalOpenAIAudioInput(
+    document: ConversationDocument,
+    model: string,
+): Promise<CanonicalOpenAIAudioInput> {
+    const task = openAIAudioTask(model);
+    if (task === undefined) throw new Error(`Model ${model} is not an OpenAI file audio model`);
+    const files: OpenAIAudioInputFile[] = [];
+    const itemMappings: NativeItemMapping[] = [];
+    const segments: CanonicalOpenAIAudioInput['segments'] = [];
+    const selected = selectedCanonicalTurns(document);
+    assertCanonicalContextProjection(document, selected, {
+        label: 'OpenAI file audio',
+        program_authorities: ['ordinary'],
+    });
+    for (let turnIndex = 0; turnIndex < selected.length; turnIndex += 1) {
+        const turn = selected[turnIndex];
+        if (turn.kind !== 'program' && turn.kind !== 'user') {
+            throw new Error('File audio canonical context accepts only program and user turns');
+        }
+        const text: string[] = [];
+        const segmentFiles: CanonicalOpenAIAudioInput['segments'][number]['files'] = [];
+        itemMappings.push({ canonical_id: turn.id, native_id: `segments/${turnIndex}`, kind: 'turn' });
+        for (let blockIndex = 0; blockIndex < turn.blocks.length; blockIndex += 1) {
+            const block = turn.blocks[blockIndex];
+            const nativeId = `segments/${turnIndex}/blocks/${blockIndex}`;
+            itemMappings.push({ canonical_id: block.id, native_id: nativeId, kind: 'block' });
+            if (block.type === 'text') {
+                text.push(block.text);
+                continue;
+            }
+            if (block.type !== 'audio' && block.type !== 'video') {
+                throw new Error(`File audio canonical context does not support ${block.type} input`);
+            }
+            const asset = Object.hasOwn(document.assets, block.asset_id) ? document.assets[block.asset_id] : undefined;
+            if (asset === undefined) throw new Error(`File audio canonical context is missing asset ${block.asset_id}`);
+            if (asset.kind !== block.type) {
+                throw new Error(
+                    `File audio canonical context asset ${asset.id} does not match its ${block.type} block`,
+                );
+            }
+            if (asset.storage.type !== 'inline_base64') {
+                throw new Error(`File audio canonical context asset ${asset.id} must use inline_base64 storage`);
+            }
+            const integrity = await inlineAssetContentIntegrity(asset.storage);
+            if (integrity === undefined) throw new Error(`File audio canonical context asset ${asset.id} has no bytes`);
+            if (asset.content_hash !== undefined && asset.content_hash !== integrity.content_hash) {
+                throw new Error(`File audio canonical context asset ${asset.id} content hash does not match its bytes`);
+            }
+            if (asset.byte_length !== undefined && asset.byte_length !== integrity.byte_length) {
+                throw new Error(`File audio canonical context asset ${asset.id} byte length does not match its bytes`);
+            }
+            const bytes = new Uint8Array(Buffer.from(asset.storage.data, 'base64'));
+            const file: OpenAIAudioInputFile = {
+                name: asset.id,
+                mime_type: asset.mime_type,
+                getStream: async () => new Blob([bytes]).stream(),
+            };
+            files.push(file);
+            segmentFiles.push({
+                asset_id: asset.id,
+                name: file.name,
+                mime_type: file.mime_type,
+                content_hash: integrity.content_hash,
+            });
+        }
+        segments.push({
+            // The native audio endpoint receives one flattened prompt and cannot preserve a system role.
+            // Context preflight therefore accepts only ordinary program authority and records the truthful
+            // native projection here as user input.
+            role: 'user',
+            content: text.join(''),
+            files: segmentFiles,
+        });
+    }
+    const text = segments
+        .map((segment) => segment.content)
+        .join('\n')
+        .trim();
+    return {
+        validated: validateOpenAIAudioValues({ task, files, text }),
+        item_mappings: itemMappings,
+        segments,
+    };
+}
+
+interface PreparedOpenAIAudioCanonicalResponse {
+    document: ConversationDocument;
+    runtime: ResolvedConversationRuntimeContext;
+    receipt: RequestReceipt;
+    generation_id: string;
+    response_turn_id: string;
+    provider: string;
+    protocol: string;
+    requested_model: string;
+    resolved_model: string;
+    payload: JsonValue;
+}
+
+async function finalizeOpenAIAudioCanonicalResponse(
+    prepared: PreparedOpenAIAudioCanonicalResponse,
+    native: OpenAIAudioNativeExecution,
+    options: OpenAIAudioExecutionOptions,
+): Promise<CanonicalExecutionResponse> {
+    const generation = await createExecutedGeneration({
+        id: prepared.generation_id,
+        runtime: prepared.runtime,
+        receipt: prepared.receipt,
+        provider: prepared.provider,
+        protocol: prepared.protocol,
+        adapter_version: OPENAI_AUDIO_ADAPTER_VERSION,
+        requested_model: prepared.requested_model,
+        resolved_model: prepared.resolved_model,
+        finish_reason: native.finish_reason ?? undefined,
+        usage: native.usage,
+    });
+    const responseTurn = {
+        id: prepared.response_turn_id,
+        kind: 'agent' as const,
+        authority: 'ordinary' as const,
+        blocks: native.blocks,
+        status: 'completed' as const,
+        timestamps: { recorded_at: native.completed_at, completed_at: native.completed_at },
+        model_visibility: 'include' as const,
+        provenance: { type: 'generated' as const },
+        generation_id: generation.id,
+    };
+    const finalDocument = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document: prepared.document,
+                generation_id: prepared.generation_id,
+                response_turn_id: prepared.response_turn_id,
+                receipt: prepared.receipt,
+                payload: prepared.payload,
+                diagnostics: [],
+            },
+            {
+                turns: [responseTurn],
+                assets: native.assets,
+                generation,
+                diagnostics: [],
+                payload_fingerprint: await fingerprintJson(native.response_fingerprint_payload),
+            },
+            {
+                operation_id: prepared.runtime.response_operation_id,
+                recorded_at: native.completed_at,
+            },
+        )
+    ).document;
+    return createCanonicalExecutionResponse(finalDocument, prepared.runtime.response_operation_id, {
+        ...(options.include_original_response && native.original_response !== undefined
+            ? { original_response: native.original_response }
+            : {}),
+    });
+}
+
 /** Direct canonical execution for finite OpenAI audio endpoints. */
 export async function executeOpenAIAudioCanonical(input: {
     service: OpenAI;
@@ -868,55 +1077,117 @@ export async function executeOpenAIAudioCanonical(input: {
         },
         input.request_model,
     );
-    const generation = await createExecutedGeneration({
-        id: identities.generation_id,
-        runtime,
-        receipt,
+    return finalizeOpenAIAudioCanonicalResponse(
+        {
+            document: appended.document,
+            runtime,
+            receipt,
+            generation_id: identities.generation_id,
+            response_turn_id: identities.response_turn_id,
+            provider: input.provider,
+            protocol,
+            requested_model: input.options.model,
+            resolved_model: input.request_model ?? input.options.model,
+            payload: requestPayload,
+        },
+        native,
+        input.options,
+    );
+}
+
+/** Execute an already materialized canonical file-audio context without rebuilding PromptSegment input. */
+export async function executeOpenAIAudioCanonicalContext(input: {
+    service: OpenAI;
+    options: CanonicalExecutionContextOptions;
+    provider: string;
+    request_model?: string;
+    request_options?: { signal?: AbortSignal; timeout?: number };
+}): Promise<CanonicalExecutionResponse> {
+    input.request_options?.signal?.throwIfAborted();
+    if (input.options.result_schema !== undefined) {
+        throw new Error('File audio operations do not accept result schemas');
+    }
+    const task = openAIAudioTask(input.options.model);
+    if (task === undefined) throw new Error(`Model ${input.options.model} is not an OpenAI file audio model`);
+    const protocol = task === 'understanding' ? OPENAI_AUDIO_CHAT_PROTOCOL : `openai.audio.${task}`;
+    const prepared = await prepareCanonicalContext({
+        options: input.options,
         provider: input.provider,
         protocol,
         adapter_version: OPENAI_AUDIO_ADAPTER_VERSION,
-        requested_model: input.options.model,
-        resolved_model: input.request_model ?? input.options.model,
-        finish_reason: native.finish_reason ?? undefined,
-        usage: native.usage,
     });
-    const responseTurn = {
-        id: identities.response_turn_id,
-        kind: 'agent' as const,
-        authority: 'ordinary' as const,
-        blocks: native.blocks,
-        status: 'completed' as const,
-        timestamps: { recorded_at: native.completed_at, completed_at: native.completed_at },
-        model_visibility: 'include' as const,
-        provenance: { type: 'generated' as const },
-        generation_id: generation.id,
-    };
-    const finalDocument = appendDecodedConversationResponse(
+    if (prepared.tool_definitions.length > 0) {
+        throw new Error('File audio canonical context does not support tool definitions');
+    }
+    const canonicalInput = await canonicalOpenAIAudioInput(prepared.request_document, input.options.model);
+    const resolvedModel = input.request_model ?? input.options.model;
+    const requestPayload = providerJsonValue({
+        model: resolvedModel,
+        task,
+        model_options: input.options.model_options ?? {},
+        segments: canonicalInput.segments,
+        input_assets: canonicalInput.segments.flatMap((segment) =>
+            segment.files.map((file) => ({ id: file.asset_id, content_hash: file.content_hash })),
+        ),
+    });
+    await assertAcceptedCanonicalRequest(
+        prepared,
+        { provider: input.provider, protocol, model: input.options.model },
+        requestPayload,
+    );
+    const receipt =
+        prepared.accepted_response?.generation.request_receipt ??
+        (await createRequestReceipt(
+            prepared.document,
+            prepared.runtime,
+            {
+                provider: input.provider,
+                protocol,
+                model: input.options.model,
+                adapter_version: OPENAI_AUDIO_ADAPTER_VERSION,
+            },
+            requestPayload,
+            canonicalInput.item_mappings,
+            prepared.tool_definitions,
+        ));
+    const canonicalState = { ...prepared, receipt };
+    if (prepared.accepted_response !== undefined) {
+        if (input.options.include_original_response) {
+            throw new Error('An idempotently recovered audio response cannot reconstruct original_response');
+        }
+        return recoverCanonicalExecutionResponse(canonicalState, input.options);
+    }
+    await publishCanonicalPreparedRequest(canonicalState, input.options);
+    const native = await executeValidatedOpenAIAudioNative(
+        input.service,
+        canonicalInput.validated,
+        input.options,
+        input.request_options,
         {
-            document: appended.document,
-            generation_id: identities.generation_id,
-            response_turn_id: identities.response_turn_id,
+            response_operation_id: prepared.runtime.response_operation_id,
+            generation_id: prepared.generation_id,
+            response_turn_id: prepared.response_turn_id,
+            ...(prepared.runtime.completed_at === undefined ? {} : { completed_at: prepared.runtime.completed_at }),
+            asset_storage: canonicalAudioAssetStorage,
+        },
+        input.request_model,
+    );
+    return finalizeOpenAIAudioCanonicalResponse(
+        {
+            document: prepared.document,
+            runtime: prepared.runtime,
             receipt,
+            generation_id: prepared.generation_id,
+            response_turn_id: prepared.response_turn_id,
+            provider: input.provider,
+            protocol,
+            requested_model: input.options.model,
+            resolved_model: resolvedModel,
             payload: requestPayload,
-            diagnostics: [],
         },
-        {
-            turns: [responseTurn],
-            assets: native.assets,
-            generation,
-            diagnostics: [],
-            payload_fingerprint: await fingerprintJson(native.response_fingerprint_payload),
-        },
-        {
-            operation_id: runtime.response_operation_id,
-            recorded_at: native.completed_at,
-        },
-    ).document;
-    return createCanonicalExecutionResponse(finalDocument, runtime.response_operation_id, {
-        ...(input.options.include_original_response && native.original_response !== undefined
-            ? { original_response: native.original_response }
-            : {}),
-    });
+        native,
+        input.options,
+    );
 }
 
 /** Execute a finite SDK audio request without retaining multipart input in a prompt or conversation. */

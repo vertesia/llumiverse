@@ -17,8 +17,10 @@ export type ConversationPreparedRequestErrorCode =
     | 'asset_mismatch'
     | 'document_mismatch'
     | 'identity_mismatch'
+    | 'indexed_source_mismatch'
     | 'mapping_mismatch'
     | 'response_mismatch'
+    | 'source_view_mismatch'
     | 'tool_set_mismatch';
 
 export class ConversationPreparedRequestError extends Error {
@@ -94,6 +96,17 @@ async function assertPreparedRequestSemantics(
     ) {
         fail('document_mismatch', 'Prepared request source does not match its canonical document head');
     }
+    const sourceView = receipt.source_view;
+    if (
+        sourceView !== undefined &&
+        (sourceView.source.conversation_id !== source.conversation_id ||
+            sourceView.source.revision !== source.revision ||
+            sourceView.context_revision !== document.context.revision ||
+            sourceView.context_fingerprint !== receipt.context_fingerprint ||
+            sourceView.request_fingerprint !== receipt.request_fingerprint)
+    ) {
+        fail('source_view_mismatch', 'Prepared request source view does not match its finalized request');
+    }
     if (
         receipt.request_id !== runtime.request_id ||
         receipt.attempt_id !== runtime.attempt_id ||
@@ -144,6 +157,9 @@ export async function parseConversationPreparedRequest(input: unknown): Promise<
             diagnosticsFromZodError(shape.error),
         );
     }
+    if (shape.data.record.indexed_source !== undefined) {
+        fail('indexed_source_mismatch', 'Indexed prepared evidence cannot represent a full materialized document');
+    }
     const document = parseConversationDocument(shape.data.document);
     const prepared = structuredClone(input) as ConversationPreparedRequest;
     prepared.document = document;
@@ -165,6 +181,33 @@ export function parseConversationPreparedRequestRecord(input: unknown): Conversa
         );
     }
     return structuredClone(input) as ConversationPreparedRequestRecord;
+}
+
+/**
+ * Adopt only the immutable source-view locator added by a durable host callback. All finalized
+ * request fields, including an existing locator, must remain byte-equivalent to the original.
+ */
+export async function adoptConversationPreparedRequestRecord(
+    originalInput: ConversationPreparedRequest,
+    returnedInput: unknown,
+): Promise<ConversationPreparedRequest> {
+    const returned = parseConversationPreparedRequestRecord(returnedInput);
+    const original = await parseConversationPreparedRequest(originalInput);
+    const withoutSourceView = (record: ConversationPreparedRequestRecord) => {
+        const { source_view: _sourceView, ...requestReceipt } = record.request_receipt;
+        return { ...record, request_receipt: requestReceipt };
+    };
+    if (
+        (await fingerprintJson(withoutSourceView(original.record))) !==
+            (await fingerprintJson(withoutSourceView(returned))) ||
+        (original.record.request_receipt.source_view !== undefined &&
+            (returned.request_receipt.source_view === undefined ||
+                (await fingerprintJson(original.record.request_receipt.source_view)) !==
+                    (await fingerprintJson(returned.request_receipt.source_view))))
+    ) {
+        fail('source_view_mismatch', 'Durable host callback changed finalized prepared-request evidence');
+    }
+    return parseConversationPreparedRequest({ document: original.document, record: returned });
 }
 
 /** Verify that an accepted response was produced from an exact durably retained prepared-request record. */

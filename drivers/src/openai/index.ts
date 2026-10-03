@@ -1,16 +1,27 @@
+import type { CanonicalProjectedRequestMeasurement, CanonicalRequestProjectionCompiler } from '@llumiverse/common';
+import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import {
     type ToolDefinition as CanonicalToolDefinition,
+    type ConversationDocument,
+    type ConversationModelSwitchProjection,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
+    fingerprintJson,
     isConversationDocumentFormat,
+    type JsonValue,
+    type ModelTarget,
     type NativeStreamPosition,
+    parseConversationDocument,
 } from '@llumiverse/conversation';
+import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
 import {
     type AIModel,
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalModelSwitchProjectionControls,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -31,6 +42,7 @@ import {
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
+    isOpenAIImageVersionGTE,
     type JSONSchema,
     LlumiverseError,
     legacyCompletionFromCanonicalExecution,
@@ -38,9 +50,13 @@ import {
     markCanonicalAcceptedRecovery,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
+    type OpenAiDalleOptions,
+    type OpenAiGptImageOptions,
+    type OpenAiImageGenerationOptions,
     type PromptOptions,
     type PromptSegment,
     Providers,
+    resolveModelProfile,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -67,6 +83,7 @@ import {
     providerJsonValue,
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
+    selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
 import {
     normalizeDecodedStructuredOutputForSchema,
@@ -76,23 +93,27 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
     executeOpenAIAudioCanonical,
+    executeOpenAIAudioCanonicalContext,
     executeOpenAIAudioRequest,
     openAIAudioTask,
     streamOpenAIAudioCanonicalEvents,
 } from './audio.js';
+import { projectCanonicalRequestMeasurement } from './canonical-request-measurement.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import {
     executeOpenAIImageCanonical,
-    mapOpenAIImagesUsage,
-    openAIImageRequest,
+    executeOpenAIImageCanonicalContext,
     validateOpenAICanonicalImageInput,
 } from './image.js';
+import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
-import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import {
-    appendOpenAIResponsesCanonicalResponse,
+    appendOpenAIResponsesCanonicalResponseWithProcessing,
+    compileOpenAIResponsesConversation,
     decodeOpenAIResponsesCanonicalResponse,
     finalizeOpenAIResponsesPreparedRequest,
+    OPENAI_RESPONSES_ADAPTER_VERSION,
     OPENAI_RESPONSES_PROTOCOL,
     type PreparedOpenAIResponsesConversation,
     prepareOpenAIResponsesCanonicalContext,
@@ -106,6 +127,7 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type OpenAIResponseServiceTier = OpenAI.Responses.ResponseCreateParams['service_tier'];
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
+    image_generation?: OpenAiImageGenerationOptions;
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
@@ -317,7 +339,7 @@ const supportFineTunning = new Set([
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
 function projectCanonicalResponsesHistory(
-    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    prepared: Pick<PreparedOpenAIResponsesConversation, 'document' | 'native_conversation' | 'prior_native_item_count'>,
     options: ExecutionOptions,
 ): { conversation: ResponseInputItem[]; current_items: ResponseInputItem[] } {
     const currentTurn = canonicalConversationTurnNumber(prepared.document);
@@ -333,7 +355,16 @@ function projectCanonicalResponsesHistory(
         preserveSubtree,
     };
     const prior = prepared.native_conversation.slice(0, prepared.prior_native_item_count);
-    let projectedPrior = stripBase64ImagesFromConversation(prior, stripOptions);
+    const retainedPrior =
+        currentTurn >= (options.stripImagesAfterTurns ?? Infinity)
+            ? prior.map(
+                  (item): ResponseInputItem =>
+                      'type' in item && item.type === 'image_generation_call' && item.id
+                          ? ({ type: 'item_reference', id: item.id } as ResponseInputItem)
+                          : item,
+              )
+            : prior;
+    let projectedPrior = stripBase64ImagesFromConversation(retainedPrior, stripOptions);
     projectedPrior = truncateLargeTextInConversation(projectedPrior, stripOptions);
     projectedPrior = stripHeartbeatsFromConversation(projectedPrior, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
@@ -342,6 +373,165 @@ function projectCanonicalResponsesHistory(
     });
     const currentItems = prepared.native_conversation.slice(prepared.prior_native_item_count);
     return { conversation: [...(projectedPrior as ResponseInputItem[]), ...currentItems], current_items: currentItems };
+}
+
+interface OpenAIResponsesBuiltRequest<Request> {
+    request: Request;
+    conversation: ResponseInputItem[];
+    includeThoughts: boolean;
+}
+
+function buildOpenAIResponsesRequest(
+    state: Pick<
+        PreparedOpenAIResponsesConversation,
+        'document' | 'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
+    >,
+    driver: OpenAIResponsesDriverBase,
+    options: ExecutionOptions,
+    operation: 'execute',
+    imageToolPrompt?: ResponseInputItem[],
+): OpenAIResponsesBuiltRequest<OpenAI.Responses.ResponseCreateParamsNonStreaming>;
+function buildOpenAIResponsesRequest(
+    state: Pick<
+        PreparedOpenAIResponsesConversation,
+        'document' | 'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
+    >,
+    driver: OpenAIResponsesDriverBase,
+    options: ExecutionOptions,
+    operation: 'stream',
+    imageToolPrompt?: ResponseInputItem[],
+): OpenAIResponsesBuiltRequest<OpenAI.Responses.ResponseCreateParamsStreaming>;
+/** The one transport payload builder used by execute, stream and dry model-switch projection. */
+function buildOpenAIResponsesRequest(
+    state: Pick<
+        PreparedOpenAIResponsesConversation,
+        'document' | 'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
+    >,
+    driver: OpenAIResponsesDriverBase,
+    options: ExecutionOptions,
+    operation: 'execute' | 'stream',
+    imageToolPrompt: ResponseInputItem[] = [],
+): OpenAIResponsesBuiltRequest<
+    OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming
+> {
+    const modelOptions = options.model_options as OpenAIRequestOptions | undefined;
+    const toolDefs = getToolDefinitions(state.tool_definitions);
+    const useTools = Boolean(
+        toolDefs?.length && supportsToolUse(options.model, driver.provider, operation === 'stream'),
+    );
+    assertOpenAIResponseToolChoiceAvailable(modelOptions, useTools, options.model, driver.provider, operation);
+    const projection = projectCanonicalResponsesHistory(state, options);
+    let conversation = projection.conversation;
+    const currentItems = projection.current_items;
+    convertRoles(currentItems, options.model);
+    insert_image_detail(currentItems, modelOptions?.image_detail ?? 'auto');
+    conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
+    if (!useTools) conversation = convertOpenAIFunctionItemsToText(conversation);
+    let parsedSchema: JSONSchema | undefined;
+    let strictMode = false;
+    if (
+        options.result_schema &&
+        supportsSchema(options.model, driver.provider) &&
+        options.prompt_cache_schema_suffix !== true
+    ) {
+        const formattedSchema = formatOpenAISchema(options.result_schema);
+        parsedSchema = formattedSchema.schema;
+        strictMode = formattedSchema.strict;
+    }
+    const requestedEffort = modelOptions?.effort ?? modelOptions?.reasoning_effort;
+    const reasoning = openAIReasoning(
+        requestedEffort,
+        isOpenAIReasoningModel(options.model),
+        openAIReasoningContext(driver.provider, options.model, modelOptions?.reasoning_context),
+    );
+    const promptCacheKey = modelOptions?.prompt_cache_key ?? options.prompt_cache_key;
+    const promptCache = configureOpenAIPromptCaching(
+        conversation,
+        driver.getResponsesRequestModel(options.model),
+        promptCacheKey,
+    );
+    const include: OpenAI.Responses.ResponseCreateParamsNonStreaming['include'] = reasoning
+        ? ['reasoning.encrypted_content']
+        : undefined;
+    const common = {
+        model: driver.getResponsesRequestModel(options.model),
+        prompt_cache_key: promptCacheKey,
+        ...getPromptCacheRequestOptions(options.model, modelOptions?.prompt_cache_retention, promptCache.options),
+        input: promptCache.input,
+        reasoning,
+        include,
+        temperature: isOpenAIReasoningModel(options.model) ? undefined : modelOptions?.temperature,
+        top_p: isOpenAIReasoningModel(options.model) ? undefined : modelOptions?.top_p,
+        max_output_tokens: modelOptions?.max_tokens,
+        service_tier: asOpenAIResponseServiceTier(modelOptions?.service_tier),
+        tools: responseTools(imageToolPrompt, modelOptions?.image_generation, useTools ? (toolDefs ?? []) : []),
+        tool_choice: modelOptions?.image_generation?.force
+            ? ({ type: 'image_generation' } as const)
+            : useTools
+              ? getOpenAIResponseToolChoice(modelOptions)
+              : undefined,
+        parallel_tool_calls: useTools ? modelOptions?.parallel_tool_calls : undefined,
+        text: buildResponseTextConfig(
+            parsedSchema,
+            strictMode,
+            modelOptions?.verbosity,
+            options.prompt_cache_schema_suffix === true && !!options.result_schema,
+        ),
+    };
+    const includeThoughts = modelOptions?.include_thoughts !== false;
+    if (operation === 'stream') {
+        return {
+            request: mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
+                { ...common, stream: true },
+                modelOptions?.extra_body,
+            ),
+            conversation,
+            includeThoughts,
+        };
+    }
+    return {
+        request: mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
+            { ...common, stream: false },
+            modelOptions?.extra_body,
+        ),
+        conversation,
+        includeThoughts,
+    };
+}
+
+/** Validate host counting against the exact final Responses body before prepared publication. */
+async function projectOpenAIResponsesMeasurement(
+    prepared: PreparedOpenAIResponsesConversation,
+    request: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming,
+    options: ExecutionOptions,
+    signal?: AbortSignal,
+): Promise<CanonicalProjectedRequestMeasurement | undefined> {
+    if (!options.on_canonical_request_projected && !prepared.document.processing.enabled) return undefined;
+    const nativeRequest = providerJsonValue(structuredClone(request));
+    const document = parseConversationDocument(prepared.document);
+    const sourceHash = await fingerprintJson(document);
+    const compiler: CanonicalRequestProjectionCompiler = {
+        compileDocument: async (input, compileSignal) => {
+            compileSignal?.throwIfAborted();
+            if ((await fingerprintJson(parseConversationDocument(input))) !== sourceHash) {
+                throw new Error('Responses projection of a changed document is unavailable');
+            }
+            compileSignal?.throwIfAborted();
+            return structuredClone(nativeRequest);
+        },
+        compileProspective: async () => ({ status: 'unavailable' }),
+    };
+    return projectCanonicalRequestMeasurement(
+        {
+            document,
+            runtime: structuredClone(prepared.runtime),
+            target: structuredClone(prepared.receipt.target),
+            native_request: nativeRequest,
+        },
+        compiler,
+        options.on_canonical_request_projected,
+        signal,
+    );
 }
 
 function withoutCanonicalIngestionFields(items: ResponseInputItem[]): ResponseInputItem[] {
@@ -454,7 +644,7 @@ async function finalizeOpenAIResponsesStreamResponse(input: {
               })
             : rawDecoded;
     if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-    const document = appendOpenAIResponsesCanonicalResponse(input.prepared, decoded);
+    const document = await appendOpenAIResponsesCanonicalResponseWithProcessing(input.prepared, decoded);
     return {
         raw_decoded: rawDecoded,
         decoded,
@@ -473,6 +663,43 @@ export class OpenAIResponsesProtocol {
             signal?: AbortSignal,
         ) => { signal?: AbortSignal; timeout?: number } | undefined,
     ) {}
+
+    private getRequestOptions(
+        driver: OpenAIResponsesDriverBase,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): OpenAI.RequestOptions | undefined {
+        const base = this.resolveRequestOptions(options, signal);
+        const imageTool = (options.model_options as OpenAIRequestOptions | undefined)?.image_generation;
+        if (!imageTool || (driver.provider !== Providers.azure_foundry && driver.provider !== Providers.azure_openai)) {
+            return base;
+        }
+        return {
+            ...base,
+            headers: {
+                'x-ms-oai-image-generation-deployment': driver.getResponsesRequestModel(imageTool.model),
+                api_version: 'preview',
+            },
+        };
+    }
+
+    private requestFingerprintPayload(
+        driver: OpenAIResponsesDriverBase,
+        options: ExecutionOptions,
+        request: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming,
+    ): JsonValue {
+        const payload = providerJsonValue(request);
+        const imageTool = (options.model_options as OpenAIRequestOptions | undefined)?.image_generation;
+        if (!imageTool || (driver.provider !== Providers.azure_foundry && driver.provider !== Providers.azure_openai)) {
+            return payload;
+        }
+        return providerJsonValue({
+            request: payload,
+            transport: {
+                image_generation_deployment: driver.getResponsesRequestModel(imageTool.model),
+            },
+        });
+    }
 
     async requestTextCompletionStream(
         driver: OpenAIResponsesDriverBase,
@@ -550,35 +777,42 @@ export class OpenAIResponsesProtocol {
             promptCacheRetention,
             promptCache.options,
         );
-        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
-            {
-                stream: true,
-                model: driver.getResponsesRequestModel(options.model),
-                prompt_cache_key: promptCacheKey,
-                ...promptCacheRequestOptions,
-                input: promptCache.input,
-                reasoning,
-                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-                temperature: isReasoningModel ? undefined : model_options?.temperature,
-                top_p: isReasoningModel ? undefined : model_options?.top_p,
-                max_output_tokens: model_options?.max_tokens,
-                service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
-                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
-                text: buildResponseTextConfig(
-                    parsedSchema,
-                    strictMode,
-                    model_options?.verbosity,
-                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
-                ),
-            },
-            model_options?.extra_body,
+        const request = structuredClone(
+            mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
+                {
+                    stream: true,
+                    model: driver.getResponsesRequestModel(options.model),
+                    prompt_cache_key: promptCacheKey,
+                    ...promptCacheRequestOptions,
+                    input: promptCache.input,
+                    reasoning,
+                    include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+                    temperature: isReasoningModel ? undefined : model_options?.temperature,
+                    top_p: isReasoningModel ? undefined : model_options?.top_p,
+                    max_output_tokens: model_options?.max_tokens,
+                    service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
+                    tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
+                    tool_choice: model_options?.image_generation?.force
+                        ? { type: 'image_generation' }
+                        : useTools
+                          ? toolChoice
+                          : undefined,
+                    parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
+                    text: buildResponseTextConfig(
+                        parsedSchema,
+                        strictMode,
+                        model_options?.verbosity,
+                        options.prompt_cache_schema_suffix === true && !!options.result_schema,
+                    ),
+                },
+                model_options?.extra_body,
+            ),
         );
+        const requestFingerprintPayload = this.requestFingerprintPayload(driver, options, request);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider: driver.provider, protocol: 'openai.responses', model: options.model },
-            providerJsonValue(request),
+            requestFingerprintPayload,
         );
         if (canonicalState.accepted_response !== undefined) {
             const canonical = await recoverCanonicalExecutionResponse(canonicalState, options, {
@@ -590,25 +824,36 @@ export class OpenAIResponsesProtocol {
                 legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
             );
         }
-        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+        const finalized = await finalizeOpenAIResponsesPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             request,
+            requestFingerprintPayload,
         );
-        await publishCanonicalPreparedRequest(prepared, options);
-        const requestOptions = this.resolveRequestOptions(options, signal);
+        const counted = await projectOpenAIResponsesMeasurement(finalized, request, options, signal);
+        const prepared =
+            counted === undefined
+                ? finalized
+                : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
+        await publishCanonicalPreparedRequest(prepared, options, counted);
+        const requestOptions = this.getRequestOptions(driver, options, signal);
         const stream = requestOptions
-            ? await driver.service.responses.create(request, requestOptions)
-            : await driver.service.responses.create(request);
+            ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+            : await driver.getResponsesService(options).responses.create(request);
 
-        const mapped = mapResponseStream(stream, includeThoughts, async (response) => {
-            return (
-                await finalizeOpenAIResponsesStreamResponse({
-                    response,
-                    prepared,
-                    options,
-                })
-            ).response;
-        });
+        const mapped = mapResponseStream(
+            stream,
+            includeThoughts,
+            async (response) => {
+                return (
+                    await finalizeOpenAIResponsesStreamResponse({
+                        response,
+                        prepared,
+                        options,
+                    })
+                ).response;
+            },
+            model_options?.image_generation?.output_format,
+        );
         const finalize = mapped.finalizeConversation;
         if (finalize === undefined) throw new Error('OpenAI Responses stream has no canonical finalizer');
         let finalizedConversation: Promise<unknown> | undefined;
@@ -634,7 +879,14 @@ export class OpenAIResponsesProtocol {
             options,
             provider: driver.provider,
         });
-        return this.requestPreparedCanonicalTextCompletionEventStream(driver, canonicalState, options, signal, open);
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            options,
+            signal,
+            open,
+            prompt,
+        );
     }
 
     async requestCanonicalContextCompletionEventStream(
@@ -646,6 +898,7 @@ export class OpenAIResponsesProtocol {
         const canonicalState = await prepareOpenAIResponsesCanonicalContext({
             options,
             provider: driver.provider,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(driver, canonicalState, options, signal, open);
     }
@@ -656,76 +909,16 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        imageToolPrompt: ResponseInputItem[] = [],
     ): Promise<CanonicalExecutionEventStream> {
-        const toolDefs = getToolDefinitions(canonicalState.tool_definitions);
-        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
-        const modelOptions = options.model_options as OpenAIRequestOptions | undefined;
-        assertOpenAIResponseToolChoiceAvailable(modelOptions, useTools, options.model, driver.provider, 'stream');
-        const projection = projectCanonicalResponsesHistory(canonicalState, options);
-        let conversation = projection.conversation;
-        const currentItems = projection.current_items;
-        convertRoles(currentItems, options.model);
-        insert_image_detail(currentItems, modelOptions?.image_detail ?? 'auto');
-        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
-        if (!useTools) conversation = convertOpenAIFunctionItemsToText(conversation);
-
-        let parsedSchema: JSONSchema | undefined;
-        let strictMode = false;
-        if (
-            options.result_schema &&
-            supportsSchema(options.model, driver.provider) &&
-            options.prompt_cache_schema_suffix !== true
-        ) {
-            const formattedSchema = formatOpenAISchema(options.result_schema);
-            parsedSchema = formattedSchema.schema;
-            strictMode = formattedSchema.strict;
-        }
-        const requestedEffort = modelOptions?.effort ?? modelOptions?.reasoning_effort;
-        const reasoningContext = openAIReasoningContext(
-            driver.provider,
-            options.model,
-            modelOptions?.reasoning_context,
-        );
-        const reasoning = openAIReasoning(requestedEffort, isOpenAIReasoningModel(options.model), reasoningContext);
-        const promptCacheKey = modelOptions?.prompt_cache_key ?? options.prompt_cache_key;
-        const promptCache = configureOpenAIPromptCaching(
-            conversation,
-            driver.getResponsesRequestModel(options.model),
-            promptCacheKey,
-        );
-        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
-            {
-                stream: true,
-                model: driver.getResponsesRequestModel(options.model),
-                prompt_cache_key: promptCacheKey,
-                ...getPromptCacheRequestOptions(
-                    options.model,
-                    modelOptions?.prompt_cache_retention,
-                    promptCache.options,
-                ),
-                input: promptCache.input,
-                reasoning,
-                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-                temperature: isOpenAIReasoningModel(options.model) ? undefined : modelOptions?.temperature,
-                top_p: isOpenAIReasoningModel(options.model) ? undefined : modelOptions?.top_p,
-                max_output_tokens: modelOptions?.max_tokens,
-                service_tier: asOpenAIResponseServiceTier(modelOptions?.service_tier),
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? getOpenAIResponseToolChoice(modelOptions) : undefined,
-                parallel_tool_calls: useTools ? modelOptions?.parallel_tool_calls : undefined,
-                text: buildResponseTextConfig(
-                    parsedSchema,
-                    strictMode,
-                    modelOptions?.verbosity,
-                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
-                ),
-            },
-            modelOptions?.extra_body,
-        );
+        const built = buildOpenAIResponsesRequest(canonicalState, driver, options, 'stream', imageToolPrompt);
+        const { conversation } = built;
+        const request = structuredClone(built.request);
+        const requestFingerprintPayload = this.requestFingerprintPayload(driver, options, request);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider: driver.provider, protocol: OPENAI_RESPONSES_PROTOCOL, model: options.model },
-            providerJsonValue(request),
+            requestFingerprintPayload,
         );
         const acceptedResponse = canonicalState.accepted_response;
         const identity = {
@@ -747,10 +940,16 @@ export class OpenAIResponsesProtocol {
                 { ...open, origin: 'accepted_recovery' },
             );
         }
-        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+        const finalized = await finalizeOpenAIResponsesPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             request,
+            requestFingerprintPayload,
         );
+        const counted = await projectOpenAIResponsesMeasurement(finalized, request, options, signal);
+        const prepared =
+            counted === undefined
+                ? finalized
+                : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
 
         const abortController = new AbortController();
         const forwardAbort = () => abortController.abort(signal?.reason);
@@ -845,7 +1044,7 @@ export class OpenAIResponsesProtocol {
                 } else if (item.type === 'image_generation_call' && typeof item.result === 'string') {
                     await startDraft(writer, openAIResponsesStreamPosition(outputIndex, [], item.id), 'image', {
                         type: 'image',
-                        mime_type: 'image/png',
+                        mime_type: `image/${item.output_format ?? 'png'}`,
                     });
                 }
             }
@@ -855,10 +1054,10 @@ export class OpenAIResponsesProtocol {
             identity,
             open,
             openSource: async () => {
-                const requestOptions = this.resolveRequestOptions(options, abortController.signal);
+                const requestOptions = this.getRequestOptions(driver, options, abortController.signal);
                 return requestOptions
-                    ? await driver.service.responses.create(request, requestOptions)
-                    : await driver.service.responses.create(request);
+                    ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+                    : await driver.getResponsesService(options).responses.create(request);
             },
             map: async (event, writer) => {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
@@ -1088,7 +1287,7 @@ export class OpenAIResponsesProtocol {
             abort: () => abortController.abort(),
             close: () => signal?.removeEventListener('abort', forwardAbort),
         });
-        await publishCanonicalPreparedRequest(prepared, options);
+        await publishCanonicalPreparedRequest(prepared, options, counted);
         if (signal?.aborted) forwardAbort();
         else signal?.addEventListener('abort', forwardAbort, { once: true });
         return eventStream;
@@ -1106,7 +1305,7 @@ export class OpenAIResponsesProtocol {
             options,
             provider: driver.provider,
         });
-        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal);
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal, prompt);
     }
 
     async requestCanonicalContextCompletion(
@@ -1117,6 +1316,7 @@ export class OpenAIResponsesProtocol {
         const canonicalState = await prepareOpenAIResponsesCanonicalContext({
             options,
             provider: driver.provider,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal);
     }
@@ -1126,6 +1326,7 @@ export class OpenAIResponsesProtocol {
         canonicalState: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        imageToolPrompt: ResponseInputItem[] = [],
     ): Promise<CanonicalExecutionResponse> {
         if (
             options.model_options?._option_id !== undefined &&
@@ -1137,87 +1338,14 @@ export class OpenAIResponsesProtocol {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
-        const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        const toolDefs = getToolDefinitions(canonicalState.tool_definitions);
-        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
-        const includeThoughts = model_options?.include_thoughts !== false;
-        const projection = projectCanonicalResponsesHistory(canonicalState, options);
-        let conversation = projection.conversation;
-        const currentItems = projection.current_items;
-        convertRoles(currentItems, options.model);
-        insert_image_detail(currentItems, model_options?.image_detail ?? 'auto');
-        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
-
-        // When no tools are provided but conversation contains function_call/function_call_output
-        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
-        if (!useTools) {
-            conversation = convertOpenAIFunctionItemsToText(conversation);
-        }
-
-        let parsedSchema: JSONSchema | undefined;
-        let strictMode = false;
-        if (
-            options.result_schema &&
-            supportsSchema(options.model, driver.provider) &&
-            options.prompt_cache_schema_suffix !== true
-        ) {
-            const formattedSchema = formatOpenAISchema(options.result_schema);
-            parsedSchema = formattedSchema.schema;
-            strictMode = formattedSchema.strict;
-        }
-
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
-        const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoningContext = openAIReasoningContext(
-            driver.provider,
-            options.model,
-            model_options?.reasoning_context,
-        );
-        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
-        const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
-        const promptCacheRetention = model_options?.prompt_cache_retention;
-
-        const promptCache = configureOpenAIPromptCaching(
-            conversation,
-            driver.getResponsesRequestModel(options.model),
-            promptCacheKey,
-        );
-        const toolChoice = getOpenAIResponseToolChoice(model_options);
-        const promptCacheRequestOptions = getPromptCacheRequestOptions(
-            options.model,
-            promptCacheRetention,
-            promptCache.options,
-        );
-        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
-            {
-                stream: false,
-                model: driver.getResponsesRequestModel(options.model),
-                prompt_cache_key: promptCacheKey,
-                ...promptCacheRequestOptions,
-                input: promptCache.input,
-                reasoning,
-                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-                temperature: isReasoningModel ? undefined : model_options?.temperature,
-                top_p: isReasoningModel ? undefined : model_options?.top_p,
-                max_output_tokens: model_options?.max_tokens,
-                service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
-                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
-                text: buildResponseTextConfig(
-                    parsedSchema,
-                    strictMode,
-                    model_options?.verbosity,
-                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
-                ),
-            },
-            model_options?.extra_body,
-        );
+        const built = buildOpenAIResponsesRequest(canonicalState, driver, options, 'execute', imageToolPrompt);
+        const { conversation, includeThoughts } = built;
+        const request = structuredClone(built.request);
+        const requestFingerprintPayload = this.requestFingerprintPayload(driver, options, request);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider: driver.provider, protocol: 'openai.responses', model: options.model },
-            providerJsonValue(request),
+            requestFingerprintPayload,
         );
         if (canonicalState.accepted_response !== undefined) {
             if (options.include_original_response) {
@@ -1231,15 +1359,21 @@ export class OpenAIResponsesProtocol {
                     : { service_tier: canonicalResponsesServiceTier(canonicalState) }),
             });
         }
-        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+        const finalized = await finalizeOpenAIResponsesPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             request,
+            requestFingerprintPayload,
         );
-        await publishCanonicalPreparedRequest(prepared, options);
-        const requestOptions = this.resolveRequestOptions(options, signal);
+        const counted = await projectOpenAIResponsesMeasurement(finalized, request, options, signal);
+        const prepared =
+            counted === undefined
+                ? finalized
+                : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
+        await publishCanonicalPreparedRequest(prepared, options, counted);
+        const requestOptions = this.getRequestOptions(driver, options, signal);
         const res = requestOptions
-            ? await driver.service.responses.create(request, requestOptions)
-            : await driver.service.responses.create(request);
+            ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+            : await driver.getResponsesService(options).responses.create(request);
 
         assertOpenAIResponseSucceeded(res);
         const completionResults = extractCompletionResults(res.output, includeThoughts);
@@ -1268,7 +1402,7 @@ export class OpenAIResponsesProtocol {
                   })
                 : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-        const document = appendOpenAIResponsesCanonicalResponse(prepared, decoded);
+        const document = await appendOpenAIResponsesCanonicalResponseWithProcessing(prepared, decoded);
 
         return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
             ...(res.service_tier == null ? {} : { service_tier: res.service_tier }),
@@ -1303,6 +1437,118 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
+
+    override async resolveCanonicalModelSwitchTarget(
+        model: string,
+        options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined> {
+        const ownedModel = model;
+        const ownedOptions = options === undefined ? undefined : structuredClone(options);
+        const parsedOptions = ownedOptions === undefined ? undefined : ModelOptionsSchema.parse(ownedOptions);
+        if (
+            ownedOptions !== undefined &&
+            (await fingerprintJson(parsedOptions)) !== (await fingerprintJson(ownedOptions))
+        ) {
+            return undefined;
+        }
+        return ModelTargetSchema.parse({
+            provider: this.provider,
+            protocol: OPENAI_RESPONSES_PROTOCOL,
+            model: ownedModel,
+            adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+            ...(parsedOptions === undefined ? {} : { options: parsedOptions }),
+        });
+    }
+
+    override async projectCanonicalModelSwitchRequest(
+        sourceInput: ConversationDocument,
+        targetInput: ModelTarget,
+        operation: 'execute' | 'stream',
+        controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection> {
+        const document = parseConversationDocument(sourceInput);
+        const target = ModelTargetSchema.parse(structuredClone(targetInput));
+        const selectedOperation = operation;
+        const ownedControls = controls === undefined ? undefined : structuredClone(controls);
+        if (
+            target.provider !== this.provider ||
+            target.protocol !== OPENAI_RESPONSES_PROTOCOL ||
+            target.adapter_version !== OPENAI_RESPONSES_ADAPTER_VERSION
+        ) {
+            return { status: 'unsupported', reason: 'Configured Responses driver differs from target protocol' };
+        }
+        const allowedBlocks = new Set(['text', 'json', 'tool_call', 'tool_result']);
+        for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
+            for (const block of turn.blocks) {
+                if (!allowedBlocks.has(block.type)) {
+                    return { status: 'unsupported', reason: `Responses switch requires a ${block.type} policy` };
+                }
+                if (
+                    block.type === 'tool_result' &&
+                    block.content.some((item) => item.type !== 'text' && item.type !== 'json')
+                ) {
+                    return { status: 'unsupported', reason: 'Responses switch requires a tool-result media policy' };
+                }
+            }
+        }
+        const modelOptions = target.options === undefined ? undefined : ModelOptionsSchema.parse(target.options);
+        if (
+            target.options !== undefined &&
+            (await fingerprintJson(modelOptions)) !== (await fingerprintJson(target.options))
+        ) {
+            return { status: 'unsupported', reason: 'Responses target contains unsupported model options' };
+        }
+        const options: ExecutionOptions = {
+            model: target.model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...ownedControls,
+        };
+        const extraBody = (modelOptions as OpenAIRequestOptions | undefined)?.extra_body;
+        const reservedBodyFields = new Set([
+            'model',
+            'input',
+            'tools',
+            'tool_choice',
+            'stream',
+            'previous_response_id',
+            'conversation',
+        ]);
+        if (extraBody && Object.keys(extraBody).some((field) => reservedBodyFields.has(field))) {
+            return {
+                status: 'unsupported',
+                reason: 'Responses switch extra body conflicts with canonical request state',
+            };
+        }
+        const compiled = compileOpenAIResponsesConversation(document, target);
+        const originalConversation = providerJsonValue(structuredClone(compiled.conversation));
+        const state = {
+            document,
+            native_conversation: compiled.conversation,
+            prior_native_item_count: compiled.conversation.length,
+            tool_definitions: document.context.active_tool_definition_ids.map((id) => {
+                const definition = document.tool_definitions[id];
+                if (!definition) throw new Error(`Active tool definition ${id} is unavailable`);
+                return definition;
+            }),
+        };
+        const built =
+            selectedOperation === 'stream'
+                ? buildOpenAIResponsesRequest(state, this, options, 'stream')
+                : buildOpenAIResponsesRequest(state, this, options, 'execute');
+        if (
+            (await fingerprintJson(originalConversation)) !==
+            (await fingerprintJson(providerJsonValue(built.conversation)))
+        ) {
+            return { status: 'unsupported', reason: 'Responses switch requires an explicit history or tool policy' };
+        }
+        if (built.request.previous_response_id !== undefined || built.request.conversation !== undefined) {
+            return {
+                status: 'unsupported',
+                reason: 'Responses switch cannot depend on server-side conversation state',
+            };
+        }
+        return { status: 'compiled', native_request: providerJsonValue(built.request) };
+    }
 
     protected isFileAudioModel(model: string): boolean {
         return (
@@ -1394,12 +1640,16 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return true;
     }
 
-    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
-        return !this.isFileAudioModel(options.model);
+    protected supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
+        return true;
     }
 
     protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
         return this.provider === Providers.openai;
+    }
+
+    protected override supportsCanonicalImageContextGeneration(options: CanonicalExecutionContextOptions): boolean {
+        return this.supportsCanonicalImageGeneration(options);
     }
 
     protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
@@ -1407,6 +1657,16 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        if (this.isImageModel(options.model)) {
+            return formatOpenAILikeMultimodalPrompt(segments, {
+                ...options,
+                // Canonical ingestion retains role/authority evidence; only the named legacy image boundary flattens.
+                imageGeneration:
+                    this.provider !== Providers.xai &&
+                    (options as PromptOptions & { conversation_runtime?: unknown }).conversation_runtime === undefined,
+                result_schema: undefined,
+            });
+        }
         const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
         const resultSchema =
             supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
@@ -1430,7 +1690,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         // Collect all parts in order (text and images)
         const includeThoughts =
             (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
-        const allResults = extractCompletionResults(result.output, includeThoughts);
+        const allResults = extractCompletionResults(
+            result.output,
+            includeThoughts,
+            (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
+        );
 
         if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
@@ -1451,6 +1715,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (this.isImageModel(options.model)) return this.requestImageStream(prompt, options, signal);
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
@@ -1479,6 +1744,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (this.isImageModel(options.model)) return this.requestImageGeneration(prompt, options, signal);
         return this.responsesProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
@@ -1497,13 +1763,44 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
+        if (this.isImageModel(options.model)) {
+            return this.requestCanonicalImageContextGeneration(options, signal);
+        }
+        if (this.isFileAudioModel(options.model)) {
+            return executeOpenAIAudioCanonicalContext({
+                service: this.service,
+                options,
+                provider: this.provider,
+                request_model: this.getResponsesRequestModel(options.model),
+                request_options: this.getDriverRequestOptions(options, signal),
+            });
+        }
         return this.responsesProtocol.requestCanonicalContextCompletion(this, options, signal);
     }
 
+    override requestCanonicalImageContextGeneration(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeOpenAIImageCanonicalContext({
+            service: this.getImageService(),
+            provider: this.provider,
+            options,
+            host_capabilities: hostCapabilities,
+            request_model: this.getResponsesRequestModel(options.model),
+            source_model: this.getImageSourceModel(options.model),
+            fetch_image: this.getDriverFetch(),
+            request_options: this.getDriverRequestOptions(options, signal),
+            signal,
+        });
+    }
+
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        // Image generation models don't support streaming
+        if (this.isFileAudioModel(_options.model)) return Promise.resolve(false);
+        // GPT Image supports completed-image streaming; legacy image endpoints use the fallback.
         if (this.isImageModel(_options.model)) {
-            return Promise.resolve(false);
+            return Promise.resolve(this.getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'));
         }
 
         if (_options.model.includes('o1') && !(_options.model.includes('mini') || _options.model.includes('preview'))) {
@@ -1642,7 +1939,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         result = result.filter((m) => {
             if (this.isFileAudioModel(m.id)) return true;
             return (
-                !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
+                !unsupportedEndpointPattern.test(m.id.toLowerCase()) &&
+                !m.id.toLowerCase().includes('dall-e') &&
+                (this.isImageModel(m.id) || !isDedicatedInferenceModel(m.id, this.provider))
             );
         });
 
@@ -1657,7 +1956,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
                 // Determine model type based on capabilities
                 let modelType = this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text;
-                if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
+                if (this.isImageModel(m.id)) {
                     modelType = ModelType.Image;
                 }
 
@@ -1722,78 +2021,99 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         }
     }
 
-    imageModels = ['dall-e', 'gpt-image', 'chatgpt-image'];
-
-    /**
-     * Determine if a model is specifically an image generation model (not conversational image model)
-     */
     isImageModel(model: string): boolean {
-        // DALL-E models are standalone image generation
-        // gpt-image models can generate images in conversations, not standalone
-        return this.imageModels.some((imageModel) => model.includes(imageModel));
+        return resolveModelProfile(this.getImageSourceModel(model), this.provider).family === 'image';
     }
 
     /**
      * Request image generation from standalone Images API
-     * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
+     * Reference images select the edit operation; text-only prompts select generation.
      */
     async requestImageGeneration(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
-
-        try {
-            const generateParams = openAIImageRequest(prompt, options);
-
-            const response = signal
-                ? await this.service.images.generate(generateParams, { signal })
-                : await this.service.images.generate(generateParams);
-
-            // Convert response to CompletionResults
-            const results: CompletionResult[] = [];
-
-            if (response.data) {
-                for (const image of response.data) {
-                    let imageValue: string;
-
-                    if (image.b64_json) {
-                        // Base64 format
-                        imageValue = `data:image/png;base64,${image.b64_json}`;
-                    } else if (image.url) {
-                        // URL format
-                        imageValue = image.url;
-                    } else {
-                        continue;
-                    }
-
-                    results.push({
-                        type: 'image',
-                        value: imageValue,
-                    });
-                }
-            }
-
-            return {
-                result: results,
-                token_usage: mapOpenAIImagesUsage(response.usage),
-            };
-        } catch (error: unknown) {
-            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
-            const generationError = error instanceof Error ? error : new Error(String(error));
-            const errorCode =
-                (error as { code?: unknown })?.code === 'content_policy_violation'
-                    ? 'content_policy_violation'
-                    : 'validation_error';
-            return {
-                result: [],
-                error: {
-                    message: generationError.message,
-                    code: errorCode,
-                },
-            };
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
+            this.getImageSourceModel(options.model),
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
+        );
+        const response = request.edit
+            ? await this.getImageService().images.edit(request.edit, requestOptions)
+            : await this.getImageService().images.generate(request.generate, requestOptions);
+        if (!response.data?.some((image) => image.b64_json || image.url)) {
+            throw new Error('Image response did not contain a completed image');
         }
+        const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        return {
+            result: (response.data ?? []).flatMap((image): CompletionResult[] =>
+                image.b64_json
+                    ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
+                    : image.url
+                      ? [{ type: 'image', value: image.url }]
+                      : [],
+            ),
+            token_usage: imageUsage(response.usage),
+            original_response: options.include_original_response ? response : undefined,
+        };
+    }
+
+    getImageSourceModel(model: string): string {
+        return model;
+    }
+
+    getImageService(): OpenAI {
+        return this.service;
+    }
+
+    getResponsesService(_options: ExecutionOptions): OpenAI {
+        return this.service;
+    }
+
+    async requestImageStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | undefined,
+            this.getImageSourceModel(options.model),
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
+        );
+        const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        const stream = request.edit
+            ? await this.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
+            : await this.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
+        return {
+            async *[Symbol.asyncIterator]() {
+                let completed = false;
+                for await (const event of stream) {
+                    if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
+                    completed = true;
+                    yield {
+                        result: [
+                            {
+                                type: 'image',
+                                value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
+                            },
+                        ],
+                        token_usage: imageUsage(event.usage),
+                    } satisfies CompletionChunkObject;
+                }
+                if (!completed) throw new Error('Image stream ended without a completed image');
+            },
+        };
     }
 
     override async requestCanonicalImageGeneration(
@@ -1802,10 +2122,12 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         return executeOpenAIImageCanonical({
-            service: this.service,
+            service: this.getImageService(),
             provider: this.provider,
             prompt,
             options,
+            request_model: this.getResponsesRequestModel(options.model),
+            source_model: this.getImageSourceModel(options.model),
             fetch_image: this.getDriverFetch(),
             request_options: this.getDriverRequestOptions(options, signal),
             signal,
@@ -1947,6 +2269,7 @@ export function mapResponseStream(
     stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
     includeThoughts = false,
     finalize?: (response: OpenAI.Responses.Response) => unknown | Promise<unknown>,
+    requestedFormat?: string,
 ): DriverCompletionStream {
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
     let finalResponse: OpenAI.Responses.Response | undefined;
@@ -1955,6 +2278,7 @@ export function mapResponseStream(
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';
+            const emittedImages = new Set<string>();
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -1990,6 +2314,12 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
+                } else if (event.type === 'response.output_item.done' && event.item.type === 'image_generation_call') {
+                    const results = extractCompletionResults([event.item], false, requestedFormat);
+                    if (results.length && !emittedImages.has(event.item.id)) {
+                        emittedImages.add(event.item.id);
+                        yield { result: results } satisfies CompletionChunkObject;
+                    }
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
                     yield {
@@ -2028,7 +2358,12 @@ export function mapResponseStream(
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     yield {
-                        result: [],
+                        result: event.response.output.flatMap((item): CompletionResult[] => {
+                            if (item.type !== 'image_generation_call' || emittedImages.has(item.id)) return [];
+                            const results = extractCompletionResults([item], false, requestedFormat);
+                            if (results.length) emittedImages.add(item.id);
+                            return results;
+                        }),
                         finish_reason: responseFinishReason(event.response, finalTools),
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
@@ -2215,6 +2550,7 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
 function extractCompletionResults(
     output?: OpenAI.Responses.ResponseOutputItem[],
     includeThoughts = true,
+    requestedFormat?: string,
 ): CompletionResult[] {
     if (!output) {
         return [];
@@ -2238,11 +2574,11 @@ function extractCompletionResults(
                     });
                 }
             }
-        } else if (item.type === 'image_generation_call' && 'result' in item && item.result) {
+        } else if (item.type === 'image_generation_call' && item.status === 'completed' && item.result) {
             // GPT-image models return base64 encoded images in result field
             const base64Data = item.result;
             // Format as data URL for consistency with other image outputs
-            const imageUrl = base64Data.startsWith('data:') ? base64Data : `data:image/png;base64,${base64Data}`;
+            const imageUrl = imageDataUrl(base64Data, item.output_format, requestedFormat);
             results.push({
                 type: 'image',
                 value: imageUrl,
@@ -2417,4 +2753,50 @@ function safeJsonParse(value: unknown): unknown {
     } catch {
         return value;
     }
+}
+
+function imageUsage(usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+}): ExecutionTokenUsage | undefined {
+    return usage
+        ? {
+              prompt: usage.input_tokens,
+              prompt_new: usage.input_tokens,
+              result: usage.output_tokens,
+              result_image: usage.output_tokens,
+              total: usage.total_tokens,
+          }
+        : undefined;
+}
+
+function responseTools(
+    prompt: ResponseInputItem[],
+    config: OpenAiImageGenerationOptions | undefined,
+    functions: OpenAI.Responses.Tool[],
+): OpenAI.Responses.Tool[] | undefined {
+    if (!config) return functions.length ? functions : undefined;
+    if (!config.model) throw new Error('Image generation tool requires an image model');
+    const { force: _force, ...settings } = config;
+    const masks = getImageMasks(prompt);
+    if (masks.length > 1 || (masks.length && settings.input_image_mask))
+        throw new Error('Only one image mask is supported');
+    const mask = masks[0];
+    const model = settings.model.split('::').pop() ?? settings.model;
+    return [
+        ...functions,
+        {
+            ...settings,
+            model,
+            type: 'image_generation',
+            input_fidelity:
+                isOpenAIImageVersionGTE(model, 2) && !isOpenAIImageVersionGTE(model, 2, 5)
+                    ? undefined
+                    : settings.input_fidelity,
+            input_image_mask: mask
+                ? { image_url: mask.image_url ?? undefined, file_id: mask.file_id ?? undefined }
+                : settings.input_image_mask,
+        },
+    ];
 }

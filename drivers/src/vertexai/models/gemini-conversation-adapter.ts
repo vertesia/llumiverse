@@ -48,7 +48,9 @@ import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
+    appendCanonicalDecodedResponseWithProcessing,
     appendCanonicalPrompt,
+    assertCanonicalContextProjection,
     assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
@@ -1453,13 +1455,21 @@ function projectGeminiConversation(
     const mappings: NativeItemMapping[] = [];
     const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
     for (const turn of selectedTurns) {
+        if (turn.kind === 'program' && turn.authority === 'developer') {
+            throw new TypeError('Gemini cannot project developer program authority');
+        }
+    }
+    if (!readOnlyCompatibilityProjection) {
+        assertCanonicalContextProjection(document, selectedTurns, {
+            label: 'Gemini',
+            program_authorities: ['system', 'ordinary'],
+        });
+    }
+    for (const turn of selectedTurns) {
         if (!readOnlyCompatibilityProjection)
             assertProtectedReplayCompatibility(document, turn, GEMINI_GENERATE_CONTENT_PROTOCOL, target);
     }
     for (const turn of selectedTurns) {
-        if (turn.kind === 'program' && turn.authority === 'developer') {
-            throw new TypeError('Gemini cannot project developer program authority');
-        }
         const replay = replayContent(turn, document, target);
         const compiled =
             replay !== undefined
@@ -1981,6 +1991,18 @@ export function appendGeminiCanonicalResponse(
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;
+}
+
+export async function appendGeminiCanonicalResponseWithProcessing(
+    prepared: PreparedGeminiConversation,
+    decoded: DecodedConversationResponse,
+): Promise<ConversationDocument> {
+    return (
+        await appendCanonicalDecodedResponseWithProcessing(prepared, decoded, {
+            operation_id: prepared.runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.recorded_at,
+        })
+    ).document;
 }
 
 export function exportLegacyGeminiConversation(document: ConversationDocument): LegacyGeminiConversation {

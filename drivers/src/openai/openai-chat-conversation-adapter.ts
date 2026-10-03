@@ -4,7 +4,9 @@ import {
     type Asset,
     appendConversationRecords,
     type ConversationDocument,
+    type ConversationPreparedRequestRecord,
     type ConversationTurn,
+    ConversationTurnSchema,
     type DecodedConversationResponse,
     deriveConversationId,
     type ExecutedGeneration,
@@ -12,20 +14,35 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    type IndexedConversationSelectedContext,
+    IndexedConversationSelectedContextSchema,
     inlineAssetContentIntegrity,
+    JsonMinificationCandidateSchema,
+    type JsonMinificationProspectiveInput,
     type JsonObject,
     type JsonValue,
+    type ModelTarget,
+    ModelTargetSchema,
     type NativeItemMapping,
     type NativeReplayBlock,
     type NestedToolResultContentBlock,
     type PreparedConversationRequest,
     type ProgramContentBlock,
     parseConversationDocument,
+    parseConversationPreparedRequestRecord,
     preflightJsonInput,
+    processingContextFingerprint,
+    type RequestReceipt,
+    type RequestSourceWorkingSet,
+    RequestSourceWorkingSetSchema,
+    type ResolvedConversationRuntimeContext,
+    ResolvedConversationRuntimeContextSchema,
+    resolveActiveTextExternalReference,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
     type UserContentBlock,
+    validateJsonMinificationCandidate,
 } from '@llumiverse/conversation';
 import {
     type CanonicalExecutionContextOptions,
@@ -36,17 +53,21 @@ import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
+    appendCanonicalDecodedResponseWithProcessing,
     appendCanonicalPrompt,
+    assertCanonicalContextProjection,
     assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     canonicalToolSelectionTargetOptions,
     createExecutedGeneration,
     createRequestReceipt,
+    createRequestReceiptFromSelectedSource,
     newCanonicalConversation,
     parseCanonicalConversation,
     prepareCanonicalContext,
     providerJsonValue,
+    requestContextFingerprint,
     resolveCanonicalToolDefinitions,
     resolveConversationRuntime,
     selectedCanonicalTurns,
@@ -827,7 +848,11 @@ function audioAssetPart(asset: Asset): Extract<OpenAIChatCompletionsContentPart,
     return { type: 'input_audio', input_audio: { data: asset.storage.data, format } };
 }
 
-function contentParts(turn: ConversationTurn, document: ConversationDocument): OpenAIChatCompletionsContentPart[] {
+function contentParts(
+    turn: ConversationTurn,
+    document: Pick<ConversationDocument, 'assets'> &
+        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>>,
+): OpenAIChatCompletionsContentPart[] {
     const parts: OpenAIChatCompletionsContentPart[] = [];
     for (const block of turn.blocks) {
         if (block.type === 'text') parts.push({ type: 'text', text: block.text });
@@ -840,6 +865,15 @@ function contentParts(turn: ConversationTurn, document: ConversationDocument): O
             const asset = document.assets[block.asset_id];
             if (asset === undefined) throw new Error(`OpenAI Chat content references missing asset ${block.asset_id}`);
             parts.push(audioAssetPart(asset));
+        } else if (block.type === 'external_reference') {
+            if (block.preview === undefined || block.preview.length > 512) {
+                throw new TypeError(`OpenAI Chat external reference ${block.id} lacks a verified read capability`);
+            }
+            const resolved = resolveActiveTextExternalReference(document, block.asset_id, block.id);
+            parts.push({
+                type: 'text',
+                text: `${block.preview}\n[Full original text is available through ${resolved.tool_definition.name} with ${JSON.stringify(resolved.block.retrieval.arguments)}.]`,
+            });
         } else if (
             block.type !== 'tool_call' &&
             block.type !== 'reasoning' &&
@@ -880,7 +914,8 @@ function structuredChatContent(
 
 function compileTurn(
     turn: ConversationTurn,
-    document: ConversationDocument,
+    document: Pick<ConversationDocument, 'assets'> &
+        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>>,
     target?: { provider?: string; model?: string },
 ): OpenAIChatCompletionsMessage[] {
     if (turn.kind === 'tool') {
@@ -965,13 +1000,29 @@ function projectOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt;
     mappings: NativeItemMapping[];
 } {
-    const messages: OpenAIChatCompletionsMessage[] = [];
-    const mappings: NativeItemMapping[] = [];
     const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    if (!readOnlyCompatibilityProjection) {
+        assertCanonicalContextProjection(document, selectedTurns, {
+            label: 'OpenAI Chat',
+            program_authorities: ['system', 'developer', 'ordinary'],
+        });
+    }
     for (const turn of selectedTurns) {
         if (!readOnlyCompatibilityProjection)
             assertProtectedReplayCompatibility(document, turn, OPENAI_CHAT_COMPLETIONS_PROTOCOL, target);
     }
+    return compileOpenAIChatSelectedTurns(document, selectedTurns, target);
+}
+
+/** Shared native compilation; prospective turns are ephemeral projections, never accepted records. */
+function compileOpenAIChatSelectedTurns(
+    document: Pick<ConversationDocument, 'assets'> &
+        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>>,
+    selectedTurns: ConversationTurn[],
+    target?: { provider?: string; model?: string },
+): { conversation: OpenAIChatCompletionsPrompt; mappings: NativeItemMapping[] } {
+    const messages: OpenAIChatCompletionsMessage[] = [];
+    const mappings: NativeItemMapping[] = [];
     for (const turn of selectedTurns) {
         const compiled = compileTurn(turn, document, target);
         const messageIndex = messages.length;
@@ -989,6 +1040,351 @@ function projectOpenAIChatCompletionsConversation(
         }
     }
     return { conversation: { _is_openai_chat_completions: true, messages }, mappings };
+}
+
+/**
+ * Compile a projected selected-content archive without pretending it is a complete document.
+ * The caller must separately authenticate its prepared-record CAS and prove native-request parity;
+ * this pure projection cannot authorize provider transport or a new derived edit.
+ */
+function selectedWorkingSetSource(
+    workingSet: Pick<RequestSourceWorkingSet, 'turns' | 'context' | 'assets'> & {
+        replacement_turns?: RequestSourceWorkingSet['replacement_turns'];
+    },
+) {
+    const materialize = (projection: RequestSourceWorkingSet['turns'][number]): ConversationTurn =>
+        ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
+    const turns = workingSet.turns.map(materialize);
+    const grouped = new Map<string, ConversationTurn[]>();
+    for (const { compaction_id, projection } of workingSet.replacement_turns ?? []) {
+        const prior = grouped.get(compaction_id) ?? [];
+        prior.push(materialize(projection));
+        grouped.set(compaction_id, prior);
+    }
+    const compactions = Object.fromEntries([...grouped].map(([id, replacement_turns]) => [id, { replacement_turns }]));
+    return { turns, context: workingSet.context, compactions, assets: workingSet.assets };
+}
+
+/** Compile a host-verified indexed text selection without representing it as a full conversation document. */
+export function compileOpenAIChatIndexedSelectedText(
+    input: IndexedConversationSelectedContext,
+    target?: { provider?: string; model?: string },
+): ReturnType<typeof compileOpenAIChatSelectedTurns> {
+    const selectedContext = IndexedConversationSelectedContextSchema.parse(input);
+    const source = selectedWorkingSetSource(selectedContext);
+    const selected = selectedCanonicalTurns(source, { allow_interrupted_with_complete_tool_calls: true });
+    assertCanonicalContextProjection(source, selected, {
+        label: 'OpenAI Chat indexed text',
+        program_authorities: ['system', 'developer', 'ordinary'],
+    });
+    if (selected.some((turn) => turn.blocks.some((block) => block.type !== 'text'))) {
+        throw new TypeError('Indexed OpenAI Chat text selection contains unsupported content');
+    }
+    return compileOpenAIChatSelectedTurns({ assets: selectedContext.assets }, selected, target);
+}
+
+/** Finalize a fresh receipt from the same bounded source used by the indexed native compiler. */
+export async function createOpenAIChatIndexedTextRequestReceipt(input: {
+    selection: IndexedConversationSelectedContext;
+    runtime: ResolvedConversationRuntimeContext;
+    target: ModelTarget;
+    native_payload: JsonValue;
+    mappings: readonly NativeItemMapping[];
+}): Promise<RequestReceipt> {
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed request evidence is not bounded JSON');
+    const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+    const runtime = ResolvedConversationRuntimeContextSchema.parse(structuredClone(input.runtime));
+    const target = ModelTargetSchema.parse(structuredClone(input.target));
+    if (
+        runtime.conversation_id !== selection.source.conversation_id ||
+        target.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+        target.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION
+    ) {
+        throw new Error('Indexed request source or OpenAI target differs from the selected context');
+    }
+    const source = selectedWorkingSetSource(selection);
+    const definitions = selection.context.active_tool_definition_ids.map((id) => {
+        const definition = Object.hasOwn(selection.tool_definitions, id) ? selection.tool_definitions[id] : undefined;
+        if (!definition) throw new Error(`Indexed request tool ${id} is unavailable`);
+        return definition;
+    });
+    return createRequestReceiptFromSelectedSource(
+        {
+            ...source,
+            id: selection.source.conversation_id,
+            revision: selection.source.revision,
+            ...(selection.source_tail_turn_id === undefined
+                ? {}
+                : { source_tail_turn_id: selection.source_tail_turn_id }),
+        },
+        runtime,
+        target,
+        input.native_payload,
+        input.mappings,
+        definitions,
+    );
+}
+
+export function compileOpenAIChatSelectedWorkingSet(
+    input: RequestSourceWorkingSet,
+    target?: { provider?: string; model?: string },
+): ReturnType<typeof compileOpenAIChatSelectedTurns> {
+    const workingSet = RequestSourceWorkingSetSchema.parse(input);
+    const source = selectedWorkingSetSource(workingSet);
+    const selected = selectedCanonicalTurns(source, { allow_interrupted_with_complete_tool_calls: true });
+    assertCanonicalContextProjection(source, selected, {
+        label: 'OpenAI Chat',
+        program_authorities: ['system', 'developer', 'ordinary'],
+    });
+    const selectedTurnIds = new Set(selected.map((turn) => turn.id));
+    const selectedBlockIds = new Set(
+        selected.flatMap((turn) =>
+            turn.blocks.flatMap((block) =>
+                block.type === 'tool_result' ? [block.id, ...block.content.map((nested) => nested.id)] : [block.id],
+            ),
+        ),
+    );
+    const selectedCallIds = new Set(
+        selected.flatMap((turn) => turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : []))),
+    );
+    for (const turn of selected) {
+        for (const block of turn.blocks) {
+            if (
+                block.type !== 'native_replay' ||
+                block.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+                block.dependency_policy === 'discard_on_dependency_change'
+            )
+                continue;
+            const dependencies = block.dependencies;
+            if (
+                dependencies.turn_ids.some((id) => !selectedTurnIds.has(id)) ||
+                dependencies.block_ids.some((id) => !selectedBlockIds.has(id)) ||
+                dependencies.call_ids.some((id) => !selectedCallIds.has(id)) ||
+                dependencies.request_ids.length > 0
+            ) {
+                throw new TypeError(`Protected replay ${block.id} needs an unavailable dependency witness`);
+            }
+            if (block.compatibility_scope.model === undefined) {
+                throw new TypeError(`Protected replay ${block.id} needs its retained generation witness`);
+            }
+            if (
+                target?.provider === undefined ||
+                target.model === undefined ||
+                block.compatibility_scope.provider !== target.provider ||
+                block.compatibility_scope.model !== target.model
+            ) {
+                throw new TypeError(`Protected replay ${block.id} is outside its compatibility scope`);
+            }
+        }
+    }
+    return compileOpenAIChatSelectedTurns({ assets: workingSet.assets }, selected, target);
+}
+
+/**
+ * Check a host-loaded selected archive against the exact prepared provider request. The caller
+ * must authenticate the retained record and artifact bytes before invoking this pure check; a
+ * partial selected-content archive is never itself permission to dispatch or accept a response.
+ */
+export async function assertOpenAIChatSelectedPreparedRequestEvidence(input: {
+    record: ConversationPreparedRequestRecord;
+    working_set: RequestSourceWorkingSet;
+    runtime: ResolvedConversationRuntimeContext;
+    target: ModelTarget;
+    native_payload: JsonValue;
+}): Promise<void> {
+    const record = parseConversationPreparedRequestRecord(input.record);
+    if (
+        !preflightJsonInput(input.working_set).success ||
+        !preflightJsonInput(input.runtime).success ||
+        !preflightJsonInput(input.target).success ||
+        !preflightJsonInput(input.native_payload).success
+    ) {
+        throw new TypeError('Selected OpenAI Chat request evidence is not bounded JSON');
+    }
+    const workingSet = RequestSourceWorkingSetSchema.parse(structuredClone(input.working_set));
+    const runtime = ResolvedConversationRuntimeContextSchema.parse(structuredClone(input.runtime));
+    const target = ModelTargetSchema.parse(structuredClone(input.target));
+    const nativePayload = structuredClone(input.native_payload);
+    const receipt = record.request_receipt;
+    const sourceView = receipt.source_view;
+    if (sourceView?.completeness !== 'selected_content_unverified') {
+        throw new Error('Selected OpenAI Chat request has no host-retained content archive');
+    }
+    if (workingSet.archive_version !== 2 || workingSet.accepted_prepared_record_binding_hash === undefined) {
+        throw new Error('Selected OpenAI Chat archive lacks the accepted prepared-record witness');
+    }
+    const { source_view: _sourceView, ...receiptWithoutLocator } = receipt;
+    const recordWithoutLocator = { ...record, request_receipt: receiptWithoutLocator };
+    const compiled = compileOpenAIChatSelectedWorkingSet(workingSet, target);
+    const activeTools = workingSet.context.active_tool_definition_ids.map((id) => {
+        const tool = Object.hasOwn(workingSet.tool_definitions, id) ? workingSet.tool_definitions[id] : undefined;
+        if (tool === undefined) throw new Error(`Selected OpenAI Chat tool ${id} is unavailable`);
+        return tool;
+    });
+    const [{ fingerprint: contextFingerprint, assets }, toolSetFingerprint, requestFingerprint, mappingsFingerprint] =
+        await Promise.all([
+            requestContextFingerprint(selectedWorkingSetSource(workingSet), OPENAI_CHAT_COMPLETIONS_PROTOCOL),
+            fingerprintJson(activeTools),
+            fingerprintJson(nativePayload),
+            fingerprintJson(compiled.mappings),
+        ]);
+    const assetVersions = assets.flatMap((asset) =>
+        asset.content_hash === undefined ? [] : [{ asset_id: asset.id, content_hash: asset.content_hash }],
+    );
+    if (
+        record.source.conversation_id !== workingSet.source.conversation_id ||
+        record.source.revision !== workingSet.source.revision ||
+        workingSet.accepted_prepared_record_binding_hash !== (await fingerprintJson(recordWithoutLocator)) ||
+        runtime.conversation_id !== record.source.conversation_id ||
+        (await fingerprintJson(record.runtime)) !== (await fingerprintJson(runtime)) ||
+        receipt.source.conversation_id !== record.source.conversation_id ||
+        receipt.source.revision !== record.source.revision ||
+        receipt.request_id !== runtime.request_id ||
+        receipt.attempt_id !== runtime.attempt_id ||
+        receipt.recorded_at !== runtime.recorded_at ||
+        receipt.id !== (await deriveConversationId('request_receipt', runtime.request_id, runtime.attempt_id)) ||
+        record.generation_id !== (await deriveConversationId('generation', runtime.request_id, runtime.attempt_id)) ||
+        record.response_turn_id !==
+            (await deriveConversationId('turn', runtime.response_operation_id, 'response', '0')) ||
+        (await fingerprintJson(workingSet.request_receipt)) !== (await fingerprintJson(receipt)) ||
+        sourceView.source.conversation_id !== record.source.conversation_id ||
+        sourceView.source.revision !== record.source.revision ||
+        sourceView.context_revision !== workingSet.context.revision ||
+        sourceView.context_fingerprint !== contextFingerprint ||
+        sourceView.request_fingerprint !== requestFingerprint ||
+        receipt.context_fingerprint !== contextFingerprint ||
+        receipt.tool_set_fingerprint !== toolSetFingerprint ||
+        receipt.request_fingerprint !== requestFingerprint ||
+        receipt.target.provider !== target.provider ||
+        receipt.target.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+        receipt.target.model !== target.model ||
+        receipt.target.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION ||
+        (await fingerprintJson(receipt.target)) !== (await fingerprintJson(target)) ||
+        (await fingerprintJson(receipt.asset_versions)) !== (await fingerprintJson(assetVersions)) ||
+        (await fingerprintJson(receipt.item_mappings)) !== mappingsFingerprint
+    ) {
+        throw new Error('Selected OpenAI Chat request differs from accepted prepared evidence');
+    }
+}
+
+export interface OpenAIChatProspectiveJsonMinificationProjection {
+    kind: 'prospective_json_minification';
+    protocol: typeof OPENAI_CHAT_COMPLETIONS_PROTOCOL;
+    adapter_version: typeof OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION;
+    input_fingerprint: string;
+    context_fingerprint: string;
+    target_fingerprint: string;
+    original: {
+        conversation: OpenAIChatCompletionsPrompt;
+        mappings: NativeItemMapping[];
+        projection_fingerprint: string;
+    };
+    replacement: {
+        conversation: OpenAIChatCompletionsPrompt;
+        mappings: NativeItemMapping[];
+        projection_fingerprint: string;
+    };
+}
+
+/**
+ * Dry compile only. It cannot prepare, persist, count, publish readiness, or dispatch a provider request.
+ * The valid owned source remains unchanged; substitutions apply to selected entry positions only.
+ */
+export async function compileOpenAIChatProspectiveJsonMinification(
+    input: JsonMinificationProspectiveInput,
+    targetInput: ModelTarget,
+    signal?: AbortSignal,
+): Promise<OpenAIChatProspectiveJsonMinificationProjection> {
+    signal?.throwIfAborted();
+    if (!preflightJsonInput({ input, target: targetInput }, { max_bytes: 16 * 1024 * 1024 }).success)
+        throw new RangeError('Prospective JSON projection exceeds the 16MiB owned input bound');
+    const owned = structuredClone(input);
+    const target = ModelTargetSchema.parse(structuredClone(targetInput));
+    const source = parseConversationDocument(owned.source);
+    const candidate = JsonMinificationCandidateSchema.parse(owned.candidate);
+    if (
+        target.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+        target.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION
+    )
+        throw new Error('Prospective JSON projection requires the exact OpenAI Chat protocol/adapter version');
+    if (
+        owned.target_fingerprint !== (await fingerprintJson(target)) ||
+        owned.context_fingerprint !== (await processingContextFingerprint(source)) ||
+        owned.input_fingerprint !==
+            (await fingerprintJson({
+                processing_job_id: owned.processing_job_id,
+                resolved_input_fingerprint: owned.resolved_input_fingerprint,
+                context_fingerprint: owned.context_fingerprint,
+                candidate,
+                target_fingerprint: owned.target_fingerprint,
+            }))
+    )
+        throw new Error('Prospective JSON projection source, target, or input binding conflicts');
+    const job = source.processing.jobs?.[owned.processing_job_id];
+    const resolution = source.processing.resolved_inputs?.[owned.processing_job_id];
+    if (
+        !job ||
+        !resolution ||
+        job.id !== owned.processing_job_id ||
+        resolution.job_id !== owned.processing_job_id ||
+        (await fingerprintJson(resolution)) !== owned.resolved_input_fingerprint ||
+        job.processor_id !== candidate.strategy.id ||
+        job.processor_version !== candidate.strategy.version ||
+        job.configuration_fingerprint !== candidate.strategy.configuration_fingerprint ||
+        resolution.source_fingerprint !== candidate.source_fingerprint ||
+        resolution.context_fingerprint !== owned.context_fingerprint ||
+        resolution.target_fingerprint !== owned.target_fingerprint
+    )
+        throw new Error('Prospective JSON projection exact processing job/resolution binding conflicts');
+    await validateJsonMinificationCandidate(source, job, resolution, candidate, undefined, signal);
+    signal?.throwIfAborted();
+    const selected = selectedCanonicalTurns(source, { allow_interrupted_with_complete_tool_calls: true });
+    assertCanonicalContextProjection(source, selected, {
+        label: 'OpenAI Chat prospective JSON',
+        program_authorities: ['system', 'developer', 'ordinary'],
+    });
+    for (const turn of selected)
+        assertProtectedReplayCompatibility(source, turn, OPENAI_CHAT_COMPLETIONS_PROTOCOL, target);
+    const retainedTurns = new Map(source.turns.map((turn) => [turn.id, turn]));
+    const visibleEntries = source.context.entries.filter((entry) => {
+        const turn =
+            entry.type === 'source_turn'
+                ? retainedTurns.get(entry.turn_id)
+                : source.compactions[entry.compaction_id]?.replacement_turns.find((item) => item.id === entry.turn_id);
+        if (!turn) throw new Error('Prospective JSON projection selected entry is unavailable');
+        return turn.model_visibility !== 'exclude';
+    });
+    if (visibleEntries.length !== selected.length)
+        throw new Error('Prospective JSON projection entry ordering conflicts');
+    const replacement = structuredClone(selected);
+    for (const transform of candidate.transforms) {
+        signal?.throwIfAborted();
+        const index = visibleEntries.findIndex((entry) => entry.id === transform.entry_id);
+        const turn = replacement[index];
+        if (!turn || turn.id !== transform.source_slice.turn_id)
+            throw new Error('Prospective JSON projection selected entry/source conflicts');
+        const block = turn.blocks.find((item) => item.id === transform.source_slice.block_id);
+        if (block?.type !== 'text') throw new Error('Prospective JSON projection text source is unavailable');
+        block.text = transform.replacement_text;
+    }
+    if (!preflightJsonInput({ selected, replacement }, { max_bytes: 16 * 1024 * 1024 }).success)
+        throw new RangeError('Prospective JSON selected working set exceeds 16MiB');
+    const original = compileOpenAIChatSelectedTurns(source, selected, target);
+    const prospective = compileOpenAIChatSelectedTurns(source, replacement, target);
+    signal?.throwIfAborted();
+    const originalFingerprint = await fingerprintJson(original.conversation);
+    const replacementFingerprint = await fingerprintJson(prospective.conversation);
+    signal?.throwIfAborted();
+    return {
+        kind: 'prospective_json_minification',
+        protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+        adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+        input_fingerprint: owned.input_fingerprint,
+        context_fingerprint: owned.context_fingerprint,
+        target_fingerprint: owned.target_fingerprint,
+        original: { ...original, projection_fingerprint: originalFingerprint },
+        replacement: { ...prospective, projection_fingerprint: replacementFingerprint },
+    };
 }
 
 /** Pure registered-protocol import. The report explicitly leaves continuation readiness unvalidated. */
@@ -1396,6 +1792,18 @@ export function appendOpenAIChatCanonicalResponse(
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;
+}
+
+export async function appendOpenAIChatCanonicalResponseWithProcessing(
+    prepared: PreparedOpenAIChatConversation,
+    decoded: DecodedConversationResponse,
+): Promise<ConversationDocument> {
+    return (
+        await appendCanonicalDecodedResponseWithProcessing(prepared, decoded, {
+            operation_id: prepared.runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.recorded_at,
+        })
+    ).document;
 }
 
 /** Read-only compatibility projection for versioned legacy API responses. */

@@ -1,5 +1,5 @@
 import type { Content, Part } from '@google/genai';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import { applyContextChange, parseConversationDocument, planContextChange } from '@llumiverse/conversation';
 import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import { canonicalToolDefinitions, parseCanonicalConversation } from '../../conversation/canonical-runtime.js';
@@ -409,17 +409,27 @@ describe('Gemini canonical adapter', () => {
         });
         const user = prepared.document.turns.find((turn) => turn.kind === 'user');
         if (user?.kind !== 'user') throw new Error('missing user turn');
-        const selected = parseConversationDocument({
-            ...prepared.document,
-            context: {
-                ...prepared.document.context,
-                entries: prepared.document.context.entries.map((entry) =>
-                    entry.type === 'source_turn' && entry.turn_id === user.id
-                        ? { ...entry, block_ids: [user.blocks[0].id] }
-                        : entry,
-                ),
-            },
-        });
+        const userEntry = prepared.document.context.entries.find(
+            (entry) => entry.type === 'source_turn' && entry.turn_id === user.id,
+        );
+        if (userEntry === undefined) throw new Error('missing user context entry');
+        const selection = {
+            expected_revision: prepared.document.revision,
+            expected_context_revision: prepared.document.context.revision,
+            entry_ids: [userEntry.id],
+            selected_block_ids: { [userEntry.id]: [user.blocks[1].id] },
+            selected_entries: [userEntry],
+        };
+        const plan = await planContextChange(prepared.document, selection);
+        const selected = (
+            await applyContextChange(prepared.document, {
+                ...selection,
+                operation_id: 'exclude:omitted-user-block',
+                expected_source_fingerprint: plan.source_fingerprint,
+                recorded_at: '2026-09-30T00:00:00.000Z',
+                proposal: { kind: 'exclude' },
+            })
+        ).document;
         expect(compileGeminiConversation(selected).conversation.contents).toEqual([
             { role: 'user', parts: [{ text: 'keep' }] },
         ]);
@@ -442,7 +452,7 @@ describe('Gemini canonical adapter', () => {
         });
         const agent = signedPrepared.document.turns.find((turn) => turn.kind === 'agent');
         if (agent?.kind !== 'agent') throw new Error('missing signed agent turn');
-        const selectedSigned = parseConversationDocument({
+        const selectedSigned = {
             ...signedPrepared.document,
             context: {
                 ...signedPrepared.document.context,
@@ -452,10 +462,23 @@ describe('Gemini canonical adapter', () => {
                         : entry,
                 ),
             },
-        });
+        };
         expect(() =>
             compileGeminiConversation(selectedSigned, { provider: 'vertexai', model: 'gemini-2.5-pro' }),
         ).toThrow(/protected replay|replay dependency|no longer matches canonical data/);
+        const signedEntry = signedPrepared.document.context.entries.find(
+            (entry) => entry.type === 'source_turn' && entry.turn_id === agent.id,
+        );
+        if (signedEntry === undefined) throw new Error('missing signed agent context entry');
+        await expect(
+            planContextChange(signedPrepared.document, {
+                expected_revision: signedPrepared.document.revision,
+                expected_context_revision: signedPrepared.document.context.revision,
+                entry_ids: [signedEntry.id],
+                selected_block_ids: { [signedEntry.id]: [agent.blocks[1].id] },
+                selected_entries: [signedEntry],
+            }),
+        ).rejects.toThrow(/protected replay|replay dependency/);
     });
 });
 

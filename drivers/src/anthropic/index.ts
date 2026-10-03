@@ -1,10 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { AnthropicClaudeOptions } from '@llumiverse/common';
+import type { ConversationDocument, ConversationModelSwitchProjection, ModelTarget } from '@llumiverse/conversation';
+import { parseConversationDocument } from '@llumiverse/conversation';
+import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
 import {
     type AIModel,
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalModelSwitchProjectionControls,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -35,12 +39,55 @@ import {
     streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
+import {
+    CLAUDE_MESSAGES_ADAPTER_VERSION,
+    CLAUDE_MESSAGES_PROTOCOL,
+} from '../shared/claude-messages-conversation-adapter.js';
 
 export type { AnthropicDriverOptions } from '../driver-options.js';
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
     provider = Providers.anthropic;
     client: Anthropic;
+
+    override async resolveCanonicalModelSwitchTarget(
+        model: string,
+        options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined> {
+        return ModelTargetSchema.parse({
+            provider: this.provider,
+            protocol: CLAUDE_MESSAGES_PROTOCOL,
+            model,
+            adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
+            ...(options === undefined ? {} : { options: structuredClone(options) }),
+        });
+    }
+
+    override async projectCanonicalModelSwitchRequest(
+        document: ConversationDocument,
+        target: ModelTarget,
+        operation: 'execute' | 'stream',
+        controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection> {
+        if (controls && Object.values(controls).some((value) => value !== undefined)) {
+            return { status: 'unsupported', reason: 'Claude switch requires an explicit request-control policy' };
+        }
+        const ownedDocument = parseConversationDocument(document);
+        const ownedTarget = ModelTargetSchema.parse(structuredClone(target));
+        const ownedOperation = operation;
+        if (ownedTarget.provider !== this.provider) {
+            return { status: 'unsupported', reason: 'Model switch target provider differs from configured driver' };
+        }
+        const { compileClaudeModelSwitchRequest } = await import('../shared/claude-model-switch.js');
+        return {
+            status: 'compiled',
+            native_request: await compileClaudeModelSwitchRequest({
+                document: ownedDocument,
+                target: ownedTarget,
+                operation: ownedOperation,
+            }),
+        };
+    }
 
     protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
         return true;

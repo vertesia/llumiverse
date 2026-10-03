@@ -98,11 +98,24 @@ function sampleValues(option: ModelOptionInfoItem): unknown[] {
         case OptionType.numeric_list:
             return [[1]];
         case OptionType.json_object:
-            return [{ provider_extension: { enabled: true } }];
+            return option.name === 'image_generation'
+                ? [{ model: 'gpt-image-2.5-flare' }]
+                : [{ provider_extension: { enabled: true } }];
     }
 }
 
 describe('option factory contracts', () => {
+    it('keeps Responses image tools out of OpenRouter chat options', () => {
+        const options = getOptions('openai/gpt-4o', Providers.openrouter);
+        expect(options.options.some((option) => option.name === 'image_generation')).toBe(false);
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'openrouter-text',
+                image_generation: { model: 'gpt-image-2' },
+            }).success,
+        ).toBe(false);
+    });
+
     it('allows fractional Imagen mask dilation', () => {
         const info = getOptions('imagen-3.0-capability-001', Providers.vertexai, {
             _option_id: 'vertexai-imagen',

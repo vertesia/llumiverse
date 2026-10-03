@@ -5,7 +5,7 @@ import { helpers, type protos } from '@google-cloud/aiplatform';
 import {
     type AgentContentBlock,
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     createTextBlock,
     createUserTurn,
     deriveConversationId,
@@ -630,23 +630,25 @@ export async function executeImagenCanonical(input: {
             ...(image.enhanced_prompt === undefined ? {} : { enhanced_prompt: image.enhanced_prompt }),
         })),
     };
-    const finalDocument = appendDecodedConversationResponse(
-        {
-            document,
-            generation_id: identities.generation_id,
-            response_turn_id: identities.response_turn_id,
-            receipt,
-            payload: preparedRequest.request_json,
-            diagnostics: [],
-        },
-        {
-            turns: [responseTurn],
-            assets,
-            generation,
-            diagnostics: [],
-            payload_fingerprint: await fingerprintJson(providerJsonValue(responseEvidence)),
-        },
-        { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+    const finalDocument = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document,
+                generation_id: identities.generation_id,
+                response_turn_id: identities.response_turn_id,
+                receipt,
+                payload: preparedRequest.request_json,
+                diagnostics: [],
+            },
+            {
+                turns: [responseTurn],
+                assets,
+                generation,
+                diagnostics: [],
+                payload_fingerprint: await fingerprintJson(providerJsonValue(responseEvidence)),
+            },
+            { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return createCanonicalExecutionResponse(finalDocument, runtime.response_operation_id, {
         ...(input.options.include_original_response ? { original_response: nativeResponse } : {}),

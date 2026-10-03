@@ -27,7 +27,13 @@ import {
     type TrainingOptions,
     type TrainingPromptOptions,
 } from '@llumiverse/common';
-import { deriveConversationId, isConversationDocumentFormat } from '@llumiverse/conversation';
+import {
+    type ConversationDocument,
+    type ConversationModelSwitchProjection,
+    deriveConversationId,
+    isConversationDocumentFormat,
+    type ModelTarget,
+} from '@llumiverse/conversation';
 import type { Agent } from 'undici';
 import {
     CanonicalAcceptedOutputRecovered,
@@ -37,10 +43,13 @@ import {
     type CanonicalExecutionOptions,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalHostCapabilities,
+    canonicalHostCallbackFailure,
     createCanonicalExecutionResponse,
     legacyCompletionFromCanonicalExecution,
     resolveCanonicalExecutionContextOptions,
     resolveCanonicalExecutionOptions,
+    rethrowCanonicalHostCallbackFailure,
 } from './CanonicalExecution.js';
 import {
     type CanonicalExecutionEventStream,
@@ -56,7 +65,7 @@ import {
     leaseCanonicalExecutionStream,
     leaseCompletionStream,
 } from './CompletionStream.js';
-import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
+import { stripAudioFromCompletion } from './conversation-utils.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
     createAgentBackedFetch,
@@ -70,11 +79,64 @@ import { normalizeCompletionResult } from './validation.js';
 
 export { createLogger } from './logger.js';
 
+/** Host-owned transport controls that can change the actual native body outside target.model_options. */
+export type CanonicalModelSwitchProjectionControls = Pick<
+    ExecutionOptions,
+    | 'result_schema'
+    | 'prompt_cache_key'
+    | 'prompt_cache_schema_suffix'
+    | 'stripImagesAfterTurns'
+    | 'stripTextMaxTokens'
+    | 'stripHeartbeatsAfterTurns'
+>;
+
 function getObjectProperty(value: unknown, key: string): unknown {
     if (value && typeof value === 'object' && key in value) {
         return (value as Record<string, unknown>)[key];
     }
     return undefined;
+}
+
+function assertNoCallerHostCapabilities(options: object): void {
+    if (Object.hasOwn(options, 'host_capabilities')) {
+        throw new TypeError('Canonical host capabilities must be supplied through the internal per-call parameter');
+    }
+}
+
+/**
+ * Own the per-call callback record synchronously. Only an own data-property function is accepted;
+ * the function and its closure remain host-owned, while later mutation of the supplied record cannot
+ * redirect an in-flight call after prompt preparation or the durable prepared-request barrier.
+ */
+function ownCanonicalHostCapabilities(input?: CanonicalHostCapabilities): CanonicalHostCapabilities | undefined {
+    if (input === undefined) return undefined;
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+        throw new TypeError('Canonical host capabilities must be a callback record');
+    }
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError('Canonical host capabilities must be a plain callback record');
+    }
+    if (Reflect.ownKeys(input).some((key) => key !== 'resolve_canonical_asset')) {
+        throw new TypeError('Canonical host capabilities contain an unsupported callback');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, 'resolve_canonical_asset');
+    if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+        throw new TypeError('Canonical host capability callbacks must be own data properties');
+    }
+    const resolver: unknown = descriptor?.value;
+    if (resolver !== undefined && typeof resolver !== 'function') {
+        throw new TypeError('Canonical asset host capability must be a function');
+    }
+    return Object.freeze(
+        resolver === undefined
+            ? {}
+            : {
+                  resolve_canonical_asset: resolver as NonNullable<
+                      CanonicalHostCapabilities['resolve_canonical_asset']
+                  >,
+              },
+    );
 }
 
 // Nominal lifecycle contract: subclasses inherit this through AbstractDriver, while unrelated
@@ -91,7 +153,7 @@ export interface Driver<PromptT = unknown> {
      */
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string>;
 
-    createPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<PromptT>;
+    createPrompt(segments: PromptSegment[], opts: ExecutionOptions, signal?: AbortSignal): Promise<PromptT>;
 
     /** Supported legacy Completion/ExecutionTokenUsage projection boundary. */
     execute(
@@ -104,12 +166,14 @@ export interface Driver<PromptT = unknown> {
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse>;
 
     /** Current canonical execution over an already materialized document; no prompt authoring occurs. */
     executeCanonicalContext(
         options: CanonicalExecutionContextInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse>;
 
     /** Supported legacy string/CompletionResult stream boundary. */
@@ -123,12 +187,14 @@ export interface Driver<PromptT = unknown> {
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionStream>;
 
     /** Legacy string preview projected from the current typed canonical context stream. */
     streamCanonicalContext(
         options: CanonicalExecutionContextInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionStream>;
 
     streamCanonicalEvents(
@@ -136,12 +202,14 @@ export interface Driver<PromptT = unknown> {
         options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream>;
 
     streamCanonicalContextEvents(
         options: CanonicalExecutionContextInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream>;
 
     /** Report whether this concrete provider/model path can produce canonical execution authority. */
@@ -149,6 +217,20 @@ export interface Driver<PromptT = unknown> {
 
     /** Report whether this path compiles an already materialized canonical context without prompt authoring. */
     supportsCanonicalContextExecution(options: CanonicalExecutionContextInputOptions): Promise<boolean>;
+
+    /** The next-request target this configured concrete driver can dry-project, if supported. */
+    resolveCanonicalModelSwitchTarget(
+        model: string,
+        options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined>;
+
+    /** Dry native request projection through this configured driver; no transport or prepared receipt. */
+    projectCanonicalModelSwitchRequest(
+        document: ConversationDocument,
+        target: ModelTarget,
+        operation: 'execute' | 'stream',
+        controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection>;
 
     startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob>;
 
@@ -195,6 +277,8 @@ const lifecycleGuardedOperationNames = [
     'streamCanonicalContextEvents',
     'supportsCanonicalExecution',
     'supportsCanonicalContextExecution',
+    'resolveCanonicalModelSwitchTarget',
+    'projectCanonicalModelSwitchRequest',
     'startTraining',
     'cancelTraining',
     'getTrainingJob',
@@ -256,6 +340,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return false;
     }
 
+    /** Whether this image path can compile a retained canonical document without prompt authoring. */
+    protected supportsCanonicalImageContextGeneration(_options: CanonicalExecutionContextOptions): boolean {
+        return false;
+    }
+
     async supportsCanonicalExecution(options: ExecutionOptions): Promise<boolean> {
         return this.isImageModel(options.model)
             ? this.supportsCanonicalImageGeneration(options)
@@ -264,9 +353,25 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     async supportsCanonicalContextExecution(options: CanonicalExecutionContextInputOptions): Promise<boolean> {
         const canonicalOptions = options as CanonicalExecutionContextOptions;
-        return (
-            !this.isImageModel(canonicalOptions.model) && this.supportsCanonicalContextConversation(canonicalOptions)
-        );
+        return this.isImageModel(canonicalOptions.model)
+            ? this.supportsCanonicalImageContextGeneration(canonicalOptions)
+            : this.supportsCanonicalContextConversation(canonicalOptions);
+    }
+
+    async projectCanonicalModelSwitchRequest(
+        _document: ConversationDocument,
+        _target: ModelTarget,
+        _operation: 'execute' | 'stream',
+        _controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection> {
+        return { status: 'unsupported', reason: 'This configured driver cannot dry-project a model switch' };
+    }
+
+    async resolveCanonicalModelSwitchTarget(
+        _model: string,
+        _options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined> {
+        return undefined;
     }
 
     /** Validate raw media-generation input before prompt formatting can read or discard unsupported content. */
@@ -528,8 +633,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         if (this.isImageModel(options.model) && this.supportsCanonicalImageGeneration(options)) {
             this.validateCanonicalImageInput(segments, options);
         }
-        const prompt = await this.createPrompt(segments, options);
+        const prompt = await this.createPrompt(segments, options, signal);
         return await this._execute(prompt, options, signal).catch((error: unknown) => {
+            rethrowCanonicalHostCallbackFailure(error);
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -546,7 +652,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
+        assertNoCallerHostCapabilities(options);
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
         const canonicalOptions = options as CanonicalExecutionOptions;
         this.assertConversationInputSupported(canonicalOptions);
         if (canonicalOptions.conversation_runtime.materialized_input !== undefined && segments.length > 0) {
@@ -560,42 +669,55 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             }
             this.validateCanonicalImageInput(segments, canonicalOptions);
         }
-        const prompt = await this.createPrompt(segments, canonicalOptions);
-        return await this._executeCanonical(prompt, canonicalOptions, signal).catch((error: unknown) => {
-            if (CanonicalAcceptedOutputRecovered.is(error)) throw error;
-            if (LlumiverseError.isLlumiverseError(error)) throw error;
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model: canonicalOptions.model,
-                operation: 'execute',
-            });
-        });
+        const prompt = await this.createPrompt(segments, canonicalOptions, signal);
+        return await this._executeCanonical(prompt, canonicalOptions, signal, ownedHostCapabilities).catch(
+            (error: unknown) => {
+                if (CanonicalAcceptedOutputRecovered.is(error)) throw error;
+                rethrowCanonicalHostCallbackFailure(error);
+                if (LlumiverseError.isLlumiverseError(error)) throw error;
+                throw this.formatLlumiverseError(error, {
+                    provider: this.provider,
+                    model: canonicalOptions.model,
+                    operation: 'execute',
+                });
+            },
+        );
     }
 
     async executeCanonicalContext(
         options: CanonicalExecutionContextInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
+        assertNoCallerHostCapabilities(options);
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
         const canonicalOptions = options as CanonicalExecutionContextOptions;
-        if (!this.supportsCanonicalContextConversation(canonicalOptions) || this.isImageModel(canonicalOptions.model)) {
+        const supported = this.isImageModel(canonicalOptions.model)
+            ? this.supportsCanonicalImageContextGeneration(canonicalOptions)
+            : this.supportsCanonicalContextConversation(canonicalOptions);
+        if (!supported) {
             throw new Error(
                 `Provider ${this.provider} model ${canonicalOptions.model} does not support canonical context execution`,
             );
         }
-        return await this._executeCanonicalContext(canonicalOptions, signal).catch((error: unknown) => {
-            if (CanonicalAcceptedOutputRecovered.is(error)) throw error;
-            if (LlumiverseError.isLlumiverseError(error)) throw error;
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model: canonicalOptions.model,
-                operation: 'execute',
-            });
-        });
+        return await this._executeCanonicalContext(canonicalOptions, signal, ownedHostCapabilities).catch(
+            (error: unknown) => {
+                if (CanonicalAcceptedOutputRecovered.is(error)) throw error;
+                rethrowCanonicalHostCallbackFailure(error);
+                if (LlumiverseError.isLlumiverseError(error)) throw error;
+                throw this.formatLlumiverseError(error, {
+                    provider: this.provider,
+                    model: canonicalOptions.model,
+                    operation: 'execute',
+                });
+            },
+        );
     }
 
     async _executeCanonicalContext(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const httpScope = this.createExecutionHttpAgentScope(options, signal !== undefined);
         const abort = () => void httpScope.abort();
@@ -604,7 +726,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         const start = Date.now();
         try {
             return await httpScope.run(async () => {
-                const response = await this.requestCanonicalContextCompletion(options, signal);
+                const response = this.isImageModel(options.model)
+                    ? await this.requestCanonicalImageContextGeneration(options, signal, hostCapabilities)
+                    : await this.requestCanonicalContextCompletion(options, signal, hostCapabilities);
                 return response.execution_time === undefined
                     ? { ...response, execution_time: Date.now() - start }
                     : response;
@@ -619,6 +743,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         prompt: PromptT,
         options: CanonicalExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         this.assertConversationInputSupported(options);
         const httpScope = this.createExecutionHttpAgentScope(options, signal !== undefined);
@@ -629,8 +754,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         try {
             return await httpScope.run(async () => {
                 const response = this.isImageModel(options.model)
-                    ? await this.requestCanonicalImageGeneration(prompt, options, signal)
-                    : await this.requestCanonicalTextCompletion(prompt, options, signal);
+                    ? await this.requestCanonicalImageGeneration(prompt, options, signal, hostCapabilities)
+                    : await this.requestCanonicalTextCompletion(prompt, options, signal, hostCapabilities);
                 return response.execution_time === undefined
                     ? { ...response, execution_time: Date.now() - start }
                     : response;
@@ -673,23 +798,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     const execution_time = Date.now() - start;
                     return stripAudioFromCompletion({ ...result, prompt, execution_time });
                 } catch (error) {
+                    if (canonicalHostCallbackFailure(error) !== undefined) throw error;
                     // Don't wrap if already a LlumiverseError
                     if (LlumiverseError.isLlumiverseError(error)) {
                         throw error;
                     }
-                    // Log the original error for debugging
-                    this.logger.error(
-                        {
-                            err: error,
-                            data: {
-                                provider: this.provider,
-                                model: options.model,
-                                operation: 'execute',
-                                prompt: stripAudioPayloads(prompt),
-                            },
-                        },
-                        `Error during execution in provider ${this.provider}:`,
-                    );
+                    // Normalize here; the request/run boundary logs the resulting error once with
+                    // the final severity and correlation context. In particular, never log prompts.
                     throw this.formatLlumiverseError(error, {
                         provider: this.provider,
                         model: options.model,
@@ -726,7 +841,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             options,
             `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
         );
-        const prompt = await this.createPrompt(segments, options);
+        const prompt = await this.createPrompt(segments, options, signal);
         signal?.throwIfAborted();
         if (await this.canStream(options, signal)) {
             signal?.throwIfAborted();
@@ -740,11 +855,19 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionStream> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
         const canonicalOptions = options as CanonicalExecutionOptions;
-        const source = await this.streamCanonicalEvents(segments, canonicalOptions, signal, {
-            stream_id: canonicalOptions.conversation_runtime.response_operation_id,
-        });
+        const source = await this.streamCanonicalEvents(
+            segments,
+            canonicalOptions,
+            signal,
+            {
+                stream_id: canonicalOptions.conversation_runtime.response_operation_id,
+            },
+            ownedHostCapabilities,
+        );
         return new LegacyCanonicalExecutionEventProjection(
             source,
             (canonicalOptions.model_options as { include_thoughts?: unknown } | undefined)?.include_thoughts === true,
@@ -754,11 +877,18 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     async streamCanonicalContext(
         options: CanonicalExecutionContextInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionStream> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
         const canonicalOptions = options as CanonicalExecutionContextOptions;
-        const source = await this.streamCanonicalContextEvents(canonicalOptions, signal, {
-            stream_id: canonicalOptions.conversation_runtime.response_operation_id,
-        });
+        const source = await this.streamCanonicalContextEvents(
+            canonicalOptions,
+            signal,
+            {
+                stream_id: canonicalOptions.conversation_runtime.response_operation_id,
+            },
+            ownedHostCapabilities,
+        );
         return new LegacyCanonicalExecutionEventProjection(
             source,
             (canonicalOptions.model_options as { include_thoughts?: unknown } | undefined)?.include_thoughts === true,
@@ -770,7 +900,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
+        assertNoCallerHostCapabilities(options);
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
         const canonicalOptions = options as CanonicalExecutionOptions;
         this.assertConversationInputSupported(options);
         if (canonicalOptions.conversation_runtime.materialized_input !== undefined && segments.length > 0) {
@@ -786,7 +919,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             this.validateCanonicalImageInput(segments, canonicalOptions);
         }
         signal?.throwIfAborted();
-        const prompt = await this.createPrompt(segments, canonicalOptions);
+        const prompt = await this.createPrompt(segments, canonicalOptions, signal);
         signal?.throwIfAborted();
         if (this.isImageModel(canonicalOptions.model) || !(await this.canStream(canonicalOptions, signal))) {
             const retainedDocument = canonicalOptions.conversation;
@@ -816,27 +949,45 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                         prompt,
                         canonicalOptions,
                         signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                        ownedHostCapabilities,
                     ),
                 { ...open, ...(retainedResponse === undefined ? {} : { origin: 'accepted_recovery' as const }) },
             );
         }
-        return await this.requestCanonicalTextCompletionEventStream(prompt, canonicalOptions, signal, open);
+        try {
+            return await this.requestCanonicalTextCompletionEventStream(
+                prompt,
+                canonicalOptions,
+                signal,
+                open,
+                ownedHostCapabilities,
+            );
+        } catch (error: unknown) {
+            rethrowCanonicalHostCallbackFailure(error);
+            throw error;
+        }
     }
 
     async streamCanonicalContextEvents(
         options: CanonicalExecutionContextInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
+        assertNoCallerHostCapabilities(options);
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
         const canonicalOptions = options as CanonicalExecutionContextOptions;
-        if (!this.supportsCanonicalContextConversation(canonicalOptions) || this.isImageModel(canonicalOptions.model)) {
+        const supported = this.isImageModel(canonicalOptions.model)
+            ? this.supportsCanonicalImageContextGeneration(canonicalOptions)
+            : this.supportsCanonicalContextConversation(canonicalOptions);
+        if (!supported) {
             throw new Error(
                 `Provider ${this.provider} model ${canonicalOptions.model} does not support canonical context execution`,
             );
         }
         const runtime = canonicalOptions.conversation_runtime;
         signal?.throwIfAborted();
-        if (!(await this.canStream(canonicalOptions, signal))) {
+        if (this.isImageModel(canonicalOptions.model) || !(await this.canStream(canonicalOptions, signal))) {
             const retainedDocument = canonicalOptions.conversation;
             const retainedResponse = Object.hasOwn(retainedDocument.operation_receipts, runtime.response_operation_id)
                 ? createCanonicalExecutionResponse(retainedDocument, runtime.response_operation_id)
@@ -861,11 +1012,22 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     this._executeCanonicalContext(
                         canonicalOptions,
                         signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                        ownedHostCapabilities,
                     ),
                 { ...open, ...(retainedResponse === undefined ? {} : { origin: 'accepted_recovery' as const }) },
             );
         }
-        return await this.requestCanonicalContextCompletionEventStream(canonicalOptions, signal, open);
+        try {
+            return await this.requestCanonicalContextCompletionEventStream(
+                canonicalOptions,
+                signal,
+                open,
+                ownedHostCapabilities,
+            );
+        } catch (error: unknown) {
+            rethrowCanonicalHostCallbackFailure(error);
+            throw error;
+        }
     }
 
     /**
@@ -874,14 +1036,21 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @param options
      * @returns
      */
-    protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
+    protected async formatPrompt(
+        segments: PromptSegment[],
+        opts: PromptOptions,
+        _signal?: AbortSignal,
+    ): Promise<PromptT> {
         return formatTextPrompt(segments, opts.result_schema) as PromptT;
     }
 
-    public async createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
-        return await (opts.format
+    public async createPrompt(segments: PromptSegment[], opts: PromptOptions, signal?: AbortSignal): Promise<PromptT> {
+        signal?.throwIfAborted();
+        const prompt = await (opts.format
             ? (opts.format(segments, opts.result_schema) as PromptT)
-            : this.formatPrompt(segments, opts));
+            : this.formatPrompt(segments, opts, signal));
+        signal?.throwIfAborted();
+        return prompt;
     }
 
     /**
@@ -1034,6 +1203,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _prompt: PromptT,
         options: CanonicalExecutionOptions,
         _signal?: AbortSignal,
+        _hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical execution`);
     }
@@ -1043,6 +1213,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: CanonicalExecutionOptions,
         _signal: AbortSignal | undefined,
         _open: CanonicalStreamOpenOptions,
+        _hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical typed streaming`);
     }
@@ -1050,6 +1221,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     async requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         _signal?: AbortSignal,
+        _hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         throw new Error(
             `Provider ${this.provider} model ${options.model} does not support canonical context execution`,
@@ -1060,6 +1232,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: CanonicalExecutionContextOptions,
         _signal: AbortSignal | undefined,
         _open: CanonicalStreamOpenOptions,
+        _hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         throw new Error(
             `Provider ${this.provider} model ${options.model} does not support canonical context typed streaming`,
@@ -1070,8 +1243,19 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _prompt: PromptT,
         options: ExecutionOptions,
         _signal?: AbortSignal,
+        _hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical image generation`);
+    }
+
+    async requestCanonicalImageContextGeneration(
+        options: CanonicalExecutionContextOptions,
+        _signal?: AbortSignal,
+        _hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        throw new Error(
+            `Provider ${this.provider} model ${options.model} does not support canonical image context generation`,
+        );
     }
 
     async requestImageGeneration(

@@ -68,6 +68,7 @@ function createResponse(): OpenAI.Responses.Response {
     return {
         id: 'resp-test',
         object: 'response',
+        access_programs: null,
         created_at: 1,
         output_text: 'ok',
         error: null,

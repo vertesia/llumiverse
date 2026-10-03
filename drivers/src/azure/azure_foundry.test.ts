@@ -1,26 +1,24 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { Readable } from 'node:stream';
 import type { TokenCredential } from '@azure/identity';
 import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
 import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
-import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
+import { type OpenAIChatCompletionsPayload, toOpenAINonStreamingPayload } from '../openai/openai_chat_completions.js';
 import { prepareOpenAIChatCanonicalState } from '../openai/openai-chat-conversation-adapter.js';
 import { prepareOpenAIResponsesCanonicalState } from '../openai/openai-responses-conversation-adapter.js';
-import { AzureFoundryDriver, toAzureInferenceRequest } from './azure_foundry.js';
+import { AzureFoundryDriver } from './azure_foundry.js';
 
 const credential: TokenCredential = {
     getToken: vi.fn(async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 60_000 })),
 };
 
 type FoundryInternals = {
-    inferenceClient: object;
-    inferenceProtocolDriver: {
-        service: object;
-    };
+    getDriverFetch: () => typeof fetch;
+    canStream: (options: import('@llumiverse/core').ExecutionOptions) => Promise<boolean>;
+    getInferenceClient: () => OpenAI;
+    getResourceClient: () => OpenAI;
+    getInferenceProtocolDriver: () => { service: OpenAI };
 };
 
 function createDriver(): AzureFoundryDriver {
@@ -83,27 +81,33 @@ describe('AzureFoundryDriver protocol composition', () => {
         'accepts canonical history through the parent Chat %s execution path',
         async (mode) => {
             const driver = createDriver();
+            const nativeResponse = {
+                id: 'foundry-chat-canonical',
+                object: 'chat.completion',
+                created: 1,
+                model: 'llama-deployment',
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop',
+                        logprobs: null,
+                        message: { role: 'assistant', content: 'chat answer', refusal: null },
+                    },
+                ],
+                usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            } satisfies OpenAI.Chat.ChatCompletion;
+            const requests: OpenAI.Chat.ChatCompletionCreateParams[] = [];
+            const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+                requests.push(JSON.parse(String(init?.body)) as OpenAI.Chat.ChatCompletionCreateParams);
+                return new Response(JSON.stringify(nativeResponse), {
+                    headers: { 'content-type': 'application/json' },
+                });
+            });
+            vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
             driver.service = {
                 deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+                getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
             } as unknown as AzureFoundryDriver['service'];
-            const post = vi.fn(async () => ({
-                status: '200',
-                body: {
-                    id: 'foundry-chat-canonical',
-                    created: 1,
-                    model: 'llama-deployment',
-                    choices: [
-                        {
-                            index: 0,
-                            finish_reason: 'stop',
-                            message: { role: 'assistant', content: 'chat answer' },
-                        },
-                    ],
-                    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
-                },
-            }));
-            const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-            Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
             const model = 'llama-deployment::llama';
             const id = 'foundry-chat';
             const state = await prepareOpenAIChatCanonicalState({
@@ -144,33 +148,40 @@ describe('AzureFoundryDriver protocol composition', () => {
                     }),
                 ).rejects.toThrow();
             }
-            expect(post).toHaveBeenCalledWith(
-                expect.objectContaining({ body: expect.objectContaining({ model: 'llama-deployment' }) }),
-            );
-            expect(post).toHaveBeenCalledOnce();
+            expect(requests).toEqual([expect.objectContaining({ model: 'llama-deployment' })]);
+            expect(fetchMock).toHaveBeenCalledOnce();
         },
     );
 
     it('streams a canonical Chat response through the parent without losing deployment identity', async () => {
         const driver = createDriver();
-        driver.service = {
-            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
-        } as unknown as AzureFoundryDriver['service'];
         const chunk = {
             id: 'foundry-stream',
+            object: 'chat.completion.chunk',
             model: 'llama-deployment',
             created: 1,
-            choices: [{ index: 0, delta: { role: 'assistant', content: 'stream answer' }, finish_reason: 'stop' }],
+            choices: [
+                {
+                    index: 0,
+                    delta: { role: 'assistant', content: 'stream answer' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
             usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
-        };
-        const post = vi.fn(() => ({
-            asNodeStream: async () => ({
-                status: '200',
-                body: Readable.from([Buffer.from(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)]),
-            }),
-        }));
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        } satisfies OpenAI.Chat.ChatCompletionChunk;
+        const requests: OpenAI.Chat.ChatCompletionCreateParams[] = [];
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            requests.push(JSON.parse(String(init?.body)) as OpenAI.Chat.ChatCompletionCreateParams);
+            return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+                headers: { 'content-type': 'text/event-stream' },
+            });
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
         const options = canonicalOptions('llama-deployment::llama', 'foundry-stream');
         const stream = await driver.streamCanonical([{ role: PromptRole.user, content: 'hello' }], options);
         for await (const _chunk of stream) {
@@ -187,41 +198,39 @@ describe('AzureFoundryDriver protocol composition', () => {
             resolved_model: 'llama-deployment',
             provider: 'azure_foundry',
         });
-        expect(post).toHaveBeenCalledWith(
-            expect.objectContaining({
-                body: expect.objectContaining({
-                    model: 'llama-deployment',
-                    stream: true,
-                }),
-            }),
-        );
-        expect(post).toHaveBeenCalledOnce();
+        expect(requests).toEqual([expect.objectContaining({ model: 'llama-deployment', stream: true })]);
+        expect(fetchMock).toHaveBeenCalledOnce();
     });
 
     it('delegates public typed canonical Chat events after the prepared-request barrier', async () => {
         const driver = createDriver();
-        driver.service = {
-            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
-        } as unknown as AzureFoundryDriver['service'];
         let prepared = false;
         const chunk = {
             id: 'foundry-typed-chat',
+            object: 'chat.completion.chunk',
             model: 'llama-deployment',
             created: 1,
-            choices: [{ index: 0, delta: { role: 'assistant', content: 'typed answer' }, finish_reason: 'stop' }],
+            choices: [
+                {
+                    index: 0,
+                    delta: { role: 'assistant', content: 'typed answer' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
             usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
-        };
-        const post = vi.fn(() => {
+        } satisfies OpenAI.Chat.ChatCompletionChunk;
+        const fetchMock = vi.fn(async () => {
             expect(prepared).toBe(true);
-            return {
-                asNodeStream: async () => ({
-                    status: '200',
-                    body: Readable.from([Buffer.from(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)]),
-                }),
-            };
+            return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+                headers: { 'content-type': 'text/event-stream' },
+            });
         });
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
         const options = {
             ...canonicalOptions('llama-deployment::llama', 'foundry-typed-chat'),
             on_canonical_request_prepared: vi.fn(async () => {
@@ -245,17 +254,17 @@ describe('AzureFoundryDriver protocol composition', () => {
             resolved_model: 'llama-deployment',
         });
         expect(options.on_canonical_request_prepared).toHaveBeenCalledOnce();
-        expect(post).toHaveBeenCalledOnce();
+        expect(fetchMock).toHaveBeenCalledOnce();
     });
 
     it('does not open the Foundry Chat transport when typed request publication is rejected', async () => {
         const driver = createDriver();
+        const fetchMock = vi.fn();
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
         driver.service = {
             deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
         } as unknown as AzureFoundryDriver['service'];
-        const post = vi.fn();
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
         await expect(
             driver.streamCanonicalEvents(
                 [{ role: PromptRole.user, content: 'hello' }],
@@ -269,26 +278,26 @@ describe('AzureFoundryDriver protocol composition', () => {
                 { stream_id: 'stream:foundry:chat:rejected' },
             ),
         ).rejects.toThrow('publication rejected');
-        expect(post).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('preserves tool result status through Chat ingestion without sending private evidence', async () => {
         const driver = createDriver();
-        driver.service = {
-            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
-        } as unknown as AzureFoundryDriver['service'];
-        const responses = [
+        const responses: OpenAI.Chat.ChatCompletion[] = [
             {
                 id: 'foundry-tool-call',
+                object: 'chat.completion',
                 created: 1,
                 model: 'llama-deployment',
                 choices: [
                     {
                         index: 0,
                         finish_reason: 'tool_calls',
+                        logprobs: null,
                         message: {
                             role: 'assistant',
                             content: null,
+                            refusal: null,
                             tool_calls: [
                                 {
                                     id: 'call:lookup',
@@ -303,15 +312,32 @@ describe('AzureFoundryDriver protocol composition', () => {
             },
             {
                 id: 'foundry-tool-result',
+                object: 'chat.completion',
                 created: 2,
                 model: 'llama-deployment',
-                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'unavailable' } }],
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop',
+                        logprobs: null,
+                        message: { role: 'assistant', content: 'unavailable', refusal: null },
+                    },
+                ],
                 usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
             },
         ];
-        const post = vi.fn(async (_request: unknown) => ({ status: '200', body: responses.shift() }));
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const requests: OpenAI.Chat.ChatCompletionCreateParams[] = [];
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            requests.push(JSON.parse(String(init?.body)) as OpenAI.Chat.ChatCompletionCreateParams);
+            return new Response(JSON.stringify(responses.shift()), {
+                headers: { 'content-type': 'application/json' },
+            });
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
         const model = 'llama-deployment::llama';
         const id = 'foundry-tool-status';
 
@@ -341,8 +367,8 @@ describe('AzureFoundryDriver protocol composition', () => {
             call_id: 'call:lookup',
             status: 'error',
         });
-        expect(JSON.stringify(post.mock.calls[1]?.[0])).not.toContain('tool_result_status');
-        expect(JSON.stringify(post.mock.calls[1]?.[0])).not.toContain('_llumiverse_tool_result_status');
+        expect(JSON.stringify(requests[1])).not.toContain('tool_result_status');
+        expect(JSON.stringify(requests[1])).not.toContain('_llumiverse_tool_result_status');
     });
 
     it.each(['legacy', 'canonical', 'canonical-sync', 'canonical-typed'] as const)(
@@ -354,6 +380,7 @@ describe('AzureFoundryDriver protocol composition', () => {
             const response = {
                 id: 'foundry-response-canonical',
                 object: 'response',
+                access_programs: null,
                 created_at: 1,
                 model: 'gpt-deployment',
                 status: 'completed',
@@ -384,18 +411,23 @@ describe('AzureFoundryDriver protocol composition', () => {
                     total_tokens: 4,
                 },
             } satisfies OpenAI.Responses.Response;
-            const create = vi.fn((request: OpenAI.Responses.ResponseCreateParams, _options?: unknown) =>
-                Promise.resolve(
-                    request.stream
-                        ? (async function* () {
-                              yield { type: 'response.completed', sequence_number: 1, response };
-                          })()
-                        : response,
-                ),
-            );
+            const requests: OpenAI.Responses.ResponseCreateParams[] = [];
+            const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+                const request = JSON.parse(String(init?.body)) as OpenAI.Responses.ResponseCreateParams;
+                requests.push(request);
+                return request.stream
+                    ? new Response(
+                          `data: ${JSON.stringify({ type: 'response.completed', sequence_number: 1, response })}\n\ndata: [DONE]\n\n`,
+                          { headers: { 'content-type': 'text/event-stream' } },
+                      )
+                    : new Response(JSON.stringify(response), {
+                          headers: { 'content-type': 'application/json' },
+                      });
+            });
+            vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
             driver.service = {
                 deployments: { get: vi.fn(async () => ({ modelPublisher: 'OpenAI' })) },
-                getOpenAIClient: vi.fn(() => ({ responses: { create } })),
+                getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
             } as unknown as AzureFoundryDriver['service'];
             const state = await prepareOpenAIResponsesCanonicalState({
                 conversation: [{ type: 'message', role: 'user', content: 'prior' }],
@@ -436,30 +468,27 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect(Object.values(conversation.generations)).toEqual(
                 expect.arrayContaining([expect.objectContaining({ requested_model: model })]),
             );
-            expect(create.mock.calls[0]?.[0]).toEqual(
+            expect(requests[0]).toEqual(
                 expect.objectContaining({ model: 'gpt-deployment', stream: mode !== 'canonical-sync' }),
             );
-            expect(create).toHaveBeenCalledOnce();
+            expect(fetchMock).toHaveBeenCalledOnce();
         },
     );
 
     it('preserves required tool choice when adapting an OpenAI chat request', () => {
-        const body = toAzureInferenceRequest(
-            {
-                model: 'deployment',
-                messages: [{ role: 'user', content: 'Act now.' }],
-                tools: [
-                    {
-                        type: 'function',
-                        function: { name: 'write_artifact', parameters: { type: 'object', properties: {} } },
-                    },
-                ],
-                tool_choice: { type: 'function', function: { name: 'write_artifact' } },
-                parallel_tool_calls: false,
-                stream: false,
-            } satisfies OpenAIChatCompletionsPayload,
-            false,
-        );
+        const body = toOpenAINonStreamingPayload({
+            model: 'deployment',
+            messages: [{ role: 'user', content: 'Act now.' }],
+            tools: [
+                {
+                    type: 'function',
+                    function: { name: 'write_artifact', parameters: { type: 'object', properties: {} } },
+                },
+            ],
+            tool_choice: { type: 'function', function: { name: 'write_artifact' } },
+            parallel_tool_calls: false,
+            stream: false,
+        } satisfies OpenAIChatCompletionsPayload);
 
         expect(body.tool_choice).toEqual({ type: 'function', function: { name: 'write_artifact' } });
         expect(body.parallel_tool_calls).toBe(false);
@@ -471,7 +500,17 @@ describe('AzureFoundryDriver protocol composition', () => {
             modelDeployment('explicit-chat', 'Llama-5', { chat_completion: 'true' }),
             modelDeployment('not-chat', 'Llama-4', { chat_completion: 'false' }),
             modelDeployment('embedding', 'text-embedding-4', { chat_completion: 'true' }),
+            modelDeployment('flux', 'FLUX.1-Kontext-pro', {}),
+            modelDeployment('future-flux', 'FLUX-9-pro', { chat_completion: 'true' }),
+            {
+                ...modelDeployment('anthropic', 'claude-future', { chat_completion: 'true' }),
+                modelPublisher: 'Anthropic',
+            },
             modelDeployment('speech', 'gpt-4o-mini-tts', { chat_completion: 'true' }),
+            {
+                ...modelDeployment('image', 'gpt-image-2.5-flare', { chat_completion: 'false' }),
+                modelPublisher: 'OpenAI',
+            },
         ];
         driver.service = {
             deployments: {
@@ -486,7 +525,32 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect((await driver.listModels()).map((model) => model.id)).toEqual([
             'explicit-chat::Llama-5',
             'future-chat::Future-Chat-7',
+            'image::gpt-image-2.5-flare',
         ]);
+    });
+
+    it.each([
+        ['image::dall-e-3', false],
+        ['gpt-image-2::gpt-image-2', true],
+        ['custom-image', true],
+        ['chat::gpt-4.1-mini', true],
+    ])('preserves image and text streaming capability for %s', async (model, expected) => {
+        const driver = new AzureFoundryDriver({
+            endpoint: 'https://foundry.example.test',
+            azureADTokenProvider: credential,
+            sourceModel: 'gpt-image-2',
+        });
+        try {
+            expect(await exposePrivate<FoundryInternals>(driver).canStream({ model })).toBe(expected);
+            expect(
+                await exposePrivate<FoundryInternals>(driver).canStream({
+                    model,
+                    model_options: { _option_id: 'openai-text', image_generation: { model: 'gpt-image-2' } },
+                }),
+            ).toBe(false);
+        } finally {
+            driver.destroy();
+        }
     });
 
     it('does not cache failed deployment lookups or silently route them to Chat', async () => {
@@ -506,7 +570,10 @@ describe('AzureFoundryDriver protocol composition', () => {
     it('uses shared Chat behavior for non-OpenAI deployments and sends stream false', async () => {
         const driver = createDriver();
         const deploymentGet = vi.fn(async () => ({ modelPublisher: 'Meta' }));
-        driver.service = { deployments: { get: deploymentGet } } as unknown as AzureFoundryDriver['service'];
+        driver.service = {
+            deployments: { get: deploymentGet },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
         const nativeResponse = {
             id: 'foundry-1',
             created: 1,
@@ -530,10 +597,10 @@ describe('AzureFoundryDriver protocol composition', () => {
             ],
             usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
         };
-        const post = vi.fn(async () => ({ status: '200', body: nativeResponse }));
-        const path = vi.fn(() => ({ post }));
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path } });
+        const client = exposePrivate<FoundryInternals>(driver).getInferenceClient();
+        const post = vi
+            .spyOn(client.chat.completions, 'create')
+            .mockResolvedValue(nativeResponse as OpenAI.Chat.ChatCompletion);
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Weather?' }], {
             model: 'llama-deployment::llama',
         });
@@ -552,11 +619,8 @@ describe('AzureFoundryDriver protocol composition', () => {
             tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' } }],
         });
 
-        expect(path).toHaveBeenCalledWith('/chat/completions');
-        expect(post).toHaveBeenCalledWith({
-            timeout: 900_000,
-            headers: { 'extra-parameters': 'pass-through' },
-            body: expect.objectContaining({
+        expect(post).toHaveBeenCalledWith(
+            expect.objectContaining({
                 model: 'llama-deployment',
                 stream: false,
                 max_tokens: 16,
@@ -575,7 +639,8 @@ describe('AzureFoundryDriver protocol composition', () => {
                     },
                 ],
             }),
-        });
+            undefined,
+        );
         expect(completion.tool_use?.[0]).toEqual({
             id: 'call_1',
             tool_name: 'lookup',
@@ -584,7 +649,41 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(completion.original_response).toBe(nativeResponse);
     });
 
-    it('sends authenticated Responses requests and caches deployment discovery', async ({ onTestFinished }) => {
+    it('streams non-OpenAI inference without unsupported usage options', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Mistral AI' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            const body = JSON.parse(String(init?.body));
+            expect(body).not.toHaveProperty('stream_options');
+            expect(body).toMatchObject({ model: 'chat-deployment', stream: true });
+            return new Response(
+                `data: ${JSON.stringify({
+                    id: 'chat-1',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'chat-deployment',
+                    choices: [{ index: 0, delta: { content: 'Green' }, finish_reason: null }],
+                })}\n\ndata: [DONE]\n\n`,
+                { headers: { 'content-type': 'text/event-stream' } },
+            );
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        const options = { model: 'chat-deployment::mistral' };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'What color is grass?' }], options);
+        const results = [];
+        for await (const chunk of await driver.requestTextCompletionStream(prompt, options)) {
+            results.push(...chunk.result);
+        }
+        expect(results).toContainEqual({ type: 'text', value: 'Green' });
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('memoizes the OpenAI Responses adapter and deployment decision', async () => {
+        const driver = createDriver();
+        const deploymentGet = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
         const response = {
             id: 'response-1',
             object: 'response',
@@ -612,40 +711,22 @@ describe('AzureFoundryDriver protocol composition', () => {
             top_p: 1,
             usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
         };
-        const requests: Array<{ url?: string; authorization?: string; body: string }> = [];
-        const server = createServer((req, res) => {
-            let body = '';
-            req.setEncoding('utf8');
-            req.on('data', (chunk: string) => {
-                body += chunk;
+        const requests: { body: unknown; headers: Headers; url: string }[] = [];
+        const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            requests.push({
+                body: JSON.parse(String(init?.body)),
+                headers: new Headers(init?.headers),
+                url: String(input),
             });
-            req.on('end', () => {
-                requests.push({ url: req.url, authorization: req.headers.authorization, body });
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(response));
-            });
+            return new Response(JSON.stringify(response), { headers: { 'content-type': 'application/json' } });
         });
-        onTestFinished(async () => {
-            server.closeAllConnections();
-            await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-        });
-        await new Promise<void>((resolve, reject) => {
-            server.once('error', reject);
-            server.listen(0, '127.0.0.1', resolve);
-        });
-        const { port } = server.address() as AddressInfo;
-        const driver = new AzureFoundryDriver({
-            endpoint: `http://127.0.0.1:${port}/projects/demo/`,
-            azureADTokenProvider: credential,
-        });
-        onTestFinished(() => driver.destroy());
-        const deploymentGet = vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
-            type: 'ModelDeployment',
-            name: 'gpt-deployment',
-            modelName: 'gpt-5',
-            modelVersion: '1',
-            modelPublisher: 'OpenAI',
-        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        const openAIClient = { baseURL: 'https://foundry.example.test/openai/v1' };
+        const getOpenAIClient = vi.fn(() => openAIClient);
+        driver.service = {
+            deployments: { get: deploymentGet },
+            getOpenAIClient,
+        } as unknown as AzureFoundryDriver['service'];
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
             model: 'gpt-deployment::gpt-5',
         });
@@ -672,16 +753,14 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect.objectContaining({ result: [{ type: 'text', value: 'ok' }] }),
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
+        expect(getOpenAIClient).toHaveBeenCalledOnce();
         expect(requests).toHaveLength(2);
-        for (const request of requests) {
-            expect(request.url).toBe('/projects/demo/openai/v1/responses');
-            expect(request.authorization).toBe('Bearer test-token');
-        }
-        expect(credential.getToken).toHaveBeenCalledWith(['https://ai.azure.com/.default'], expect.anything());
-        const payload = JSON.parse(requests[0].body);
-        expect(payload).not.toHaveProperty('temperature');
-        expect(payload).not.toHaveProperty('top_p');
-        expect(payload).toEqual(
+        expect(requests[0].url).toBe('https://foundry.example.test/openai/v1/responses');
+        expect(requests[0].headers.get('authorization')).toBe('Bearer test-token');
+        expect(requests[0].headers.has('x-ms-oai-image-generation-deployment')).toBe(false);
+        expect(requests[0].body).not.toHaveProperty('temperature');
+        expect(requests[0].body).not.toHaveProperty('top_p');
+        expect(requests[0].body).toEqual(
             expect.objectContaining({
                 model: 'gpt-deployment',
                 stream: false,
@@ -708,6 +787,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         const driver = createDriver();
         driver.service = {
             deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
         } as unknown as AzureFoundryDriver['service'];
         const options = {
             model: 'llama-deployment::llama',
@@ -750,40 +830,45 @@ describe('AzureFoundryDriver protocol composition', () => {
         const driver = createDriver();
         driver.service = {
             deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
         } as unknown as AzureFoundryDriver['service'];
-        const post = vi.fn(async () => ({
-            status: '503',
-            body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
-        }));
-        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
-        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const error = new OpenAI.InternalServerError(
+            503,
+            { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
+            'Temporarily unavailable',
+            new Headers(),
+        );
+        vi.spyOn(
+            exposePrivate<FoundryInternals>(driver).getInferenceClient().chat.completions,
+            'create',
+        ).mockRejectedValue(error);
 
         await expect(
             driver.execute([{ role: PromptRole.user, content: 'Hello' }], {
                 model: 'llama-deployment::llama',
             }),
         ).rejects.toMatchObject({
-            name: 'AzureFoundryHTTPError',
+            name: 'InternalServerError',
             code: 503,
             retryable: true,
             originalError: expect.objectContaining({
                 status: 503,
-                body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+                error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
             }),
         });
     });
 
     it('preserves Azure embedding HTTP status and retryability in LlumiverseError', async () => {
         const driver = createDriver();
-        const post = vi.fn(async () => ({
-            status: '503',
-            body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
-            headers: { get: vi.fn(() => undefined) },
-            request: { url: 'https://foundry.example.test/embeddings' },
-        }));
-        Object.defineProperty(exposePrivate<FoundryInternals>(driver), 'inferenceClient', {
-            value: { path: vi.fn(() => ({ post })) },
-        });
+        const error = new OpenAI.InternalServerError(
+            503,
+            { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
+            'Temporarily unavailable',
+            new Headers(),
+        );
+        vi.spyOn(exposePrivate<FoundryInternals>(driver).getResourceClient().embeddings, 'create').mockRejectedValue(
+            error,
+        );
 
         await expect(
             driver.generateEmbeddings({
@@ -791,7 +876,7 @@ describe('AzureFoundryDriver protocol composition', () => {
                 inputs: [{ type: 'text', text: 'Hello' }],
             }),
         ).rejects.toMatchObject({
-            name: 'AzureFoundryHTTPError',
+            name: 'InternalServerError',
             code: 503,
             retryable: true,
             context: {
@@ -801,7 +886,7 @@ describe('AzureFoundryDriver protocol composition', () => {
             },
             originalError: expect.objectContaining({
                 status: 503,
-                body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+                error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' },
             }),
         });
     });

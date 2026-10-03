@@ -7,10 +7,40 @@ import type {
     ConversationPreparedRequest,
     ConversationPreparedRequestRecord,
     ConversationRuntimeContext,
+    JsonMinificationProspectiveInput,
+    JsonValue,
+    ModelTarget,
+    ResolvedConversationRuntimeContext,
 } from '@llumiverse/conversation';
 import type { z } from 'zod';
 
 export type { ConversationRuntimeContext } from '@llumiverse/conversation';
+
+/** A prepared barrier may publish an adopted durable record or retain its original no-return behavior. */
+export type CanonicalPreparedRequestPublication = ConversationPreparedRequestRecord | void;
+
+export type CanonicalProjectedRequestMeasurement = z.infer<
+    typeof import('./schemas/canonical-projection.js').CanonicalProjectedRequestMeasurementSchema
+>;
+
+/** Runtime-only owned request projection, not a caller-supplied wire authority. */
+export interface CanonicalRequestProjection {
+    document: ConversationDocument;
+    runtime: ResolvedConversationRuntimeContext;
+    target: ModelTarget;
+    native_request: JsonValue;
+}
+
+/** Pure adapter ports. No compiler callback is persisted in a conversation or receipt. */
+export interface CanonicalRequestProjectionCompiler {
+    compileDocument(document: ConversationDocument, signal?: AbortSignal): Promise<JsonValue>;
+    compileProspective(
+        input: JsonMinificationProspectiveInput,
+        signal?: AbortSignal,
+    ): Promise<
+        { status: 'unavailable' } | { status: 'compiled'; source_request: JsonValue; replacement_request: JsonValue }
+    >;
+}
 
 import type {
     ExecutionTokenUsageSchema,
@@ -757,11 +787,23 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
         | undefined
     >;
     /**
+     * Runtime-only source/job ACK and measurement boundary before prepared publication/transport.
+     * Processing executes separately after a typed pending result, never inside this callback.
+     */
+    on_canonical_request_projected?: (
+        projection: CanonicalRequestProjection,
+        compiler: CanonicalRequestProjectionCompiler,
+    ) => Promise<CanonicalProjectedRequestMeasurement | undefined>;
+    /**
      * Runtime-only durability barrier invoked after an adopted adapter has finalized its exact native
      * request and before provider transport begins. The callback must not resolve until the prepared
      * canonical request is durably recorded. It is intentionally absent from wire option schemas.
      */
-    on_canonical_request_prepared?: (prepared: ConversationPreparedRequest) => Promise<void>;
+    on_canonical_request_prepared?: (
+        prepared: ConversationPreparedRequest,
+        /** Validated actual-body count evidence, retained privately by the host. */
+        projection?: CanonicalProjectedRequestMeasurement,
+    ) => Promise<CanonicalPreparedRequestPublication>;
     /**
      * Labels for billing attribution and cost tracking.
      * Passed through to provider APIs that support request-level labels (e.g. Vertex AI).

@@ -7,6 +7,7 @@ import {
     ConversationRecordBatchJsonSchema,
     DecodedConversationResponseJsonSchema,
 } from '../src/json-schema.js';
+import { appendConversationRecords } from '../src/runtime.js';
 import {
     AppendConversationRecordsOptionsSchema,
     AppendConversationRecordsResultSchema,
@@ -47,7 +48,7 @@ describe('ingestion schema contracts', () => {
             {
                 zod: AppendConversationRecordsResultSchema,
                 json: AppendConversationRecordsResultJsonSchema,
-                valid: { document: emptyDocument(), applied: true, accepted_turn_ids: [], accepted_generation_ids: [] },
+                valid: appendConversationRecords(emptyDocument(), {}, options),
                 invalid: [
                     { document: emptyDocument(), applied: 'yes', accepted_turn_ids: [], accepted_generation_ids: [] },
                 ],

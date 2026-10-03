@@ -1,6 +1,7 @@
 import {
     type AssetStorage,
     type ConversationDocument,
+    type ConversationPreparedRequest,
     createConversationDocument,
     deriveConversationId,
     externalizeToolCallArguments,
@@ -9,6 +10,7 @@ import {
     type NativeItemMapping,
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
+import { canonicalHostCallbackFailure } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
     acceptedCanonicalRequestDocument,
@@ -20,6 +22,7 @@ import {
     createRequestReceipt,
     publishCanonicalPreparedRequest,
     type ResolvedConversationRuntimeContext,
+    recoverCanonicalExecutionResponse,
 } from './canonical-runtime.js';
 
 const now = '2026-09-30T00:00:00.000Z';
@@ -189,6 +192,210 @@ describe('canonical request receipt binding', () => {
 
         expect(calls).toEqual(['persist', 'recover']);
         expect(prepared?.record.request_receipt).toEqual(requestReceipt);
+    });
+
+    it('uses the exact host-returned prepared receipt for recovery and the accepted generation', async () => {
+        const doc = document();
+        const requestReceipt = await receipt(doc);
+        const state: CanonicalPreparedState<{ messages: never[] }> = {
+            document: doc,
+            native_conversation: { messages: [] },
+            receipt: requestReceipt,
+            runtime,
+            generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+            tool_definitions: [],
+        };
+        const sourceView = {
+            version: 1 as const,
+            completeness: 'selected_execution' as const,
+            source: requestReceipt.source,
+            context_revision: doc.context.revision,
+            manifest_storage_key: 'opaque-manifest-key',
+            manifest_content_hash: `sha256:${'a'.repeat(64)}`,
+            manifest_size_bytes: 1024,
+            context_fingerprint: requestReceipt.context_fingerprint,
+            request_fingerprint: requestReceipt.request_fingerprint,
+        };
+        const prepared = await publishCanonicalPreparedRequest(state, {
+            model: 'model',
+            on_canonical_request_prepared: async (candidate) => {
+                const retained = structuredClone(candidate.record);
+                candidate.record.request_receipt.request_fingerprint = 'sha256:callback-mutated-argument';
+                await Promise.resolve();
+                retained.request_receipt.source_view = sourceView;
+                return retained;
+            },
+            load_recovered_canonical_output: async (identity) => {
+                expect(identity.prepared_request?.request_receipt.source_view).toEqual(sourceView);
+                return undefined;
+            },
+        });
+        expect(prepared?.record.request_receipt.source_view).toEqual(sourceView);
+        expect(state.receipt).toEqual(prepared?.record.request_receipt);
+        expect(requestReceipt.source_view).toBeUndefined();
+
+        const generation = await createExecutedGeneration({
+            id: state.generation_id,
+            runtime: state.runtime,
+            receipt: state.receipt,
+            provider: target.provider,
+            protocol: target.protocol,
+            adapter_version: target.adapter_version,
+            requested_model: target.model,
+        });
+        expect(generation.request_receipt).toEqual(prepared?.record.request_receipt);
+    });
+
+    it('rejects every invalid non-undefined host return and never treats it as a void callback', async () => {
+        const doc = document();
+        const requestReceipt = await receipt(doc);
+        const state: CanonicalPreparedState<{ messages: never[] }> = {
+            document: doc,
+            native_conversation: { messages: [] },
+            receipt: requestReceipt,
+            runtime,
+            generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+            tool_definitions: [],
+        };
+        const baseline = {
+            source: requestReceipt.source,
+            runtime,
+            request_receipt: requestReceipt,
+            generation_id: state.generation_id,
+            response_turn_id: state.response_turn_id,
+        };
+        for (const invalid of [
+            null,
+            false,
+            { ...baseline, runtime: undefined },
+            { ...baseline, request_receipt: undefined },
+        ]) {
+            await expect(
+                publishCanonicalPreparedRequest(state, {
+                    model: 'model',
+                    on_canonical_request_prepared: async () => invalid as never,
+                }),
+            ).rejects.toThrow();
+            expect(state.receipt).toEqual(requestReceipt);
+        }
+    });
+
+    it('reuses the exact committed source-view receipt after a throw following durable publication', async () => {
+        const doc = document();
+        const requestReceipt = await receipt(doc);
+        const state: CanonicalPreparedState<{ messages: never[] }> = {
+            document: doc,
+            native_conversation: { messages: [] },
+            receipt: requestReceipt,
+            runtime,
+            generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+            tool_definitions: [],
+        };
+        let retained: ConversationPreparedRequest['record'] | undefined;
+        const commit = async (candidate: ConversationPreparedRequest) => {
+            retained ??= {
+                ...candidate.record,
+                request_receipt: {
+                    ...candidate.record.request_receipt,
+                    source_view: {
+                        version: 1 as const,
+                        completeness: 'selected_execution' as const,
+                        source: candidate.record.source,
+                        context_revision: candidate.document.context.revision,
+                        manifest_storage_key: 'retained-manifest',
+                        manifest_content_hash: `sha256:${'a'.repeat(64)}`,
+                        manifest_size_bytes: 1024,
+                        context_fingerprint: candidate.record.request_receipt.context_fingerprint,
+                        request_fingerprint: candidate.record.request_receipt.request_fingerprint,
+                    },
+                },
+            };
+            return retained;
+        };
+        await expect(
+            publishCanonicalPreparedRequest(state, {
+                model: 'model',
+                on_canonical_request_prepared: async (candidate) => {
+                    await commit(candidate);
+                    throw new Error('callback failed after durable commit');
+                },
+            }),
+        ).rejects.toThrow('callback failed after durable commit');
+        expect(state.receipt.source_view).toBeUndefined();
+        const retry = await publishCanonicalPreparedRequest(state, {
+            model: 'model',
+            on_canonical_request_prepared: commit,
+        });
+        expect(retry?.record).toEqual(retained);
+        expect(state.receipt).toEqual(retained?.request_receipt);
+    });
+
+    it('marks only host durability and recovery callback failures with their exact causes', async () => {
+        const doc = document();
+        const requestReceipt = await receipt(doc);
+        const state: CanonicalPreparedState<{ messages: never[] }> = {
+            document: doc,
+            native_conversation: { messages: [] },
+            receipt: requestReceipt,
+            runtime,
+            generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+            tool_definitions: [],
+        };
+        const persistenceFailure = Object.freeze(new Error('persistence unavailable'));
+        const recoveryLookupFailure = Object.freeze(new Error('recovery lookup unavailable'));
+
+        for (const [expected, run] of [
+            [
+                persistenceFailure,
+                () =>
+                    publishCanonicalPreparedRequest(state, {
+                        model: 'model',
+                        on_canonical_request_prepared: async () => {
+                            throw persistenceFailure;
+                        },
+                    }),
+            ],
+            [
+                recoveryLookupFailure,
+                () =>
+                    publishCanonicalPreparedRequest(state, {
+                        model: 'model',
+                        on_canonical_request_prepared: async () => undefined,
+                        load_recovered_canonical_output: async () => {
+                            throw recoveryLookupFailure;
+                        },
+                    }),
+            ],
+        ] as const) {
+            try {
+                await run();
+                throw new Error('Expected marked host callback failure');
+            } catch (error: unknown) {
+                expect(canonicalHostCallbackFailure(error)?.failure).toBe(expected);
+            }
+        }
+
+        const accepted = await acceptedState();
+        try {
+            await recoverCanonicalExecutionResponse(
+                { document: doc, ...accepted },
+                {
+                    model: 'model',
+                    load_recovered_canonical_output: async () => {
+                        throw recoveryLookupFailure;
+                    },
+                },
+            );
+            throw new Error('Expected marked accepted-recovery callback failure');
+        } catch (error: unknown) {
+            expect(canonicalHostCallbackFailure(error)?.failure).toBe(recoveryLookupFailure);
+        }
+
+        expect(canonicalHostCallbackFailure(new Error('provider failed'))).toBeUndefined();
     });
 
     it('fingerprints edited selected content even when its IDs and context revision are unchanged', async () => {

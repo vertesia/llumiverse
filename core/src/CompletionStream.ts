@@ -16,6 +16,7 @@ import {
     type CanonicalExecutionStream,
     isCanonicalAcceptedRecovery,
     markCanonicalAcceptedRecovery,
+    rethrowCanonicalHostCallbackFailure,
 } from './CanonicalExecution.js';
 import type { CanonicalExecutionEventStream, CanonicalStreamTerminalEvent } from './CanonicalStreaming.js';
 import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
@@ -713,6 +714,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             }
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
+            rethrowCanonicalHostCallbackFailure(error);
             // Some transports report final usage immediately before a terminal error. Preserve
             // that partial completion so server-side failed-call telemetry records the tokens
             // that were actually billed even though no canonical conversation can be finalized.
@@ -782,6 +784,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                 this.driver.validateResult(this.completion, this.options);
             }
         } catch (error: unknown) {
+            rethrowCanonicalHostCallbackFailure(error);
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -847,6 +850,7 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
             this.completion = stripAudioFromCompletion(completion); // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
+            rethrowCanonicalHostCallbackFailure(error);
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;

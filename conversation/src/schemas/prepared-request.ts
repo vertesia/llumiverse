@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ConversationDocumentSchema } from './document.js';
 import { ConversationRuntimeContextSchema, RequestReceiptSchema } from './execution.js';
+import { IndexedPreparedSourceSchema } from './indexed-prepared-source.js';
 import { ConversationRefSchema, IdentifierSchema } from './primitives.js';
 
 /** Runtime identity after adapter defaults have been resolved. */
@@ -17,6 +18,7 @@ export const ConversationPreparedRequestRecordSchema = z
         request_receipt: RequestReceiptSchema,
         generation_id: IdentifierSchema,
         response_turn_id: IdentifierSchema,
+        indexed_source: IndexedPreparedSourceSchema.optional(),
     })
     .meta({ id: 'ConversationPreparedRequestRecord' });
 

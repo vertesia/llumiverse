@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
     appendConversationRecords,
     type ConversationDocument,
@@ -5,7 +6,9 @@ import {
     createConversationDocument,
     createTextBlock,
     createUserTurn,
+    fingerprintJson,
     parseConversationDocument,
+    processingContextFingerprint,
 } from '@llumiverse/conversation';
 import {
     type CanonicalExecutionInputOptions,
@@ -13,13 +16,17 @@ import {
     legacyCompletionFromCanonicalExecution,
     PromptRole,
     Providers,
+    resolveCanonicalExecutionContextOptions,
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
 import {
     exportLegacyOpenAIResponsesConversation,
+    finalizeOpenAIResponsesPreparedRequest,
+    OPENAI_RESPONSES_ADAPTER_VERSION,
     OPENAI_RESPONSES_PROTOCOL,
+    prepareOpenAIResponsesCanonicalContext,
     prepareOpenAIResponsesCanonicalState,
 } from './openai-responses-conversation-adapter.js';
 
@@ -195,6 +202,351 @@ function acceptedOutputWithoutProviderTimestamps(value: unknown): unknown {
 }
 
 describe('OpenAI Responses canonical lifecycle', () => {
+    it('publishes the exact counted native body and measurement in the prepared receipt', async () => {
+        const document = materializedInputDocument();
+        const create = vi.fn(async (_request: unknown) =>
+            response({
+                id: 'response:counted-body',
+                model: 'gpt-5',
+                output: [messageItem('message:counted-body', 'Done.')],
+            }),
+        );
+        const publish = vi.fn(
+            async (..._args: Parameters<NonNullable<ExecutionOptions['on_canonical_request_prepared']>>) => undefined,
+        );
+        const driver = new TestOpenAIResponsesDriver(create);
+        await driver.executeCanonicalContext({
+            ...runtimeOptions({
+                flow: 'materialized-driver-retry',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T00:02:00.000Z',
+                conversation: document,
+                materializedInput: {
+                    operation_id: 'operation:materialized-driver-input',
+                    result_revision: document.revision,
+                },
+            }),
+            conversation: document,
+            on_canonical_request_projected: async (projection) => ({
+                counted_request_fingerprint: await fingerprintJson(projection.native_request),
+                measurement: {
+                    input_tokens: 42,
+                    method: 'estimated',
+                    tokenizer: 'full-native-json-bpe-v1',
+                    tokenizer_version: '1.0.22',
+                    adapter: projection.target.protocol,
+                    adapter_version: projection.target.adapter_version,
+                    source_fingerprint: await processingContextFingerprint(projection.document),
+                    target_model: projection.target.model,
+                    measured_at: '2026-09-12T00:02:00.000Z',
+                },
+            }),
+            on_canonical_request_prepared: publish,
+        });
+        expect(publish).toHaveBeenCalledOnce();
+        const prepared = publish.mock.calls[0]?.[0];
+        const projection = publish.mock.calls[0]?.[1];
+        expect(prepared?.record.request_receipt.measurement).toMatchObject({ input_tokens: 42 });
+        expect(prepared?.record.request_receipt.measurement).toEqual(projection?.measurement);
+        expect(projection?.counted_request_fingerprint).toBe(
+            await fingerprintJson(JSON.parse(JSON.stringify(create.mock.calls[0]?.[0]))),
+        );
+    });
+
+    it('exposes the exact final execute and stream bodies before publication, with callback isolation', async () => {
+        const document = materializedInputDocument();
+        const sent: unknown[] = [];
+        const create = vi.fn(async (request: unknown) => {
+            sent.push(structuredClone(request));
+            return response({
+                id: 'response:projected-body',
+                model: 'gpt-4o-2024-08-06',
+                output: [messageItem('message:projected-body', 'Done.')],
+            });
+        });
+        const driver = new TestOpenAIResponsesDriver(create);
+        const observed: unknown[] = [];
+        const publish = vi.fn(async () => undefined);
+        await driver.executeCanonicalContext({
+            ...runtimeOptions({
+                flow: 'materialized-driver-retry',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T00:03:00.000Z',
+                conversation: document,
+                materializedInput: {
+                    operation_id: 'operation:materialized-driver-input',
+                    result_revision: document.revision,
+                },
+            }),
+            conversation: document,
+            on_canonical_request_projected: async (projection) => {
+                observed.push(structuredClone(projection.native_request));
+                const body = projection.native_request as { model?: string };
+                body.model = 'mutated-by-callback';
+                return undefined;
+            },
+            on_canonical_request_prepared: publish,
+        });
+        expect(observed[0]).toEqual(sent[0]);
+        expect(sent[0]).toMatchObject({ model: 'gpt-5', stream: false });
+        expect(publish).toHaveBeenCalledOnce();
+
+        const terminal = response({
+            id: 'response:projected-stream',
+            model: 'gpt-4o-2024-08-06',
+            output: [messageItem('message:projected-stream', 'Done.')],
+        });
+        const streamCreate = vi.fn(async (request: unknown) => {
+            sent.push(structuredClone(request));
+            return (async function* () {
+                yield { type: 'response.completed' as const, sequence_number: 1, response: terminal };
+            })();
+        });
+        const streamDriver = new TestOpenAIResponsesDriver(streamCreate);
+        const stream = await streamDriver.streamCanonicalContextEvents(
+            {
+                ...runtimeOptions({
+                    flow: 'materialized-driver-retry',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-09-12T00:04:00.000Z',
+                    conversation: document,
+                    materializedInput: {
+                        operation_id: 'operation:materialized-driver-input',
+                        result_revision: document.revision,
+                    },
+                }),
+                conversation: document,
+                on_canonical_request_projected: async (projection) => {
+                    observed.push(structuredClone(projection.native_request));
+                    return undefined;
+                },
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:projected-body' },
+        );
+        await collectCanonicalEvents(stream);
+        expect(observed[1]).toEqual(sent[1]);
+        expect(sent[1]).toMatchObject({ model: 'gpt-5', stream: true });
+        expect(publish).toHaveBeenCalledTimes(2);
+    });
+
+    it('rejects a post-input budget callback before prepared publication or provider transport', async () => {
+        const document = materializedInputDocument();
+        const create = vi.fn();
+        const publish = vi.fn(async () => undefined);
+        const driver = new TestOpenAIResponsesDriver(create);
+        await expect(
+            driver.executeCanonicalContext({
+                ...runtimeOptions({
+                    flow: 'materialized-driver-retry',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-09-12T00:05:00.000Z',
+                    conversation: document,
+                    materializedInput: {
+                        operation_id: 'operation:materialized-driver-input',
+                        result_revision: document.revision,
+                    },
+                }),
+                conversation: document,
+                on_canonical_request_projected: async (projection) => {
+                    expect(projection.native_request).toMatchObject({ stream: false });
+                    throw new Error('Post-input request exceeds the target budget');
+                },
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('Post-input request exceeds the target budget');
+        expect(publish).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('dry-projects the exact configured Responses body sent by a fresh context execution', async () => {
+        const create = vi.fn(async (_request: unknown) =>
+            response({
+                id: 'response:model-switch-parity',
+                model: 'gpt-4o-2024-08-06',
+                output: [messageItem('message:model-switch-parity', 'Done.')],
+            }),
+        );
+        class AliasedResponsesDriver extends TestOpenAIResponsesDriver {
+            override getResponsesRequestModel(model: string): string {
+                return `deployment/${model}`;
+            }
+        }
+        const driver = new AliasedResponsesDriver(create);
+        const document = materializedInputDocument();
+        const modelOptions = {
+            _option_id: 'openai-text',
+            max_tokens: 64,
+            extra_body: { metadata: { model_switch: 'count-this-field' } },
+        } as const;
+        const target = {
+            provider: Providers.openai,
+            protocol: OPENAI_RESPONSES_PROTOCOL,
+            model: 'gpt-4o-2024-08-06',
+            adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+            options: modelOptions,
+        };
+        const projected = await driver.projectCanonicalModelSwitchRequest(document, target, 'execute');
+        expect(projected.status).toBe('compiled');
+        if (projected.status !== 'compiled') throw new Error('Expected configured Responses projection');
+        await driver.executeCanonicalContext({
+            ...runtimeOptions({
+                flow: 'materialized-driver-retry',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T00:01:00.000Z',
+                conversation: document,
+                model: target.model,
+                materializedInput: {
+                    operation_id: 'operation:materialized-driver-input',
+                    result_revision: document.revision,
+                },
+            }),
+            conversation: document,
+            model_options: modelOptions,
+        });
+        expect(create).toHaveBeenCalledOnce();
+        expect(projected.native_request).toEqual(create.mock.calls[0]?.[0]);
+        expect(projected.native_request).toMatchObject({
+            model: 'deployment/gpt-4o-2024-08-06',
+            metadata: { model_switch: 'count-this-field' },
+        });
+
+        const resolved = await driver.resolveCanonicalModelSwitchTarget(target.model, modelOptions);
+        expect(resolved).toEqual(target);
+        const projectedStream = await driver.projectCanonicalModelSwitchRequest(document, target, 'stream');
+        if (projectedStream.status !== 'compiled') throw new Error('Expected configured Responses stream projection');
+        const terminal = response({
+            id: 'response:model-switch-stream-parity',
+            model: 'gpt-4o-2024-08-06',
+            output: [messageItem('message:model-switch-stream-parity', 'Done.')],
+        });
+        const streamCreate = vi.fn(async (_request: unknown) =>
+            (async function* () {
+                yield { type: 'response.completed' as const, sequence_number: 1, response: terminal };
+            })(),
+        );
+        const streamDriver = new AliasedResponsesDriver(streamCreate);
+        const stream = await streamDriver.streamCanonicalContextEvents(
+            {
+                ...runtimeOptions({
+                    flow: 'materialized-driver-retry',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-09-12T00:02:00.000Z',
+                    conversation: document,
+                    model: target.model,
+                    materializedInput: {
+                        operation_id: 'operation:materialized-driver-input',
+                        result_revision: document.revision,
+                    },
+                }),
+                conversation: document,
+                model_options: modelOptions,
+            },
+            undefined,
+            { stream_id: 'stream:model-switch-parity' },
+        );
+        await collectCanonicalEvents(stream);
+        expect(streamCreate).toHaveBeenCalledOnce();
+        expect(projectedStream.native_request).toEqual(streamCreate.mock.calls[0]?.[0]);
+        expect(projectedStream.native_request).toMatchObject({
+            model: 'deployment/gpt-4o-2024-08-06',
+            stream: true,
+            max_output_tokens: 64,
+        });
+    });
+
+    it('rejects provider-side continuation and extra-body source overrides during a dry switch', async () => {
+        const driver = new TestOpenAIResponsesDriver(
+            vi.fn(async () => {
+                throw new Error('Dry projection must not send provider transport');
+            }),
+        );
+        const document = materializedInputDocument();
+        const base = {
+            provider: Providers.openai,
+            protocol: OPENAI_RESPONSES_PROTOCOL,
+            model: 'gpt-4o-2024-08-06',
+            adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+        };
+        for (const field of ['previous_response_id', 'conversation', 'input', 'tools'] as const) {
+            const projected = await driver.projectCanonicalModelSwitchRequest(
+                document,
+                { ...base, options: { _option_id: 'openai-text', extra_body: { [field]: 'opaque' } } },
+                'execute',
+            );
+            expect(projected).toMatchObject({ status: 'unsupported' });
+        }
+    });
+
+    it('does not authorize implicit history stripping as a compatible model switch', async () => {
+        const at = '2026-09-12T00:00:00.000Z';
+        const source = createConversationDocument({ id: 'conversation:model-switch-history', created_at: at });
+        const older = createUserTurn({
+            id: 'turn:model-switch-history:older',
+            authority: 'ordinary',
+            status: 'completed',
+            timestamps: { recorded_at: at },
+            model_visibility: 'include',
+            provenance: { type: 'received' },
+            blocks: [
+                createTextBlock({
+                    id: 'block:model-switch-history:older',
+                    text: '<heartbeat>old status</heartbeat>',
+                    format: 'plain',
+                }),
+            ],
+        });
+        const newer = createUserTurn({
+            id: 'turn:model-switch-history:newer',
+            authority: 'ordinary',
+            status: 'completed',
+            timestamps: { recorded_at: at },
+            model_visibility: 'include',
+            provenance: { type: 'received' },
+            blocks: [createTextBlock({ id: 'block:model-switch-history:newer', text: 'Continue.', format: 'plain' })],
+        });
+        const document = appendConversationRecords(
+            source,
+            {
+                turns: [older, newer],
+                context_entries: [
+                    { id: 'entry:model-switch-history:older', type: 'source_turn', turn_id: older.id },
+                    { id: 'entry:model-switch-history:newer', type: 'source_turn', turn_id: newer.id },
+                ],
+            },
+            {
+                expected_revision: 0,
+                operation_id: 'operation:model-switch-history',
+                payload_fingerprint: 'sha256:model-switch-history',
+                recorded_at: at,
+            },
+        ).document;
+        const driver = new TestOpenAIResponsesDriver(
+            vi.fn(async () => {
+                throw new Error('Dry projection must not send provider transport');
+            }),
+        );
+        const projected = await driver.projectCanonicalModelSwitchRequest(
+            document,
+            {
+                provider: Providers.openai,
+                protocol: OPENAI_RESPONSES_PROTOCOL,
+                model: 'gpt-4o-2024-08-06',
+                adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+            },
+            'execute',
+            { stripHeartbeatsAfterTurns: 0 },
+        );
+        expect(projected).toMatchObject({ status: 'unsupported', reason: expect.stringContaining('history') });
+    });
+
     it('emits native-positioned structured-output events with the same accepted output as the legacy stream boundary', async () => {
         const final = response({
             id: 'response:typed-parity',
@@ -1203,6 +1555,49 @@ describe('OpenAI Responses canonical lifecycle', () => {
         expect(retried.result).toEqual(second.result);
         expect(retried.conversation).toEqual(persisted);
         expect(create).toHaveBeenCalledTimes(2);
+
+        // This is a complete validated context whose optional opaque native replay was removed by
+        // source policy. Its application call/result pair remains, in the original order.
+        const portable = structuredClone(persisted);
+        for (const turn of portable.turns) {
+            if (turn.kind === 'agent') turn.blocks = turn.blocks.filter((block) => block.type !== 'native_replay');
+            if (turn.kind === 'tool') {
+                turn.blocks[0].content = turn.blocks[0].content.filter((block) => block.type !== 'native_replay');
+            }
+        }
+        const portableDocument = parseConversationDocument(portable);
+        const target = {
+            provider: Providers.openai,
+            protocol: OPENAI_RESPONSES_PROTOCOL,
+            model: 'gpt-5',
+            adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+        };
+        const projected = await driver.projectCanonicalModelSwitchRequest(portableDocument, target, 'execute');
+        if (projected.status !== 'compiled') throw new Error('Expected complete tool-pair projection');
+        responses.push(
+            response({
+                id: 'response:tool-pair-switch',
+                output: [messageItem('message:tool-pair-switch', 'The tool failed.')],
+            }),
+        );
+        await driver.executeCanonicalContext({
+            ...runtimeOptions({
+                flow: 'tools',
+                operation: 'tool-pair-switch',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:06:00.000Z',
+                conversation: portableDocument,
+                model: target.model,
+            }),
+            conversation: portableDocument,
+        });
+        expect(projected.native_request).toEqual(create.mock.calls[2]?.[0]);
+        expect(projected.native_request).toMatchObject({
+            input: expect.arrayContaining([
+                expect.objectContaining({ type: 'function_call', call_id: 'call:lookup' }),
+                expect.objectContaining({ type: 'function_call_output', call_id: 'call:lookup' }),
+            ]),
+        });
     });
 
     it('streams reasoning and text through core, finalizes authoritative output, and recovers without transport', async () => {
@@ -1432,5 +1827,156 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 ],
             },
         ]);
+    });
+
+    it('hydrates an authenticated received image only in the native Responses body, retaining external source identity', async () => {
+        const png = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+            'base64',
+        );
+        const at = '2026-09-12T06:00:00.000Z';
+        const initial = createConversationDocument({ id: 'conversation:received-image', created_at: at });
+        const asset = {
+            id: 'asset:received-image',
+            kind: 'image' as const,
+            mime_type: 'image/png',
+            byte_length: png.byteLength,
+            content_hash: `sha256:${createHash('sha256').update(png).digest('hex')}`,
+            storage: {
+                type: 'external' as const,
+                resolver: 'vertesia.agent_artifact',
+                locator: { storage_id: 'owner', artifact_path: 'archive/assets/one' },
+            },
+            provenance: { type: 'received' as const },
+            created_at: at,
+        };
+        const appended = appendConversationRecords(
+            initial,
+            {
+                turns: [
+                    {
+                        id: 'turn:received-image',
+                        kind: 'user' as const,
+                        authority: 'ordinary' as const,
+                        status: 'completed' as const,
+                        timestamps: { recorded_at: at },
+                        model_visibility: 'include' as const,
+                        blocks: [
+                            createTextBlock({
+                                id: 'block:received-image:text',
+                                text: 'Inspect this.',
+                                format: 'plain',
+                            }),
+                            { id: 'block:received-image:image', type: 'image' as const, asset_id: asset.id },
+                        ],
+                        provenance: { type: 'inserted' as const, operation_id: 'operation:received-image' },
+                    },
+                ],
+                assets: [asset],
+                context_entries: [
+                    { id: 'context:received-image', type: 'source_turn' as const, turn_id: 'turn:received-image' },
+                ],
+            },
+            {
+                expected_revision: initial.revision,
+                operation_id: 'operation:received-image',
+                payload_fingerprint: await fingerprintJson({ received: 'image' }),
+                recorded_at: at,
+            },
+        ).document;
+        const resolve = vi.fn(async function* () {
+            yield png;
+        });
+        const runtime = runtimeOptions({
+            flow: 'received-image',
+            operation: 'respond',
+            attempt: 'first',
+            recordedAt: at,
+            conversation: appended,
+            materializedInput: { operation_id: 'operation:received-image', result_revision: appended.revision },
+        });
+        const options = {
+            ...runtime,
+            conversation: appended,
+            resolve_canonical_asset: resolve,
+        };
+        const dry = await prepareOpenAIResponsesCanonicalContext({
+            options: resolveCanonicalExecutionContextOptions(options),
+            provider: Providers.openai,
+        });
+        expect(dry.native_conversation).toMatchObject([
+            {
+                role: 'user',
+                content: [
+                    { type: 'input_text', text: 'Inspect this.' },
+                    { type: 'input_image', image_url: `data:image/png;base64,${png.toString('base64')}` },
+                ],
+            },
+        ]);
+        const changedSource = structuredClone(dry);
+        changedSource.document.assets[asset.id].content_hash = `sha256:${'0'.repeat(64)}`;
+        await expect(
+            finalizeOpenAIResponsesPreparedRequest(changedSource, { model: 'gpt-5', input: [], stream: false }),
+        ).rejects.toThrow('canonical source changed after native image projection');
+        const create = vi.fn(async (_request: unknown) =>
+            response({ id: 'response:received-image', output: [messageItem('message:received-image', 'Done.')] }),
+        );
+        const publish = vi.fn<NonNullable<ExecutionOptions['on_canonical_request_prepared']>>(async () => undefined);
+        const driver = new TestOpenAIResponsesDriver(create);
+        const first = await driver.executeCanonicalContext({ ...options, on_canonical_request_prepared: publish });
+        expect(resolve).toHaveBeenCalledTimes(2);
+        expect(create).toHaveBeenCalledOnce();
+        await expect(
+            driver.executeCanonicalContext({
+                ...options,
+                conversation: first.conversation,
+                resolve_canonical_asset: async function* () {
+                    yield await Promise.reject<Buffer>(new Error('received image unavailable'));
+                },
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('received image unavailable');
+        expect(create).toHaveBeenCalledOnce();
+        expect(create.mock.calls[0]?.[0]).toMatchObject({ input: dry.native_conversation });
+        const prepared = publish.mock.calls[0]?.[0];
+        expect(prepared?.record.request_receipt.request_fingerprint).toBe(
+            await fingerprintJson(JSON.parse(JSON.stringify(create.mock.calls[0]?.[0]))),
+        );
+        expect(prepared?.document.assets[asset.id]).toEqual(asset);
+        expect(prepared?.record.request_receipt.asset_versions).toContainEqual({
+            asset_id: asset.id,
+            content_hash: asset.content_hash,
+        });
+        const streamCreate = vi.fn(async (_request: unknown) =>
+            (async function* () {
+                yield {
+                    type: 'response.completed' as const,
+                    sequence_number: 1,
+                    response: response({
+                        id: 'response:received-image:stream',
+                        output: [messageItem('message:received-image:stream', 'Done.')],
+                    }),
+                };
+            })(),
+        );
+        const streamDriver = new TestOpenAIResponsesDriver(streamCreate);
+        const stream = await streamDriver.streamCanonicalContextEvents(
+            { ...options, on_canonical_request_prepared: publish },
+            undefined,
+            { stream_id: 'stream:received-image' },
+        );
+        await collectCanonicalEvents(stream);
+        expect(streamCreate.mock.calls[0]?.[0]).toMatchObject({ input: dry.native_conversation, stream: true });
+        expect(publish).toHaveBeenCalledTimes(2);
+        await expect(
+            driver.executeCanonicalContext({
+                ...options,
+                resolve_canonical_asset: async function* () {
+                    yield Buffer.from('wrong image bytes');
+                },
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('does not match resolved bytes');
+        expect(create).toHaveBeenCalledOnce();
     });
 });

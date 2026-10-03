@@ -86,7 +86,7 @@ import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { type GeminiContextCacheExecution, generateWithGeminiContextCache } from './gemini-context-cache.js';
 import {
-    appendGeminiCanonicalResponse,
+    appendGeminiCanonicalResponseWithProcessing,
     cleanGeminiPromptPart,
     compileGeminiConversation,
     decodeGeminiCanonicalResponse,
@@ -1198,132 +1198,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             provider: geminiProvider(driver),
         });
         if (isFileAudioModel(modelName)) {
-            if (canonicalState.accepted_response !== undefined) {
-                if (requestedOptions.include_original_response) {
-                    throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
-                }
-                return recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
-                    service_tier: canonicalGeminiServiceTier(canonicalState),
-                });
-            }
-            const transportOptions = { ...options, model: modelName };
-            if (fileAudioRequest === undefined) throw new Error(`Model ${modelName} is not a Gemini file audio model`);
-            const modelOptions = fileAudioRequest.model_options;
-            const client = driver.getGoogleGenAIClient(
+            return this.requestPreparedCanonicalFileAudioCompletion(
+                driver,
+                canonicalState,
+                requestedOptions,
+                modelName,
                 region,
-                resolveVertexAIServiceTier(modelOptions),
-                transportOptions.httpTimeout,
+                signal,
             );
-            const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
-            const { payload, speech } = geminiFileAudioRequest(canonicalPrompt, requestedOptions, modelName);
-            const prepared = await finalizeGeminiPreparedRequest(
-                { ...canonicalState, native_conversation: canonicalPrompt },
-                payload,
-            );
-            await publishCanonicalPreparedRequest(prepared, requestedOptions);
-            const response = await client.models.generateContent(geminiFileAudioTransportRequest(payload, signal));
-            const candidate = response.candidates?.[0];
-            if (candidate?.content === undefined) throw new Error('Audio model returned no candidate content');
-            const persistedAudio: Array<{
-                data: string;
-                result: Extract<CompletionResult, { type: 'audio' }>;
-                byte_length: number;
-            }> = [];
-            for (const part of candidate.content.parts ?? []) {
-                if (!part.inlineData?.mimeType?.startsWith('audio/')) continue;
-                if (!speech) throw new Error('Unexpected audio output from transcription model');
-                const data = part.inlineData.data ?? '';
-                if (data.length > Math.ceil(50_000_000 / 3) * 4)
-                    throw new Error('Audio exceeds the 50000000 byte limit');
-                const bytes = Buffer.from(data, 'base64');
-                const result = await storeAudioResult(
-                    new Blob([bytes]).stream(),
-                    {
-                        mime_type: part.inlineData.mimeType,
-                        container: 'raw',
-                        codec: 'pcm',
-                        sample_rate: 24000,
-                        channels: 1,
-                        sample_encoding: 'int16',
-                        byte_order: 'little',
-                    },
-                    transportOptions,
-                    signal,
-                );
-                persistedAudio.push({ data, result, byte_length: bytes.byteLength });
-            }
-            if (speech && persistedAudio.length === 0) throw new Error('Audio model returned no usable audio result');
-            const finishReason = normalizeGeminiFinishReason(candidate.finishReason);
-            let decoded = await decodeGeminiCanonicalResponse({
-                response,
-                content: candidate.content,
-                prepared,
-                finish_reason: finishReason,
-            });
-            const remainingAudio = [...persistedAudio];
-            decoded = {
-                ...decoded,
-                ...(speech
-                    ? {
-                          turns: decoded.turns.map((turn) =>
-                              turn.kind === 'agent' && 'generation_id' in turn
-                                  ? {
-                                        ...turn,
-                                        blocks: turn.blocks.filter((block) => block.type !== 'native_replay'),
-                                    }
-                                  : turn,
-                          ),
-                      }
-                    : {}),
-                assets: (decoded.assets ?? []).map((asset) => {
-                    if (asset.kind !== 'audio' || asset.storage.type !== 'inline_base64') return asset;
-                    const inlineData = asset.storage.data;
-                    const matchIndex = remainingAudio.findIndex((entry) => entry.data === inlineData);
-                    if (matchIndex < 0) return asset;
-                    const [match] = remainingAudio.splice(matchIndex, 1);
-                    if (match === undefined) return asset;
-                    return {
-                        ...asset,
-                        storage: canonicalAudioAssetStorage(match.result.value),
-                        byte_length: match.byte_length,
-                        media: {
-                            ...(match.result.container === undefined ? {} : { container: match.result.container }),
-                            ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
-                            ...(match.result.sample_rate === undefined
-                                ? {}
-                                : { sample_rate: match.result.sample_rate }),
-                            ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
-                            ...(match.result.sample_encoding === undefined
-                                ? {}
-                                : { sample_encoding: match.result.sample_encoding }),
-                            ...(match.result.byte_order === undefined ? {} : { byte_order: match.result.byte_order }),
-                        },
-                        metadata: {
-                            audio_result: {
-                                value: match.result.value,
-                                mime_type: match.result.mime_type,
-                                ...(match.result.container === undefined ? {} : { container: match.result.container }),
-                                ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
-                                ...(match.result.sample_rate === undefined
-                                    ? {}
-                                    : { sample_rate: match.result.sample_rate }),
-                                ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
-                                ...(match.result.sample_encoding === undefined
-                                    ? {}
-                                    : { sample_encoding: match.result.sample_encoding }),
-                                ...(match.result.byte_order === undefined
-                                    ? {}
-                                    : { byte_order: match.result.byte_order }),
-                            },
-                        },
-                    };
-                }),
-            };
-            const document = appendGeminiCanonicalResponse(prepared, decoded);
-            return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
-                service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
-                ...(requestedOptions.include_original_response ? { original_response: response } : {}),
-            });
         }
         return this.requestPreparedCanonicalTextCompletion(
             driver,
@@ -1344,13 +1226,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
         const modelName = splits.at(-1) ?? options.model;
-        if (isFileAudioModel(modelName)) {
-            throw new Error(`Gemini file audio model ${options.model} does not support canonical context execution`);
-        }
         const canonicalState = await prepareGeminiCanonicalContext({
             options,
             provider: geminiProvider(driver),
         });
+        if (isFileAudioModel(modelName)) {
+            return this.requestPreparedCanonicalFileAudioCompletion(
+                driver,
+                canonicalState,
+                options,
+                modelName,
+                region,
+                signal,
+                true,
+            );
+        }
         return this.requestPreparedCanonicalTextCompletion(
             driver,
             canonicalState,
@@ -1360,6 +1250,155 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             signal,
             true,
         );
+    }
+
+    private async requestPreparedCanonicalFileAudioCompletion(
+        driver: VertexAIDriver,
+        canonicalState: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        requestedOptions: ExecutionOptions,
+        modelName: string,
+        region: string | undefined,
+        signal?: AbortSignal,
+        contextOnly = false,
+    ): Promise<CanonicalExecutionResponse> {
+        if (contextOnly && canonicalState.tool_definitions.length > 0) {
+            throw new Error('Gemini file audio canonical context does not support tool definitions');
+        }
+        if (contextOnly && requestedOptions.result_schema !== undefined) {
+            throw new Error('Gemini file audio canonical context does not support result schemas');
+        }
+        const transportOptions = { ...requestedOptions, model: modelName };
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions, contextOnly);
+        const {
+            model_options: modelOptions,
+            payload,
+            speech,
+        } = geminiFileAudioRequest(canonicalPrompt, requestedOptions, modelName);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (requestedOptions.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                service_tier: canonicalGeminiServiceTier(canonicalState),
+            });
+        }
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(modelOptions),
+            transportOptions.httpTimeout,
+        );
+        const response = await client.models.generateContent(geminiFileAudioTransportRequest(payload, signal));
+        const candidate = response.candidates?.[0];
+        if (candidate?.content === undefined) throw new Error('Audio model returned no candidate content');
+        const persistedAudio: Array<{
+            data: string;
+            result: Extract<CompletionResult, { type: 'audio' }>;
+            byte_length: number;
+        }> = [];
+        for (const part of candidate.content.parts ?? []) {
+            if (!part.inlineData?.mimeType?.startsWith('audio/')) continue;
+            if (!speech) throw new Error('Unexpected audio output from transcription model');
+            const data = part.inlineData.data ?? '';
+            if (data.length > Math.ceil(50_000_000 / 3) * 4) throw new Error('Audio exceeds the 50000000 byte limit');
+            const bytes = Buffer.from(data, 'base64');
+            const result = await storeAudioResult(
+                new Blob([bytes]).stream(),
+                {
+                    mime_type: part.inlineData.mimeType,
+                    container: 'raw',
+                    codec: 'pcm',
+                    sample_rate: 24000,
+                    channels: 1,
+                    sample_encoding: 'int16',
+                    byte_order: 'little',
+                },
+                transportOptions,
+                signal,
+            );
+            persistedAudio.push({ data, result, byte_length: bytes.byteLength });
+        }
+        if (speech && persistedAudio.length === 0) throw new Error('Audio model returned no usable audio result');
+        const finishReason = normalizeGeminiFinishReason(candidate.finishReason);
+        let decoded = await decodeGeminiCanonicalResponse({
+            response,
+            content: candidate.content,
+            prepared,
+            finish_reason: finishReason,
+        });
+        const remainingAudio = [...persistedAudio];
+        decoded = {
+            ...decoded,
+            ...(speech
+                ? {
+                      turns: decoded.turns.map((turn) =>
+                          turn.kind === 'agent' && 'generation_id' in turn
+                              ? {
+                                    ...turn,
+                                    blocks: turn.blocks.filter((block) => block.type !== 'native_replay'),
+                                }
+                              : turn,
+                      ),
+                  }
+                : {}),
+            assets: (decoded.assets ?? []).map((asset) => {
+                if (asset.kind !== 'audio' || asset.storage.type !== 'inline_base64') return asset;
+                const inlineData = asset.storage.data;
+                const matchIndex = remainingAudio.findIndex((entry) => entry.data === inlineData);
+                if (matchIndex < 0) return asset;
+                const [match] = remainingAudio.splice(matchIndex, 1);
+                if (match === undefined) return asset;
+                return {
+                    ...asset,
+                    storage: canonicalAudioAssetStorage(match.result.value),
+                    byte_length: match.byte_length,
+                    media: {
+                        ...(match.result.container === undefined ? {} : { container: match.result.container }),
+                        ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
+                        ...(match.result.sample_rate === undefined ? {} : { sample_rate: match.result.sample_rate }),
+                        ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
+                        ...(match.result.sample_encoding === undefined
+                            ? {}
+                            : { sample_encoding: match.result.sample_encoding }),
+                        ...(match.result.byte_order === undefined ? {} : { byte_order: match.result.byte_order }),
+                    },
+                    metadata: {
+                        audio_result: {
+                            value: match.result.value,
+                            mime_type: match.result.mime_type,
+                            ...(match.result.container === undefined ? {} : { container: match.result.container }),
+                            ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
+                            ...(match.result.sample_rate === undefined
+                                ? {}
+                                : { sample_rate: match.result.sample_rate }),
+                            ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
+                            ...(match.result.sample_encoding === undefined
+                                ? {}
+                                : { sample_encoding: match.result.sample_encoding }),
+                            ...(match.result.byte_order === undefined ? {} : { byte_order: match.result.byte_order }),
+                        },
+                    },
+                };
+            }),
+        };
+        const document = await appendGeminiCanonicalResponseWithProcessing(prepared, decoded);
+        return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+            service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
+            ...(requestedOptions.include_original_response ? { original_response: response } : {}),
+        });
     }
 
     private async requestPreparedCanonicalTextCompletion(
@@ -1471,7 +1510,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                   })
                 : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-        const document = appendGeminiCanonicalResponse(prepared, decoded);
+        const document = await appendGeminiCanonicalResponseWithProcessing(prepared, decoded);
         return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
             service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
             prompt_cache_diagnostic: cacheExecution.diagnostic,
@@ -1722,7 +1761,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                       structured_output: normalized.structured_output,
                   })
                 : rawDecoded;
-        const finalConversation = appendGeminiCanonicalResponse(prepared, decoded);
+        const finalConversation = await appendGeminiCanonicalResponseWithProcessing(prepared, decoded);
 
         return {
             result: completionResults,
@@ -1927,7 +1966,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             finalizePromptCacheDiagnostic: () => cacheExecution.diagnostic,
             finalizeConversation: async () => {
                 const { decoded } = await decodeFinalResponse();
-                return appendGeminiCanonicalResponse(prepared, decoded);
+                return await appendGeminiCanonicalResponseWithProcessing(prepared, decoded);
             },
         });
     }
@@ -2285,7 +2324,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (normalized?.status === 'invalid') {
                     decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
                 }
-                const document = appendGeminiCanonicalResponse(prepared, decoded);
+                const document = await appendGeminiCanonicalResponseWithProcessing(prepared, decoded);
                 const serviceTier = normalizeVertexAIResolvedServiceTier(finalUsageMetadata?.trafficType);
                 const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
                     service_tier: serviceTier,

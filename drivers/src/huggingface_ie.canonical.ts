@@ -1,6 +1,6 @@
 import type { InferenceClient, TextGenerationOutput, TextGenerationStreamOutput } from '@huggingface/inference';
 import {
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     createGeneratedAgentTurn,
     createStructuredOutputTransformationProof,
     createTextBlock,
@@ -379,17 +379,19 @@ async function finalizeHuggingFaceCanonical(
     } else if (normalized?.status === 'invalid') {
         decoded = rejectDecodedStructuredOutput(rawDecoded, normalized.error);
     }
-    const final = appendDecodedConversationResponse(
-        {
-            document: prepared.document,
-            generation_id: prepared.generation_id,
-            response_turn_id: prepared.response_turn_id,
-            receipt: prepared.receipt,
-            payload: prepared.request_json,
-            diagnostics: [],
-        },
-        decoded,
-        { operation_id: prepared.runtime.response_operation_id, recorded_at: completedAt },
+    const final = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document: prepared.document,
+                generation_id: prepared.generation_id,
+                response_turn_id: prepared.response_turn_id,
+                receipt: prepared.receipt,
+                payload: prepared.request_json,
+                diagnostics: [],
+            },
+            decoded,
+            { operation_id: prepared.runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return {
         raw_decoded: rawDecoded,

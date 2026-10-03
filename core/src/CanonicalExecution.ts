@@ -13,6 +13,7 @@ import type {
     ResultValidationError,
     ToolUse,
 } from '@llumiverse/common';
+import { LlumiverseError } from '@llumiverse/common';
 import {
     type Asset,
     type AssetKind,
@@ -21,7 +22,6 @@ import {
     type ConversationAcceptedOutputFragment,
     type ConversationDocument,
     type ConversationOutputBlock,
-    type ConversationPreparedRequest,
     type ConversationPreparedRequestRecord,
     type ConversationRuntimeContext,
     ConversationRuntimeContextSchema,
@@ -29,6 +29,8 @@ import {
     createConversationDocument,
     parseAcceptedOutputFragment,
     parseConversationDocument,
+    parseConversationPreparedRequestRecord,
+    type ResolveConversationAsset,
     type ResolvedConversationRuntimeContext,
     ResolvedConversationRuntimeContextSchema,
     toolArgumentsForModel,
@@ -37,6 +39,73 @@ import { MalformedStreamingToolArgumentsError } from './stream-errors.js';
 
 /** Runtime-only provenance. Symbol keys survive internal object spreads but are never serialized on the wire. */
 export const CANONICAL_ACCEPTED_RECOVERY = Symbol('llumiverse.canonical-accepted-recovery');
+
+/**
+ * Private in-process provenance for failures thrown by host durability/recovery callbacks.
+ *
+ * Provider adapters may wrap an error while classifying native transport failures. Keeping the
+ * callback failure in this dedicated wrapper lets public Driver boundaries recover and rethrow the
+ * exact host value without treating arbitrary provider failures as host failures.
+ */
+export interface CanonicalHostCallbackFailure {
+    readonly failure: unknown;
+}
+
+class CanonicalHostCallbackPrimitiveFailure extends Error {
+    readonly failure: unknown;
+
+    constructor(failure: unknown) {
+        super('Canonical host callback failed');
+        this.name = 'CanonicalHostCallbackPrimitiveFailure';
+        this.failure = failure;
+    }
+}
+
+const canonicalHostCallbackFailures = new WeakMap<object, CanonicalHostCallbackFailure>();
+
+function isWeakKey(value: unknown): value is object {
+    return (typeof value === 'object' && value !== null) || typeof value === 'function';
+}
+
+/** Mark one host callback failure without mutating or replacing object-valued failures. */
+export function markCanonicalHostCallbackFailure(error: unknown): unknown {
+    if (isWeakKey(error)) {
+        if (!canonicalHostCallbackFailures.has(error)) canonicalHostCallbackFailures.set(error, { failure: error });
+        return error;
+    }
+    const wrapped = new CanonicalHostCallbackPrimitiveFailure(error);
+    canonicalHostCallbackFailures.set(wrapped, { failure: error });
+    return wrapped;
+}
+
+/** Find host-callback provenance through the wrappers Driver/provider layers are allowed to add. */
+export function canonicalHostCallbackFailure(error: unknown): CanonicalHostCallbackFailure | undefined {
+    const visited = new Set<unknown>();
+    let current = error;
+    while (current !== undefined && current !== null && !visited.has(current)) {
+        if (isWeakKey(current)) {
+            const failure = canonicalHostCallbackFailures.get(current);
+            if (failure !== undefined) return failure;
+        }
+        visited.add(current);
+        if (LlumiverseError.isLlumiverseError(current)) {
+            current = current.originalError;
+            continue;
+        }
+        if (current instanceof Error && 'cause' in current) {
+            current = current.cause;
+            continue;
+        }
+        break;
+    }
+    return undefined;
+}
+
+/** Rethrow the exact host failure when provenance is present; otherwise return to normal classification. */
+export function rethrowCanonicalHostCallbackFailure(error: unknown): void {
+    const hostFailure = canonicalHostCallbackFailure(error);
+    if (hostFailure !== undefined) throw hostFailure.failure;
+}
 
 /** Direct canonical provider result. The complete document is authoritative; accepted_output is its safe projection. */
 export interface CanonicalExecutionResponse {
@@ -69,6 +138,11 @@ export type CanonicalExecutionInputOptions = Omit<ExecutionOptions, 'conversatio
     conversation_runtime: ConversationRuntimeContext;
 };
 
+/** Host-owned per-call I/O, never recovered from serialized execution options. */
+export interface CanonicalHostCapabilities {
+    readonly resolve_canonical_asset?: ResolveConversationAsset;
+}
+
 /**
  * Transport and response policy for current canonical execution.
  *
@@ -77,8 +151,8 @@ export type CanonicalExecutionInputOptions = Omit<ExecutionOptions, 'conversatio
  * an already materialized canonical context. Projection-retention fields remain temporarily because
  * adopted providers still apply those policies while compiling a canonical document to native wire.
  */
-export interface CanonicalExecutionTransportOptions {
-    model: string;
+export interface CanonicalExecutionTransportOptions<Model extends string | undefined = string> {
+    model: Model;
     result_schema?: JSONSchema;
     prompt_cache_schema_suffix?: boolean;
     include_original_response?: boolean;
@@ -98,6 +172,8 @@ export interface CanonicalExecutionTransportOptions {
         metadata: { kind: AssetKind; mime_type: string; media?: AssetMediaMetadata },
         signal?: AbortSignal,
     ) => Promise<{ storage: AssetStorage; byte_length: number; content_hash: string }>;
+    /** Resolve a canonical asset through the authenticated host without changing its persisted locator identity. */
+    resolve_canonical_asset?: ResolveConversationAsset;
     load_recovered_canonical_output?: (identity: {
         conversation_id: string;
         response_operation_id: string;
@@ -107,21 +183,60 @@ export interface CanonicalExecutionTransportOptions {
         | { accepted_output: ConversationAcceptedOutputFragment; conversation?: ConversationDocument }
         | undefined
     >;
-    on_canonical_request_prepared?: (prepared: ConversationPreparedRequest) => Promise<void>;
+    on_canonical_request_projected?: ExecutionOptions['on_canonical_request_projected'];
+    on_canonical_request_prepared?: ExecutionOptions['on_canonical_request_prepared'];
     labels?: Record<string, string>;
     stripImagesAfterTurns?: number;
     stripTextMaxTokens?: number;
     stripHeartbeatsAfterTurns?: number;
 }
 
+/**
+ * Host-selected prepared evidence for native context recovery. Nonenumerable symbol storage stays
+ * outside JSON/provider options and ordinary object spreads. Only the native context resolver copies
+ * it explicitly; a host must select this record from its durable store rather than trust wire input.
+ * Validation reuses the authoritative prepared-record schema and existing finite JSON preflight limits.
+ */
+export const CANONICAL_RETAINED_PREPARED_REQUEST = Symbol('llumiverse.canonical-retained-prepared-request');
+
+export function canonicalRetainedPreparedRequest(
+    options: CanonicalExecutionContextInputOptions<string | undefined>,
+): ConversationPreparedRequestRecord | undefined {
+    const descriptor = Object.getOwnPropertyDescriptor(options, CANONICAL_RETAINED_PREPARED_REQUEST);
+    if (descriptor === undefined) return undefined;
+    if (!Object.hasOwn(descriptor, 'value')) {
+        throw new TypeError('Retained canonical prepared evidence must be an own data property');
+    }
+    return parseConversationPreparedRequestRecord(descriptor.value);
+}
+
+/** Attach an owned snapshot without mutating options or making evidence serializable. */
+export function withCanonicalRetainedPreparedRequest<
+    T extends CanonicalExecutionContextInputOptions<string | undefined>,
+>(options: T, record: ConversationPreparedRequestRecord): T {
+    const owned = parseConversationPreparedRequestRecord(record);
+    const result = { ...options };
+    Object.defineProperty(result, CANONICAL_RETAINED_PREPARED_REQUEST, {
+        value: owned,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+    });
+    return result;
+}
+
 /** Caller-facing, already materialized canonical context. */
-export interface CanonicalExecutionContextInputOptions extends CanonicalExecutionTransportOptions {
+export interface CanonicalExecutionContextInputOptions<Model extends string | undefined = string>
+    extends CanonicalExecutionTransportOptions<Model> {
+    readonly [CANONICAL_RETAINED_PREPARED_REQUEST]?: ConversationPreparedRequestRecord;
     conversation: ConversationDocument;
     conversation_runtime: ConversationRuntimeContext;
 }
 
 /** Validated and owned canonical context used by provider adapters. */
-export interface CanonicalExecutionContextOptions extends CanonicalExecutionTransportOptions {
+export interface CanonicalExecutionContextOptions<Model extends string | undefined = string>
+    extends CanonicalExecutionTransportOptions<Model> {
+    readonly [CANONICAL_RETAINED_PREPARED_REQUEST]?: ConversationPreparedRequestRecord;
     conversation: ConversationDocument;
     conversation_runtime: ResolvedConversationRuntimeContext;
 }
@@ -187,10 +302,10 @@ export function resolveCanonicalExecutionOptions(options: ExecutionOptions): Can
  * Validate and own an already materialized canonical context without accepting authoring inputs.
  * The returned snapshot contains no legacy tool catalog or custom prompt formatter.
  */
-export function resolveCanonicalExecutionContextOptions(
-    options: CanonicalExecutionContextInputOptions,
-): CanonicalExecutionContextOptions {
-    const unsafe = options as CanonicalExecutionContextInputOptions & {
+export function resolveCanonicalExecutionContextOptions<Model extends string | undefined>(
+    options: CanonicalExecutionContextInputOptions<Model>,
+): CanonicalExecutionContextOptions<Model> {
+    const unsafe = options as CanonicalExecutionContextInputOptions<Model> & {
         format?: unknown;
         output_modality?: unknown;
         tools?: unknown;
@@ -203,6 +318,7 @@ export function resolveCanonicalExecutionContextOptions(
     if (unsafe.output_modality !== undefined) {
         throw new TypeError('Canonical context execution does not accept legacy output modality policy');
     }
+    const retained = canonicalRetainedPreparedRequest(options);
     const conversation = parseConversationDocument(options.conversation);
     const suppliedRuntime = ConversationRuntimeContextSchema.parse(options.conversation_runtime);
     if (suppliedRuntime.conversation_id !== undefined && suppliedRuntime.conversation_id !== conversation.id) {
@@ -222,7 +338,7 @@ export function resolveCanonicalExecutionContextOptions(
         result_schema,
         ...rest
     } = options;
-    return {
+    const resolved = {
         ...rest,
         conversation,
         conversation_runtime: conversationRuntime,
@@ -231,6 +347,7 @@ export function resolveCanonicalExecutionContextOptions(
         ...(model_options === undefined ? {} : { model_options: cloneOptionValue(model_options) }),
         ...(result_schema === undefined ? {} : { result_schema: cloneOptionValue(result_schema) }),
     };
+    return retained === undefined ? resolved : withCanonicalRetainedPreparedRequest(resolved, retained);
 }
 
 export function markCanonicalAcceptedRecovery<T extends object>(value: T): T & { [CANONICAL_ACCEPTED_RECOVERY]: true } {

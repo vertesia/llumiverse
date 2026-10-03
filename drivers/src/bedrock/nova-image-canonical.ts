@@ -2,7 +2,7 @@ import type { InvokeModelCommandOutput } from '@aws-sdk/client-bedrock-runtime';
 import {
     type AgentContentBlock,
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     createTextBlock,
     createUserTurn,
     deriveConversationId,
@@ -507,23 +507,25 @@ export async function executeNovaCanvasCanonical(input: {
         provenance: { type: 'generated' as const },
         generation_id: generation.id,
     };
-    const finalDocument = appendDecodedConversationResponse(
-        {
-            document,
-            generation_id: identities.generation_id,
-            response_turn_id: identities.response_turn_id,
-            receipt,
-            payload: payloadJson,
-            diagnostics: [],
-        },
-        {
-            turns: [responseTurn],
-            assets,
-            generation,
-            diagnostics: [],
-            payload_fingerprint: await fingerprintJson(decoded.evidence),
-        },
-        { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+    const finalDocument = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document,
+                generation_id: identities.generation_id,
+                response_turn_id: identities.response_turn_id,
+                receipt,
+                payload: payloadJson,
+                diagnostics: [],
+            },
+            {
+                turns: [responseTurn],
+                assets,
+                generation,
+                diagnostics: [],
+                payload_fingerprint: await fingerprintJson(decoded.evidence),
+            },
+            { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return createCanonicalExecutionResponse(finalDocument, runtime.response_operation_id, {
         ...(input.options.include_original_response ? { original_response: decoded.original_response } : {}),

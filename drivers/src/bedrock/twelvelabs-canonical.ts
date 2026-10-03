@@ -1,7 +1,7 @@
 import type { InvokeModelCommandOutput, ServiceTierType } from '@aws-sdk/client-bedrock-runtime';
 import {
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     type ConversationTurn,
     createGeneratedAgentTurn,
     createProgramTurn,
@@ -20,6 +20,7 @@ import {
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import {
+    type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalStreamOpenOptions,
@@ -34,15 +35,18 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     assertAcceptedCanonicalRequest,
+    assertCanonicalContextProjection,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
     createExecutedGeneration,
     createRequestReceipt,
     newCanonicalConversation,
+    prepareCanonicalContext,
     providerJsonValue,
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
     resolveConversationRuntime,
+    selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
 import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
 import {
@@ -237,6 +241,149 @@ async function sourceRecords(
     return { turns, assets, mappings };
 }
 
+function pegasusAssetName(asset: Asset): string {
+    const metadata = asset.metadata?.twelvelabs_pegasus;
+    if (typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)) {
+        const name = (metadata as Record<string, unknown>).name;
+        if (typeof name === 'string' && name.length > 0) return name;
+    }
+    return asset.id;
+}
+
+function pegasusS3Location(asset: Asset): NonNullable<TwelvelabsPegasusRequest['mediaSource']['s3Location']> {
+    if (asset.storage.type !== 'external' || asset.storage.resolver !== 'aws.s3') {
+        throw new Error(`TwelveLabs Pegasus retained video ${asset.id} must use inline_base64 or aws.s3 storage`);
+    }
+    const uri = asset.storage.locator.uri;
+    if (typeof uri !== 'string' || !uri.startsWith('s3://')) {
+        throw new Error(`TwelveLabs Pegasus retained video ${asset.id} has no valid S3 URI`);
+    }
+    const bucketOwner = asset.storage.locator.bucketOwner;
+    if (bucketOwner !== undefined && typeof bucketOwner !== 'string') {
+        throw new Error(`TwelveLabs Pegasus retained video ${asset.id} has an invalid bucket owner`);
+    }
+    return { uri, ...(bucketOwner === undefined ? {} : { bucketOwner }) };
+}
+
+async function retainedContextPrompt(
+    document: ReturnType<typeof parseConversationDocument>,
+    options: CanonicalExecutionContextOptions,
+): Promise<{ prompt: TwelvelabsPegasusCanonicalPrompt; mappings: NativeItemMapping[] }> {
+    const modelOptions = options.model_options as Record<string, unknown> | undefined;
+    const allowedOptions = new Set(['_option_id', 'temperature', 'max_tokens', 'service_tier']);
+    for (const [key, value] of Object.entries(modelOptions ?? {})) {
+        if (value !== undefined && !allowedOptions.has(key)) {
+            throw new TypeError(`TwelveLabs Pegasus canonical execution does not support model option ${key}`);
+        }
+    }
+    if (modelOptions?._option_id !== undefined && modelOptions._option_id !== 'bedrock-twelvelabs-pegasus') {
+        throw new TypeError(`TwelveLabs Pegasus does not support option set ${String(modelOptions._option_id)}`);
+    }
+    const sourceSegments: Array<{ index: number; role: PromptRole.user; content: string }> = [];
+    const mappings: NativeItemMapping[] = [];
+    let mediaSource: TwelvelabsPegasusRequest['mediaSource'] | undefined;
+    let videoSource: { segment_index: number; name: string; mime_type: string } | undefined;
+    const selected = selectedCanonicalTurns(document);
+    assertCanonicalContextProjection(document, selected, {
+        label: 'TwelveLabs Pegasus',
+        program_authorities: ['ordinary'],
+    });
+    for (let turnIndex = 0; turnIndex < selected.length; turnIndex += 1) {
+        const turn = selected[turnIndex];
+        if (turn.kind !== 'program' && turn.kind !== 'user') {
+            throw new TypeError(`TwelveLabs Pegasus retained context does not support ${turn.kind} turns`);
+        }
+        const text: string[] = [];
+        mappings.push({ canonical_id: turn.id, native_id: `source/segments/${turnIndex}`, kind: 'turn' });
+        for (let blockIndex = 0; blockIndex < turn.blocks.length; blockIndex += 1) {
+            const block = turn.blocks[blockIndex];
+            if (block.type === 'text') {
+                text.push(block.text);
+                mappings.push({
+                    canonical_id: block.id,
+                    native_id: `body/inputPrompt/segments/${turnIndex}/blocks/${blockIndex}`,
+                    kind: 'block',
+                });
+                continue;
+            }
+            if (block.type !== 'video') {
+                throw new TypeError(`TwelveLabs Pegasus retained context does not support ${block.type} input`);
+            }
+            if (mediaSource !== undefined) {
+                throw new TypeError('TwelveLabs Pegasus canonical execution requires exactly one video');
+            }
+            const asset = Object.hasOwn(document.assets, block.asset_id) ? document.assets[block.asset_id] : undefined;
+            if (asset === undefined)
+                throw new Error(`TwelveLabs Pegasus retained context is missing ${block.asset_id}`);
+            if (asset.kind !== 'video') {
+                throw new TypeError(`TwelveLabs Pegasus retained asset ${asset.id} is not a video`);
+            }
+            if (!asset.mime_type.startsWith('video/')) {
+                throw new TypeError(`TwelveLabs Pegasus does not support ${asset.mime_type || 'untyped'} input files`);
+            }
+            if (asset.storage.type === 'inline_base64') {
+                const integrity = await inlineAssetContentIntegrity(asset.storage);
+                if (integrity === undefined) {
+                    throw new Error('TwelveLabs Pegasus inline video integrity is unavailable');
+                }
+                if (integrity.byte_length > MAX_INLINE_VIDEO_BYTES) {
+                    throw new Error('TwelveLabs Pegasus inline video exceeds the 25MB limit');
+                }
+                if (asset.content_hash !== undefined && asset.content_hash !== integrity.content_hash) {
+                    throw new Error(
+                        `TwelveLabs Pegasus retained video ${asset.id} content hash does not match its bytes`,
+                    );
+                }
+                if (asset.byte_length !== undefined && asset.byte_length !== integrity.byte_length) {
+                    throw new Error(
+                        `TwelveLabs Pegasus retained video ${asset.id} byte length does not match its bytes`,
+                    );
+                }
+                mediaSource = { base64String: asset.storage.data };
+            } else {
+                mediaSource = { s3Location: pegasusS3Location(asset) };
+            }
+            videoSource = {
+                segment_index: turnIndex,
+                name: pegasusAssetName(asset),
+                mime_type: asset.mime_type,
+            };
+            mappings.push({ canonical_id: block.id, native_id: 'body/mediaSource', kind: 'block' });
+        }
+        sourceSegments.push({
+            index: turnIndex,
+            // Pegasus receives a single inputPrompt string and has no native system-role channel. Preflight
+            // accepts only ordinary program authority, so the retained source metadata records this as the
+            // user-role projection that is actually sent.
+            role: PromptRole.user,
+            content: text.join(''),
+        });
+    }
+    const inputPrompt = sourceSegments
+        .map((segment) => segment.content)
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    if (inputPrompt.length === 0) throw new TypeError('TwelveLabs Pegasus requires a text prompt');
+    if (mediaSource === undefined || videoSource === undefined) {
+        throw new TypeError('TwelveLabs Pegasus canonical execution requires exactly one video');
+    }
+    const prompt: TwelvelabsPegasusCanonicalPrompt = {
+        inputPrompt,
+        mediaSource,
+        ...(typeof modelOptions?.temperature === 'number' ? { temperature: modelOptions.temperature } : {}),
+        ...(typeof modelOptions?.max_tokens === 'number' ? { maxOutputTokens: modelOptions.max_tokens } : {}),
+        ...(options.result_schema === undefined ? {} : { responseFormat: { jsonSchema: options.result_schema } }),
+    };
+    Object.defineProperty(prompt, TWELVELABS_PEGASUS_PROMPT_SOURCE, {
+        configurable: false,
+        enumerable: false,
+        value: { segments: sourceSegments, video: videoSource },
+        writable: false,
+    });
+    return { prompt, mappings };
+}
+
 function assertCanonicalConversationInput(options: ExecutionOptions): void {
     if (options.conversation !== undefined && !isConversationDocumentFormat(options.conversation)) {
         throw new TypeError('TwelveLabs Pegasus canonical execution does not support legacy conversation input');
@@ -398,6 +545,75 @@ async function prepareTwelvelabsPegasusCanonical(input: {
     };
 }
 
+async function prepareTwelvelabsPegasusCanonicalContext(input: {
+    provider: string;
+    region: string;
+    options: CanonicalExecutionContextOptions;
+}): Promise<PreparedTwelvelabsPegasus> {
+    const prepared = await prepareCanonicalContext({
+        options: input.options,
+        provider: input.provider,
+        protocol: TWELVELABS_PEGASUS_PROTOCOL,
+        adapter_version: TWELVELABS_PEGASUS_ADAPTER_VERSION,
+    });
+    if (prepared.tool_definitions.length > 0) {
+        throw new TypeError('TwelveLabs Pegasus does not support active canonical tool definitions');
+    }
+    const compiled = await retainedContextPrompt(prepared.request_document, input.options);
+    const semanticPayload = requestBody(compiled.prompt);
+    const tier = serviceTier(input.options);
+    const request = invokeRequest(compiled.prompt, input.options, tier);
+    const requestJson = providerJsonValue({
+        modelId: request.modelId,
+        contentType: request.contentType,
+        accept: request.accept,
+        body: semanticPayload,
+        serviceTier: request.serviceTier,
+    });
+    const expectedTargetOptions = targetOptions(input.region, compiled.prompt, input.options);
+    await assertAcceptedCanonicalRequest(
+        prepared,
+        { provider: input.provider, protocol: TWELVELABS_PEGASUS_PROTOCOL, model: input.options.model },
+        requestJson,
+    );
+    if (prepared.accepted_response !== undefined) {
+        const receipt = prepared.accepted_response.generation.request_receipt;
+        if (
+            receipt.target.adapter_version !== TWELVELABS_PEGASUS_ADAPTER_VERSION ||
+            receipt.target.options === undefined ||
+            (await fingerprintJson(receipt.target.options)) !== (await fingerprintJson(expectedTargetOptions))
+        ) {
+            throw new Error(
+                `Accepted response operation ${prepared.runtime.response_operation_id} has incompatible TwelveLabs Pegasus target options`,
+            );
+        }
+    }
+    const receipt =
+        prepared.accepted_response?.generation.request_receipt ??
+        (await createRequestReceipt(
+            prepared.document,
+            prepared.runtime,
+            {
+                provider: input.provider,
+                protocol: TWELVELABS_PEGASUS_PROTOCOL,
+                model: input.options.model,
+                adapter_version: TWELVELABS_PEGASUS_ADAPTER_VERSION,
+                options: expectedTargetOptions,
+            },
+            requestJson,
+            compiled.mappings,
+            prepared.tool_definitions,
+        ));
+    const { request_document: _requestDocument, ...base } = prepared;
+    return {
+        ...base,
+        native_conversation: compiled.prompt,
+        receipt,
+        request,
+        request_json: requestJson,
+    };
+}
+
 interface PegasusOutcome {
     generation_status: 'completed' | 'cancelled';
     turn_status: 'completed' | 'interrupted';
@@ -521,17 +737,19 @@ async function finalizeTwelvelabsPegasusCanonical(
     } else if (normalized?.status === 'invalid') {
         decoded = rejectDecodedStructuredOutput(rawDecoded, normalized.error);
     }
-    const finalDocument = appendDecodedConversationResponse(
-        {
-            document: prepared.document,
-            generation_id: prepared.generation_id,
-            response_turn_id: prepared.response_turn_id,
-            receipt: prepared.receipt,
-            payload: prepared.request_json,
-            diagnostics: [],
-        },
-        decoded,
-        { operation_id: prepared.runtime.response_operation_id, recorded_at: completedAt },
+    const finalDocument = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document: prepared.document,
+                generation_id: prepared.generation_id,
+                response_turn_id: prepared.response_turn_id,
+                receipt: prepared.receipt,
+                payload: prepared.request_json,
+                diagnostics: [],
+            },
+            decoded,
+            { operation_id: prepared.runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return {
         raw_decoded: rawDecoded,
@@ -566,14 +784,33 @@ export async function executeTwelvelabsPegasusCanonical(input: {
     transport: TwelvelabsPegasusTransport;
 }): Promise<CanonicalExecutionResponse> {
     const prepared = await prepareTwelvelabsPegasusCanonical(input);
-    assertRecoverableTwelvelabsPegasus(prepared, input.options);
-    if (prepared.accepted_response !== undefined) return recoverCanonicalExecutionResponse(prepared, input.options);
-    await publishCanonicalPreparedRequest(prepared, input.options);
-    input.signal?.throwIfAborted();
-    const response = await input.transport.invoke(prepared.request, input.signal);
-    input.signal?.throwIfAborted();
-    return (await finalizeTwelvelabsPegasusCanonical(prepared, nativeResponseFromInvoke(response), input.options))
-        .response;
+    return executePreparedTwelvelabsPegasus(prepared, input.options, input.signal, input.transport);
+}
+
+export async function executeTwelvelabsPegasusCanonicalContext(input: {
+    provider: string;
+    region: string;
+    options: CanonicalExecutionContextOptions;
+    signal?: AbortSignal;
+    transport: TwelvelabsPegasusTransport;
+}): Promise<CanonicalExecutionResponse> {
+    const prepared = await prepareTwelvelabsPegasusCanonicalContext(input);
+    return executePreparedTwelvelabsPegasus(prepared, input.options, input.signal, input.transport);
+}
+
+async function executePreparedTwelvelabsPegasus(
+    prepared: PreparedTwelvelabsPegasus,
+    options: ExecutionOptions,
+    signal: AbortSignal | undefined,
+    transport: TwelvelabsPegasusTransport,
+): Promise<CanonicalExecutionResponse> {
+    assertRecoverableTwelvelabsPegasus(prepared, options);
+    if (prepared.accepted_response !== undefined) return recoverCanonicalExecutionResponse(prepared, options);
+    await publishCanonicalPreparedRequest(prepared, options);
+    signal?.throwIfAborted();
+    const response = await transport.invoke(prepared.request, signal);
+    signal?.throwIfAborted();
+    return (await finalizeTwelvelabsPegasusCanonical(prepared, nativeResponseFromInvoke(response), options)).response;
 }
 
 export interface PegasusStreamChunk {
@@ -677,7 +914,29 @@ export async function streamTwelvelabsPegasusCanonicalEvents(input: {
     transport: TwelvelabsPegasusTransport;
 }): Promise<CanonicalExecutionEventStream> {
     const prepared = await prepareTwelvelabsPegasusCanonical(input);
-    assertRecoverableTwelvelabsPegasus(prepared, input.options);
+    return streamPreparedTwelvelabsPegasusEvents(prepared, input.options, input.signal, input.open, input.transport);
+}
+
+export async function streamTwelvelabsPegasusCanonicalContextEvents(input: {
+    provider: string;
+    region: string;
+    options: CanonicalExecutionContextOptions;
+    signal: AbortSignal | undefined;
+    open: CanonicalStreamOpenOptions;
+    transport: TwelvelabsPegasusTransport;
+}): Promise<CanonicalExecutionEventStream> {
+    const prepared = await prepareTwelvelabsPegasusCanonicalContext(input);
+    return streamPreparedTwelvelabsPegasusEvents(prepared, input.options, input.signal, input.open, input.transport);
+}
+
+async function streamPreparedTwelvelabsPegasusEvents(
+    prepared: PreparedTwelvelabsPegasus,
+    options: ExecutionOptions,
+    signal: AbortSignal | undefined,
+    open: CanonicalStreamOpenOptions,
+    transport: TwelvelabsPegasusTransport,
+): Promise<CanonicalExecutionEventStream> {
+    assertRecoverableTwelvelabsPegasus(prepared, options);
     const accepted = prepared.accepted_response;
     const identity = {
         request_id: accepted?.generation.request_id ?? prepared.runtime.request_id,
@@ -689,12 +948,12 @@ export async function streamTwelvelabsPegasusCanonicalEvents(input: {
     if (accepted !== undefined) {
         return new FallbackCanonicalExecutionEventStream(
             identity,
-            () => recoverCanonicalExecutionResponse(prepared, input.options),
-            { ...input.open, origin: 'accepted_recovery' },
+            () => recoverCanonicalExecutionResponse(prepared, options),
+            { ...open, origin: 'accepted_recovery' },
         );
     }
     const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(input.signal?.reason);
+    const forwardAbort = () => abortController.abort(signal?.reason);
     const accumulator = new TwelvelabsPegasusNativeStreamAccumulator();
     const position = streamPosition();
     const draftBlockId = `${prepared.response_turn_id}:twelvelabs:text`;
@@ -702,9 +961,9 @@ export async function streamTwelvelabsPegasusCanonicalEvents(input: {
     let responseMetadata: { provider_response_id?: string; service_tier?: string } = {};
     const eventStream = canonicalNativeExecutionEventStream({
         identity,
-        open: input.open,
+        open,
         openSource: async () => {
-            const opened = await input.transport.stream(prepared.request, abortController.signal);
+            const opened = await transport.stream(prepared.request, abortController.signal);
             responseMetadata = {
                 provider_response_id: opened.provider_response_id,
                 service_tier: opened.service_tier,
@@ -726,7 +985,7 @@ export async function streamTwelvelabsPegasusCanonicalEvents(input: {
         },
         finalize: async () => {
             const nativeResponse = accumulator.response(responseMetadata);
-            const finalized = await finalizeTwelvelabsPegasusCanonical(prepared, nativeResponse, input.options);
+            const finalized = await finalizeTwelvelabsPegasusCanonical(prepared, nativeResponse, options);
             return {
                 decoded: finalized.decoded,
                 response: finalized.response,
@@ -791,16 +1050,16 @@ export async function streamTwelvelabsPegasusCanonicalEvents(input: {
                         },
                     };
                 },
-                ...(finalized.normalized?.status === 'valid' && input.options.result_schema !== undefined
-                    ? { result_schema: input.options.result_schema }
+                ...(finalized.normalized?.status === 'valid' && options.result_schema !== undefined
+                    ? { result_schema: options.result_schema }
                     : {}),
             };
         },
         abort: () => abortController.abort(),
-        close: () => input.signal?.removeEventListener('abort', forwardAbort),
+        close: () => signal?.removeEventListener('abort', forwardAbort),
     });
-    await publishCanonicalPreparedRequest(prepared, input.options);
-    if (input.signal?.aborted) forwardAbort();
-    else input.signal?.addEventListener('abort', forwardAbort, { once: true });
+    await publishCanonicalPreparedRequest(prepared, options);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
     return eventStream;
 }

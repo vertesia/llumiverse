@@ -148,6 +148,8 @@ function projectReceipt(receipt: ReturnType<typeof resolveAcceptedRecords>['rece
         accepted_tool_definition_ids: _acceptedToolDefinitionIds,
         accepted_execution_receipt_ids: _acceptedExecutionReceiptIds,
         accepted_context_entry_ids: _acceptedContextEntryIds,
+        accepted_context_entries: _acceptedContextEntries,
+        accepted_tool_selection: _acceptedToolSelection,
         ...projected
     } = receipt;
     return ConversationOutputReceiptSchema.parse(projected);

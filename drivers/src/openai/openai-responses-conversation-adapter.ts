@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type { ExecutionOptions } from '@llumiverse/common';
 import {
     type AgentContentBlock,
@@ -22,6 +23,8 @@ import {
     type ProgramContentBlock,
     parseConversationDocument,
     preflightJsonInput,
+    type ResolveConversationAsset,
+    readBoundedConversationAsset,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
@@ -37,7 +40,9 @@ import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
+    appendCanonicalDecodedResponseWithProcessing,
     appendCanonicalPrompt,
+    assertCanonicalContextProjection,
     assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
@@ -81,6 +86,16 @@ export type OpenAIResponsesPayload =
 
 type SourceKind = 'imported' | 'received';
 type CanonicalToolResultStatus = 'success' | 'error' | 'cancelled' | 'denied';
+
+export type OpenAIResponsesMediaCaptionProjection = { type: 'provenance' } | { type: 'semantic_text'; text: string };
+
+export interface OpenAIResponsesProjectionOptions {
+    project_media_caption?: (
+        block: Extract<ContentBlock, { type: 'image' | 'document' | 'audio' | 'video' }>,
+        asset: Asset,
+        owner: ConversationTurn,
+    ) => OpenAIResponsesMediaCaptionProjection | undefined;
+}
 
 export type CanonicalOpenAIResponsesFunctionCallOutput = Omit<
     OpenAI.Responses.ResponseInputItem.FunctionCallOutput,
@@ -195,6 +210,8 @@ export interface PreparedOpenAIResponsesConversation
     provider: string;
     requested_model: string;
     prior_native_item_count: number;
+    /** Ephemeral native projection proof; never replaces the retained canonical source. */
+    native_projection?: { source_fingerprint: string; mappings: NativeItemMapping[] };
 }
 
 function ownValue(value: object, key: string): unknown {
@@ -568,10 +585,11 @@ async function assistantItemsRecords(input: {
                 data: parsed?.data ?? item.result,
             };
             const integrity = await inlineAssetContentIntegrity(storage);
+            const outputFormat = typeof item.output_format === 'string' ? item.output_format : undefined;
             const asset: Asset = {
                 id: assetId,
                 kind: 'image',
-                mime_type: parsed?.mime_type ?? 'image/png',
+                mime_type: parsed?.mime_type ?? (outputFormat === undefined ? 'image/png' : `image/${outputFormat}`),
                 storage,
                 provenance:
                     input.source === 'imported'
@@ -922,17 +940,37 @@ function assetToInputPart(asset: Asset, target?: { provider?: string }): OpenAI.
     throw new TypeError(`OpenAI Responses cannot resolve document asset ${asset.id}`);
 }
 
-function ordinaryBlockToPart(
+/** Project an image asset with the same ownership and storage checks as retained Responses context. */
+export function openAIResponsesImageInput(
+    asset: Asset,
+    target?: { provider?: string },
+): OpenAI.Responses.ResponseInputImage {
+    const part = assetToInputPart(asset, target);
+    if (part.type !== 'input_image') {
+        throw new TypeError(`OpenAI Responses asset ${asset.id} is not an image`);
+    }
+    return part;
+}
+
+function ordinaryBlockToParts(
     block: ContentBlock,
     document: ConversationDocument,
     target?: { provider?: string },
-): OpenAI.Responses.ResponseInputContent {
-    if (block.type === 'text') return { type: 'input_text', text: block.text };
-    if (block.type === 'json') return { type: 'input_text', text: JSON.stringify(block.value) };
+    projection?: OpenAIResponsesProjectionOptions,
+    owner?: ConversationTurn,
+): OpenAI.Responses.ResponseInputContent[] {
+    if (block.type === 'text') return [{ type: 'input_text', text: block.text }];
+    if (block.type === 'json') return [{ type: 'input_text', text: JSON.stringify(block.value) }];
     if (block.type === 'image' || block.type === 'document') {
         const asset = document.assets[block.asset_id];
         if (asset === undefined) throw new Error(`OpenAI Responses content references missing asset ${block.asset_id}`);
-        return assetToInputPart(asset, target);
+        const media = assetToInputPart(asset, target);
+        if (block.caption === undefined) return [media];
+        const caption = owner === undefined ? undefined : projection?.project_media_caption?.(block, asset, owner);
+        if (caption === undefined) {
+            throw new TypeError(`OpenAI Responses cannot preserve ${block.type} block ${block.id} caption`);
+        }
+        return caption.type === 'provenance' ? [media] : [{ type: 'input_text', text: caption.text }, media];
     }
     throw new TypeError(`OpenAI Responses cannot project canonical ${block.type} block ${block.id}`);
 }
@@ -1092,7 +1130,9 @@ function assertReplaySemantics(
                 const expected = asset.storage.type === 'inline_base64' ? asset.storage.data : undefined;
                 const parsed = typeof raw.result === 'string' ? dataUrl(raw.result) : undefined;
                 const actual = typeof raw.result === 'string' ? (parsed?.data ?? raw.result) : undefined;
-                const actualMimeType = parsed?.mime_type ?? 'image/png';
+                const outputFormat = typeof raw.output_format === 'string' ? raw.output_format : undefined;
+                const actualMimeType =
+                    parsed?.mime_type ?? (outputFormat === undefined ? 'image/png' : `image/${outputFormat}`);
                 if (expected === undefined || actual !== expected || asset.mime_type !== actualMimeType) {
                     throw new TypeError(
                         `OpenAI Responses replay image ${entry.asset_id} no longer matches canonical data`,
@@ -1158,6 +1198,7 @@ function replayItems(
     turn: ConversationTurn,
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+    projection?: OpenAIResponsesProjectionOptions,
 ): OpenAIResponsesInputItem[] | undefined {
     const replayBlocks: Array<Extract<ContentBlock, { type: 'native_replay' }>> = [];
     for (const block of turn.blocks) {
@@ -1247,12 +1288,12 @@ function replayItems(
         if (block.type === 'reasoning') {
             throw new TypeError(`OpenAI Responses requires protected replay for reasoning block ${block.id}`);
         }
-        const part = ordinaryBlockToPart(block, document, target);
+        const parts = ordinaryBlockToParts(block, document, target, projection, turn);
         units.push({
             block_offset: blockIndex,
             item_order: Number.MAX_SAFE_INTEGER,
             raw: false,
-            items: [{ role: 'assistant', content: [part] } as OpenAIResponsesInputItem],
+            items: [{ role: 'assistant', content: parts } as OpenAIResponsesInputItem],
         });
     }
     units.sort(
@@ -1268,13 +1309,14 @@ function compileOrdinaryTurn(
     turn: ConversationTurn,
     document: ConversationDocument,
     target?: { provider?: string },
+    projection?: OpenAIResponsesProjectionOptions,
 ): OpenAIResponsesInputItem[] {
     if (turn.kind === 'tool') {
         const result = turn.blocks[0];
         const parts = result.content.flatMap((block): OpenAI.Responses.ResponseInputContent[] => {
             if (block.type === 'native_replay') return [];
             if (block.type === 'extension' && block.model_projection === 'excluded') return [];
-            return [ordinaryBlockToPart(block, document, target)];
+            return ordinaryBlockToParts(block, document, target, projection, turn);
         });
         const output: string | OpenAI.Responses.ResponseInputContent[] =
             parts.length === 1 && parts[0].type === 'input_text' ? parts[0].text : parts;
@@ -1289,7 +1331,7 @@ function compileOrdinaryTurn(
                 `OpenAI Responses requires protected replay for canonical ${block.type} block ${block.id}`,
             );
         }
-        return [ordinaryBlockToPart(block, document, target)];
+        return ordinaryBlockToParts(block, document, target, projection, turn);
     });
     const content: string | OpenAI.Responses.ResponseInputContent[] =
         parts.length === 1 && parts[0].type === 'input_text' ? parts[0].text : parts;
@@ -1313,14 +1355,83 @@ function compileOrdinaryTurn(
 export function compileOpenAIResponsesConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
+    projection?: OpenAIResponsesProjectionOptions,
 ): ReturnType<typeof projectOpenAIResponsesConversation> {
-    return projectOpenAIResponsesConversation(document, target);
+    return projectOpenAIResponsesConversation(document, target, false, projection);
+}
+
+/** Resolve selected, integrity-declared external images that Responses cannot represent natively. */
+async function compileOpenAIResponsesContextWithHostAssets(
+    document: ConversationDocument,
+    target: { provider: string; model: string },
+    resolveAsset: ResolveConversationAsset | undefined,
+    signal: AbortSignal | undefined,
+    hydrated: Map<string, { fingerprint: string; data: string }>,
+): Promise<ReturnType<typeof compileOpenAIResponsesConversation>> {
+    const selected = selectedCanonicalTurns(document, {
+        allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
+        allow_interrupted_with_complete_tool_calls: true,
+    });
+    const imageAssetIds = new Set<string>();
+    for (const turn of selected) {
+        for (const block of turn.blocks) {
+            if (block.type === 'image') imageAssetIds.add(block.asset_id);
+        }
+    }
+    const externalImageIds = [...imageAssetIds].filter((id) => {
+        const asset = document.assets[id];
+        if (!asset) throw new TypeError(`OpenAI Responses selected image asset ${id} is missing`);
+        return (
+            asset.storage.type === 'external' &&
+            asset.storage.resolver !== 'url' &&
+            asset.storage.resolver !== 'openai_file'
+        );
+    });
+    if (externalImageIds.length === 0) return compileOpenAIResponsesConversation(document, target);
+    const nativeDocument = { ...document, assets: { ...document.assets } };
+    let aggregateBytes = 0;
+    for (const id of externalImageIds) {
+        const asset = document.assets[id];
+        if (!asset) throw new TypeError(`OpenAI Responses selected image asset ${id} is missing`);
+        if (asset.kind !== 'image' || !resolveAsset)
+            throw new TypeError(`OpenAI Responses external image asset ${id} has no host resolver`);
+        if (asset.mime_type !== 'image/png' && asset.mime_type !== 'image/jpeg')
+            throw new TypeError(`OpenAI Responses external image asset ${id} has unsupported MIME`);
+        if (asset.byte_length === undefined || asset.byte_length > 32 * 1024 * 1024 - aggregateBytes)
+            throw new RangeError('OpenAI Responses external images exceed the aggregate native projection budget');
+        const fingerprint = await fingerprintJson(asset);
+        signal?.throwIfAborted();
+        let data = hydrated.get(id)?.data;
+        if (data !== undefined && hydrated.get(id)?.fingerprint !== fingerprint)
+            throw new TypeError(`OpenAI Responses external image asset ${id} changed during native preparation`);
+        if (data === undefined) {
+            const bytes = await readBoundedConversationAsset(asset, resolveAsset, {
+                max_bytes: 32 * 1024 * 1024,
+                max_chunks: 65_536,
+                signal,
+                require_integrity: true,
+                label: 'OpenAI Responses external image',
+            });
+            signal?.throwIfAborted();
+            const png = Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+            const jpeg = bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+            if ((!png || asset.mime_type !== 'image/png') && (!jpeg || asset.mime_type !== 'image/jpeg'))
+                throw new TypeError(`OpenAI Responses external image asset ${id} has invalid media bytes`);
+            data = Buffer.from(bytes).toString('base64');
+            hydrated.set(id, { fingerprint, data });
+        }
+        aggregateBytes += asset.byte_length;
+        nativeDocument.assets[id] = { ...asset, storage: { type: 'inline_base64', data } };
+    }
+    signal?.throwIfAborted();
+    return compileOpenAIResponsesConversation(nativeDocument, target);
 }
 
 function projectOpenAIResponsesConversation(
     document: ConversationDocument,
     target?: { provider?: string; model?: string },
     readOnlyCompatibilityProjection = false,
+    projection?: OpenAIResponsesProjectionOptions,
 ): { conversation: OpenAIResponsesInputItem[]; mappings: NativeItemMapping[] } {
     const conversation: OpenAIResponsesInputItem[] = [];
     const mappings: NativeItemMapping[] = [];
@@ -1328,12 +1439,30 @@ function projectOpenAIResponsesConversation(
         allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
         allow_interrupted_with_complete_tool_calls: true,
     });
+    if (!readOnlyCompatibilityProjection) {
+        assertCanonicalContextProjection(document, selectedTurns, {
+            label: 'OpenAI Responses',
+            program_authorities: ['system', 'developer', 'ordinary'],
+            ...(projection?.project_media_caption === undefined
+                ? {}
+                : {
+                      preserve_media_caption: (block, owner) => {
+                          const asset = document.assets[block.asset_id];
+                          return (
+                              asset !== undefined &&
+                              projection.project_media_caption?.(block, asset, owner) !== undefined
+                          );
+                      },
+                  }),
+        });
+    }
     for (const turn of selectedTurns) {
         if (!readOnlyCompatibilityProjection)
             assertProtectedReplayCompatibility(document, turn, OPENAI_RESPONSES_PROTOCOL, target);
     }
     for (const turn of selectedTurns) {
-        const items = replayItems(turn, document, target) ?? compileOrdinaryTurn(turn, document, target);
+        const items =
+            replayItems(turn, document, target, projection) ?? compileOrdinaryTurn(turn, document, target, projection);
         const itemIndex = conversation.length;
         conversation.push(...items);
         mappings.push({ canonical_id: turn.id, native_id: `items/${itemIndex}`, kind: 'turn' });
@@ -1510,7 +1639,10 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
 export async function prepareOpenAIResponsesCanonicalContext(input: {
     options: CanonicalExecutionContextOptions;
     provider: string;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>> {
+    const resolveAsset = input.options.resolve_canonical_asset;
+    const signal = input.signal;
     const prepared = await prepareCanonicalContext({
         options: input.options,
         provider: input.provider,
@@ -1518,16 +1650,33 @@ export async function prepareOpenAIResponsesCanonicalContext(input: {
         adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
     });
     const target = { provider: input.provider, model: input.options.model };
-    const compiled = compileOpenAIResponsesConversation(prepared.request_document, target);
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compiled = await compileOpenAIResponsesContextWithHostAssets(
+        prepared.request_document,
+        target,
+        resolveAsset,
+        signal,
+        hydrated,
+    );
     const priorCompiled =
         prepared.request_document === prepared.document
             ? compiled
-            : compileOpenAIResponsesConversation(prepared.document, target);
+            : await compileOpenAIResponsesContextWithHostAssets(
+                  prepared.document,
+                  target,
+                  resolveAsset,
+                  signal,
+                  hydrated,
+              );
     const priorNativeItemCount = priorCompiled.conversation.length;
     const { request_document: _requestDocument, ...base } = prepared;
     return {
         ...base,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(prepared.document),
+            mappings: compiled.mappings,
+        },
         provider: input.provider,
         requested_model: input.options.model,
         prior_native_item_count: priorNativeItemCount,
@@ -1537,9 +1686,17 @@ export async function prepareOpenAIResponsesCanonicalContext(input: {
 export async function finalizeOpenAIResponsesPreparedRequest(
     state: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
     payload: OpenAIResponsesPayload,
+    requestFingerprintPayload: JsonValue = providerJsonValue(payload),
 ): Promise<PreparedOpenAIResponsesConversation> {
     const model = state.requested_model;
-    const compiled = compileOpenAIResponsesConversation(state.document, { provider: state.provider, model });
+    if (
+        state.native_projection !== undefined &&
+        state.native_projection.source_fingerprint !== (await fingerprintJson(state.document))
+    )
+        throw new TypeError('OpenAI Responses canonical source changed after native image projection');
+    const mappings =
+        state.native_projection?.mappings ??
+        compileOpenAIResponsesConversation(state.document, { provider: state.provider, model }).mappings;
     const targetOptions = canonicalToolSelectionTargetOptions(undefined, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
@@ -1551,8 +1708,8 @@ export async function finalizeOpenAIResponsesPreparedRequest(
             adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
             ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
-        providerJsonValue(payload),
-        compiled.mappings,
+        requestFingerprintPayload,
+        mappings,
         state.tool_definitions,
     );
     return { ...state, payload, receipt, diagnostics: [] };
@@ -1787,6 +1944,18 @@ export function appendOpenAIResponsesCanonicalResponse(
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;
+}
+
+export async function appendOpenAIResponsesCanonicalResponseWithProcessing(
+    prepared: PreparedOpenAIResponsesConversation,
+    decoded: DecodedConversationResponse,
+): Promise<ConversationDocument> {
+    return (
+        await appendCanonicalDecodedResponseWithProcessing(prepared, decoded, {
+            operation_id: prepared.runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.recorded_at,
+        })
+    ).document;
 }
 
 /** Read-only compatibility projection for versioned legacy API responses. */

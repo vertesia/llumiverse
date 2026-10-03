@@ -2,7 +2,7 @@ import type { Interactions } from '@google/genai';
 import {
     type AgentContentBlock,
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     buildConversationTurn,
     type ConversationTurn,
     createProgramTurn,
@@ -632,23 +632,25 @@ async function executeOmniVideoCanonical(input: {
         outputs,
         usage: response.usage,
     });
-    const finalDocument = appendDecodedConversationResponse(
-        {
-            document,
-            generation_id: identities.generation_id,
-            response_turn_id: identities.response_turn_id,
-            receipt,
-            payload: preparedRequest.payload_json,
-            diagnostics: [],
-        },
-        {
-            turns: [responseTurn],
-            assets,
-            generation,
-            diagnostics: [],
-            payload_fingerprint: await fingerprintJson(responseEvidence),
-        },
-        { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+    const finalDocument = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document,
+                generation_id: identities.generation_id,
+                response_turn_id: identities.response_turn_id,
+                receipt,
+                payload: preparedRequest.payload_json,
+                diagnostics: [],
+            },
+            {
+                turns: [responseTurn],
+                assets,
+                generation,
+                diagnostics: [],
+                payload_fingerprint: await fingerprintJson(responseEvidence),
+            },
+            { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return createCanonicalExecutionResponse(finalDocument, runtime.response_operation_id, {
         ...(input.options.include_original_response ? { original_response: response } : {}),

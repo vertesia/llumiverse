@@ -163,7 +163,7 @@ export async function readBoundedGeneratedImageResponse(
 
 export async function generatedImageStorage(
     image: VerifiedGeneratedImage,
-    options: ExecutionOptions,
+    options: Pick<ExecutionOptions, 'store_generated_asset'>,
     label: string,
     signal?: AbortSignal,
 ): Promise<AssetStorage> {
@@ -192,7 +192,10 @@ export async function generatedImageStorage(
     return stored.storage;
 }
 
-export function maximumGeneratedImageOutputBytes(document: unknown, options: ExecutionOptions): number {
+export function maximumGeneratedImageOutputBytes(
+    document: unknown,
+    options: Pick<ExecutionOptions, 'store_generated_asset'>,
+): number {
     if (options.store_generated_asset !== undefined) return MAX_GENERATED_IMAGE_BYTES;
     const currentBytes = new TextEncoder().encode(JSON.stringify(document)).byteLength;
     const remainingJsonBytes = MAX_CANONICAL_JSON_BYTES - currentBytes - CANONICAL_RESPONSE_JSON_RESERVE_BYTES;

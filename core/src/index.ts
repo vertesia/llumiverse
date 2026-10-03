@@ -4,7 +4,7 @@ export * from './CanonicalSelection.js';
 export * from './CanonicalStreaming.js';
 export * from './CanonicalToolDefinitions.js';
 export * from './conversation-utils.js';
-export type { AbstractDriver, Driver } from './Driver.js';
+export type { AbstractDriver, CanonicalModelSwitchProjectionControls, Driver } from './Driver.js';
 export type * from './embedding-batch.js';
 export * from './embeddings.js';
 export * from './json.js';

@@ -3,7 +3,9 @@ import type { ExecutionOptions } from '@llumiverse/common';
 import {
     type Asset,
     appendConversationRecords,
+    type ContentBlock,
     type ConversationDocument,
+    type ConversationTurn,
     createConversationDocument,
     createToolTurn,
     externalizeToolCallArguments,
@@ -39,7 +41,12 @@ import {
     compileGeminiConversation,
     prepareGeminiCanonicalState,
 } from '../vertexai/models/gemini-conversation-adapter.js';
-import { canonicalToolDefinitions, parseCanonicalConversation } from './canonical-runtime.js';
+import {
+    assertCanonicalContextProjection,
+    canonicalToolDefinitions,
+    parseCanonicalConversation,
+    selectedCanonicalTurns,
+} from './canonical-runtime.js';
 import { exportLegacyConversation } from './index.js';
 
 const recordedAt = '2026-09-11T00:00:00.000Z';
@@ -127,7 +134,188 @@ function durableAsset(input: {
     };
 }
 
+function projectionDocument(turns: ConversationTurn[], entries = turns.map((turn) => turn.id)): ConversationDocument {
+    const document = createConversationDocument({ id: 'canonical-projection-policy', created_at: recordedAt });
+    document.turns.push(...turns);
+    document.context.entries = entries.map((turnId) => ({
+        id: `context:${turnId}`,
+        type: 'source_turn' as const,
+        turn_id: turnId,
+    }));
+    document.assets['asset:video'] = {
+        id: 'asset:video',
+        kind: 'video',
+        mime_type: 'video/mp4',
+        storage: { type: 'inline_base64', data: 'YWJj' },
+        provenance: { type: 'received', source_turn_id: turns[0]?.id },
+        byte_length: 3,
+        created_at: recordedAt,
+    };
+    return parseConversationDocument(document);
+}
+
+function receivedTurn(input: {
+    id: string;
+    kind?: 'user' | 'program';
+    authority?: ConversationTurn['authority'];
+    blocks: ContentBlock[];
+}): ConversationTurn {
+    return {
+        id: input.id,
+        kind: input.kind ?? 'user',
+        authority: input.authority ?? 'ordinary',
+        status: 'completed',
+        timestamps: { recorded_at: recordedAt },
+        provenance: { type: 'received' },
+        model_visibility: 'include',
+        blocks: input.blocks,
+    } as ConversationTurn;
+}
+
 describe('canonical native adapter conformance', () => {
+    const currentCompilers = [
+        compileOpenAIChatCompletionsConversation,
+        compileOpenAIResponsesConversation,
+        compileClaudeMessagesConversation,
+        compileGeminiConversation,
+        compileBedrockConverseConversation,
+    ];
+
+    it.each([
+        {
+            name: 'caption',
+            block: {
+                id: 'selected-video',
+                type: 'video' as const,
+                asset_id: 'asset:video',
+                caption: 'Preserve this caption',
+            },
+        },
+        {
+            name: 'selection',
+            block: {
+                id: 'selected-video',
+                type: 'video' as const,
+                asset_id: 'asset:video',
+                selection: { type: 'time_range' as const, start_seconds: 1, end_seconds: 2 },
+            },
+        },
+    ])('rejects a selected media $name before every current native compiler can discard it', ({ block }) => {
+        const document = projectionDocument([receivedTurn({ id: 'selected-user', blocks: [block] })]);
+
+        for (const compile of currentCompilers) {
+            expect(() => compile(structuredClone(document))).toThrow(/cannot preserve video block selected-video/);
+        }
+    });
+
+    it('rejects selected elevated actor authority instead of lowering it to the native role', () => {
+        const document = projectionDocument([
+            receivedTurn({
+                id: 'selected-user',
+                authority: 'system',
+                blocks: [{ id: 'selected-text', type: 'text', text: 'trusted', format: 'plain' }],
+            }),
+        ]);
+
+        for (const compile of currentCompilers) {
+            expect(() => compile(structuredClone(document))).toThrow(
+                /cannot preserve user turn selected-user authority system/,
+            );
+        }
+    });
+
+    it('ignores unsupported semantics outside the active context and in omitted blocks', () => {
+        const historical = receivedTurn({
+            id: 'historical-user',
+            authority: 'system',
+            blocks: [
+                {
+                    id: 'historical-video',
+                    type: 'video',
+                    asset_id: 'asset:video',
+                    caption: 'Not selected',
+                    selection: { type: 'time_range', start_seconds: 1, end_seconds: 2 },
+                },
+            ],
+        });
+        const selected = receivedTurn({
+            id: 'selected-user',
+            blocks: [
+                { id: 'selected-text', type: 'text', text: 'selected', format: 'plain' },
+                {
+                    id: 'omitted-video',
+                    type: 'video',
+                    asset_id: 'asset:video',
+                    caption: 'Omitted by block selection',
+                },
+            ],
+        });
+        const document = projectionDocument([historical, selected], ['selected-user']);
+        document.context.entries[0] = {
+            ...document.context.entries[0],
+            block_ids: ['selected-text'],
+        };
+        const parsed = parseConversationDocument(document);
+
+        for (const compile of currentCompilers) {
+            expect(() => compile(structuredClone(parsed))).not.toThrow();
+        }
+    });
+
+    it('checks selected nested tool media', () => {
+        const nestedDocument = projectionDocument([
+            {
+                id: 'agent-tool-call',
+                kind: 'agent',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [
+                    {
+                        id: 'tool-call-block',
+                        type: 'tool_call',
+                        call_id: 'call-1',
+                        tool_name: 'inspect',
+                        executor: 'application',
+                        arguments: { type: 'json', value: {} },
+                    },
+                ],
+            },
+            createToolTurn({
+                id: 'tool-result',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [
+                    {
+                        id: 'tool-result-block',
+                        type: 'tool_result',
+                        call_id: 'call-1',
+                        status: 'success',
+                        content: [
+                            {
+                                id: 'nested-video',
+                                type: 'video',
+                                asset_id: 'asset:video',
+                                caption: 'Nested caption',
+                            },
+                        ],
+                    },
+                ],
+            }),
+        ]);
+        expect(() =>
+            assertCanonicalContextProjection(nestedDocument, selectedCanonicalTurns(nestedDocument), {
+                label: 'test',
+                program_authorities: ['ordinary'],
+            }),
+        ).toThrow(/cannot preserve video block nested-video caption/);
+    });
+
     it('uses the exact ordered canonical active catalog across conversational adapters', async () => {
         const document = canonicalToolDocument();
         const options = (suffix: string, model: string): ExecutionOptions => ({

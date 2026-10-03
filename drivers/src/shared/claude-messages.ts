@@ -99,7 +99,7 @@ import {
     rejectDecodedStructuredOutput,
 } from '../conversation/structured-output.js';
 import {
-    appendClaudeCanonicalResponse,
+    appendClaudeCanonicalResponseWithProcessing,
     type CanonicalClaudeToolResultBlockParam,
     CLAUDE_MESSAGES_PROTOCOL,
     decodeClaudeCanonicalResponse,
@@ -1102,7 +1102,7 @@ export function buildClaudeStreamingConversation(
     return processed as ClaudePrompt;
 }
 
-function projectClaudeConversation(
+export function projectClaudeConversation(
     conversation: ClaudePrompt,
     options: ExecutionOptions,
     currentTurn: number,
@@ -1416,7 +1416,7 @@ async function executePreparedCanonicalClaudeCompletion(
             ? await decodeClaudeCanonicalResponse(result, prepared, normalized.structured_output)
             : rawDecoded;
     if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-    const document = appendClaudeCanonicalResponse(prepared, decoded);
+    const document = await appendClaudeCanonicalResponseWithProcessing(prepared, decoded);
     return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
         service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
         ...(options.include_original_response ? { original_response: result } : {}),
@@ -1488,7 +1488,7 @@ export async function executeClaudeCompletion(
         normalized?.status === 'valid'
             ? await decodeClaudeCanonicalResponse(result, prepared, normalized.structured_output)
             : rawDecoded;
-    const processedConversation = appendClaudeCanonicalResponse(prepared, decoded);
+    const processedConversation = await appendClaudeCanonicalResponseWithProcessing(prepared, decoded);
 
     return {
         result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
@@ -1662,7 +1662,7 @@ export async function streamClaudeCompletion(
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
             const { decoded } = await decodeFinalResponse();
-            return appendClaudeCanonicalResponse(prepared, decoded);
+            return await appendClaudeCanonicalResponseWithProcessing(prepared, decoded);
         },
     };
     return driverStream;
@@ -1965,7 +1965,7 @@ async function streamPreparedCanonicalClaudeEvents(
             if (normalized?.status === 'invalid') {
                 decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
             }
-            const document = appendClaudeCanonicalResponse(prepared, decoded);
+            const document = await appendClaudeCanonicalResponseWithProcessing(prepared, decoded);
             const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
                 service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
                 ...(options.include_original_response ? { original_response: finalMessage } : {}),

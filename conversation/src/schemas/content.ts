@@ -14,6 +14,7 @@ import {
     TurnStatusSchema,
     TurnTimestampsSchema,
 } from './primitives.js';
+import { DerivedBlockLineageSchema } from './source-slices.js';
 
 export const NativeIdentitySchema = z
     .strictObject({
@@ -23,32 +24,9 @@ export const NativeIdentitySchema = z
     })
     .meta({ id: 'ConversationNativeIdentity' });
 
-export const ImageRegionSchema = z
-    .strictObject({
-        type: z.literal('image_region'),
-        coordinate_space: z.enum(['pixels', 'normalized']),
-        x: z.number().nonnegative(),
-        y: z.number().nonnegative(),
-        width: z.number().positive(),
-        height: z.number().positive(),
-    })
-    .meta({ id: 'ConversationImageRegion' });
+import { ImageRegionSchema, PageRangeSchema, TimeRangeSchema } from './content-ranges.js';
 
-export const PageRangeSchema = z
-    .strictObject({
-        type: z.literal('page_range'),
-        from_page: PositiveSafeIntegerSchema,
-        through_page: PositiveSafeIntegerSchema,
-    })
-    .meta({ id: 'ConversationPageRange' });
-
-export const TimeRangeSchema = z
-    .strictObject({
-        type: z.literal('time_range'),
-        start_seconds: z.number().nonnegative(),
-        end_seconds: z.number().positive(),
-    })
-    .meta({ id: 'ConversationTimeRange' });
+export { ImageRegionSchema, PageRangeSchema, TimeRangeSchema } from './content-ranges.js';
 
 export const AssetKindSchema = z
     .enum(['text', 'json', 'binary', 'image', 'document', 'audio', 'video', 'other'])
@@ -539,6 +517,7 @@ export const DerivedTurnProvenanceSchema = z
         source_turn_ids: z.array(IdentifierSchema).min(1),
         source_block_ids: z.array(IdentifierSchema).min(1).optional(),
         source_hash: ContentHashSchema,
+        block_lineage: DerivedBlockLineageSchema.optional(),
     })
     .meta({ id: 'ConversationDerivedTurnProvenance' });
 

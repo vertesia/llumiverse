@@ -1,7 +1,7 @@
 import {
     type AgentContentBlock,
     type Asset,
-    appendDecodedConversationResponse,
+    appendDecodedConversationResponseWithProcessing,
     buildConversationTurn,
     type ConversationTurn,
     createProgramTurn,
@@ -610,23 +610,25 @@ export async function executeXAIImageCanonical(input: {
         })),
         ...(response.usage === undefined ? {} : { usage: response.usage }),
     });
-    const finalDocument = appendDecodedConversationResponse(
-        {
-            document,
-            generation_id: identities.generation_id,
-            response_turn_id: identities.response_turn_id,
-            receipt,
-            payload: requestJson,
-            diagnostics: [],
-        },
-        {
-            turns: [responseTurn],
-            assets,
-            generation,
-            diagnostics: [],
-            payload_fingerprint: await fingerprintJson(responseEvidence),
-        },
-        { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+    const finalDocument = (
+        await appendDecodedConversationResponseWithProcessing(
+            {
+                document,
+                generation_id: identities.generation_id,
+                response_turn_id: identities.response_turn_id,
+                receipt,
+                payload: requestJson,
+                diagnostics: [],
+            },
+            {
+                turns: [responseTurn],
+                assets,
+                generation,
+                diagnostics: [],
+                payload_fingerprint: await fingerprintJson(responseEvidence),
+            },
+            { operation_id: runtime.response_operation_id, recorded_at: completedAt },
+        )
     ).document;
     return createCanonicalExecutionResponse(finalDocument, runtime.response_operation_id, {
         ...(input.options.include_original_response ? { original_response: response } : {}),

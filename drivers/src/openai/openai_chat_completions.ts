@@ -1,28 +1,50 @@
+import type {
+    CanonicalProjectedRequestMeasurement,
+    CanonicalRequestProjectionCompiler,
+    ExecutionOptions,
+} from '@llumiverse/common';
+import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import {
     type ToolDefinition as CanonicalToolDefinition,
+    type ConversationDocument,
+    type ConversationModelSwitchProjection,
+    type ConversationPreparedRequestRecord,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
+    fingerprintJson,
+    type IndexedConversationSelectedContext,
+    IndexedConversationSelectedContextSchema,
     type JsonObject,
     type JsonValue,
+    type ModelTarget,
     type NativeStreamPosition,
+    parseConversationDocument,
+    parseConversationPreparedRequestRecord,
+    preflightJsonInput,
+    type RequestSourceWorkingSet,
+    RequestSourceWorkingSetSchema,
+    type ResolvedConversationRuntimeContext,
+    ResolvedConversationRuntimeContextSchema,
 } from '@llumiverse/conversation';
+import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
 import {
     type AIModel,
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
+    type CanonicalModelSwitchProjectionControls,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    canonicalToolSelectionPolicy,
     createCanonicalExecutionResponse,
     type DriverCompletionStream,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
-    type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
     FallbackCanonicalExecutionEventStream,
@@ -56,9 +78,11 @@ import { canonicalNativeExecutionEventStream } from '../conversation/canonical-e
 import {
     assertAcceptedCanonicalRequest,
     canonicalConversationTurnNumber,
+    canonicalToolSelectionTargetOptions,
     providerJsonValue,
     publishCanonicalPreparedRequest,
     recoverCanonicalExecutionResponse,
+    selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
 import {
     normalizeDecodedStructuredOutputForSchema,
@@ -74,13 +98,23 @@ import {
     openAIInputAudioPart,
     streamOpenAIAudioCanonicalEvents,
 } from './audio.js';
+import {
+    boundedCanonicalProjectionOperation,
+    projectCanonicalRequestMeasurement,
+} from './canonical-request-measurement.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import {
-    appendOpenAIChatCanonicalResponse,
+    appendOpenAIChatCanonicalResponseWithProcessing,
+    assertOpenAIChatSelectedPreparedRequestEvidence,
     compileOpenAIChatCompletionsConversation,
+    compileOpenAIChatIndexedSelectedText,
+    compileOpenAIChatProspectiveJsonMinification,
+    compileOpenAIChatSelectedWorkingSet,
+    createOpenAIChatIndexedTextRequestReceipt,
     decodeOpenAIChatCanonicalResponse,
     finalizeOpenAIChatPreparedRequest,
+    OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
     type PreparedOpenAIChatConversation,
     prepareOpenAIChatCanonicalContext,
@@ -90,6 +124,7 @@ import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
 export type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
+export { compileOpenAIChatIndexedSelectedText } from './openai-chat-conversation-adapter.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
 
@@ -355,7 +390,7 @@ async function finalizeOpenAIChatStreamResponse(input: {
               )
             : rawDecoded;
     if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-    const document = appendOpenAIChatCanonicalResponse(input.prepared, decoded);
+    const document = await appendOpenAIChatCanonicalResponseWithProcessing(input.prepared, decoded);
     return {
         raw_decoded: rawDecoded,
         decoded,
@@ -922,7 +957,7 @@ function finalizeOpenAIChatCompletionsConversation(
     return projectOpenAIChatCompletionsHistory(conversation, options, getConversationMeta(conversation).turnNumber);
 }
 
-function projectOpenAIChatCompletionsHistory(
+export function projectOpenAIChatCompletionsHistory(
     conversation: OpenAIChatCompletionsPrompt,
     options: ExecutionOptions,
     currentTurn: number,
@@ -978,26 +1013,37 @@ function getOpenAIChatDriverProvider(driver: unknown): string {
     return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
 }
 
+function prepareCanonicalOpenAIProjectionFromNative(
+    native: OpenAIChatCompletionsPrompt,
+    priorNativeMessageCount: number,
+    options: ExecutionOptions,
+    currentTurn: number,
+    tools: readonly (Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition)[],
+): OpenAIChatCompletionsPrompt {
+    const prior: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: native.messages.slice(0, priorNativeMessageCount),
+    };
+    const projectedPrior = projectOpenAIChatCompletionsHistory(prior, options, currentTurn);
+    return prepareOpenAIChatCompletionsConversation(
+        {
+            _is_openai_chat_completions: true,
+            messages: [...projectedPrior.messages, ...native.messages.slice(priorNativeMessageCount)],
+        },
+        { model: options.model, tools },
+    );
+}
+
 function prepareCanonicalOpenAIProjection(
     prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
     options: ExecutionOptions,
 ): OpenAIChatCompletionsPrompt {
-    const native = prepared.native_conversation;
-    const prior: OpenAIChatCompletionsPrompt = {
-        _is_openai_chat_completions: true,
-        messages: native.messages.slice(0, prepared.prior_native_message_count),
-    };
-    const projectedPrior = projectOpenAIChatCompletionsHistory(
-        prior,
+    return prepareCanonicalOpenAIProjectionFromNative(
+        prepared.native_conversation,
+        prepared.prior_native_message_count,
         options,
         canonicalConversationTurnNumber(prepared.document),
-    );
-    return prepareOpenAIChatCompletionsConversation(
-        {
-            _is_openai_chat_completions: true,
-            messages: [...projectedPrior.messages, ...native.messages.slice(prepared.prior_native_message_count)],
-        },
-        { model: options.model, tools: prepared.tool_definitions },
+        prepared.tool_definitions,
     );
 }
 
@@ -1125,11 +1171,247 @@ interface OpenAIChatRequestBinding {
     target_options?: JsonObject;
 }
 
+/** Shared native request builder: transport, dry measurement and accepted-view attestation use identical fields. */
+export function buildOpenAIChatCompletionsPayload(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: ExecutionOptions,
+    protocolOptions: OpenAIChatCompletionsProtocolOptions,
+    modelName: string,
+    stream: boolean,
+    provider: string = Providers.openai_compatible,
+    tools:
+        | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+        | ToolDefinition[]
+        | undefined = options.tools,
+): OpenAIChatCompletionsPayload {
+    const modelOptions = options.model_options as TextFallbackOptions & {
+        effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+        reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+        seed?: number;
+        service_tier?: string;
+        tool_choice?: 'auto' | 'none' | 'any' | 'required';
+        /** Internal execution hint supplied after public model-option validation. */
+        required_tool_name?: string;
+        /** Internal execution hint used with a required named tool. */
+        parallel_tool_calls?: boolean;
+    };
+    const payload: OpenAIChatCompletionsPayload = {
+        model: modelName,
+        messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
+        // Some OpenAI-compatible providers return empty/truncated completions unless a
+        // documented or runtime-validated token budget is supplied. Caller options still win.
+        max_tokens: modelOptions?.max_tokens ?? protocolOptions.defaultMaxTokens,
+        temperature: modelOptions?.temperature,
+        top_p: modelOptions?.top_p,
+        presence_penalty: modelOptions?.presence_penalty,
+        frequency_penalty: modelOptions?.frequency_penalty,
+        n: 1,
+        stop: modelOptions?.stop_sequence,
+        seed: modelOptions?.seed,
+        reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
+        service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
+        stream,
+    };
+
+    const executionExtraBody = getOpenAIExtraBody(modelOptions);
+    if (protocolOptions.extraBody || executionExtraBody) {
+        payload.extra_body = { ...protocolOptions.extraBody, ...executionExtraBody };
+    }
+
+    const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(tools, protocolOptions.toolSchemaMode);
+    const forcedToolChoice =
+        typeof modelOptions?.required_tool_name === 'string' ||
+        modelOptions?.tool_choice === 'required' ||
+        modelOptions?.tool_choice === 'any';
+    if (forcedToolChoice && (!toolsPayload || toolsPayload.length === 0)) {
+        throw createToolChoiceConfigurationError(
+            '[OpenAI Chat Completions API] A required tool choice was requested, but no tools are available.',
+            { provider, model: options.model, operation: stream ? 'stream' : 'execute' },
+        );
+    }
+    if (toolsPayload && toolsPayload.length > 0) {
+        payload.tools = toolsPayload;
+        payload.tool_choice = modelOptions?.required_tool_name
+            ? { type: 'function', function: { name: modelOptions.required_tool_name } }
+            : modelOptions?.tool_choice === 'any'
+              ? 'required'
+              : modelOptions?.tool_choice;
+        payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
+    }
+
+    if (options.result_schema && protocolOptions.resultSchemaMode !== 'prompt') {
+        const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
+        payload.response_format = {
+            type: 'json_schema',
+            json_schema: { name: 'output', strict: formattedSchema.strict, schema: formattedSchema.schema },
+        };
+    }
+
+    return payload;
+}
+
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
     constructor(options: OpenAIChatCompletionsProtocolOptions) {
         this.options = options;
+    }
+
+    /** Prepare exact native payload and receipt from a bounded indexed selection; host durability still gates dispatch. */
+    async prepareIndexedTextRequest(input: {
+        selection: IndexedConversationSelectedContext;
+        runtime: ResolvedConversationRuntimeContext;
+        options: ExecutionOptions;
+        provider: string;
+        stream: boolean;
+    }) {
+        // Own every JSON input used after receipt hashing yields. ExecutionOptions may also contain
+        // callbacks, so copy only the request controls consumed by this indexed compiler.
+        if (!preflightJsonInput(input.selection).success || !preflightJsonInput(input.runtime).success) {
+            throw new TypeError('Indexed OpenAI source or runtime is not bounded JSON');
+        }
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const runtime = ResolvedConversationRuntimeContextSchema.parse(structuredClone(input.runtime));
+        const ownField = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed OpenAI option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownField('model');
+        const modelOptions = ownField('model_options');
+        const resultSchema = ownField('result_schema');
+        const stripImagesAfterTurns = ownField('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownField('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownField('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        const provider = input.provider;
+        const stream = input.stream;
+        const compiled = compileOpenAIChatIndexedSelectedText(selection, {
+            provider,
+            model: options.model,
+        });
+        const tools = selection.context.active_tool_definition_ids.map((id) => {
+            const tool = Object.hasOwn(selection.tool_definitions, id) ? selection.tool_definitions[id] : undefined;
+            if (!tool) throw new Error(`Indexed OpenAI Chat tool ${id} is unavailable`);
+            return tool;
+        });
+        const nativeConversation = prepareCanonicalOpenAIProjectionFromNative(
+            compiled.conversation,
+            compiled.conversation.messages.length,
+            options,
+            selection.source_turn_count,
+            tools,
+        );
+        const builtPayload = this.buildPayload(nativeConversation, options, stream, provider, tools);
+        if (builtPayload.extra_body !== undefined && !preflightJsonInput(builtPayload.extra_body).success) {
+            throw new TypeError('Indexed OpenAI extra body is not bounded JSON');
+        }
+        // Protocol configuration is constructor-owned and can contain nested mutable extra-body values.
+        // Keep the returned payload and hashed receipt bound to one owned value across the await below.
+        const payload = structuredClone(builtPayload);
+        const binding = this.requestBinding(payload, options, provider);
+        const targetOptions = canonicalToolSelectionTargetOptions(
+            binding.target_options,
+            canonicalToolSelectionPolicy(options),
+        );
+        const receipt = await createOpenAIChatIndexedTextRequestReceipt({
+            selection,
+            runtime,
+            target: {
+                provider,
+                protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                model: options.model,
+                adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                ...(targetOptions === undefined ? {} : { options: targetOptions }),
+            },
+            native_payload: binding.payload,
+            mappings: compiled.mappings,
+        });
+        return {
+            status: 'awaiting_durable_prepared_record' as const,
+            source: selection.source,
+            native_conversation: nativeConversation,
+            payload,
+            receipt,
+        };
+    }
+
+    /**
+     * Compare an authenticated selected-content archive with the existing requestBinding JSON receipt.
+     * SDK request conversion happens later and has no separate retained wire digest. This parity check
+     * neither makes the archive execution-ready nor authorizes provider transport.
+     */
+    async attestSelectedPreparedRequest(input: {
+        record: ConversationPreparedRequestRecord;
+        working_set: RequestSourceWorkingSet;
+        runtime: ResolvedConversationRuntimeContext;
+        options: ExecutionOptions;
+        provider: string;
+        stream: boolean;
+        current_turn: number;
+        prior_native_message_count?: number;
+    }): Promise<void> {
+        const record = parseConversationPreparedRequestRecord(input.record);
+        if (!preflightJsonInput(input.working_set).success) {
+            throw new TypeError('Selected OpenAI Chat working set is not bounded JSON');
+        }
+        const workingSet = RequestSourceWorkingSetSchema.parse(structuredClone(input.working_set));
+        const selected = compileOpenAIChatSelectedWorkingSet(workingSet, {
+            provider: input.provider,
+            model: input.options.model,
+        });
+        const priorCount = input.prior_native_message_count ?? selected.conversation.messages.length;
+        if (
+            !Number.isSafeInteger(input.current_turn) ||
+            input.current_turn < 0 ||
+            !Number.isSafeInteger(priorCount) ||
+            priorCount < 0 ||
+            priorCount > selected.conversation.messages.length
+        ) {
+            throw new RangeError('Selected OpenAI Chat projection counters are invalid');
+        }
+        const tools = workingSet.context.active_tool_definition_ids.map((id) => {
+            const tool = Object.hasOwn(workingSet.tool_definitions, id) ? workingSet.tool_definitions[id] : undefined;
+            if (tool === undefined) throw new Error(`Selected OpenAI Chat tool ${id} is unavailable`);
+            return tool;
+        });
+        const conversation = prepareCanonicalOpenAIProjectionFromNative(
+            selected.conversation,
+            priorCount,
+            input.options,
+            input.current_turn,
+            tools,
+        );
+        const payload = this.buildPayload(conversation, input.options, input.stream, input.provider, tools);
+        const binding = this.requestBinding(payload, input.options, input.provider);
+        const targetOptions = canonicalToolSelectionTargetOptions(
+            binding.target_options,
+            canonicalToolSelectionPolicy(input.options),
+        );
+        await assertOpenAIChatSelectedPreparedRequestEvidence({
+            record,
+            working_set: workingSet,
+            runtime: input.runtime,
+            target: {
+                provider: input.provider,
+                protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                model: input.options.model,
+                adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                ...(targetOptions === undefined ? {} : { options: targetOptions }),
+            },
+            native_payload: binding.payload,
+        });
     }
 
     async createPrompt(
@@ -1312,12 +1594,27 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             }
             return recoverCanonicalExecutionResponse(canonicalState, options);
         }
-        const prepared = await finalizeOpenAIChatPreparedRequest(
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
             requestBinding,
         );
-        await publishCanonicalPreparedRequest(prepared, options);
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+        await publishCanonicalPreparedRequest(prepared, options, measured);
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1350,7 +1647,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                   )
                 : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-        const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
+        const canonicalConversation = await appendOpenAIChatCanonicalResponseWithProcessing(prepared, decoded);
 
         return createCanonicalExecutionResponse(canonicalConversation, prepared.runtime.response_operation_id, {
             ...(result.service_tier == null ? {} : { service_tier: result.service_tier }),
@@ -1389,12 +1686,27 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         if (canonicalState.accepted_response !== undefined) {
             return recoverOpenAICompletion(canonicalState, options, includeThoughts);
         }
-        const prepared = await finalizeOpenAIChatPreparedRequest(
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
             requestBinding,
         );
-        await publishCanonicalPreparedRequest(prepared, options);
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+        await publishCanonicalPreparedRequest(prepared, options, measured);
         const result = await this.postChatCompletion(driver, payload, options, signal);
         const choice = result?.choices?.[0];
         const message = choice?.message;
@@ -1424,7 +1736,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                       normalized.structured_output,
                   )
                 : rawDecoded;
-        const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
+        const canonicalConversation = await appendOpenAIChatCanonicalResponseWithProcessing(prepared, decoded);
         return {
             result: completionResults,
             tool_use: toolUse,
@@ -1467,12 +1779,27 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
             );
         }
-        const prepared = await finalizeOpenAIChatPreparedRequest(
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
             requestBinding,
         );
-        await publishCanonicalPreparedRequest(prepared, options);
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+        await publishCanonicalPreparedRequest(prepared, options, measured);
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
@@ -1697,11 +2024,26 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 { ...open, origin: 'accepted_recovery' },
             );
         }
-        const prepared = await finalizeOpenAIChatPreparedRequest(
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
             requestBinding,
         );
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
 
         const abortController = new AbortController();
         const forwardAbort = () => abortController.abort(signal?.reason);
@@ -2038,7 +2380,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             abort: () => abortController.abort(),
             close: () => signal?.removeEventListener('abort', forwardAbort),
         });
-        await publishCanonicalPreparedRequest(prepared, options);
+        await publishCanonicalPreparedRequest(prepared, options, measured);
         if (signal?.aborted) forwardAbort();
         else signal?.addEventListener('abort', forwardAbort, { once: true });
         return eventStream;
@@ -2054,74 +2396,130 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             | ToolDefinition[]
             | undefined = options.tools,
     ): OpenAIChatCompletionsPayload {
-        const modelOptions = options.model_options as TextFallbackOptions & {
-            effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-            reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-            seed?: number;
-            service_tier?: string;
-            tool_choice?: 'auto' | 'none' | 'any' | 'required';
-            /** Internal execution hint supplied after public model-option validation. */
-            required_tool_name?: string;
-            /** Internal execution hint used with a required named tool. */
-            parallel_tool_calls?: boolean;
-        };
-        const payload: OpenAIChatCompletionsPayload = {
-            model: this.getModelName(options),
-            messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
-            // Some OpenAI-compatible providers return empty/truncated completions unless a
-            // documented or runtime-validated token budget is supplied. Caller options still win.
-            max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
-            temperature: modelOptions?.temperature,
-            top_p: modelOptions?.top_p,
-            presence_penalty: modelOptions?.presence_penalty,
-            frequency_penalty: modelOptions?.frequency_penalty,
-            n: 1,
-            stop: modelOptions?.stop_sequence,
-            seed: modelOptions?.seed,
-            reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
-            service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
+        return buildOpenAIChatCompletionsPayload(
+            conversation,
+            options,
+            this.options,
+            this.getModelName(options),
             stream,
-        };
-
-        const executionExtraBody = getOpenAIExtraBody(modelOptions);
-        if (this.options.extraBody || executionExtraBody) {
-            payload.extra_body = { ...this.options.extraBody, ...executionExtraBody };
-        }
-
-        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(tools, this.options.toolSchemaMode);
-        const forcedToolChoice =
-            typeof modelOptions?.required_tool_name === 'string' ||
-            modelOptions?.tool_choice === 'required' ||
-            modelOptions?.tool_choice === 'any';
-        if (forcedToolChoice && (!toolsPayload || toolsPayload.length === 0)) {
-            throw createToolChoiceConfigurationError(
-                '[OpenAI Chat Completions API] A required tool choice was requested, but no tools are available.',
-                { provider, model: options.model, operation: stream ? 'stream' : 'execute' },
-            );
-        }
-        if (toolsPayload && toolsPayload.length > 0) {
-            payload.tools = toolsPayload;
-            payload.tool_choice = modelOptions?.required_tool_name
-                ? { type: 'function', function: { name: modelOptions.required_tool_name } }
-                : modelOptions?.tool_choice === 'any'
-                  ? 'required'
-                  : modelOptions?.tool_choice;
-            payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
-        }
-
-        if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
-            const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
-            payload.response_format = {
-                type: 'json_schema',
-                json_schema: { name: 'output', strict: formattedSchema.strict, schema: formattedSchema.schema },
-            };
-        }
-
-        return payload;
+            provider,
+            tools,
+        );
     }
 
     protected getModelName(options: ExecutionOptions): string {
         return this.options.modelName ?? options.model;
+    }
+
+    /** Concrete SDK protocols must expose their actual serialized body, not intermediate receipt binding. */
+    protected canonicalTransportBody(_payload: OpenAIChatCompletionsPayload): JsonValue {
+        throw new Error('Canonical actual transport projection is unavailable for this protocol');
+    }
+
+    private async projectCanonicalMeasurement(
+        state: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        payload: OpenAIChatCompletionsPayload,
+        binding: OpenAIChatRequestBinding,
+        options: ExecutionOptions,
+        provider: string,
+        signal?: AbortSignal,
+    ): Promise<CanonicalProjectedRequestMeasurement | undefined> {
+        const callback = options.on_canonical_request_projected;
+        if (!callback) {
+            if (state.document.processing.enabled && state.document.processing.budget)
+                throw new Error('Required processing measurement is unavailable');
+            return undefined;
+        }
+        const capturedOptions: ExecutionOptions = {
+            model: options.model,
+            ...(options.model_options === undefined ? {} : { model_options: structuredClone(options.model_options) }),
+            ...(options.result_schema === undefined ? {} : { result_schema: structuredClone(options.result_schema) }),
+        };
+        const actualModel = this.getModelName(options);
+        const protocolOptions: OpenAIChatCompletionsProtocolOptions = {
+            modelName: actualModel,
+            defaultMaxTokens: this.options.defaultMaxTokens,
+            extraBody: structuredClone(this.options.extraBody),
+            resultSchemaMode: this.options.resultSchemaMode,
+            toolSchemaMode: this.options.toolSchemaMode,
+        };
+        const capturedDocument = parseConversationDocument(state.document);
+        const runtime = structuredClone(state.runtime);
+        const tools = structuredClone(state.tool_definitions);
+        const targetOptions = canonicalToolSelectionTargetOptions(
+            binding.target_options,
+            state.response_selection_policy,
+        );
+        const target = {
+            provider,
+            protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            model: state.requested_model,
+            adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+            ...(targetOptions === undefined ? {} : { options: structuredClone(targetOptions) }),
+        };
+        const nativeRequest = structuredClone(this.canonicalTransportBody(payload));
+        const stream = payload.stream === true;
+        const build = (conversation: OpenAIChatCompletionsPrompt): JsonValue => {
+            const projected = projectOpenAIChatCompletionsHistory(
+                conversation,
+                capturedOptions,
+                canonicalConversationTurnNumber(capturedDocument),
+            );
+            const prepared = prepareOpenAIChatCompletionsConversation(projected, {
+                model: capturedOptions.model,
+                tools,
+            });
+            return this.canonicalTransportBody(
+                buildOpenAIChatCompletionsPayload(
+                    prepared,
+                    capturedOptions,
+                    protocolOptions,
+                    actualModel,
+                    stream,
+                    provider,
+                    tools,
+                ),
+            );
+        };
+        const compiler: CanonicalRequestProjectionCompiler = {
+            compileDocument: (document: ConversationDocument, compileSignal?: AbortSignal) => {
+                const owned = parseConversationDocument(document);
+                return boundedCanonicalProjectionOperation(async (boundedSignal) => {
+                    boundedSignal.throwIfAborted();
+                    const compiled = compileOpenAIChatCompletionsConversation(owned, target);
+                    const request = build(compiled.conversation);
+                    boundedSignal.throwIfAborted();
+                    return request;
+                }, compileSignal);
+            },
+            compileProspective: (input, compileSignal) => {
+                const owned = structuredClone(input);
+                return boundedCanonicalProjectionOperation(async (boundedSignal) => {
+                    const compiled = await compileOpenAIChatProspectiveJsonMinification(owned, target, boundedSignal);
+                    return {
+                        status: 'compiled',
+                        source_request: build(compiled.original.conversation),
+                        replacement_request: build(compiled.replacement.conversation),
+                    };
+                }, compileSignal);
+            },
+        };
+        // Unsupported historical projections must not be silently replaced by a dry compiler.
+        const replayed = await compiler.compileDocument(capturedDocument, signal);
+        if ((await fingerprintJson(replayed)) !== (await fingerprintJson(nativeRequest)))
+            throw new Error('Canonical dry compiler cannot reproduce the actual native request');
+        const measured = await projectCanonicalRequestMeasurement(
+            {
+                document: capturedDocument,
+                runtime,
+                target,
+                native_request: nativeRequest,
+            },
+            compiler,
+            callback,
+            signal,
+        );
+        return measured;
     }
 
     protected requestBinding(
@@ -2202,12 +2600,17 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
     constructor(
         options: OpenAIChatCompletionsProtocolOptions,
         private readonly resolveModelName: (options: ExecutionOptions) => string,
+        private readonly projectTransportBody: (payload: OpenAIChatCompletionsPayload) => JsonValue,
     ) {
         super(options);
     }
 
     protected override getModelName(options: ExecutionOptions): string {
         return this.resolveModelName(options);
+    }
+
+    protected override canonicalTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return this.projectTransportBody(payload);
     }
 
     protected async postChatCompletion(
@@ -2271,7 +2674,7 @@ export function toOpenAISDKMessage(
     }
 }
 
-function toOpenAINonStreamingPayload(
+export function toOpenAINonStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
 ): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
     const { messages, stream: _stream, extra_body, ...body } = payload;
@@ -2286,7 +2689,7 @@ function toOpenAINonStreamingPayload(
     return request;
 }
 
-function toOpenAIStreamingPayload(
+export function toOpenAIStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
 ): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
     const { messages, stream: _stream, extra_body, ...body } = payload;
@@ -2303,6 +2706,12 @@ function toOpenAIStreamingPayload(
 }
 
 export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAISDKChatCompletionsDriver> {
+    protected canonicalTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return providerJsonValue(
+            payload.stream ? toOpenAIStreamingPayload(payload) : toOpenAINonStreamingPayload(payload),
+        );
+    }
+
     protected async postChatCompletion(
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
@@ -2354,7 +2763,12 @@ export abstract class OpenAIChatCompletionsDriverBase<
                 toolSchemaMode: options.toolSchemaMode,
             },
             (executionOptions) => this.resolveChatCompletionsRequestModel(executionOptions),
+            (payload) => this.projectChatCompletionsTransportBody(payload),
         );
+    }
+
+    protected projectChatCompletionsTransportBody(_payload: OpenAIChatCompletionsPayload): JsonValue {
+        throw new Error('Actual native body projection is unavailable for this provider transport');
     }
 
     /** Resolve the transport body model without changing canonical requested-model identity. */
@@ -2461,6 +2875,57 @@ export interface OpenAIChatCompletionsDriverConfig extends OpenAIChatCompletions
 
 /** Generic driver for services implementing the OpenAI Chat Completions protocol. */
 export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase<OpenAIChatCompletionsDriverConfig> {
+    override async resolveCanonicalModelSwitchTarget(
+        model: string,
+        options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined> {
+        return ModelTargetSchema.parse({
+            provider: this.provider,
+            protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            model,
+            adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+            ...(options === undefined ? {} : { options: structuredClone(options) }),
+        });
+    }
+
+    override async projectCanonicalModelSwitchRequest(
+        document: ConversationDocument,
+        target: ModelTarget,
+        operation: 'execute' | 'stream',
+        controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection> {
+        if (controls && Object.values(controls).some((value) => value !== undefined)) {
+            return { status: 'unsupported', reason: 'Chat switch requires an explicit request-control policy' };
+        }
+        if (target.provider !== this.provider) {
+            return { status: 'unsupported', reason: 'Model switch target provider differs from configured driver' };
+        }
+        const protocolOptions: OpenAIChatCompletionsProtocolOptions = {
+            modelName: this.resolveChatCompletionsRequestModel({ model: target.model }),
+            defaultMaxTokens: this.options.defaultMaxTokens,
+            extraBody: this.options.extraBody,
+            resultSchemaMode: this.options.resultSchemaMode,
+            includeResultSchemaInPrompt: this.options.includeResultSchemaInPrompt,
+            includeResultSchemaInPromptForModel: this.options.includeResultSchemaInPromptForModel,
+            toolSchemaMode: this.options.toolSchemaMode,
+        };
+        return {
+            status: 'compiled',
+            native_request: await compileOpenAIChatModelSwitchRequest({
+                document,
+                target,
+                protocol_options: protocolOptions,
+                stream: operation === 'stream',
+            }),
+        };
+    }
+
+    protected override projectChatCompletionsTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return providerJsonValue(
+            payload.stream ? toOpenAIStreamingPayload(payload) : toOpenAINonStreamingPayload(payload),
+        );
+    }
+
     readonly provider = Providers.openai_compatible;
     service: OpenAI;
 
@@ -2631,4 +3096,96 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                 : undefined,
         };
     }
+}
+
+/**
+ * Compile a new target through the same adapter, history policy, payload builder and SDK body
+ * converter used by transport. This compatible-only path rejects implicit history rewriting.
+ */
+export async function compileOpenAIChatModelSwitchRequest(input: {
+    document: ConversationDocument;
+    target: ModelTarget;
+    protocol_options: OpenAIChatCompletionsProtocolOptions;
+    stream: boolean;
+}) {
+    const document = parseConversationDocument(input.document);
+    const target = ModelTargetSchema.parse(structuredClone(input.target));
+    const { includeResultSchemaInPromptForModel, ...serializableProtocolOptions } = input.protocol_options;
+    // A configured model policy callback is intentionally shared by identity. All serializable
+    // options are owned before the first await, including nested extra-body values.
+    const protocolOptions: OpenAIChatCompletionsProtocolOptions = {
+        ...structuredClone(serializableProtocolOptions),
+        ...(includeResultSchemaInPromptForModel ? { includeResultSchemaInPromptForModel } : {}),
+    };
+    const stream = input.stream;
+    // Deployment aliases belong to the trusted host protocol configuration. Extra body may
+    // extend provider-specific parameters, but may not replace the request we attest below.
+    const protectedBodyFields = new Set([
+        'model',
+        'messages',
+        'tools',
+        'tool_choice',
+        'stream',
+        'stream_options',
+        'response_format',
+    ]);
+    for (const field of Object.keys(protocolOptions.extraBody ?? {})) {
+        if (protectedBodyFields.has(field))
+            throw new Error(`OpenAI Chat model switch extraBody cannot override ${field}`);
+    }
+    if (
+        target.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+        target.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION
+    ) {
+        throw new Error('OpenAI Chat model switch target has an unsupported protocol or adapter version');
+    }
+    const tools = document.context.active_tool_definition_ids.map((id) => {
+        const definition = document.tool_definitions[id];
+        if (!definition) throw new Error(`OpenAI Chat model switch tool ${id} is unavailable`);
+        return definition;
+    });
+    const selected = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    const unsupportedMedia = new Set(['image', 'document', 'audio', 'video', 'extension']);
+    for (const turn of selected) {
+        for (const block of turn.blocks) {
+            if (unsupportedMedia.has(block.type))
+                throw new Error(`OpenAI Chat model switch requires an explicit ${block.type} media policy`);
+            if (block.type === 'tool_result' && block.content.some((item) => unsupportedMedia.has(item.type)))
+                throw new Error('OpenAI Chat model switch requires an explicit nested tool-result media policy');
+        }
+    }
+    const modelOptions = target.options === undefined ? undefined : ModelOptionsSchema.parse(target.options);
+    if (
+        target.options !== undefined &&
+        (await fingerprintJson(modelOptions)) !== (await fingerprintJson(target.options))
+    ) {
+        throw new Error('OpenAI Chat model switch target contains unsupported model options');
+    }
+    const options: ExecutionOptions = {
+        model: target.model,
+        ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+    };
+    const compiled = compileOpenAIChatCompletionsConversation(document, target);
+    const projected = projectOpenAIChatCompletionsHistory(
+        compiled.conversation,
+        options,
+        canonicalConversationTurnNumber(document),
+    );
+    if ((await fingerprintJson(projected.messages)) !== (await fingerprintJson(compiled.conversation.messages))) {
+        throw new Error('OpenAI Chat model switch requires an explicit history or media transformation');
+    }
+    const prepared = prepareOpenAIChatCompletionsConversation(projected, { model: target.model, tools });
+    if ((await fingerprintJson(prepared.messages)) !== (await fingerprintJson(projected.messages))) {
+        throw new Error('OpenAI Chat model switch requires an explicit tool or replay transformation');
+    }
+    const payload = buildOpenAIChatCompletionsPayload(
+        prepared,
+        options,
+        protocolOptions,
+        protocolOptions.modelName ?? target.model,
+        stream,
+        target.provider,
+        tools,
+    );
+    return providerJsonValue(stream ? toOpenAIStreamingPayload(payload) : toOpenAINonStreamingPayload(payload));
 }

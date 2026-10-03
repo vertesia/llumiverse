@@ -1,3 +1,4 @@
+import { type ResolveConversationAsset, readBoundedConversationAsset } from './asset-resolution.js';
 import { hashContentBytes, hashUtf8Content } from './content-integrity.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
@@ -66,9 +67,7 @@ export interface HydrateToolArgumentsOptions {
     max_bytes?: number;
 }
 
-export type ResolveToolArgumentTextAsset = (
-    asset: Asset,
-) => AsyncIterable<Uint8Array> | Promise<AsyncIterable<Uint8Array>>;
+export type ResolveToolArgumentTextAsset = ResolveConversationAsset;
 
 interface LocatedToolCall {
     call: ToolCallBlock;
@@ -608,34 +607,11 @@ async function readAssetBytes(
     resolveAsset: ResolveToolArgumentTextAsset,
     maxBytes: number,
 ): Promise<Uint8Array> {
-    if (asset.byte_length !== undefined && asset.byte_length > maxBytes) {
-        throw new RangeError(`Tool argument asset ${asset.id} exceeds max_bytes before resolution`);
-    }
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let chunkCount = 0;
-    for await (const chunk of await resolveAsset(asset)) {
-        chunkCount += 1;
-        if (chunkCount > MAX_TOOL_ARGUMENT_HYDRATION_CHUNKS) {
-            throw new RangeError(`Tool argument asset ${asset.id} exceeds the hydration chunk limit`);
-        }
-        if (!(chunk instanceof Uint8Array)) throw new TypeError(`Tool argument asset ${asset.id} yielded non-bytes`);
-        if (chunk.byteLength === 0) continue;
-        if (chunk.byteLength > maxBytes - total) {
-            throw new RangeError(`Tool argument asset ${asset.id} exceeds max_bytes while resolving`);
-        }
-        total += chunk.byteLength;
-        const owned = new Uint8Array(chunk.byteLength);
-        owned.set(chunk);
-        chunks.push(owned);
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    return bytes;
+    return readBoundedConversationAsset(asset, resolveAsset, {
+        max_bytes: maxBytes,
+        max_chunks: MAX_TOOL_ARGUMENT_HYDRATION_CHUNKS,
+        label: 'Tool argument asset',
+    });
 }
 
 export async function hydrateToolCallArguments(

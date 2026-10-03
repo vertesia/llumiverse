@@ -51,7 +51,9 @@ import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
+    appendCanonicalDecodedResponseWithProcessing,
     appendCanonicalPrompt,
+    assertCanonicalContextProjection,
     assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
@@ -1627,6 +1629,17 @@ function projectBedrockConverseConversation(
         allow_interrupted_with_complete_tool_calls: true,
     });
     for (const turn of selectedTurns) {
+        if (turn.kind === 'program' && turn.authority === 'developer') {
+            throw new TypeError(`Bedrock Converse has no distinct developer-authority projection for turn ${turn.id}`);
+        }
+    }
+    if (!readOnlyCompatibilityProjection) {
+        assertCanonicalContextProjection(document, selectedTurns, {
+            label: 'Bedrock Converse',
+            program_authorities: ['system', 'ordinary'],
+        });
+    }
+    for (const turn of selectedTurns) {
         if (!readOnlyCompatibilityProjection)
             assertProtectedReplayCompatibility(document, turn, BEDROCK_CONVERSE_PROTOCOL, target);
     }
@@ -1635,11 +1648,6 @@ function projectBedrockConverseConversation(
         if (turn.kind === 'program') {
             if (replay !== undefined)
                 throw new TypeError(`Bedrock program turn ${turn.id} cannot contain native replay`);
-            if (turn.authority === 'developer') {
-                throw new TypeError(
-                    `Bedrock Converse has no distinct developer-authority projection for turn ${turn.id}`,
-                );
-            }
             if (turn.authority === 'ordinary') {
                 const content: ContentBlock[] = [];
                 const projectedBlocks: AgentContentBlock[] = [];
@@ -2210,6 +2218,18 @@ export function appendBedrockConverseCanonicalResponse(
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;
+}
+
+export async function appendBedrockConverseCanonicalResponseWithProcessing(
+    prepared: PreparedBedrockConverseConversation,
+    decoded: DecodedConversationResponse,
+): Promise<ConversationDocument> {
+    return (
+        await appendCanonicalDecodedResponseWithProcessing(prepared, decoded, {
+            operation_id: prepared.runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.recorded_at,
+        })
+    ).document;
 }
 
 export function exportLegacyBedrockConverseConversation(

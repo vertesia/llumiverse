@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { CONVERSATION_USAGE_METRICS } from '../runtime-constants.js';
+import { ContextEntrySchema } from './context-foundation.js';
+import { ContextMeasurementSchema } from './context-measurement.js';
+import { ConversationDeleteOperationSchema } from './conversation-delete-operation.js';
+import { ConversationEditOperationSchema } from './conversation-edit-operation.js';
 import {
     ContentHashSchema,
     ConversationRefSchema,
@@ -10,6 +14,7 @@ import {
     NonnegativeSafeIntegerSchema,
     TimestampSchema,
 } from './primitives.js';
+import { ProcessingOperationSchema } from './processing-operation.js';
 
 /** Proof that the current canonical head already contains this request's complete model-visible input. */
 export const ConversationMaterializedInputSchema = z
@@ -99,19 +104,7 @@ export const GenerationUsageSchema = z
     })
     .meta({ id: 'ConversationGenerationUsage' });
 
-export const ContextMeasurementSchema = z
-    .strictObject({
-        input_tokens: NonnegativeSafeIntegerSchema,
-        method: z.enum(['exact', 'estimated', 'provider_counted']),
-        tokenizer: IdentifierSchema,
-        tokenizer_version: IdentifierSchema.optional(),
-        adapter: IdentifierSchema,
-        adapter_version: IdentifierSchema,
-        source_fingerprint: ContentHashSchema,
-        target_model: IdentifierSchema,
-        measured_at: TimestampSchema,
-    })
-    .meta({ id: 'ConversationContextMeasurement' });
+export { ContextMeasurementSchema } from './context-measurement.js';
 
 export const ModelTargetSchema = z
     .strictObject({
@@ -138,6 +131,25 @@ export const NativeItemMappingSchema = z
     })
     .meta({ id: 'ConversationNativeItemMapping' });
 
+/** Host-owned immutable selected-content locator; the key is opaque, never a fetch URL. */
+export const RequestSourceViewReferenceSchema = z
+    .strictObject({
+        version: z.literal(1),
+        completeness: z.enum(['selected_execution', 'selected_content_unverified']),
+        source: ConversationRefSchema,
+        context_revision: NonnegativeSafeIntegerSchema,
+        manifest_storage_key: z.string().min(1).max(512),
+        manifest_content_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+        manifest_size_bytes: z
+            .number()
+            .int()
+            .positive()
+            .max(256 * 1024),
+        context_fingerprint: ContentHashSchema,
+        request_fingerprint: ContentHashSchema,
+    })
+    .meta({ id: 'ConversationRequestSourceViewReference' });
+
 export const RequestReceiptSchema = z
     .strictObject({
         id: IdentifierSchema,
@@ -148,6 +160,7 @@ export const RequestReceiptSchema = z
         context_fingerprint: ContentHashSchema,
         tool_set_fingerprint: ContentHashSchema,
         request_fingerprint: ContentHashSchema,
+        source_view: RequestSourceViewReferenceSchema.optional(),
         target: ModelTargetSchema,
         tool_definition_ids: z.array(IdentifierSchema),
         asset_versions: z.array(AssetVersionBindingSchema),
@@ -250,6 +263,38 @@ export const GenerationSchema = z
     .discriminatedUnion('record_source', [ExecutedGenerationSchema, ImportedGenerationSchema])
     .meta({ id: 'ConversationGeneration' });
 
+export const ContextChangePlacementSchema = z
+    .strictObject({
+        mode: z.enum(['first_selected', 'per_selected_range']),
+        causal_order: z.enum(['contiguous', 'explicit_disjoint_summary', 'preserved_disjoint_ranges']),
+    })
+    .meta({ id: 'ConversationContextChangePlacement' });
+
+export const SelectedContextBlocksSchema = z
+    .record(IdentifierSchema, z.array(IdentifierSchema).min(1))
+    .meta({ id: 'ConversationSelectedContextBlocks' });
+
+export const ContextChangeOperationSchema = z
+    .strictObject({
+        kind: z.enum(['exclude', 'replace_with_compaction']),
+        removed_entry_ids: z.array(IdentifierSchema).min(1),
+        inserted_entry_ids: z.array(IdentifierSchema),
+        source_fingerprint: ContentHashSchema,
+        placement: ContextChangePlacementSchema.optional(),
+        selected_block_ids: SelectedContextBlocksSchema.optional(),
+        remainder_entry_ids: z.array(IdentifierSchema).optional(),
+    })
+    .meta({ id: 'ConversationContextChangeOperation' });
+
+export { ProcessingOperationSchema };
+/** Accepted request intent, including omitted versus explicitly empty active-tool selection. */
+export const AcceptedToolSelectionSchema = z
+    .discriminatedUnion('kind', [
+        z.strictObject({ kind: z.literal('unchanged') }),
+        z.strictObject({ kind: z.literal('replace'), definition_ids: z.array(IdentifierSchema) }),
+    ])
+    .meta({ id: 'ConversationAcceptedToolSelection' });
+
 export const OperationReceiptSchema = z
     .strictObject({
         id: IdentifierSchema,
@@ -264,6 +309,15 @@ export const OperationReceiptSchema = z
         accepted_tool_definition_ids: z.array(IdentifierSchema).optional(),
         accepted_execution_receipt_ids: z.array(IdentifierSchema).optional(),
         accepted_context_entry_ids: z.array(IdentifierSchema).optional(),
+        /** Immutable accepted references; active context may later remove or partition them. */
+        accepted_context_entries: z.array(ContextEntrySchema).optional(),
+        accepted_tool_selection: AcceptedToolSelectionSchema.optional(),
+        /** Absent on append receipts, including historical ones. */
+        operation_kind: z.enum(['context_change', 'conversation_edit', 'conversation_delete', 'processing']).optional(),
+        context_change: ContextChangeOperationSchema.optional(),
+        conversation_edit: ConversationEditOperationSchema.optional(),
+        conversation_delete: ConversationDeleteOperationSchema.optional(),
+        processing_operation: ProcessingOperationSchema.optional(),
     })
     .meta({ id: 'ConversationOperationReceipt' });
 

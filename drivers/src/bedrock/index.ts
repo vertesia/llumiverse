@@ -104,7 +104,7 @@ import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/de
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
-    appendBedrockConverseCanonicalResponse,
+    appendBedrockConverseCanonicalResponseWithProcessing,
     bedrockConverseJsonValue,
     decodeBedrockConverseCanonicalResponse,
     finalizeBedrockConversePreparedRequest,
@@ -138,6 +138,8 @@ import {
 } from './twelvelabs.js';
 import {
     executeTwelvelabsPegasusCanonical,
+    executeTwelvelabsPegasusCanonicalContext,
+    streamTwelvelabsPegasusCanonicalContextEvents,
     streamTwelvelabsPegasusCanonicalEvents,
     type TwelvelabsPegasusInvokeRequest,
     TwelvelabsPegasusNativeStreamAccumulator,
@@ -699,8 +701,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return true;
     }
 
-    protected override supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
-        return !options.model.includes('twelvelabs.pegasus');
+    protected override supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
+        return true;
     }
 
     override async executeCanonical(
@@ -1421,7 +1423,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         if (options.model.includes('twelvelabs.pegasus')) {
-            throw new Error(`TwelveLabs Pegasus model ${options.model} does not support canonical context execution`);
+            return executeTwelvelabsPegasusCanonicalContext({
+                provider: this.provider,
+                region: this.options.region,
+                options,
+                signal,
+                transport: this.twelvelabsPegasusTransport(options),
+            });
         }
         const canonicalState = await prepareBedrockConverseCanonicalContext({
             options,
@@ -1500,7 +1508,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 ? await decodeBedrockConverseCanonicalResponse(res, prepared, normalized.structured_output)
                 : rawDecoded;
         if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-        const processedConversation = appendBedrockConverseCanonicalResponse(prepared, decoded);
+        const processedConversation = await appendBedrockConverseCanonicalResponseWithProcessing(prepared, decoded);
 
         return createCanonicalExecutionResponse(processedConversation, prepared.runtime.response_operation_id, {
             ...(res.serviceTier?.type === undefined ? {} : { service_tier: res.serviceTier.type }),
@@ -1724,7 +1732,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         if (normalized?.status === 'invalid') {
                             decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
                         }
-                        return appendBedrockConverseCanonicalResponse(prepared, decoded);
+                        return await appendBedrockConverseCanonicalResponseWithProcessing(prepared, decoded);
                     })();
                     return finalizedConversation;
                 };
@@ -1772,7 +1780,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
-            throw new Error(`TwelveLabs Pegasus model ${options.model} does not support canonical context streaming`);
+            return streamTwelvelabsPegasusCanonicalContextEvents({
+                provider: this.provider,
+                region: this.options.region,
+                options,
+                signal,
+                open,
+                transport: this.twelvelabsPegasusTransport(options),
+            });
         }
         const canonicalState = await prepareBedrockConverseCanonicalContext({
             options,
@@ -2042,7 +2057,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 if (normalized?.status === 'invalid') {
                     decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
                 }
-                const document = appendBedrockConverseCanonicalResponse(prepared, decoded);
+                const document = await appendBedrockConverseCanonicalResponseWithProcessing(prepared, decoded);
                 const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
                     ...(serviceTier?.type === undefined ? {} : { service_tier: serviceTier.type }),
                     chunks: previewChunks,

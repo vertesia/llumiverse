@@ -1,5 +1,13 @@
 import { boundConversationDiagnostic, diagnosticPointer, diagnosticValue } from './diagnostics.js';
-import { CONVERSATION_USAGE_METRICS } from './runtime-constants.js';
+import { DEFAULT_JSON_INPUT_LIMITS } from './json-preflight.js';
+import {
+    CONVERSATION_USAGE_METRICS,
+    MAX_PROCESSING_OUTPUT_BYTES,
+    MAX_PROCESSOR_CONFIGURATION_BYTES,
+} from './runtime-constants.js';
+import { resolveSourceSliceCoverage, sourceSliceForBlock, sourceSlicesOverlap } from './source-slice-coverage.js';
+import { assertDerivedBlockLineageStructure } from './source-slice-structure.js';
+import { type SourceSliceWork, spendSourceSliceWork } from './source-slice-work.js';
 import type {
     Asset,
     CompactionRecord,
@@ -15,6 +23,7 @@ import type {
     RequestReceipt,
     SemanticConversationDiagnostic,
     SemanticConversationDiagnosticCode,
+    SourceBlockSlice,
     ToolCallBlock,
     ToolResultBlock,
 } from './types.js';
@@ -172,7 +181,7 @@ function authorityRank(authority: ConversationTurn['authority']): number {
     return 0;
 }
 
-function validateUsage(
+export function validateUsage(
     usage: GenerationUsage,
     path: string,
     add: (code: SemanticConversationDiagnosticCode, path: string, message: string, recordId?: string) => void,
@@ -669,7 +678,10 @@ function validateCompaction(
     }
 }
 
-export function validateConversationSemantics(document: ConversationDocument): ConversationDiagnostic[] {
+export function validateConversationSemantics(
+    document: ConversationDocument,
+    onGlobalId?: (id: string, kind: string) => void,
+): ConversationDiagnostic[] {
     const diagnostics: ConversationDiagnostic[] = [];
     const add = (code: SemanticConversationDiagnosticCode, path: string, message: string, recordId?: string): void => {
         if (diagnostics.length < MAX_SEMANTIC_DIAGNOSTICS - 1) {
@@ -706,6 +718,7 @@ export function validateConversationSemantics(document: ConversationDocument): C
             );
         } else {
             globalIds.set(id, { kind, path });
+            onGlobalId?.(id, kind);
         }
     };
     registerId(document.id, 'conversation', '/id');
@@ -763,6 +776,39 @@ export function validateConversationSemantics(document: ConversationDocument): C
 
     for (let index = 0; index < document.turns.length; index += 1) {
         registerTurn(document.turns[index], `/turns/${index}`, true);
+    }
+    for (const [id, witness] of Object.entries(document.deleted_turns ?? {})) {
+        const path = recordPath('deleted_turns', id);
+        if (id !== witness.id) add('MAP_KEY_ID_MISMATCH', path, 'Deleted turn key differs from its retained ID');
+        registerId(witness.id, 'deleted source turn', `${path}/id`);
+        for (const [index, blockId] of witness.block_ids.entries()) {
+            registerId(blockId, 'deleted block', `${path}/block_ids/${index}`);
+        }
+        const accepted = hasOwn(document.operation_receipts, witness.accepted_operation_id)
+            ? document.operation_receipts[witness.accepted_operation_id]
+            : undefined;
+        const deleted = hasOwn(document.operation_receipts, witness.operation_id)
+            ? document.operation_receipts[witness.operation_id]
+            : undefined;
+        if (
+            !accepted ||
+            accepted.operation_kind !== undefined ||
+            accepted.conversation_id !== document.id ||
+            !accepted.accepted_turn_ids?.includes(id) ||
+            accepted.result_revision > witness.source_revision ||
+            !deleted ||
+            deleted.operation_kind !== 'conversation_delete' ||
+            deleted.base_revision !== witness.source_revision ||
+            !deleted.conversation_delete?.deleted_turns.some(
+                (ref) =>
+                    ref.id === id &&
+                    ref.fingerprint === witness.fingerprint &&
+                    ref.accepted_operation_id === witness.accepted_operation_id &&
+                    JSON.stringify(ref.block_ids) === JSON.stringify(witness.block_ids),
+            )
+        ) {
+            add('REFERENCE_NOT_FOUND', path, 'Deleted turn lacks matching append and delete receipts', id);
+        }
     }
     for (const [compactionId, compaction] of Object.entries(document.compactions)) {
         const path = recordPath('compactions', compactionId);
@@ -1252,8 +1298,174 @@ export function validateConversationSemantics(document: ConversationDocument): C
         }
     }
 
+    const archivedEntries = new Map<string, ContextEntry>();
+    const sameEntry = (a: ContextEntry, b: ContextEntry) =>
+        a.type === b.type &&
+        a.turn_id === b.turn_id &&
+        (a.type !== 'replacement_turn' || (b.type === 'replacement_turn' && a.compaction_id === b.compaction_id)) &&
+        JSON.stringify(a.block_ids) === JSON.stringify(b.block_ids);
     for (const [operationId, receipt] of Object.entries(document.operation_receipts)) {
         const path = recordPath('operation_receipts', operationId);
+        if ((receipt.operation_kind === 'context_change') !== (receipt.context_change !== undefined)) {
+            add('CONTEXT_REVISION_INVALID', path, 'Context-change receipt kind and details must be paired');
+        }
+        if ((receipt.operation_kind === 'conversation_edit') !== (receipt.conversation_edit !== undefined)) {
+            add('CONTEXT_REVISION_INVALID', path, 'Conversation-edit receipt kind and details must be paired');
+        }
+        if ((receipt.operation_kind === 'conversation_delete') !== (receipt.conversation_delete !== undefined)) {
+            add('CONTEXT_REVISION_INVALID', path, 'Conversation-delete receipt kind and details must be paired');
+        }
+        if (receipt.conversation_delete) {
+            const detail = receipt.conversation_delete;
+            if (
+                detail.source.conversation_id !== document.id ||
+                detail.source.revision !== receipt.base_revision ||
+                receipt.result_revision !== receipt.base_revision + 1 ||
+                detail.deleted_turns.length !== new Set(detail.deleted_turns.map((turn) => turn.id)).size ||
+                (receipt.accepted_turn_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_generation_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_asset_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_tool_definition_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_execution_receipt_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_context_entry_ids?.length ?? 0) !== 0
+            ) {
+                add(
+                    'CONTEXT_REVISION_INVALID',
+                    path,
+                    'Conversation-delete source, revision or accepted effects differ',
+                );
+            }
+            for (const ref of detail.deleted_turns) {
+                const witness =
+                    document.deleted_turns && hasOwn(document.deleted_turns, ref.id)
+                        ? document.deleted_turns[ref.id]
+                        : undefined;
+                if (
+                    !witness ||
+                    witness.operation_id !== receipt.id ||
+                    witness.source_revision !== receipt.base_revision ||
+                    witness.fingerprint !== ref.fingerprint ||
+                    witness.accepted_operation_id !== ref.accepted_operation_id ||
+                    JSON.stringify(witness.block_ids) !== JSON.stringify(ref.block_ids)
+                ) {
+                    add(
+                        'REFERENCE_NOT_FOUND',
+                        path,
+                        'Deleted turn witness does not match its accepted receipt',
+                        ref.id,
+                    );
+                }
+            }
+        }
+        if (receipt.conversation_edit) {
+            const detail = receipt.conversation_edit;
+            if (
+                detail.source.conversation_id !== document.id ||
+                detail.source.revision !== receipt.base_revision ||
+                receipt.result_revision !== receipt.base_revision + 1 ||
+                detail.source_context_revision > receipt.base_revision
+            ) {
+                add(
+                    'CONTEXT_REVISION_INVALID',
+                    path,
+                    'Conversation-edit detail source/revision does not match its receipt',
+                );
+            }
+        }
+        if (receipt.accepted_tool_selection !== undefined) {
+            if (receipt.operation_kind !== undefined) {
+                add(
+                    'CONTEXT_REVISION_INVALID',
+                    `${path}/accepted_tool_selection`,
+                    'Only append receipts carry accepted tool-selection intent',
+                );
+            }
+            if (receipt.accepted_tool_selection.kind === 'replace') {
+                for (const id of receipt.accepted_tool_selection.definition_ids) {
+                    if (!hasOwn(document.tool_definitions, id)) {
+                        add(
+                            'REFERENCE_NOT_FOUND',
+                            `${path}/accepted_tool_selection`,
+                            'Accepted tool selection references a definition no longer retained',
+                            id,
+                        );
+                    }
+                }
+            }
+        }
+        if (receipt.accepted_context_entries !== undefined) {
+            const entries = receipt.accepted_context_entries;
+            if (
+                receipt.operation_kind !== undefined ||
+                receipt.accepted_context_entry_ids === undefined ||
+                entries.length !== receipt.accepted_context_entry_ids.length ||
+                entries.some((entry, index) => entry.id !== receipt.accepted_context_entry_ids?.[index]) ||
+                new Set(entries.map((entry) => entry.id)).size !== entries.length
+            ) {
+                add(
+                    'CONTEXT_REVISION_INVALID',
+                    `${path}/accepted_context_entries`,
+                    'Accepted context archive must exactly match ordered append receipt IDs',
+                );
+            }
+            for (const [index, entry] of entries.entries()) {
+                const archivePath = `${path}/accepted_context_entries/${index}`;
+                const priorEntry = archivedEntries.get(entry.id);
+                if (priorEntry !== undefined && !sameEntry(priorEntry, entry)) {
+                    add(
+                        'DUPLICATE_ID',
+                        archivePath,
+                        'Accepted context identity conflicts with a retained archive',
+                        entry.id,
+                    );
+                } else archivedEntries.set(entry.id, entry);
+                const located = turnsById.get(entry.turn_id);
+                const deleted =
+                    document.deleted_turns && hasOwn(document.deleted_turns, entry.turn_id)
+                        ? document.deleted_turns[entry.turn_id]
+                        : undefined;
+                if (deleted !== undefined && deleted.accepted_operation_id !== operationId) {
+                    add(
+                        'REFERENCE_NOT_FOUND',
+                        archivePath,
+                        'Deleted turn belongs to another accepted append',
+                        entry.turn_id,
+                    );
+                }
+                const validTarget =
+                    entry.type === 'source_turn'
+                        ? located?.source === true || deleted !== undefined
+                        : located?.source === false && located.compaction_id === entry.compaction_id;
+                if (!validTarget || (!located && !deleted)) {
+                    add(
+                        'REFERENCE_NOT_FOUND',
+                        archivePath,
+                        'Accepted context archive target is not retained with its source kind',
+                    );
+                    continue;
+                }
+                if (entry.block_ids !== undefined) {
+                    let previous = -1;
+                    const positions = new Map(
+                        (located?.turn.blocks.map((block) => block.id) ?? deleted?.block_ids ?? []).map(
+                            (blockId, blockIndex) => [blockId, blockIndex],
+                        ),
+                    );
+                    for (const blockId of entry.block_ids) {
+                        const position = positions.get(blockId);
+                        if (position === undefined || position <= previous) {
+                            add(
+                                'CONTEXT_BLOCK_ORDER_INVALID',
+                                archivePath,
+                                'Accepted context archive blocks must remain retained and in source order',
+                            );
+                            break;
+                        }
+                        previous = position;
+                    }
+                }
+            }
+        }
         if (receipt.conversation_id !== document.id) {
             add('REFERENCE_NOT_FOUND', `${path}/conversation_id`, 'Operation receipt belongs to another conversation');
         }
@@ -1297,52 +1509,132 @@ export function validateConversationSemantics(document: ConversationDocument): C
         },
     );
 
+    const hasPreciseLineage = [...turnsById.values()].some(
+        (located) => located.turn.provenance.type === 'derived' && located.turn.provenance.block_lineage !== undefined,
+    );
+    const sliceWork: SourceSliceWork = { nodes: 0 };
+    const preciseCoverage = new Map<
+        string,
+        { slice: SourceBlockSlice; path: string; origin: 'direct' | 'replacement' }[]
+    >();
+    if (hasPreciseLineage) {
+        try {
+            assertDerivedBlockLineageStructure(document, sliceWork);
+        } catch (error: unknown) {
+            add(
+                'DERIVED_PROVENANCE_MISMATCH',
+                '/turns',
+                error instanceof Error ? error.message : 'Invalid precise source lineage',
+            );
+        }
+    }
     const contextEntryIds = new Map<string, string>();
     const activeSelections = new Map<string, ActiveSelectionIndex>();
+    let activeLineageSteps = 0;
     const sourceSelectionsForEntry = (entry: ContextEntry, path: string, located: LocatedTurn): ActiveSelection[] => {
-        if (entry.type === 'source_turn') {
-            return [
-                {
-                    turn_id: entry.turn_id,
-                    all_blocks: entry.block_ids === undefined,
-                    block_ids: new Set(entry.block_ids ?? []),
-                    origin: 'direct',
+        const result: ActiveSelection[] = [];
+        const stack: { located: LocatedTurn; block_ids?: ReadonlySet<string>; origin: 'direct' | 'replacement' }[] = [
+            {
+                located,
+                ...(entry.block_ids === undefined ? {} : { block_ids: new Set(entry.block_ids) }),
+                origin:
+                    entry.type === 'source_turn' && located.turn.provenance.type !== 'derived'
+                        ? 'direct'
+                        : 'replacement',
+            },
+        ];
+        const expanded = new Set<string>();
+        while (stack.length) {
+            if (++activeLineageSteps > DEFAULT_JSON_INPUT_LIMITS.max_nodes) {
+                add(
+                    'SEMANTIC_DIAGNOSTIC_LIMIT',
                     path,
-                },
-            ];
-        }
-        const provenance = located.turn.provenance;
-        if (provenance.type !== 'derived') {
-            return [];
-        }
-        if (provenance.source_block_ids === undefined) {
-            return provenance.source_turn_ids.map((turnId) => ({
-                turn_id: turnId,
-                all_blocks: true,
-                block_ids: new Set<string>(),
-                origin: 'replacement',
-                path,
-                compaction_id: entry.compaction_id,
-            }));
-        }
-        const blocksByTurn = new Map<string, Set<string>>();
-        for (const blockId of provenance.source_block_ids) {
-            const sourceTurnId = blocksById.get(blockId)?.turn_id;
-            if (sourceTurnId === undefined) {
+                    'Active source-lineage traversal exceeds materialized work limit',
+                );
+                break;
+            }
+            const frame = stack.pop();
+            if (!frame) break;
+            const turn = frame.located.turn,
+                provenance = turn.provenance;
+            if (provenance.type !== 'derived') {
+                result.push({
+                    turn_id: turn.id,
+                    all_blocks: frame.block_ids === undefined,
+                    block_ids: frame.block_ids ?? new Set<string>(),
+                    origin: frame.origin,
+                    path,
+                    ...(entry.type === 'replacement_turn' ? { compaction_id: entry.compaction_id } : {}),
+                });
                 continue;
             }
-            const selectedBlocks = blocksByTurn.get(sourceTurnId) ?? new Set<string>();
-            selectedBlocks.add(blockId);
-            blocksByTurn.set(sourceTurnId, selectedBlocks);
+            if (expanded.has(turn.id)) {
+                add(
+                    'DERIVED_PROVENANCE_MISMATCH',
+                    path,
+                    'Derived active coverage repeats an indivisible ancestor',
+                    turn.id,
+                );
+                continue;
+            }
+            expanded.add(turn.id);
+            if (frame.block_ids !== undefined && !turn.blocks.every((block) => frame.block_ids?.has(block.id))) {
+                add(
+                    'DERIVED_PROVENANCE_MISMATCH',
+                    path,
+                    'Partial derived coverage requires precise per-block source lineage',
+                    turn.id,
+                );
+                continue;
+            }
+            const sourceTurnIds = new Set(provenance.source_turn_ids);
+            if (sourceTurnIds.size !== provenance.source_turn_ids.length)
+                add('DERIVED_PROVENANCE_MISMATCH', path, 'Derived provenance repeats a source turn', turn.id);
+            const blocksByTurn = new Map<string, Set<string>>();
+            if (provenance.source_block_ids !== undefined) {
+                const unique = new Set(provenance.source_block_ids);
+                if (unique.size !== provenance.source_block_ids.length)
+                    add('DERIVED_PROVENANCE_MISMATCH', path, 'Derived provenance repeats a source block', turn.id);
+                for (const blockId of unique) {
+                    const sourceTurnId = blocksById.get(blockId)?.turn_id;
+                    if (sourceTurnId === undefined || !sourceTurnIds.has(sourceTurnId)) {
+                        add(
+                            'DERIVED_PROVENANCE_MISMATCH',
+                            path,
+                            'Derived source block is missing or outside declared source turns',
+                            turn.id,
+                        );
+                        continue;
+                    }
+                    const chosen = blocksByTurn.get(sourceTurnId) ?? new Set<string>();
+                    chosen.add(blockId);
+                    blocksByTurn.set(sourceTurnId, chosen);
+                }
+            }
+            for (const sourceTurnId of sourceTurnIds) {
+                const source = turnsById.get(sourceTurnId);
+                if (!source) {
+                    add('REFERENCE_NOT_FOUND', path, 'Derived source turn is not retained', sourceTurnId);
+                    continue;
+                }
+                const blockIds = provenance.source_block_ids === undefined ? undefined : blocksByTurn.get(sourceTurnId);
+                if (blockIds === undefined && provenance.source_block_ids !== undefined && source.turn.blocks.length) {
+                    add(
+                        'DERIVED_PROVENANCE_MISMATCH',
+                        path,
+                        'Derived source turn has no declared source blocks',
+                        sourceTurnId,
+                    );
+                    continue;
+                }
+                stack.push({
+                    located: source,
+                    ...(blockIds === undefined ? {} : { block_ids: blockIds }),
+                    origin: 'replacement',
+                });
+            }
         }
-        return [...blocksByTurn].map(([turnId, blockIds]) => ({
-            turn_id: turnId,
-            all_blocks: false,
-            block_ids: blockIds,
-            origin: 'replacement',
-            path,
-            compaction_id: entry.compaction_id,
-        }));
+        return result;
     };
     const registerActiveSelection = (selection: ActiveSelection, entryId: string): void => {
         const existing = activeSelections.get(selection.turn_id);
@@ -1386,6 +1678,10 @@ export function validateConversationSemantics(document: ConversationDocument): C
         const entry = document.context.entries[index];
         const path = `/context/entries/${index}`;
         registerId(entry.id, 'context entry', `${path}/id`);
+        const archived = archivedEntries.get(entry.id);
+        if (archived !== undefined && !sameEntry(archived, entry)) {
+            add('DUPLICATE_ID', path, 'Active context identity conflicts with its accepted archive', entry.id);
+        }
         const prior = contextEntryIds.get(entry.id);
         if (prior !== undefined) {
             add(
@@ -1427,8 +1723,49 @@ export function validateConversationSemantics(document: ConversationDocument): C
                 priorBlockIndex = currentBlockIndex;
             }
         }
-        for (const selection of sourceSelectionsForEntry(entry, path, located)) {
-            registerActiveSelection(selection, entry.id);
+        if (!hasPreciseLineage) {
+            for (const selection of sourceSelectionsForEntry(entry, path, located))
+                registerActiveSelection(selection, entry.id);
+        } else {
+            try {
+                const ids = entry.block_ids === undefined ? undefined : new Set(entry.block_ids);
+                const blocks = located.turn.blocks.filter((block) => ids === undefined || ids.has(block.id));
+                const coverage = resolveSourceSliceCoverage(
+                    document,
+                    blocks.map((block) => sourceSliceForBlock(document, located.turn.id, block)),
+                    sliceWork,
+                );
+                const origin =
+                    entry.type === 'source_turn' && located.turn.provenance.type !== 'derived'
+                        ? 'direct'
+                        : 'replacement';
+                for (const slice of coverage) {
+                    const key = slice.block_id;
+                    const prior = preciseCoverage.get(key) ?? [];
+                    for (const item of prior) {
+                        spendSourceSliceWork(sliceWork);
+                        if (sourceSlicesOverlap(item.slice, slice)) {
+                            add(
+                                item.origin !== origin
+                                    ? 'CONTEXT_DIRECT_REPLACEMENT_OVERLAP'
+                                    : 'CONTEXT_SELECTION_OVERLAP',
+                                path,
+                                `Context source slice overlaps the active selection at ${item.path}`,
+                                entry.id,
+                            );
+                        }
+                    }
+                    prior.push({ slice, path, origin });
+                    preciseCoverage.set(key, prior);
+                }
+            } catch (error: unknown) {
+                add(
+                    'DERIVED_PROVENANCE_MISMATCH',
+                    path,
+                    error instanceof Error ? error.message : 'Invalid active source slice lineage',
+                    entry.id,
+                );
+            }
         }
     }
     for (let index = 0; index < document.context.active_tool_definition_ids.length; index += 1) {
@@ -1482,6 +1819,19 @@ export function validateConversationSemantics(document: ConversationDocument): C
                 `Retrieval asset ${diagnosticValue(requirement.asset_id)} does not exist`,
             );
         }
+        if (requirement.accepted_asset_operation_id !== undefined) {
+            const accepted = document.operation_receipts[requirement.accepted_asset_operation_id];
+            if (
+                accepted?.operation_kind !== undefined ||
+                accepted?.accepted_asset_ids?.filter((id) => id === requirement.asset_id).length !== 1
+            ) {
+                add(
+                    'REFERENCE_NOT_FOUND',
+                    `${path}/accepted_asset_operation_id`,
+                    'Retrieval requirement lacks its exact accepted asset append receipt',
+                );
+            }
+        }
         if (
             requirement.retrieval.tool_definition_id !== undefined &&
             !hasOwn(document.tool_definitions, requirement.retrieval.tool_definition_id)
@@ -1497,6 +1847,12 @@ export function validateConversationSemantics(document: ConversationDocument): C
     const processorKeys = new Set<string>();
     for (let index = 0; index < document.processing.processors.length; index += 1) {
         const processor = document.processing.processors[index];
+        if (new TextEncoder().encode(JSON.stringify(processor.config)).byteLength > MAX_PROCESSOR_CONFIGURATION_BYTES)
+            add(
+                'PROCESSING_CONFIG_LIMIT',
+                `/processing/processors/${index}/config`,
+                'Processor configuration exceeds durable bound',
+            );
         const key = `${processor.id}\u0000${processor.version}`;
         if (processorKeys.has(key)) {
             add(
@@ -1506,6 +1862,102 @@ export function validateConversationSemantics(document: ConversationDocument): C
             );
         }
         processorKeys.add(key);
+    }
+
+    const processing = document.processing;
+    for (const [id, job] of Object.entries(processing.jobs ?? {})) {
+        if (new TextEncoder().encode(JSON.stringify(job.configuration)).byteLength > MAX_PROCESSOR_CONFIGURATION_BYTES)
+            add(
+                'PROCESSING_CONFIG_LIMIT',
+                `/processing/jobs/${id}/configuration`,
+                'Processing job configuration exceeds durable bound',
+            );
+        if (job.id !== id || !hasOwn(document.operation_receipts, job.source_operation_id)) {
+            add(
+                'REFERENCE_NOT_FOUND',
+                `/processing/jobs/${id}`,
+                'Processing job identity or source operation is unavailable',
+            );
+        }
+        if (job.selection.kind === 'predecessor_output') {
+            const predecessor = processing.jobs?.[job.selection.job_id];
+            if (
+                !predecessor ||
+                predecessor.source_operation_id !== job.source_operation_id ||
+                predecessor.stage_index + 1 !== job.stage_index
+            )
+                add('REFERENCE_NOT_FOUND', `/processing/jobs/${id}/selection`, 'Processing predecessor is unavailable');
+        }
+    }
+    for (const [id, resolution] of Object.entries(processing.resolved_inputs ?? {})) {
+        if (resolution.job_id !== id || !hasOwn(processing.jobs ?? {}, id))
+            add('REFERENCE_NOT_FOUND', `/processing/resolved_inputs/${id}`, 'Processing resolved input has no job');
+    }
+    for (const [id, attempt] of Object.entries(processing.attempts ?? {})) {
+        if (attempt.job_id !== id || !hasOwn(processing.resolved_inputs ?? {}, id))
+            add('REFERENCE_NOT_FOUND', `/processing/attempts/${id}`, 'Processing attempt has no resolved input');
+    }
+    for (const [id, output] of Object.entries(processing.outputs ?? {})) {
+        if (output.job_id !== id || !hasOwn(processing.resolved_inputs ?? {}, id))
+            add('REFERENCE_NOT_FOUND', `/processing/outputs/${id}`, 'Processing output has no resolved input');
+        if (new TextEncoder().encode(JSON.stringify(output)).byteLength > MAX_PROCESSING_OUTPUT_BYTES)
+            add(
+                'PROCESSING_OUTPUT_LIMIT',
+                `/processing/outputs/${id}`,
+                'Processing output exceeds durable receipt bound',
+            );
+    }
+    for (const [id, completion] of Object.entries(processing.completions ?? {})) {
+        if (completion.job_id !== id || completion.output_fingerprint !== processing.outputs?.[id]?.output_fingerprint)
+            add('REFERENCE_NOT_FOUND', `/processing/completions/${id}`, 'Processing completion has no matching output');
+        if (
+            completion.context_change_operation_id !== undefined &&
+            document.operation_receipts[completion.context_change_operation_id]?.operation_kind !== 'context_change'
+        )
+            add(
+                'REFERENCE_NOT_FOUND',
+                `/processing/completions/${id}/context_change_operation_id`,
+                'Processing completion has no applied context change',
+            );
+    }
+    for (const [id, supersession] of Object.entries(processing.supersessions ?? {})) {
+        const receipt = document.operation_receipts[supersession.policy_operation_id];
+        if (
+            supersession.job_id !== id ||
+            !hasOwn(processing.jobs ?? {}, id) ||
+            receipt?.operation_kind !== 'processing' ||
+            receipt.processing_operation?.phase !== 'policy' ||
+            !receipt.processing_operation.superseded_job_ids?.includes(id) ||
+            receipt.recorded_at !== supersession.recorded_at
+        )
+            add(
+                'REFERENCE_NOT_FOUND',
+                `/processing/supersessions/${id}`,
+                'Processing supersession is not linked to an accepted policy receipt',
+            );
+    }
+    for (const [index, id] of (processing.coverage?.required_job_ids ?? []).entries()) {
+        if (!hasOwn(processing.jobs ?? {}, id))
+            add(
+                'REFERENCE_NOT_FOUND',
+                `/processing/coverage/required_job_ids/${index}`,
+                'Coverage names an unknown job',
+            );
+    }
+    for (const [id, coverage] of Object.entries(processing.coverage_receipts ?? {})) {
+        const receipt = document.operation_receipts[id];
+        if (
+            receipt?.operation_kind !== 'processing' ||
+            receipt.processing_operation?.phase !== 'coverage' ||
+            receipt.processing_operation.result_fingerprint === undefined ||
+            coverage.evaluated_at_revision !== receipt.result_revision ||
+            coverage.recorded_at !== receipt.recorded_at
+        )
+            add(
+                'REFERENCE_NOT_FOUND',
+                `/processing/coverage_receipts/${id}`,
+                'Processing coverage is not linked to its accepted operation',
+            );
     }
 
     return diagnostics;

@@ -8,12 +8,15 @@ import {
     type ConversationPreparedRequest,
     type ConversationStreamEvent,
     createConversationDocument,
+    createProgramTurn,
     createTextBlock,
     createUserTurn,
     parseConversationDocument,
+    type VideoBlock,
 } from '@llumiverse/conversation';
 import {
     Base64DataSource,
+    type CanonicalExecutionContextInputOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type DataSource,
@@ -71,6 +74,117 @@ function retryOptions(
             attempt_id: `${options.conversation_runtime.attempt_id}:retry`,
         },
     };
+}
+
+function retainedContextOptions(
+    flow: string,
+    conversation: ConversationDocument,
+): CanonicalExecutionContextInputOptions {
+    const options = runtimeOptions(flow, conversation);
+    if (options.conversation_runtime === undefined) throw new Error('Missing Pegasus runtime');
+    return { ...options, conversation, conversation_runtime: options.conversation_runtime };
+}
+
+function retainedVideoDocument(
+    flow: string,
+    storage:
+        | { type: 'inline_base64'; data: string }
+        | { type: 'external'; resolver: string; locator: { uri: string; bucketOwner?: string } } = {
+        type: 'inline_base64',
+        data: VIDEO_BASE64,
+    },
+    withTools = false,
+): ConversationDocument {
+    const options = runtimeOptions(flow);
+    const runtime = options.conversation_runtime;
+    if (runtime?.conversation_id === undefined || runtime.recorded_at === undefined) {
+        throw new Error('Missing Pegasus runtime identity');
+    }
+    const initial = createConversationDocument({ id: runtime.conversation_id, created_at: runtime.recorded_at });
+    const program = createProgramTurn({
+        id: `turn:pegasus:${flow}:program`,
+        authority: 'ordinary',
+        blocks: [
+            createTextBlock({
+                id: `block:pegasus:${flow}:program`,
+                text: 'Answer only from the video.',
+                format: 'plain',
+            }),
+        ],
+        status: 'completed',
+        timestamps: { recorded_at: runtime.recorded_at },
+        model_visibility: 'include',
+        provenance: { type: 'received' },
+    });
+    const assetId = `asset:pegasus:${flow}:video`;
+    const user = createUserTurn({
+        id: `turn:pegasus:${flow}:user`,
+        authority: 'ordinary',
+        blocks: [
+            createTextBlock({
+                id: `block:pegasus:${flow}:prompt`,
+                text: 'What happens?',
+                format: 'plain',
+            }),
+            { id: `block:pegasus:${flow}:video`, type: 'video', asset_id: assetId },
+        ],
+        status: 'completed',
+        timestamps: { recorded_at: runtime.recorded_at },
+        model_visibility: 'include',
+        provenance: { type: 'received' },
+    });
+    return appendConversationRecords(
+        initial,
+        {
+            turns: [program, user],
+            assets: [
+                {
+                    id: assetId,
+                    kind: 'video',
+                    mime_type: 'video/mp4',
+                    storage,
+                    provenance: { type: 'received', source_turn_id: user.id },
+                    created_at: runtime.recorded_at,
+                    metadata: { twelvelabs_pegasus: { name: 'clip.mp4' } },
+                    ...(storage.type === 'inline_base64' ? { byte_length: 3, content_hash: VIDEO_HASH } : {}),
+                },
+            ],
+            context_entries: [program, user].map((turn) => ({
+                id: `context:${turn.id}`,
+                type: 'source_turn' as const,
+                turn_id: turn.id,
+            })),
+            ...(withTools
+                ? {
+                      tool_definitions: [
+                          {
+                              id: `tool-definition:pegasus:${flow}`,
+                              name: 'lookup',
+                              version: 'v1',
+                              input_schema: { type: 'object', properties: {} },
+                              result_capabilities: ['text' as const],
+                          },
+                      ],
+                      active_tool_definition_ids: [`tool-definition:pegasus:${flow}`],
+                  }
+                : { active_tool_definition_ids: [] }),
+        },
+        {
+            expected_revision: initial.revision,
+            operation_id: `input:pegasus:${flow}:materialized`,
+            payload_fingerprint: `sha256:${'a'.repeat(64)}`,
+            recorded_at: runtime.recorded_at,
+        },
+    ).document;
+}
+
+function retainedVideoBlock(document: ConversationDocument): VideoBlock {
+    for (const turn of document.turns) {
+        for (const block of turn.blocks) {
+            if (block.type === 'video') return block;
+        }
+    }
+    throw new Error('Missing retained Pegasus video block');
 }
 
 function segments(video: DataSource = new Base64DataSource('clip.mp4', 'video/mp4', VIDEO_BASE64)) {
@@ -236,6 +350,205 @@ describe('Bedrock TwelveLabs Pegasus canonical lifecycle', () => {
         expect(invokeModelWithResponseStream).not.toHaveBeenCalled();
         expect(retryPublish).not.toHaveBeenCalled();
         await retry.closed;
+    });
+
+    it('executes retained video context and exact-recovers without another transport request', async () => {
+        const { driver, invokeModel, invokeModelWithResponseStream } = driverWith({
+            invoke: async () => invokeResponse({ message: '{"answer":"flight"}', finishReason: 'stop' }),
+        });
+        const document = retainedVideoDocument('retained-sync');
+        const publish = vi.fn(async () => {
+            expect(invokeModel).not.toHaveBeenCalled();
+        });
+        const options: CanonicalExecutionContextInputOptions = {
+            ...retainedContextOptions('retained-sync', document),
+            result_schema: RESULT_SCHEMA,
+            on_canonical_request_prepared: publish,
+        };
+
+        expect(await driver.supportsCanonicalContextExecution(options)).toBe(true);
+        const first = await driver.executeCanonicalContext(options);
+        expect(requestBody(invokeModel.mock.calls[0]?.[0])).toEqual({
+            inputPrompt: 'Answer only from the video.\nWhat happens?',
+            temperature: 0.2,
+            responseFormat: { jsonSchema: RESULT_SCHEMA },
+            mediaSource: { base64String: VIDEO_BASE64 },
+            maxOutputTokens: 128,
+        });
+        expect(document.turns[0]).toMatchObject({ kind: 'program', authority: 'ordinary' });
+        expect(first.accepted_output.turn.blocks).toEqual([
+            expect.objectContaining({ type: 'json', value: { answer: 'flight' } }),
+        ]);
+        expect(first.conversation.generations[first.accepted_output.generation.id]?.source).toEqual({
+            conversation_id: document.id,
+            revision: document.revision,
+        });
+        expect(first.conversation.turns.filter((turn) => turn.kind === 'program')).toHaveLength(1);
+        expect(first.conversation.turns.filter((turn) => turn.kind === 'user')).toHaveLength(1);
+        expect(publish).toHaveBeenCalledOnce();
+        expect(invokeModel).toHaveBeenCalledOnce();
+
+        const recoveredOptions = retainedContextOptions('retained-sync', first.conversation);
+        recoveredOptions.conversation_runtime.attempt_id = 'attempt:pegasus:retained-sync:retry';
+        const recovered = await driver.streamCanonicalContextEvents(
+            { ...recoveredOptions, result_schema: RESULT_SCHEMA },
+            undefined,
+            {
+                stream_id: 'stream:pegasus:retained-sync:retry',
+            },
+        );
+        expect(await collectEvents(recovered)).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'accepted_recovery' }),
+        ]);
+        expect(recovered.completion?.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(recovered.completion)).toBe(true);
+        expect(invokeModel).toHaveBeenCalledOnce();
+        expect(invokeModelWithResponseStream).not.toHaveBeenCalled();
+        await recovered.closed;
+
+        await expect(
+            driver.executeCanonicalContext({
+                ...retainedContextOptions('retained-sync', first.conversation),
+                result_schema: RESULT_SCHEMA,
+                model_options: { ...options.model_options, temperature: 0.7 },
+            }),
+        ).rejects.toThrow(/different payload|incompatible/);
+        expect(invokeModel).toHaveBeenCalledOnce();
+    });
+
+    it('preserves exact retained S3 location and rejects unsupported context before transport', async () => {
+        const { driver, invokeModel, invokeModelWithResponseStream } = driverWith({});
+        const s3Document = retainedVideoDocument('retained-s3', {
+            type: 'external',
+            resolver: 'aws.s3',
+            locator: { uri: 's3://video-bucket/source/clip.mp4', bucketOwner: '123456789012' },
+        });
+        await driver.executeCanonicalContext(retainedContextOptions('retained-s3', s3Document));
+        expect(requestBody(invokeModel.mock.calls[0]?.[0])).toMatchObject({
+            mediaSource: {
+                s3Location: { uri: 's3://video-bucket/source/clip.mp4', bucketOwner: '123456789012' },
+            },
+        });
+
+        const publish = vi.fn(async () => undefined);
+        const unsupportedDocument = retainedVideoDocument('retained-unsupported', {
+            type: 'external',
+            resolver: 'url',
+            locator: { uri: 'https://files.example/clip.mp4' },
+        });
+        await expect(
+            driver.executeCanonicalContext({
+                ...retainedContextOptions('retained-unsupported', unsupportedDocument),
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('must use inline_base64 or aws.s3 storage');
+        await expect(
+            driver.executeCanonicalContext({
+                ...retainedContextOptions('retained-tools', retainedVideoDocument('retained-tools', undefined, true)),
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('does not support active canonical tool definitions');
+        expect(publish).not.toHaveBeenCalled();
+        expect(invokeModel).toHaveBeenCalledOnce();
+        expect(invokeModelWithResponseStream).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        {
+            name: 'caption',
+            mutate(document: ConversationDocument) {
+                retainedVideoBlock(document).caption = 'Do not discard this caption';
+            },
+            expected: /cannot preserve video block .* caption/,
+        },
+        {
+            name: 'selection',
+            mutate(document: ConversationDocument) {
+                retainedVideoBlock(document).selection = { type: 'time_range', start_seconds: 1, end_seconds: 2 };
+            },
+            expected: /cannot preserve video block .* selection/,
+        },
+        {
+            name: 'elevated user authority',
+            mutate(document: ConversationDocument) {
+                const turn = document.turns.find((candidate) => candidate.kind === 'user');
+                if (turn?.kind !== 'user') throw new Error('Missing retained Pegasus user turn');
+                turn.authority = 'system';
+            },
+            expected: /cannot preserve user turn .* authority system/,
+        },
+        {
+            name: 'system program authority',
+            mutate(document: ConversationDocument) {
+                const turn = document.turns.find((candidate) => candidate.kind === 'program');
+                if (turn?.kind !== 'program') throw new Error('Missing retained Pegasus program turn');
+                turn.authority = 'system';
+            },
+            expected: /cannot preserve program turn .* authority system/,
+        },
+    ])('rejects retained $name before publication or transport', async ({ name, mutate, expected }) => {
+        const { driver, invokeModel, invokeModelWithResponseStream } = driverWith({});
+        const publish = vi.fn(async () => undefined);
+        const document = retainedVideoDocument(`projection-${name.replaceAll(' ', '-')}`);
+        mutate(document);
+        const parsed = parseConversationDocument(document);
+
+        await expect(
+            driver.executeCanonicalContext({
+                ...retainedContextOptions(`projection-${name.replaceAll(' ', '-')}`, parsed),
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow(expected);
+        expect(publish).not.toHaveBeenCalled();
+        expect(invokeModel).not.toHaveBeenCalled();
+        expect(invokeModelWithResponseStream).not.toHaveBeenCalled();
+    });
+
+    it('streams retained context after durable publication and cancellation aborts native transport', async () => {
+        let transportSignal: AbortSignal | undefined;
+        let release: (() => void) | undefined;
+        const pending = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const { driver, invokeModelWithResponseStream } = driverWith({
+            stream: async (_request, requestOptions) => {
+                transportSignal = requestOptions?.abortSignal;
+                return {
+                    body: (async function* () {
+                        try {
+                            yield streamEvent({ delta: 'retained' });
+                            await pending;
+                            yield streamEvent({ message: 'retained', finishReason: 'stop' });
+                        } finally {
+                            release?.();
+                        }
+                    })(),
+                    contentType: 'application/json',
+                    $metadata: { requestId: 'pegasus-retained-cancel' },
+                } as unknown as InvokeModelWithResponseStreamCommandOutput;
+            },
+        });
+        const publish = vi.fn(async () => {
+            expect(invokeModelWithResponseStream).not.toHaveBeenCalled();
+        });
+        const document = retainedVideoDocument('retained-cancel');
+        const stream = await driver.streamCanonicalContextEvents(
+            {
+                ...retainedContextOptions('retained-cancel', document),
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:pegasus:retained-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        expect((await iterator.next()).value).toMatchObject({ type: 'draft_started' });
+        expect((await iterator.next()).value).toMatchObject({ type: 'draft_block_started' });
+        expect((await iterator.next()).value).toMatchObject({ type: 'draft_text_delta', text: 'retained' });
+        expect(await stream.cancel()).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        expect(transportSignal?.aborted).toBe(true);
+        release?.();
+        await stream.closed;
+        expect(publish).toHaveBeenCalledOnce();
     });
 
     it('preserves S3 video provenance without claiming externally verified bytes', async () => {
@@ -585,7 +898,9 @@ describe('Bedrock TwelveLabs Pegasus canonical lifecycle', () => {
                 } as unknown as InvokeModelWithResponseStreamCommandOutput;
             },
         });
-        const publish = vi.fn(async () => expect(invokeModelWithResponseStream).not.toHaveBeenCalled());
+        const publish = vi.fn(async () => {
+            expect(invokeModelWithResponseStream).not.toHaveBeenCalled();
+        });
         const stream = await driver.streamCanonicalEvents(
             segments(),
             { ...runtimeOptions('cancel'), on_canonical_request_prepared: publish },

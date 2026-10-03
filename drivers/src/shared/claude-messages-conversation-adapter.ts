@@ -46,7 +46,9 @@ import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalDecodedResponse,
+    appendCanonicalDecodedResponseWithProcessing,
     appendCanonicalPrompt,
+    assertCanonicalContextProjection,
     assertProtectedReplayCompatibility,
     type CanonicalPreparedState,
     canonicalResponseIdentities,
@@ -1011,6 +1013,12 @@ function projectClaudeMessagesConversation(
     const messages: MessageParam[] = [];
     const mappings: NativeItemMapping[] = [];
     const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    if (!readOnlyCompatibilityProjection) {
+        assertCanonicalContextProjection(document, selectedTurns, {
+            label: 'Claude',
+            program_authorities: ['system', 'ordinary'],
+        });
+    }
     for (const turn of selectedTurns) {
         if (!readOnlyCompatibilityProjection)
             assertProtectedReplayCompatibility(document, turn, CLAUDE_MESSAGES_PROTOCOL, target);
@@ -1453,6 +1461,18 @@ export function appendClaudeCanonicalResponse(
         operation_id: prepared.runtime.response_operation_id,
         recorded_at: decoded.generation.timestamps.recorded_at,
     }).document;
+}
+
+export async function appendClaudeCanonicalResponseWithProcessing(
+    prepared: PreparedClaudeConversation,
+    decoded: DecodedConversationResponse,
+): Promise<ConversationDocument> {
+    return (
+        await appendCanonicalDecodedResponseWithProcessing(prepared, decoded, {
+            operation_id: prepared.runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.recorded_at,
+        })
+    ).document;
 }
 
 /** Read-only compatibility projection for versioned legacy API responses. */

@@ -782,6 +782,7 @@ describe('Claude native reasoning replay', () => {
         const providerCall = vi.fn(() => sdkStream([], finalToolMessage));
         const driver = new AnthropicDriver({ apiKey: 'test' });
         driver.client = { messages: { stream: providerCall } } as never;
+        const hostError = Object.freeze(Object.assign(new Error('durability barrier failed'), { status: 409 }));
 
         await expect(
             driver.streamCanonicalEvents(
@@ -789,13 +790,26 @@ describe('Claude native reasoning replay', () => {
                 {
                     ...canonicalOptions('attempt:typed:barrier', '2026-09-11T00:00:00.000Z'),
                     on_canonical_request_prepared: async () => {
-                        throw new Error('durability barrier failed');
+                        throw hostError;
                     },
                 },
                 undefined,
                 { stream_id: 'stream:claude:typed-barrier' },
             ),
-        ).rejects.toThrow('durability barrier failed');
+        ).rejects.toBe(hostError);
+
+        const projected = await driver.stream([{ role: PromptRole.user, content: 'Answer.' }], {
+            ...canonicalOptions('attempt:legacy:barrier', '2026-09-11T00:00:00.000Z'),
+            on_canonical_request_prepared: async () => {
+                throw hostError;
+            },
+        });
+        const consume = async () => {
+            for await (const _chunk of projected) {
+                // A failed durability barrier cannot publish compatibility output.
+            }
+        };
+        await expect(consume()).rejects.toBe(hostError);
         expect(providerCall).not.toHaveBeenCalled();
     });
 

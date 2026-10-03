@@ -1,6 +1,7 @@
 import type { ContentBlock, ConverseRequest, TokenUsage } from '@aws-sdk/client-bedrock-runtime';
 import {
     externalizeToolCallArguments,
+    type ImageBlock,
     parseConversationDocument,
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
@@ -343,7 +344,9 @@ describe('Bedrock Converse canonical adapter', () => {
         );
         const signedTurn = persisted.turns[signedTurnIndex];
         const signedReplay = signedTurn?.blocks.find((block) => block.type === 'native_replay');
-        if (signedReplay?.type !== 'native_replay') throw new Error('Expected signed replay block');
+        if (signedTurn === undefined || signedReplay?.type !== 'native_replay') {
+            throw new Error('Expected signed replay block');
+        }
         const signedPrefixTurns = persisted.turns.slice(0, signedTurnIndex + 1);
         const expectedBlockIds = signedPrefixTurns.flatMap((turn) =>
             turn.blocks.flatMap((block) => [
@@ -370,6 +373,47 @@ describe('Bedrock Converse canonical adapter', () => {
                 .flatMap((turn) => turn.blocks[0].content)
                 .find((block) => block.type === 'json'),
         ).toMatchObject({ value: { protocol: 'customer', adapter: { _llumiverse_bedrock_bytes: 'literal' } } });
+
+        const replayOnlyContext = {
+            id: 'context:signed-replay-only',
+            type: 'source_turn' as const,
+            turn_id: signedTurn.id,
+            block_ids: [signedReplay.id],
+        };
+        const unsupportedAuthority = structuredClone(persisted);
+        const programDependency = unsupportedAuthority.turns.find((turn) => turn.kind === 'program');
+        if (programDependency?.kind !== 'program') throw new Error('Expected signed replay system dependency');
+        expect(signedReplay.dependencies.turn_ids).toContain(programDependency.id);
+        programDependency.authority = 'developer';
+        unsupportedAuthority.context.entries = [replayOnlyContext];
+        expect(() =>
+            compileBedrockConverseConversation(parseConversationDocument(unsupportedAuthority), {
+                provider: 'bedrock',
+                model: 'anthropic.claude-sonnet-4-6',
+            }),
+        ).toThrow(/cannot preserve program turn .* authority developer/);
+
+        const unsupportedMedia = structuredClone(persisted);
+        let replayDependencyImage: ImageBlock | undefined;
+        for (const turn of unsupportedMedia.turns) {
+            for (const block of turn.blocks) {
+                if (block.type === 'image') {
+                    replayDependencyImage = block;
+                    break;
+                }
+            }
+            if (replayDependencyImage !== undefined) break;
+        }
+        if (replayDependencyImage === undefined) throw new Error('Expected signed replay image dependency');
+        expect(signedReplay.dependencies.block_ids).toContain(replayDependencyImage.id);
+        replayDependencyImage.caption = 'Do not discard replay dependency captions';
+        unsupportedMedia.context.entries = [replayOnlyContext];
+        expect(() =>
+            compileBedrockConverseConversation(parseConversationDocument(unsupportedMedia), {
+                provider: 'bedrock',
+                model: 'anthropic.claude-sonnet-4-6',
+            }),
+        ).toThrow(/cannot preserve image block .* caption/);
     });
 
     it('rejects edits to signed reasoning evidence and its preceding native chain', async () => {

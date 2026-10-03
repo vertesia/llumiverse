@@ -1,3 +1,4 @@
+export { deriveCanonicalProjectedMeasurementIdentity } from '../canonical-projection.js';
 /**
  * Runtime schemas for the llumiverse types that appear in a public API contract.
  *
@@ -7,6 +8,8 @@
  * calls. `@vertesia/common` splits `./api-schemas` off its own barrel for the same reason one layer
  * out — there, to keep ~34 ms of eager schema construction off packages that serve no HTTP.
  */
+
+export { CanonicalProjectedRequestMeasurementSchema } from './canonical-projection.js';
 export * from './completion.js';
 export * from './embeddings.js';
 export * from './http-timeout.js';

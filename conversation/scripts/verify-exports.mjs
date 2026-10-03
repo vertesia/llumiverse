@@ -9,6 +9,16 @@ const outputRuntime = await import('@llumiverse/conversation/output-runtime');
 const streamingRuntime = await import('@llumiverse/conversation/streaming-runtime');
 
 assert.equal(typeof root.validateConversationDocument, 'function');
+assert.equal(typeof root.inspectGenerationUsageAccounting, 'function');
+assert.equal(typeof root.verifyProcessingSuccessor, 'function');
+for (const name of [
+    'buildProcessingPhaseDocument',
+    'buildProcessingCompletionDocument',
+    'resolveProcessingJobInput',
+    'buildTextExternalizationProposal',
+]) {
+    assert.equal(Object.hasOwn(root, name), false, `${name} is an internal replay helper`);
+}
 assert.equal(typeof root.createConversationDocument, 'function');
 assert.equal(typeof schemas.ConversationDocumentSchema?.safeParse, 'function');
 assert.equal(typeof schemas.ConversationStreamEventSchema?.safeParse, 'function');
@@ -41,6 +51,70 @@ assert.equal(typeof root.parseNativeConversationImportOptions, 'function');
 assert.equal(typeof root.parseNativeConversationImportReport, 'function');
 assert.equal(typeof root.parseNativeConversationImportResult, 'function');
 assert.equal(typeof root.preflightNativeConversationImportInput, 'function');
+
+for (const name of [
+    'ContextSelector',
+    'ContextSelectionRequest',
+    'ContextSelectionResult',
+    'ContextChangePlan',
+    'ContextChangePlanInput',
+    'SelectedContextBlocks',
+    'ContextChangeRequest',
+    'ContextChangeProposal',
+    'ContextChangeOperation',
+    'ContextChangePlacement',
+    'ConversationChange',
+]) {
+    assert.equal(typeof schemas[`${name}Schema`]?.safeParse, 'function');
+    assert.equal(jsonSchemas[`${name}JsonSchema`].$schema, 'https://json-schema.org/draft/2020-12/schema');
+}
+assert.equal(typeof root.planContextChange, 'function');
+assert.equal(typeof root.applyContextChange, 'function');
+assert.equal(typeof root.resolveContextSelection, 'function');
+
+assert.equal(typeof root.planConversationEdit, 'function');
+assert.equal(typeof root.applyConversationEdit, 'function');
+for (const name of [
+    'AcceptedToolSelection',
+    'ConversationEditRecordRef',
+    'ConversationEditAnchor',
+    'ConversationEditOperation',
+    'ConversationEditPlacement',
+    'ConversationEditableBlock',
+    'ConversationInsertedTurn',
+    'ConversationReplacementTurn',
+    'ConversationEditCommand',
+    'ConversationEditPlanInput',
+    'ConversationEditRequest',
+    'ConversationEditPlan',
+    'ConversationEditResult',
+    'ContextChange',
+    'ConversationAppendOperation',
+    'ConversationAppendChange',
+    'ConversationEditChange',
+]) {
+    assert.equal(typeof schemas[`${name}Schema`]?.safeParse, 'function');
+    assert.equal(jsonSchemas[`${name}JsonSchema`].$schema, 'https://json-schema.org/draft/2020-12/schema');
+}
+
+for (const name of [
+    'ConversationEditOperationV1',
+    'ConversationSliceEditOperation',
+    'ConversationSliceEditCommand',
+    'ConversationSliceEditPlanInput',
+    'ConversationSliceEditRequest',
+    'JsonSourceRegion',
+    'SourceBlockSlice',
+    'JsonInverseMapping',
+    'DerivedBlockLineageGroup',
+    'DerivedBlockLineage',
+]) {
+    assert.equal(typeof root[`${name}Schema`]?.safeParse, 'function');
+    assert.equal(typeof schemas[`${name}Schema`]?.safeParse, 'function');
+    assert.equal(jsonSchemas[`${name}JsonSchema`].$schema, 'https://json-schema.org/draft/2020-12/schema');
+}
+assert.equal(typeof root.verifyDerivedBlockLineage, 'function');
+assert.equal(typeof root.applyConversationSliceEdit, 'function');
 
 const compiler = spawnSync('pnpm', ['exec', 'tsc', '-p', 'test-fixtures/tsconfig.json'], {
     cwd: new URL('..', import.meta.url),

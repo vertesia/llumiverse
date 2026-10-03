@@ -10,6 +10,8 @@ import {
     appendCanonicalPrompt,
     type CanonicalPromptRecords,
     canonicalToolDefinitions,
+    createExecutedGeneration,
+    createRequestReceipt,
     prepareCanonicalContext,
     type ResolvedConversationRuntimeContext,
 } from './canonical-runtime.js';
@@ -22,6 +24,106 @@ const emptyRecords = (): CanonicalPromptRecords => ({
     assets: [],
     context_entries: [],
     item_mappings: [],
+});
+
+describe('published historical canonical prompt recovery', () => {
+    const tools = [
+        { name: 'lookup', description: 'Lookup', input_schema: { type: 'object' as const } },
+        { name: 'write', description: 'Write', input_schema: { type: 'object' as const } },
+    ];
+
+    async function acceptedWithProjectedTools(projectedCount: number): Promise<{
+        document: ConversationDocument;
+        runtime: ResolvedConversationRuntimeContext;
+    }> {
+        const initial = createConversationDocument({
+            id: 'conversation:historical-selection',
+            created_at: RECORDED_AT,
+        });
+        const proof = freshRuntime(initial, 'historical-selection');
+        const input = await appendCanonicalPrompt(initial, emptyRecords(), proof, tools, { prompt: 'same' });
+        const requestReceipt = await createRequestReceipt(
+            input.document,
+            proof,
+            { provider: 'test-provider', protocol: 'test.protocol', model: 'model', adapter_version: 'test.v1' },
+            { messages: [] },
+            [],
+            input.tool_definitions.slice(0, projectedCount),
+        );
+        const generation = await createExecutedGeneration({
+            id: 'generation:historical-selection',
+            runtime: proof,
+            receipt: requestReceipt,
+            provider: 'test-provider',
+            protocol: 'test.protocol',
+            adapter_version: 'test.v1',
+            requested_model: 'model',
+        });
+        const response = appendConversationRecords(
+            input.document,
+            {
+                generations: [generation],
+                turns: [
+                    {
+                        id: 'turn:historical-response',
+                        kind: 'agent',
+                        authority: 'ordinary',
+                        model_visibility: 'include',
+                        status: 'completed',
+                        timestamps: { recorded_at: RECORDED_AT },
+                        provenance: { type: 'generated' },
+                        generation_id: generation.id,
+                        blocks: [{ id: 'block:historical-response', type: 'text', format: 'plain', text: 'answer' }],
+                    },
+                ],
+            },
+            {
+                expected_revision: input.document.revision,
+                operation_id: proof.response_operation_id,
+                payload_fingerprint: 'sha256:historical-response',
+                recorded_at: RECORDED_AT,
+            },
+        ).document;
+        const historical = structuredClone(response);
+        const inputReceipt = historical.operation_receipts[proof.input_operation_id];
+        if (inputReceipt === undefined) throw new Error('missing accepted input receipt');
+        delete inputReceipt.accepted_tool_selection;
+        return { document: historical, runtime: proof };
+    }
+
+    it('reuses only the exact legacy prompt fingerprint and accepted response without changing receipts', async () => {
+        const { document, runtime } = await acceptedWithProjectedTools(tools.length);
+        const before = structuredClone(document.operation_receipts);
+        const recovered = await appendCanonicalPrompt(document, emptyRecords(), runtime, tools, { prompt: 'same' });
+        expect(recovered.document).toEqual(document);
+        expect(recovered.document.operation_receipts).toEqual(before);
+        await expect(
+            appendCanonicalPrompt(document, emptyRecords(), runtime, tools, { prompt: 'changed' }),
+        ).rejects.toThrow(/exact accepted response and tool selection/);
+    });
+
+    it('rejects a request-projected subset as evidence for the prior active tool selection', async () => {
+        const { document, runtime } = await acceptedWithProjectedTools(1);
+        await expect(
+            appendCanonicalPrompt(document, emptyRecords(), runtime, tools, { prompt: 'same' }),
+        ).rejects.toThrow(/exact accepted response and tool selection/);
+    });
+
+    it('rejects absent or unrelated accepted response evidence even when current tools happen to match', async () => {
+        const { document, runtime } = await acceptedWithProjectedTools(tools.length);
+        const missing = structuredClone(document);
+        delete missing.operation_receipts[runtime.response_operation_id];
+        await expect(
+            appendCanonicalPrompt(missing, emptyRecords(), runtime, tools, { prompt: 'same' }),
+        ).rejects.toThrow(/exact accepted response and tool selection/);
+        const wrongChain = structuredClone(document);
+        const receipt = wrongChain.operation_receipts[runtime.response_operation_id];
+        if (receipt === undefined) throw new Error('missing response receipt');
+        receipt.base_revision = 0;
+        await expect(
+            appendCanonicalPrompt(wrongChain, emptyRecords(), runtime, tools, { prompt: 'same' }),
+        ).rejects.toThrow(/exact accepted response and tool selection|validation failed/);
+    });
 });
 
 function runtime(document: ConversationDocument): ResolvedConversationRuntimeContext {
