@@ -56,6 +56,7 @@ import {
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -1315,12 +1316,15 @@ export async function executeCanonicalClaudeCompletion(
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
     transport?: ClaudeTransportIdentity,
+    hostCapabilities?: CanonicalHostCapabilities,
 ): Promise<CanonicalExecutionResponse> {
     const canonicalState = await prepareClaudeCanonicalState({
         conversation: options.conversation,
         prompt,
         options,
         provider,
+        resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        signal: transportOptions?.signal ?? undefined,
         ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     return executePreparedCanonicalClaudeCompletion(
@@ -1341,10 +1345,13 @@ export async function executeCanonicalClaudeContext(
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
     transport?: ClaudeTransportIdentity,
+    hostCapabilities?: CanonicalHostCapabilities,
 ): Promise<CanonicalExecutionResponse> {
     const canonicalState = await prepareClaudeCanonicalContext({
         options,
         provider,
+        resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        signal: transportOptions?.signal ?? undefined,
         ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     return executePreparedCanonicalClaudeCompletion(
@@ -1740,12 +1747,15 @@ export async function streamCanonicalClaudeEvents(
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
     transport?: ClaudeTransportIdentity,
+    hostCapabilities?: CanonicalHostCapabilities,
 ): Promise<CanonicalExecutionEventStream> {
     const canonicalState = await prepareClaudeCanonicalState({
         conversation: options.conversation,
         prompt,
         options,
         provider,
+        resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        signal: transportOptions?.signal ?? undefined,
         ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     return streamPreparedCanonicalClaudeEvents(
@@ -1768,10 +1778,13 @@ export async function streamCanonicalClaudeContextEvents(
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
     transport?: ClaudeTransportIdentity,
+    hostCapabilities?: CanonicalHostCapabilities,
 ): Promise<CanonicalExecutionEventStream> {
     const canonicalState = await prepareClaudeCanonicalContext({
         options,
         provider,
+        resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        signal: transportOptions?.signal ?? undefined,
         ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     return streamPreparedCanonicalClaudeEvents(

@@ -31,6 +31,7 @@ import {
     type ProgramContentBlock,
     parseConversationDocument,
     preflightJsonInput,
+    type ResolveConversationAsset,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
@@ -44,6 +45,7 @@ import {
     type JSONObject,
     type ToolUse,
 } from '@llumiverse/core';
+import { hydrateCanonicalHostImages } from '../../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -142,6 +144,7 @@ export interface PreparedGeminiConversation
     requested_model: string;
     prior_native_content_count: number;
     current_native_content_indexes: number[];
+    native_projection?: { source_fingerprint: string; mappings: NativeItemMapping[] };
 }
 
 export interface LegacyGeminiConversation {
@@ -1587,6 +1590,8 @@ export async function prepareGeminiCanonicalState(input: {
     prompt: GenerateContentPrompt;
     options: ExecutionOptions;
     provider: string;
+    resolve_asset?: ResolveConversationAsset;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
@@ -1612,7 +1617,22 @@ export async function prepareGeminiCanonicalState(input: {
     }
 
     const target = { provider: input.provider, model: input.options.model };
-    const priorCompiled = compileGeminiConversation(document, target).conversation;
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compileWithAssets = async (source: ConversationDocument) =>
+        compileGeminiConversation(
+            await hydrateCanonicalHostImages({
+                document: source,
+                label: 'Gemini',
+                selection: { allow_interrupted_with_complete_tool_calls: true },
+                resolve_asset: input.resolve_asset,
+                signal: input.signal,
+                hydrated,
+                native_external: (asset) =>
+                    asset.storage.type === 'external' && asset.storage.resolver === 'google_uri',
+            }),
+            target,
+        );
+    const priorCompiled = (await compileWithAssets(document)).conversation;
     const priorNativeContentCount = priorCompiled.contents.length;
     const cleanPrompt = providerJsonValue(input.prompt) as unknown as GenerateContentPrompt;
     const inputWasAccepted = Object.hasOwn(document.operation_receipts, runtime.input_operation_id);
@@ -1652,7 +1672,7 @@ export async function prepareGeminiCanonicalState(input: {
         acceptedResponse === undefined
             ? appended.document
             : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
-    const compiled = compileGeminiConversation(requestDocument, target);
+    const compiled = await compileWithAssets(requestDocument);
     const acceptedInputTurnIds = new Set(
         appended.document.operation_receipts[runtime.input_operation_id]?.accepted_turn_ids ?? [],
     );
@@ -1680,6 +1700,10 @@ export async function prepareGeminiCanonicalState(input: {
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(appended.document),
+            mappings: structuredClone(compiled.mappings),
+        },
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
@@ -1697,6 +1721,8 @@ export async function prepareGeminiCanonicalState(input: {
 export async function prepareGeminiCanonicalContext(input: {
     options: CanonicalExecutionContextOptions;
     provider: string;
+    resolve_asset?: ResolveConversationAsset;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const prepared = await prepareCanonicalContext({
         options: input.options,
@@ -1705,16 +1731,33 @@ export async function prepareGeminiCanonicalContext(input: {
         adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
     });
     const target = { provider: input.provider, model: input.options.model };
-    const compiled = compileGeminiConversation(prepared.request_document, target);
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compileWithAssets = async (source: ConversationDocument) =>
+        compileGeminiConversation(
+            await hydrateCanonicalHostImages({
+                document: source,
+                label: 'Gemini',
+                selection: { allow_interrupted_with_complete_tool_calls: true },
+                resolve_asset: input.resolve_asset,
+                signal: input.signal,
+                hydrated,
+                native_external: (asset) =>
+                    asset.storage.type === 'external' && asset.storage.resolver === 'google_uri',
+            }),
+            target,
+        );
+    const compiled = await compileWithAssets(prepared.request_document);
     const priorCompiled =
-        prepared.request_document === prepared.document
-            ? compiled
-            : compileGeminiConversation(prepared.document, target);
+        prepared.request_document === prepared.document ? compiled : await compileWithAssets(prepared.document);
     const priorNativeContentCount = priorCompiled.conversation.contents.length;
     const { request_document: _requestDocument, ...base } = prepared;
     return {
         ...base,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(prepared.document),
+            mappings: structuredClone(compiled.mappings),
+        },
         provider: input.provider,
         requested_model: input.options.model,
         prior_native_content_count: priorNativeContentCount,
@@ -1726,10 +1769,19 @@ export async function finalizeGeminiPreparedRequest(
     state: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
     payload: GenerateContentParameters,
 ): Promise<PreparedGeminiConversation> {
-    const compiled = compileGeminiConversation(state.document, {
-        provider: state.provider,
-        model: state.requested_model,
-    });
+    if (
+        state.native_projection !== undefined &&
+        state.native_projection.source_fingerprint !== (await fingerprintJson(state.document))
+    ) {
+        throw new TypeError('Gemini canonical source changed after native preparation');
+    }
+    const mappings = structuredClone(
+        state.native_projection?.mappings ??
+            compileGeminiConversation(state.document, {
+                provider: state.provider,
+                model: state.requested_model,
+            }).mappings,
+    );
     const targetOptions = canonicalToolSelectionTargetOptions(undefined, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
@@ -1742,7 +1794,7 @@ export async function finalizeGeminiPreparedRequest(
             ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
         providerJsonValue(payload),
-        compiled.mappings,
+        mappings,
         state.tool_definitions,
     );
     return { ...state, payload, receipt, diagnostics: [] };

@@ -43,6 +43,7 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -709,6 +710,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         if (options.model.includes('twelvelabs.pegasus')) {
             validateTwelvelabsPegasusCanonicalInput(segments, options);
@@ -716,9 +718,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 segments,
                 { ...options, [TWELVELABS_PEGASUS_CANONICAL_FORMAT]: true } as PegasusCanonicalExecutionOptions,
                 signal,
+                hostCapabilities,
             );
         }
-        return super.executeCanonical(segments, options, signal);
+        return super.executeCanonical(segments, options, signal, hostCapabilities);
     }
 
     override async streamCanonicalEvents(
@@ -726,6 +729,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
             validateTwelvelabsPegasusCanonicalInput(segments, options);
@@ -734,9 +738,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 { ...options, [TWELVELABS_PEGASUS_CANONICAL_FORMAT]: true } as PegasusCanonicalExecutionOptions,
                 signal,
                 open,
+                hostCapabilities,
             );
         }
-        return super.streamCanonicalEvents(segments, options, signal, open);
+        return super.streamCanonicalEvents(segments, options, signal, open, hostCapabilities);
     }
 
     protected override supportsCanonicalImageGeneration(options: ExecutionOptions): boolean {
@@ -1394,6 +1399,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         prompt: BedrockPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         if (options.model.includes('twelvelabs.pegasus')) {
             return executeTwelvelabsPegasusCanonical({
@@ -1414,6 +1420,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             prompt: conversePrompt,
             options,
             provider: this.provider,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletion(canonicalState, options, signal);
     }
@@ -1421,6 +1429,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         if (options.model.includes('twelvelabs.pegasus')) {
             return executeTwelvelabsPegasusCanonicalContext({
@@ -1434,6 +1443,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const canonicalState = await prepareBedrockConverseCanonicalContext({
             options,
             provider: this.provider,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletion(canonicalState, options, signal, true);
     }
@@ -1750,6 +1761,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
             return streamTwelvelabsPegasusCanonicalEvents({
@@ -1770,6 +1782,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             prompt: conversePrompt,
             options,
             provider: this.provider,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(canonicalState, options, signal, open);
     }
@@ -1778,6 +1792,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
             return streamTwelvelabsPegasusCanonicalContextEvents({
@@ -1792,6 +1807,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const canonicalState = await prepareBedrockConverseCanonicalContext({
             options,
             provider: this.provider,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(canonicalState, options, signal, open, true);
     }

@@ -32,6 +32,7 @@ import {
     type ProgramContentBlock,
     parseConversationDocument,
     preflightJsonInput,
+    type ResolveConversationAsset,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
@@ -42,6 +43,7 @@ import {
     type CanonicalStructuredOutput,
     canonicalToolSelectionPolicy,
 } from '@llumiverse/core';
+import { hydrateCanonicalHostImages } from '../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -129,6 +131,7 @@ export interface PreparedClaudeConversation
     requested_model: string;
     target_options?: JsonObject;
     prior_native_message_count: number;
+    native_projection?: { source_fingerprint: string; mappings: NativeItemMapping[] };
 }
 
 function ownValue(value: object, key: string): unknown {
@@ -1126,6 +1129,8 @@ export async function prepareClaudeCanonicalState(input: {
     options: ExecutionOptions;
     provider: string;
     target_options?: JsonObject;
+    resolve_asset?: ResolveConversationAsset;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
@@ -1151,7 +1156,23 @@ export async function prepareClaudeCanonicalState(input: {
     }
 
     const target = { provider: input.provider, model: input.options.model };
-    const priorNativeMessageCount = compileClaudeMessagesConversation(document, target).conversation.messages.length;
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compileWithAssets = async (source: ConversationDocument) =>
+        compileClaudeMessagesConversation(
+            await hydrateCanonicalHostImages({
+                document: source,
+                label: 'Claude Messages',
+                selection: { allow_interrupted_with_complete_tool_calls: true },
+                resolve_asset: input.resolve_asset,
+                signal: input.signal,
+                hydrated,
+                native_external: (asset) =>
+                    asset.storage.type === 'external' &&
+                    (asset.storage.resolver === 'url' || asset.storage.resolver === 'anthropic_file'),
+            }),
+            target,
+        );
+    const priorNativeMessageCount = (await compileWithAssets(document)).conversation.messages.length;
     const received = await promptRecords({
         prompt: input.prompt,
         scope: runtime.input_operation_id,
@@ -1183,7 +1204,7 @@ export async function prepareClaudeCanonicalState(input: {
         acceptedResponse === undefined
             ? appended.document
             : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
-    const compiled = compileClaudeMessagesConversation(requestDocument, target);
+    const compiled = await compileWithAssets(requestDocument);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1192,6 +1213,10 @@ export async function prepareClaudeCanonicalState(input: {
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(appended.document),
+            mappings: structuredClone(compiled.mappings),
+        },
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
@@ -1210,6 +1235,8 @@ export async function prepareClaudeCanonicalContext(input: {
     options: CanonicalExecutionContextOptions;
     provider: string;
     target_options?: JsonObject;
+    resolve_asset?: ResolveConversationAsset;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const prepared = await prepareCanonicalContext({
         options: input.options,
@@ -1218,16 +1245,34 @@ export async function prepareClaudeCanonicalContext(input: {
         adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
     });
     const target = { provider: input.provider, model: input.options.model };
-    const compiled = compileClaudeMessagesConversation(prepared.request_document, target);
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compileWithAssets = async (source: ConversationDocument) =>
+        compileClaudeMessagesConversation(
+            await hydrateCanonicalHostImages({
+                document: source,
+                label: 'Claude Messages',
+                selection: { allow_interrupted_with_complete_tool_calls: true },
+                resolve_asset: input.resolve_asset,
+                signal: input.signal,
+                hydrated,
+                native_external: (asset) =>
+                    asset.storage.type === 'external' &&
+                    (asset.storage.resolver === 'url' || asset.storage.resolver === 'anthropic_file'),
+            }),
+            target,
+        );
+    const compiled = await compileWithAssets(prepared.request_document);
     const priorCompiled =
-        prepared.request_document === prepared.document
-            ? compiled
-            : compileClaudeMessagesConversation(prepared.document, target);
+        prepared.request_document === prepared.document ? compiled : await compileWithAssets(prepared.document);
     const priorNativeMessageCount = priorCompiled.conversation.messages.length;
     const { request_document: _requestDocument, ...base } = prepared;
     return {
         ...base,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(prepared.document),
+            mappings: structuredClone(compiled.mappings),
+        },
         provider: input.provider,
         requested_model: input.options.model,
         ...(input.target_options === undefined ? {} : { target_options: input.target_options }),
@@ -1239,10 +1284,19 @@ export async function finalizeClaudePreparedRequest(
     state: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
     payload: MessageCreateParamsBase,
 ): Promise<PreparedClaudeConversation> {
-    const compiled = compileClaudeMessagesConversation(state.document, {
-        provider: state.provider,
-        model: state.requested_model,
-    });
+    if (
+        state.native_projection !== undefined &&
+        state.native_projection.source_fingerprint !== (await fingerprintJson(state.document))
+    ) {
+        throw new TypeError('Claude Messages canonical source changed after native preparation');
+    }
+    const mappings = structuredClone(
+        state.native_projection?.mappings ??
+            compileClaudeMessagesConversation(state.document, {
+                provider: state.provider,
+                model: state.requested_model,
+            }).mappings,
+    );
     const targetOptions = canonicalToolSelectionTargetOptions(state.target_options, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
@@ -1255,7 +1309,7 @@ export async function finalizeClaudePreparedRequest(
             ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
         providerJsonValue(payload),
-        compiled.mappings,
+        mappings,
         state.tool_definitions,
     );
     return { ...state, payload, receipt, diagnostics: [] };

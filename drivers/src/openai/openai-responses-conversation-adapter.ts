@@ -1663,8 +1663,9 @@ export async function prepareOpenAIResponsesCanonicalContext(input: {
     options: CanonicalExecutionContextOptions;
     provider: string;
     signal?: AbortSignal;
+    resolve_asset?: ResolveConversationAsset;
 }): Promise<Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>> {
-    const resolveAsset = input.options.resolve_canonical_asset;
+    const resolveAsset = input.resolve_asset ?? input.options.resolve_canonical_asset;
     const signal = input.signal;
     const prepared = await prepareCanonicalContext({
         options: input.options,

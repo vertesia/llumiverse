@@ -6,6 +6,7 @@ import {
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
@@ -486,12 +487,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const definition = getModelDefinition(options.model);
         if (definition.requestCanonicalTextCompletion === undefined) {
             throw new Error(`Vertex AI model ${options.model} does not support direct canonical execution`);
         }
-        return definition.requestCanonicalTextCompletion(this, prompt, options, signal);
+        return definition.requestCanonicalTextCompletion(this, prompt, options, signal, hostCapabilities);
     }
 
     async requestCanonicalTextCompletionEventStream(
@@ -499,35 +501,45 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const definition = getModelDefinition(options.model);
         if (definition.requestCanonicalTextCompletionEventStream === undefined) {
             throw new Error(`Vertex AI model ${options.model} does not support canonical typed streaming`);
         }
-        return definition.requestCanonicalTextCompletionEventStream(this, prompt, options, signal, open);
+        return definition.requestCanonicalTextCompletionEventStream(
+            this,
+            prompt,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
     }
 
     async requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const definition = getModelDefinition(options.model);
         if (definition.requestCanonicalContextCompletion === undefined) {
             throw new Error('Vertex AI model does not support canonical context execution');
         }
-        return definition.requestCanonicalContextCompletion(this, options, signal);
+        return definition.requestCanonicalContextCompletion(this, options, signal, hostCapabilities);
     }
 
     async requestCanonicalContextCompletionEventStream(
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const definition = getModelDefinition(options.model);
         if (definition.requestCanonicalContextCompletionEventStream === undefined) {
             throw new Error('Vertex AI model does not support canonical context typed streaming');
         }
-        return definition.requestCanonicalContextCompletionEventStream(this, options, signal, open);
+        return definition.requestCanonicalContextCompletionEventStream(this, options, signal, open, hostCapabilities);
     }
 
     /**

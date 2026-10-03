@@ -3,6 +3,7 @@ import type {
     CanonicalExecutionContextOptions,
     CanonicalExecutionEventStream,
     CanonicalExecutionResponse,
+    CanonicalHostCapabilities,
     CanonicalStreamOpenOptions,
     Completion,
     DriverCompletionStream,
@@ -45,6 +46,7 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
         prompt: PromptT,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse>;
     requestCanonicalTextCompletionEventStream?(
         driver: VertexAIDriver,
@@ -52,17 +54,20 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream>;
     requestCanonicalContextCompletion?(
         driver: VertexAIDriver,
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse>;
     requestCanonicalContextCompletionEventStream?(
         driver: VertexAIDriver,
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream>;
     preValidationProcessing?(
         result: Completion,

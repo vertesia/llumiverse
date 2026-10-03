@@ -38,6 +38,7 @@ import {
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
@@ -1146,6 +1147,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const requestedOptions = options;
         const splits = options.model.split('/');
@@ -1196,6 +1198,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             prompt,
             options: requestedOptions,
             provider: geminiProvider(driver),
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         if (isFileAudioModel(modelName)) {
             return this.requestPreparedCanonicalFileAudioCompletion(
@@ -1221,6 +1225,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         driver: VertexAIDriver,
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const splits = options.model.split('/');
         let region: string | undefined;
@@ -1229,6 +1234,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const canonicalState = await prepareGeminiCanonicalContext({
             options,
             provider: geminiProvider(driver),
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         if (isFileAudioModel(modelName)) {
             return this.requestPreparedCanonicalFileAudioCompletion(
@@ -1977,6 +1984,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const requestedOptions = options;
         const splits = options.model.split('/');
@@ -1998,6 +2006,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                           prompt,
                           options: requestedOptions,
                           provider: geminiProvider(driver),
+                          resolve_asset: hostCapabilities?.resolve_canonical_asset,
+                          signal,
                       })
                     : undefined;
             const identity = {
@@ -2016,6 +2026,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         prompt,
                         requestedOptions,
                         signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                        hostCapabilities,
                     ),
                 { ...open, origin: accepted === undefined ? 'live_transport' : 'accepted_recovery' },
             );
@@ -2026,6 +2037,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             prompt,
             options: requestedOptions,
             provider: geminiProvider(driver),
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(
             driver,
@@ -2043,6 +2056,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const splits = options.model.split('/');
         let region: string | undefined;
@@ -2054,6 +2068,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const canonicalState = await prepareGeminiCanonicalContext({
             options,
             provider: geminiProvider(driver),
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+            signal,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(
             driver,

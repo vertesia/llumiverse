@@ -897,11 +897,13 @@ export class OpenAIResponsesProtocol {
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const canonicalState = await prepareOpenAIResponsesCanonicalContext({
             options,
             provider: driver.provider,
             signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(driver, canonicalState, options, signal, open);
     }
@@ -1318,11 +1320,13 @@ export class OpenAIResponsesProtocol {
         driver: OpenAIResponsesDriverBase,
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const canonicalState = await prepareOpenAIResponsesCanonicalContext({
             options,
             provider: driver.provider,
             signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
         return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal);
     }
@@ -1752,8 +1756,15 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
-        return this.responsesProtocol.requestCanonicalContextCompletionEventStream(this, options, signal, open);
+        return this.responsesProtocol.requestCanonicalContextCompletionEventStream(
+            this,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
     }
 
     requestTextCompletion(
@@ -1780,6 +1791,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         if (this.isImageModel(options.model)) {
             return this.requestCanonicalImageContextGeneration(options, signal);
@@ -1793,7 +1805,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 request_options: this.getDriverRequestOptions(options, signal),
             });
         }
-        return this.responsesProtocol.requestCanonicalContextCompletion(this, options, signal);
+        return this.responsesProtocol.requestCanonicalContextCompletion(this, options, signal, hostCapabilities);
     }
 
     override requestCanonicalImageContextGeneration(

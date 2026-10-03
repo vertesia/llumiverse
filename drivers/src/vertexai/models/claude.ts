@@ -3,6 +3,7 @@ import {
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -124,6 +125,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         prompt: ClaudePrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const transport = vertexClaudeTransport(driver, options);
         const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
@@ -135,6 +137,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.provider,
             signal ? { signal } : undefined,
             transport.identity,
+            hostCapabilities,
         );
     }
 
@@ -142,6 +145,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         driver: VertexAIDriver,
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const transport = vertexClaudeTransport(driver, options);
         const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
@@ -152,6 +156,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.provider,
             signal ? { signal } : undefined,
             transport.identity,
+            hostCapabilities,
         );
     }
 
@@ -188,6 +193,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const transport = vertexClaudeTransport(driver, options);
         const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
@@ -200,6 +206,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.provider,
             signal ? { signal } : undefined,
             transport.identity,
+            hostCapabilities,
         );
     }
 
@@ -208,6 +215,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const transport = vertexClaudeTransport(driver, options);
         const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
@@ -219,6 +227,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.provider,
             signal ? { signal } : undefined,
             transport.identity,
+            hostCapabilities,
         );
     }
 

@@ -5,6 +5,7 @@ import {
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
@@ -235,6 +236,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         prompt: BedrockMantlePrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
@@ -242,6 +244,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     requireResponsesPrompt(prompt),
                     options,
                     signal,
+                    hostCapabilities,
                 );
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletion(
@@ -258,6 +261,8 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     undefined,
                     this.provider,
                     this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
                 );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
@@ -267,10 +272,11 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestCanonicalContextCompletion(options, signal);
+                return this.responsesDelegate.requestCanonicalContextCompletion(options, signal, hostCapabilities);
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestCanonicalContextCompletion(
                     this,
@@ -284,6 +290,8 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     undefined,
                     this.provider,
                     this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
                 );
             default:
                 throw new Error('Unsupported Bedrock Mantle model for canonical context execution');
@@ -328,6 +336,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
@@ -336,6 +345,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                     signal,
                     open,
+                    hostCapabilities,
                 );
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletionEventStream(
@@ -354,6 +364,8 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     undefined,
                     this.provider,
                     this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
                 );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
@@ -364,10 +376,16 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestCanonicalContextCompletionEventStream(options, signal, open);
+                return this.responsesDelegate.requestCanonicalContextCompletionEventStream(
+                    options,
+                    signal,
+                    open,
+                    hostCapabilities,
+                );
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestCanonicalContextCompletionEventStream(
                     this,
@@ -383,6 +401,8 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     undefined,
                     this.provider,
                     this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
                 );
             default:
                 throw new Error('Unsupported Bedrock Mantle model for canonical context typed streaming');

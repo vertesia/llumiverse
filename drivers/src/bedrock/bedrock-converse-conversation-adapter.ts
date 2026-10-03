@@ -37,6 +37,7 @@ import {
     type PreparedConversationRequest,
     parseConversationDocument,
     preflightJsonInput,
+    type ResolveConversationAsset,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
@@ -47,6 +48,7 @@ import {
     type CanonicalStructuredOutput,
     canonicalToolSelectionPolicy,
 } from '@llumiverse/core';
+import { hydrateCanonicalHostImages } from '../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -124,6 +126,7 @@ export interface PreparedBedrockConverseConversation
     provider: string;
     requested_model: string;
     prior_native_message_count: number;
+    native_projection?: { source_fingerprint: string; mappings: NativeItemMapping[] };
 }
 
 interface BedrockReplayCanonicalEntry {
@@ -1802,6 +1805,8 @@ export async function prepareBedrockConverseCanonicalState(input: {
     prompt: ConverseRequest;
     options: ExecutionOptions;
     provider: string;
+    resolve_asset?: ResolveConversationAsset;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
@@ -1831,7 +1836,39 @@ export async function prepareBedrockConverseCanonicalState(input: {
     }
 
     const target = { provider: input.provider, model: input.options.model };
-    const priorCompiled = compileBedrockConverseConversation(document, target).conversation;
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compileWithAssets = async (source: ConversationDocument) =>
+        compileBedrockConverseConversation(
+            await hydrateCanonicalHostImages({
+                document: source,
+                label: 'Bedrock Converse',
+                selection: {
+                    allow_interrupted_with_replay_protocol: BEDROCK_CONVERSE_PROTOCOL,
+                    allow_interrupted_with_complete_tool_calls: true,
+                },
+                resolve_asset: input.resolve_asset,
+                signal: input.signal,
+                hydrated,
+                native_external: (asset) =>
+                    asset.storage.type === 'external' &&
+                    asset.storage.resolver === 'aws.s3' &&
+                    mediaMetadata(asset).source_type === 's3Location',
+                inline_asset: (asset, data) => ({
+                    ...asset,
+                    storage: { type: 'inline_base64', data },
+                    metadata: {
+                        ...asset.metadata,
+                        bedrock_converse: {
+                            ...mediaMetadata(asset),
+                            source_type: 'bytes',
+                            format: asset.mime_type === 'image/jpeg' ? 'jpeg' : asset.mime_type.slice('image/'.length),
+                        },
+                    },
+                }),
+            }),
+            target,
+        );
+    const priorCompiled = (await compileWithAssets(document)).conversation;
     const priorNativeMessageCount = priorCompiled.messages?.length ?? 0;
     const prompt = nativeConversation(input.prompt);
     const promptRecords = await importRecords(
@@ -1885,7 +1922,7 @@ export async function prepareBedrockConverseCanonicalState(input: {
         acceptedResponse === undefined
             ? appended.document
             : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
-    const compiled = compileBedrockConverseConversation(requestDocument, target);
+    const compiled = await compileWithAssets(requestDocument);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1894,6 +1931,10 @@ export async function prepareBedrockConverseCanonicalState(input: {
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(appended.document),
+            mappings: structuredClone(compiled.mappings),
+        },
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
@@ -1910,6 +1951,8 @@ export async function prepareBedrockConverseCanonicalState(input: {
 export async function prepareBedrockConverseCanonicalContext(input: {
     options: CanonicalExecutionContextOptions;
     provider: string;
+    resolve_asset?: ResolveConversationAsset;
+    signal?: AbortSignal;
 }): Promise<Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const prepared = await prepareCanonicalContext({
         options: input.options,
@@ -1918,16 +1961,50 @@ export async function prepareBedrockConverseCanonicalContext(input: {
         adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
     });
     const target = { provider: input.provider, model: input.options.model };
-    const compiled = compileBedrockConverseConversation(prepared.request_document, target);
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compileWithAssets = async (source: ConversationDocument) =>
+        compileBedrockConverseConversation(
+            await hydrateCanonicalHostImages({
+                document: source,
+                label: 'Bedrock Converse',
+                selection: {
+                    allow_interrupted_with_replay_protocol: BEDROCK_CONVERSE_PROTOCOL,
+                    allow_interrupted_with_complete_tool_calls: true,
+                },
+                resolve_asset: input.resolve_asset,
+                signal: input.signal,
+                hydrated,
+                native_external: (asset) =>
+                    asset.storage.type === 'external' &&
+                    asset.storage.resolver === 'aws.s3' &&
+                    mediaMetadata(asset).source_type === 's3Location',
+                inline_asset: (asset, data) => ({
+                    ...asset,
+                    storage: { type: 'inline_base64', data },
+                    metadata: {
+                        ...asset.metadata,
+                        bedrock_converse: {
+                            ...mediaMetadata(asset),
+                            source_type: 'bytes',
+                            format: asset.mime_type === 'image/jpeg' ? 'jpeg' : asset.mime_type.slice('image/'.length),
+                        },
+                    },
+                }),
+            }),
+            target,
+        );
+    const compiled = await compileWithAssets(prepared.request_document);
     const priorCompiled =
-        prepared.request_document === prepared.document
-            ? compiled
-            : compileBedrockConverseConversation(prepared.document, target);
+        prepared.request_document === prepared.document ? compiled : await compileWithAssets(prepared.document);
     const priorNativeMessageCount = priorCompiled.conversation.messages?.length ?? 0;
     const { request_document: _requestDocument, ...base } = prepared;
     return {
         ...base,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(prepared.document),
+            mappings: structuredClone(compiled.mappings),
+        },
         provider: input.provider,
         requested_model: input.options.model,
         prior_native_message_count: priorNativeMessageCount,
@@ -1939,10 +2016,19 @@ export async function finalizeBedrockConversePreparedRequest(
     payload: ConverseRequest,
 ): Promise<PreparedBedrockConverseConversation> {
     assertNonemptyString(payload.modelId, 'Bedrock Converse payload modelId');
-    const compiled = compileBedrockConverseConversation(state.document, {
-        provider: state.provider,
-        model: state.requested_model,
-    });
+    if (
+        state.native_projection !== undefined &&
+        state.native_projection.source_fingerprint !== (await fingerprintJson(state.document))
+    ) {
+        throw new TypeError('Bedrock Converse canonical source changed after native preparation');
+    }
+    const mappings = structuredClone(
+        state.native_projection?.mappings ??
+            compileBedrockConverseConversation(state.document, {
+                provider: state.provider,
+                model: state.requested_model,
+            }).mappings,
+    );
     const targetOptions = canonicalToolSelectionTargetOptions(undefined, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
@@ -1955,7 +2041,7 @@ export async function finalizeBedrockConversePreparedRequest(
             ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
         bedrockConverseJsonValue(payload),
-        compiled.mappings,
+        mappings,
         state.tool_definitions,
     );
     return { ...state, payload, receipt, diagnostics: [] };

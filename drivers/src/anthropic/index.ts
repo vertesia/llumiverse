@@ -8,6 +8,7 @@ import {
     type CanonicalExecutionContextOptions,
     type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalModelSwitchProjectionControls,
     type CanonicalStreamOpenOptions,
     type Completion,
@@ -138,6 +139,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         prompt: ClaudePrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         return executeCanonicalClaudeCompletion(
             this.client,
@@ -146,12 +148,15 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger,
             this.provider,
             this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
         );
     }
 
     async requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         return executeCanonicalClaudeContext(
             this.client,
@@ -159,6 +164,8 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger,
             this.provider,
             this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
         );
     }
 
@@ -186,6 +193,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         return streamCanonicalClaudeEvents(
             this.client,
@@ -195,6 +203,8 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger,
             this.provider,
             this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
         );
     }
 
@@ -202,6 +212,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         return streamCanonicalClaudeContextEvents(
             this.client,
@@ -210,6 +221,8 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger,
             this.provider,
             this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
         );
     }
 
