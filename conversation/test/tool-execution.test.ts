@@ -5,6 +5,7 @@ import {
     createConversationDocument,
     fingerprintJson,
     resolveToolExecutionRequest,
+    setProcessingPolicy,
     type ToolCallSourceRef,
     validateToolExecutionResult,
 } from '../src/index.js';
@@ -258,5 +259,74 @@ describe('canonical tool execution', () => {
             'result fingerprint does not match',
         );
         expect(document.execution_receipts).toEqual({});
+    });
+});
+
+describe('application tool result processing policy', () => {
+    it('keeps the async API and appends result, receipt and jobs atomically without changing the call source', async () => {
+        const original = callDocument();
+        const source = await callSource(original);
+        const enabled = await setProcessingPolicy(original, {
+            operation_id: 'enable',
+            expected_revision: original.revision,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [
+                {
+                    id: 'externalize-text',
+                    version: '1',
+                    scope: 'on_append',
+                    config: {},
+                    required: true,
+                    failure_behavior: 'block',
+                },
+            ],
+        });
+        const block = {
+            id: 'tool-result',
+            type: 'tool_result' as const,
+            call_id: source.call_id,
+            status: 'success' as const,
+            content: [
+                { id: 'tool-text', type: 'text' as const, text: 'retained tool result', format: 'plain' as const },
+            ],
+        };
+        const result = {
+            source,
+            turn: {
+                id: 'tool-turn',
+                kind: 'tool' as const,
+                authority: 'ordinary' as const,
+                model_visibility: 'include' as const,
+                status: 'completed' as const,
+                timestamps: { recorded_at: RECORDED_AT },
+                provenance: { type: 'received' as const },
+                execution_id: 'tool-execution',
+                blocks: [block],
+            },
+            execution_receipt: {
+                id: 'tool-execution',
+                call_id: source.call_id,
+                executor: 'application' as const,
+                status: 'success' as const,
+                result_turn_id: 'tool-turn',
+                result_fingerprint: await fingerprintJson(block),
+                recorded_at: RECORDED_AT,
+                call_source: source,
+            },
+        };
+        const options = {
+            expected_revision: enabled.document.revision,
+            operation_id: 'tool-append',
+            recorded_at: RECORDED_AT,
+        };
+        const accepted = await appendToolExecutionResult(enabled.document, result, options);
+        const receipt = accepted.document.operation_receipts['tool-append'];
+        expect(receipt.accepted_execution_receipt_ids).toEqual(['tool-execution']);
+        expect(accepted.document.execution_receipts['tool-execution']).toEqual(result.execution_receipt);
+        expect(Object.keys(accepted.document.processing.jobs ?? {})).toHaveLength(1);
+        const retry = await appendToolExecutionResult(accepted.document, result, options);
+        expect(retry.applied).toBe(false);
+        expect(retry.document).toEqual(accepted.document);
     });
 });

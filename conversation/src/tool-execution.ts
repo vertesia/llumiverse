@@ -1,6 +1,7 @@
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
-import { appendConversationRecords, fingerprintJson } from './runtime.js';
+import { appendConversationRecordsWithProcessing, fingerprintJson } from './runtime.js';
+import { AppendConversationRecordsOptionsSchema } from './schemas/ingestion.js';
 import {
     ConversationToolExecutionRequestSchema,
     ConversationToolExecutionResultSchema,
@@ -118,7 +119,7 @@ async function validatedToolExecutionRecords(
             inputPreflight.diagnostics,
         );
     }
-    const result = ConversationToolExecutionResultSchema.parse(resultInput);
+    const result = ConversationToolExecutionResultSchema.parse(structuredClone(resultInput));
     const document = parseConversationDocument(input);
     const call = sourceCall(document, result.source);
     await assertCallFingerprint(call, result.source);
@@ -162,6 +163,16 @@ export async function appendToolExecutionResult(
     resultInput: ConversationToolExecutionResult,
     options: AppendToolExecutionResultOptions,
 ): Promise<AppendConversationRecordsResult> {
+    const optionsPreflight = preflightJsonInput(options);
+    if (!optionsPreflight.success) {
+        throw new ConversationValidationError(
+            'Tool append options failed JSON preflight',
+            optionsPreflight.diagnostics,
+        );
+    }
+    options = AppendConversationRecordsOptionsSchema.omit({ payload_fingerprint: true }).parse(
+        structuredClone(options),
+    );
     const { document, result } = await validatedToolExecutionRecords(input, resultInput);
     if (hasTerminalResult(document, result.source.call_id)) {
         const acceptedOperation = Object.hasOwn(document.operation_receipts, options.operation_id)
@@ -172,7 +183,7 @@ export async function appendToolExecutionResult(
         }
     }
     const payloadFingerprint = await fingerprintJson(result);
-    return appendConversationRecords(
+    return appendConversationRecordsWithProcessing(
         document,
         {
             turns: [result.turn],
