@@ -1375,7 +1375,10 @@ async function compileOpenAIResponsesContextWithHostAssets(
     const imageAssetIds = new Set<string>();
     for (const turn of selected) {
         for (const block of turn.blocks) {
-            if (block.type === 'image') imageAssetIds.add(block.asset_id);
+            const content = block.type === 'tool_result' ? block.content : [block];
+            for (const item of content) {
+                if (item.type === 'image') imageAssetIds.add(item.asset_id);
+            }
         }
     }
     const externalImageIds = [...imageAssetIds].filter((id) => {
@@ -1549,6 +1552,8 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
     prompt: OpenAIResponsesInputItem[];
     options: ExecutionOptions;
     provider: string;
+    signal?: AbortSignal;
+    resolve_asset?: ResolveConversationAsset;
 }): Promise<Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
@@ -1574,7 +1579,15 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
     }
 
     const target = { provider: input.provider, model: input.options.model };
-    const priorNativeItemCount = compileOpenAIResponsesConversation(document, target).conversation.length;
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const priorCompiled = await compileOpenAIResponsesContextWithHostAssets(
+        document,
+        target,
+        input.resolve_asset,
+        input.signal,
+        hydrated,
+    );
+    const priorNativeItemCount = priorCompiled.conversation.length;
     const received = await itemsToRecords({
         items: input.prompt,
         scope: runtime.input_operation_id,
@@ -1614,7 +1627,13 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
         acceptedResponse === undefined
             ? appended.document
             : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
-    const compiled = compileOpenAIResponsesConversation(requestDocument, target);
+    const compiled = await compileOpenAIResponsesContextWithHostAssets(
+        requestDocument,
+        target,
+        input.resolve_asset,
+        input.signal,
+        hydrated,
+    );
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1623,6 +1642,10 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(appended.document),
+            mappings: compiled.mappings,
+        },
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,

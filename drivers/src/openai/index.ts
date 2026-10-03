@@ -872,12 +872,15 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const canonicalState = await prepareOpenAIResponsesCanonicalState({
             conversation: options.conversation,
             prompt,
             options,
             provider: driver.provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(
             driver,
@@ -1298,12 +1301,15 @@ export class OpenAIResponsesProtocol {
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const canonicalState = await prepareOpenAIResponsesCanonicalState({
             conversation: options.conversation,
             prompt,
             options,
             provider: driver.provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
         return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, signal, prompt);
     }
@@ -1570,8 +1576,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
-        if (!this.isFileAudioModel(options.model)) return super.executeCanonical(segments, options, signal);
+        if (!this.isFileAudioModel(options.model))
+            return super.executeCanonical(segments, options, signal, hostCapabilities);
         return executeOpenAIAudioCanonical({
             service: this.service,
             segments,
@@ -1616,9 +1624,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         if (!this.isFileAudioModel(options.model)) {
-            return super.streamCanonicalEvents(segments, options, signal, open);
+            return super.streamCanonicalEvents(segments, options, signal, open, hostCapabilities);
         }
         return streamOpenAIAudioCanonicalEvents({
             segments,
@@ -1724,11 +1733,19 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         if (this.isFileAudioModel(options.model)) {
             throw new Error(`OpenAI Responses audio model ${options.model} does not support canonical typed streaming`);
         }
-        return this.responsesProtocol.requestCanonicalTextCompletionEventStream(this, prompt, options, signal, open);
+        return this.responsesProtocol.requestCanonicalTextCompletionEventStream(
+            this,
+            prompt,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
     }
 
     requestCanonicalContextCompletionEventStream(
@@ -1752,11 +1769,12 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         if (this.isFileAudioModel(options.model)) {
             throw new Error(`OpenAI Responses audio model ${options.model} does not support canonical execution`);
         }
-        return this.responsesProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
+        return this.responsesProtocol.requestCanonicalTextCompletion(this, prompt, options, signal, hostCapabilities);
     }
 
     requestCanonicalContextCompletion(

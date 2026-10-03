@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
     appendConversationRecords,
+    appendToolExecutionResult,
     type ConversationDocument,
     type ConversationStreamEvent,
     createConversationDocument,
@@ -1827,6 +1828,326 @@ describe('OpenAI Responses canonical lifecycle', () => {
                 ],
             },
         ]);
+    });
+
+    it('appends a fresh authored prompt after hydrating a retained received image for execute and typed stream', async () => {
+        const png = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+            'base64',
+        );
+        const at = '2026-09-12T06:00:00.000Z';
+        const initial = createConversationDocument({ id: 'conversation:authored-received-image', created_at: at });
+        const asset = {
+            id: 'asset:authored-received-image',
+            kind: 'image' as const,
+            mime_type: 'image/png',
+            byte_length: png.byteLength,
+            content_hash: `sha256:${createHash('sha256').update(png).digest('hex')}`,
+            storage: {
+                type: 'external' as const,
+                resolver: 'vertesia.agent_artifact',
+                locator: { storage_id: 'owner', artifact_path: 'archive/assets/authored' },
+            },
+            provenance: { type: 'received' as const },
+            created_at: at,
+        };
+        const retained = appendConversationRecords(
+            initial,
+            {
+                turns: [
+                    {
+                        id: 'turn:authored-received-image',
+                        kind: 'user' as const,
+                        authority: 'ordinary' as const,
+                        status: 'completed' as const,
+                        timestamps: { recorded_at: at },
+                        model_visibility: 'include' as const,
+                        blocks: [
+                            createTextBlock({
+                                id: 'block:authored-received-image:text',
+                                text: 'Inspect this retained picture.',
+                                format: 'plain',
+                            }),
+                            { id: 'block:authored-received-image:image', type: 'image' as const, asset_id: asset.id },
+                        ],
+                        provenance: { type: 'inserted' as const, operation_id: 'operation:authored-received-image' },
+                    },
+                ],
+                assets: [asset],
+                context_entries: [
+                    {
+                        id: 'context:authored-received-image',
+                        type: 'source_turn' as const,
+                        turn_id: 'turn:authored-received-image',
+                    },
+                ],
+            },
+            {
+                expected_revision: initial.revision,
+                operation_id: 'operation:authored-received-image',
+                payload_fingerprint: await fingerprintJson({ received: 'image' }),
+                recorded_at: at,
+            },
+        ).document;
+        const expectedImage = `data:image/png;base64,${png.toString('base64')}`;
+        const executeCreate = vi.fn(async (_request: unknown) =>
+            response({ id: 'response:authored-image', output: [messageItem('message:authored-image', 'Done.')] }),
+        );
+        const executePublish = vi.fn<NonNullable<ExecutionOptions['on_canonical_request_prepared']>>(
+            async () => undefined,
+        );
+        const executeResolve = vi.fn(async function* () {
+            yield png;
+        });
+        const executeDriver = new TestOpenAIResponsesDriver(executeCreate);
+        const execute = await executeDriver.executeCanonical(
+            [{ role: PromptRole.user, content: 'And now describe its color.' }],
+            {
+                ...runtimeOptions({
+                    flow: 'authored-received-image',
+                    operation: 'execute',
+                    attempt: 'first',
+                    recordedAt: at,
+                    conversation: retained,
+                }),
+                on_canonical_request_prepared: executePublish,
+            },
+            undefined,
+            { resolve_canonical_asset: executeResolve },
+        );
+        expect(executeResolve).toHaveBeenCalledOnce();
+        expect(executeCreate).toHaveBeenCalledOnce();
+        expect(executeCreate.mock.calls[0]?.[0]).toMatchObject({
+            input: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'input_text', text: 'Inspect this retained picture.' },
+                        { type: 'input_image', image_url: expectedImage },
+                    ],
+                },
+                { role: 'user', content: 'And now describe its color.' },
+            ],
+        });
+        expect(executePublish.mock.calls[0]?.[0]?.record.request_receipt.request_fingerprint).toBe(
+            await fingerprintJson(JSON.parse(JSON.stringify(executeCreate.mock.calls[0]?.[0]))),
+        );
+        expect(executePublish.mock.calls[0]?.[0]?.document.assets[asset.id]).toEqual(asset);
+        expect(execute.conversation.assets[asset.id]).toEqual(asset);
+        const streamCreate = vi.fn(async (_request: unknown) =>
+            (async function* () {
+                yield {
+                    type: 'response.completed' as const,
+                    sequence_number: 1,
+                    response: response({
+                        id: 'response:authored-image:stream',
+                        output: [messageItem('message:authored-image:stream', 'Done.')],
+                    }),
+                };
+            })(),
+        );
+        const streamResolve = vi.fn(async function* () {
+            yield png;
+        });
+        const streamDriver = new TestOpenAIResponsesDriver(streamCreate);
+        const stream = await streamDriver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'And now describe its color.' }],
+            runtimeOptions({
+                flow: 'authored-received-image',
+                operation: 'stream',
+                attempt: 'first',
+                recordedAt: at,
+                conversation: retained,
+            }),
+            undefined,
+            { stream_id: 'stream:authored-received-image' },
+            { resolve_canonical_asset: streamResolve },
+        );
+        await collectCanonicalEvents(stream);
+        expect(streamResolve).toHaveBeenCalledOnce();
+        expect(streamCreate.mock.calls[0]?.[0]).toMatchObject({
+            input: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'input_text', text: 'Inspect this retained picture.' },
+                        { type: 'input_image', image_url: expectedImage },
+                    ],
+                },
+                { role: 'user', content: 'And now describe its color.' },
+            ],
+            stream: true,
+        });
+        await expect(
+            executeDriver.executeCanonical(
+                [{ role: PromptRole.user, content: 'And now describe its color.' }],
+                runtimeOptions({
+                    flow: 'authored-received-image',
+                    operation: 'unresolved',
+                    attempt: 'first',
+                    recordedAt: at,
+                    conversation: retained,
+                }),
+            ),
+        ).rejects.toThrow('has no host resolver');
+        expect(executeCreate).toHaveBeenCalledOnce();
+        const cancelled = new AbortController();
+        const cancelResolve = vi.fn(async function* () {
+            cancelled.abort(new Error('authored image cancelled'));
+            yield png;
+        });
+        await expect(
+            executeDriver.executeCanonical(
+                [{ role: PromptRole.user, content: 'And now describe its color.' }],
+                runtimeOptions({
+                    flow: 'authored-received-image',
+                    operation: 'cancelled',
+                    attempt: 'first',
+                    recordedAt: at,
+                    conversation: retained,
+                }),
+                cancelled.signal,
+                { resolve_canonical_asset: cancelResolve },
+            ),
+        ).rejects.toThrow('authored image cancelled');
+        expect(cancelResolve).toHaveBeenCalledOnce();
+        expect(executeCreate).toHaveBeenCalledOnce();
+        expect(executePublish).toHaveBeenCalledOnce();
+    });
+
+    it('hydrates a selected image nested in a tool result without changing its canonical asset', async () => {
+        const png = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+            'base64',
+        );
+        const at = '2026-09-12T06:00:00.000Z';
+        const initial = createConversationDocument({ id: 'conversation:nested-received-image', created_at: at });
+        const callBlock = {
+            id: 'block:nested-call',
+            type: 'tool_call' as const,
+            call_id: 'call:nested-image',
+            tool_name: 'lookup_weather',
+            executor: 'application' as const,
+            arguments: { type: 'json' as const, value: { city: 'Tokyo' } },
+        };
+        const withCall = appendConversationRecords(
+            initial,
+            {
+                turns: [
+                    {
+                        id: 'turn:nested-call',
+                        kind: 'agent' as const,
+                        authority: 'ordinary' as const,
+                        status: 'completed' as const,
+                        timestamps: { recorded_at: at },
+                        model_visibility: 'include' as const,
+                        blocks: [callBlock],
+                        provenance: { type: 'imported' as const, source: 'test' },
+                    },
+                ],
+                context_entries: [
+                    { id: 'context:nested-call', type: 'source_turn' as const, turn_id: 'turn:nested-call' },
+                ],
+            },
+            {
+                expected_revision: initial.revision,
+                operation_id: 'operation:nested-call',
+                payload_fingerprint: await fingerprintJson({ call: 'nested-image' }),
+                recorded_at: at,
+            },
+        ).document;
+        const asset = {
+            id: 'asset:nested-received-image',
+            kind: 'image' as const,
+            mime_type: 'image/png',
+            byte_length: png.byteLength,
+            content_hash: `sha256:${createHash('sha256').update(png).digest('hex')}`,
+            storage: {
+                type: 'external' as const,
+                resolver: 'vertesia.agent_artifact',
+                locator: { storage_id: 'owner', artifact_path: 'archive/assets/nested' },
+            },
+            provenance: { type: 'received' as const, source_turn_id: 'turn:nested-result' },
+            created_at: at,
+        };
+        const resultBlock = {
+            id: 'block:nested-result',
+            type: 'tool_result' as const,
+            call_id: callBlock.call_id,
+            status: 'success' as const,
+            content: [{ id: 'block:nested-image', type: 'image' as const, asset_id: asset.id }],
+        };
+        const source = {
+            conversation: { conversation_id: withCall.id, revision: withCall.revision },
+            turn_id: 'turn:nested-call',
+            block_id: callBlock.id,
+            call_id: callBlock.call_id,
+            call_fingerprint: await fingerprintJson(callBlock),
+        };
+        const accepted = await appendToolExecutionResult(
+            withCall,
+            {
+                source,
+                turn: {
+                    id: 'turn:nested-result',
+                    kind: 'tool' as const,
+                    authority: 'ordinary' as const,
+                    status: 'completed' as const,
+                    timestamps: { recorded_at: at },
+                    model_visibility: 'include' as const,
+                    blocks: [resultBlock],
+                    execution_id: 'execution:nested-image',
+                    provenance: { type: 'received' as const },
+                },
+                assets: [asset],
+                execution_receipt: {
+                    id: 'execution:nested-image',
+                    call_id: callBlock.call_id,
+                    executor: 'application' as const,
+                    status: 'success' as const,
+                    result_turn_id: 'turn:nested-result',
+                    result_fingerprint: await fingerprintJson(resultBlock),
+                    recorded_at: at,
+                    call_source: source,
+                },
+            },
+            {
+                expected_revision: withCall.revision,
+                operation_id: 'operation:nested-result',
+                recorded_at: at,
+            },
+        );
+        const resolve = vi.fn(async function* () {
+            yield png;
+        });
+        const prepared = await prepareOpenAIResponsesCanonicalContext({
+            options: resolveCanonicalExecutionContextOptions({
+                ...runtimeOptions({
+                    flow: 'nested-received-image',
+                    operation: 'respond',
+                    attempt: 'first',
+                    recordedAt: at,
+                    conversation: accepted.document,
+                }),
+                conversation: accepted.document,
+                resolve_canonical_asset: resolve,
+            }),
+            provider: Providers.openai,
+        });
+        expect(resolve).toHaveBeenCalledOnce();
+        expect(prepared.native_conversation).toContainEqual(
+            expect.objectContaining({
+                type: 'function_call_output',
+                call_id: callBlock.call_id,
+                output: [
+                    expect.objectContaining({
+                        type: 'input_image',
+                        image_url: `data:image/png;base64,${png.toString('base64')}`,
+                    }),
+                ],
+            }),
+        );
+        expect(prepared.document.assets[asset.id]).toEqual(asset);
     });
 
     it('hydrates an authenticated received image only in the native Responses body, retaining external source identity', async () => {
