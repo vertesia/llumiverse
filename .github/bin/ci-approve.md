@@ -64,10 +64,12 @@ These PRs still receive the CI status when tests pass. Fork PRs are not approved
 The workflow checks out `github.workflow_sha`, never PR code, and installs no
 packages. Node 24 on `ubuntu-slim` runs the dependency-free scripts directly.
 `GITHUB_TOKEN` reads PR/CI metadata and writes the `PR approval gate` commit status.
-Engineering-team membership reads and review creation and dismissal use the App
-token, scoped to the current repository with `members: read` and
-`pull-requests: write`. The App must remain a distinct identity
-from the PR author.
+Engineering-team membership reads and review creation and dismissal use separate
+App tokens. The membership token requests `members: read`; the review token is
+scoped to the current repository with `pull-requests: write`. If membership-token
+creation fails, reconciliation continues, fails eligibility closed, and uses the
+independent review token to withdraw owned approvals. The App must remain a
+distinct identity from the PR author.
 
 The script and tests are identical across studio, composableai and llumiverse,
 following the existing `automerge-ci.mjs` distribution pattern. CI requirements
@@ -75,13 +77,13 @@ remain repository-local; update the shared approval implementation in all three.
 
 ## Activation
 
-1. Merge the scripts and workflows into `main` in all three repositories, and
-   backport them to each maintained `release/X.Y` base. `pull_request_target` uses
-   the base branch's workflow; `workflow_run` uses the default branch.
-2. Confirm the App has organization `members: read` permission and each
+1. Confirm the App has organization `members: read` permission and each
    `renovate-automerge` environment provides
    `APP_VERTESIA_RENOVATE_AUTOMERGE_PEM`, and the environment/repository/organization
    supplies `APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID` for the existing App.
+2. Merge the scripts and workflows into `main` in all three repositories, and
+   backport them to each maintained `release/X.Y` base. `pull_request_target` uses
+   the base branch's workflow; `workflow_run` uses the default branch.
 3. Exercise a same-repository PR: observe the marked approval after CI, push an
    update, and verify that only this gate's approval disappears until CI passes.
 4. Once the status is being emitted, import `.github/rulesets/ci-approval.json` as
