@@ -5,6 +5,7 @@ import { fingerprintJson } from '../src/identity.js';
 import {
     type IndexedConversationRecordStore,
     loadIndexedPendingProcessingJobs,
+    loadIndexedProcessingJobState,
     loadIndexedProcessingSelectedContext,
     loadIndexedReadySelectedContext,
     stageIndexedConversationSnapshot,
@@ -18,6 +19,7 @@ import {
     applyIndexedTextExternalizationOutput,
     buildIndexedTextExternalizationOutput,
     buildIndexedTextExternalizationProposal,
+    indexedTextExternalizationOriginals,
     resolveIndexedProcessingTextInput,
 } from '../src/indexed-processing-working-set.js';
 import { PAGED_RECORD_INDEX_PAGE_MAX_BYTES } from '../src/paged-record-index.js';
@@ -44,6 +46,74 @@ const WORKING_SET_CAPACITY_TEST_TIMEOUT_MS = 30_000;
 const at = '2026-09-11T00:00:00.000Z';
 
 describe('indexed selected text processing transitions', () => {
+    it('replays original text at the exact retained resolve phase after later phase commits', async () => {
+        const { store, staged, workspace } = await indexedTextClaimFixture();
+        const state = await loadIndexedProcessingJobState(store, staged.root, workspace.job.id);
+        const receipt = state.resolution_receipt;
+        if (!receipt?.processing_operation) throw new Error('Actual indexed resolve phase has no receipt');
+        const phase = receipt.processing_operation;
+        expect(workspace.selected.source.revision).toBeGreaterThan(workspace.resolution.source_revision);
+        const original = await indexedTextExternalizationOriginals(
+            workspace.selected,
+            workspace.job,
+            workspace.resolution,
+            receipt,
+        );
+        expect(original.map((item) => item.text)).toEqual(['original']);
+        await expect(
+            indexedTextExternalizationOriginals(workspace.selected, workspace.job, workspace.resolution),
+        ).rejects.toThrow('exact retained resolution phase');
+        await expect(
+            indexedTextExternalizationOriginals(
+                workspace.selected,
+                workspace.job,
+                { ...workspace.resolution, source_revision: workspace.resolution.source_revision + 1 },
+                receipt,
+            ),
+        ).rejects.toThrow('exact retained resolution phase');
+        await expect(
+            indexedTextExternalizationOriginals(workspace.selected, workspace.job, workspace.resolution, {
+                ...receipt,
+                processing_operation: { ...phase, job_id: 'job:foreign' },
+            }),
+        ).rejects.toThrow('exact retained resolution phase');
+        const changed = structuredClone(workspace.selected);
+        const text = changed.turns[0]?.selected_blocks[0];
+        if (text?.type !== 'text') throw new Error('Actual indexed selection lost its original text');
+        text.text = 'different original';
+        await expect(
+            indexedTextExternalizationOriginals(changed, workspace.job, workspace.resolution, receipt),
+        ).rejects.toThrow('exact retained resolved selection');
+        await expect(
+            indexedTextExternalizationOriginals(
+                {
+                    ...workspace.selected,
+                    context: { ...workspace.selected.context, revision: workspace.selected.context.revision + 1 },
+                },
+                workspace.job,
+                workspace.resolution,
+                receipt,
+            ),
+        ).rejects.toThrow('exact retained resolution phase');
+        await expect(
+            indexedTextExternalizationOriginals(
+                { ...workspace.selected, context: { ...workspace.selected.context, active_tool_definition_ids: [] } },
+                workspace.job,
+                workspace.resolution,
+                receipt,
+            ),
+        ).rejects.toThrow('exact retained resolved selection');
+        const selection = { kind: 'entries' as const, entry_ids: [] };
+        await expect(
+            indexedTextExternalizationOriginals(
+                workspace.selected,
+                { ...workspace.job, selection, selection_fingerprint: await fingerprintJson(selection) },
+                workspace.resolution,
+                receipt,
+            ),
+        ).rejects.toThrow('exact retained resolved selection');
+    });
+
     it(
         'completes a real 1024-block admitted job with grouped indexes and exact retry',
         async () => {

@@ -5,6 +5,7 @@ import { fingerprintJson } from './identity.js';
 import { preflightJsonInput } from './json-preflight.js';
 import type { ProcessorResult } from './processing.js';
 import { ContextChangePlanInputSchema, ContextChangeRequestSchema } from './schemas/context-change.js';
+import { OperationReceiptSchema } from './schemas/execution.js';
 import {
     type IndexedProcessingSelectedContext,
     IndexedProcessingSelectedContextSchema,
@@ -17,7 +18,7 @@ import {
     ProcessingResolvedInputSchema,
 } from './schemas/processing.js';
 import { buildTextWorkingSetProposal, selectedTextWorkingSet } from './text-externalization-working-set.js';
-import type { ProcessingJob, ProcessingOutputReceipt, ProcessingResolvedInput } from './types.js';
+import type { OperationReceipt, ProcessingJob, ProcessingOutputReceipt, ProcessingResolvedInput } from './types.js';
 
 const MAX_WORKING_SET_BYTES = 32 * 1024 * 1024;
 const PROFILE = 'llumiverse.conversation/indexed-active-processing/2026-10-04.v1';
@@ -307,20 +308,50 @@ export async function indexedTextExternalizationOriginals(
     selectedInput: unknown,
     jobInput: ProcessingJob,
     resolutionInput: ProcessingResolvedInput,
+    retainedResolutionReceiptInput?: OperationReceipt,
 ) {
-    const envelope = { selected: selectedInput, job: jobInput, resolution: resolutionInput };
+    const envelope = {
+        selected: selectedInput,
+        job: jobInput,
+        resolution: resolutionInput,
+        ...(retainedResolutionReceiptInput === undefined ? {} : { receipt: retainedResolutionReceiptInput }),
+    };
     if (!preflightJsonInput(envelope, { max_bytes: MAX_WORKING_SET_BYTES }).success)
         throw new TypeError('Indexed originals are not bounded owned JSON');
     const owned = structuredClone(envelope);
     const selected = ownSelected(owned.selected);
     const job = ProcessingJobSchema.parse(owned.job);
     const resolution = ProcessingResolvedInputSchema.parse(owned.resolution);
-    const expected = await resolveIndexedProcessingTextInput(selected, job, resolution.recorded_at);
-    if (
-        expected.source_fingerprint !== resolution.source_fingerprint ||
-        expected.context_fingerprint !== resolution.context_fingerprint ||
-        canonicalJsonContentString(expected.entry_ids) !== canonicalJsonContentString(resolution.entry_ids)
-    )
+    // A later phase root is not a new source for the immutable resolution. Replay at its
+    // original revision only with the exact retained resolve receipt; current context/content
+    // still participates in the full deterministic resolution comparison below.
+    if (resolution.source_revision !== selected.source.revision) {
+        const receipt = owned.receipt === undefined ? undefined : OperationReceiptSchema.parse(owned.receipt);
+        const identity = await fingerprintJson(resolution);
+        if (
+            !receipt ||
+            resolution.source_revision > selected.source.revision ||
+            resolution.context_revision !== selected.context.revision ||
+            receipt.id !== `processing:resolve:${job.id}` ||
+            receipt.conversation_id !== selected.source.conversation_id ||
+            receipt.operation_kind !== 'processing' ||
+            receipt.processing_operation?.phase !== 'resolve' ||
+            receipt.processing_operation.job_id !== job.id ||
+            receipt.processing_operation.policy_revision !== job.policy_revision ||
+            receipt.processing_operation.result_fingerprint !== identity ||
+            receipt.payload_fingerprint !== identity ||
+            receipt.base_revision !== resolution.source_revision ||
+            receipt.result_revision !== receipt.base_revision + 1 ||
+            receipt.result_revision > selected.source.revision
+        )
+            throw new Error('Indexed originals lost their exact retained resolution phase');
+    }
+    const expected = await resolveIndexedProcessingTextInput(
+        { ...selected, source: { ...selected.source, revision: resolution.source_revision } },
+        job,
+        resolution.recorded_at,
+    );
+    if (canonicalJsonContentString(expected) !== canonicalJsonContentString(resolution))
         throw new Error('Indexed originals differ from their exact retained resolved selection');
     const texts = selectedTextWorkingSet(activeWorkingSet(selected), resolution);
     if (texts.length > 4096) throw new RangeError('Indexed originals exceed bounded text selection');

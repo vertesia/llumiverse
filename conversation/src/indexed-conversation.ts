@@ -3571,6 +3571,33 @@ export async function loadIndexedProcessingJobState(
         jobId,
         ProcessingResolvedInputSchema,
     );
+    const resolutionReceipt =
+        resolution === undefined
+            ? undefined
+            : await indexedRecordById(
+                  store,
+                  root,
+                  'operation_receipts',
+                  `processing:resolve:${jobId}`,
+                  OperationReceiptSchema,
+              );
+    if (resolution !== undefined) {
+        const identity = await fingerprintJson(resolution);
+        if (
+            !resolutionReceipt ||
+            resolutionReceipt.conversation_id !== root.source.conversation_id ||
+            resolutionReceipt.operation_kind !== 'processing' ||
+            resolutionReceipt.processing_operation?.phase !== 'resolve' ||
+            resolutionReceipt.processing_operation.job_id !== job.id ||
+            resolutionReceipt.processing_operation.policy_revision !== job.policy_revision ||
+            resolutionReceipt.processing_operation.result_fingerprint !== identity ||
+            resolutionReceipt.payload_fingerprint !== identity ||
+            resolutionReceipt.base_revision !== resolution.source_revision ||
+            resolutionReceipt.result_revision !== resolution.source_revision + 1 ||
+            resolutionReceipt.result_revision > root.source.revision
+        )
+            throw new Error('Indexed job resolution lost its exact immutable phase receipt');
+    }
     const attempt = await indexedProcessingRecord(store, root, 'attempts', jobId, ProcessingAttemptReceiptSchema);
     const output = await indexedProcessingRecord(store, root, 'outputs', jobId, ProcessingOutputReceiptSchema);
     const completion = await indexedProcessingRecord(
@@ -3591,7 +3618,7 @@ export async function loadIndexedProcessingJobState(
         job,
         configuration,
         header,
-        ...(resolution === undefined ? {} : { resolution }),
+        ...(resolution === undefined ? {} : { resolution, resolution_receipt: resolutionReceipt }),
         ...(attempt === undefined ? {} : { attempt }),
         ...(output === undefined ? {} : { output }),
         ...(completion === undefined ? {} : { completion }),
