@@ -6,6 +6,7 @@ import { main as verifyCi } from './automerge-ci.mjs';
 export const CONTEXT = 'PR approval gate';
 export const MARKER = '<!-- vertesia-ci-approval:v1 -->';
 export const APP_LOGIN = 'vertesia-automerge[bot]';
+export const ENGINEERING_TEAM_SLUG = 'engineering';
 export const CI_SETTLE_TIMEOUT_MS = 180_000;
 export const CI_SETTLE_POLL_MS = 10_000;
 
@@ -25,7 +26,7 @@ export function ownsReview(review) {
 export function requiresHuman(pr) {
     if (pr.labels.some(({ name }) => name === 'human-review-required')) return true;
     // Existing specialized gates retain ownership of deployment and automation PRs.
-    return pr.labels.some(({ name }) => name === 'deployment') || pr.user.type === 'Bot';
+    return pr.labels.some(({ name }) => name === 'deployment') || pr.user?.type !== 'User' || !pr.user.login;
 }
 
 export async function evaluate(api, pr, ci) {
@@ -43,13 +44,17 @@ export async function evaluate(api, pr, ci) {
             reason: 'Waiting for successful lint, build, and selected tests for this commit.',
         };
     }
-    const human = requiresHuman(pr);
+    const specialized = requiresHuman(pr);
+    const engineeringMember = !specialized && (await api.engineeringMember(pr.user.login));
+    const human = specialized || !engineeringMember;
     return {
         state: 'success',
         approve: !human,
-        reason: human
+        reason: specialized
             ? 'CI passed; approval remains with a human or the specialized gate.'
-            : 'Lint, build, and selected tests passed for this commit.',
+            : engineeringMember
+              ? 'Lint, build, and selected tests passed for this commit.'
+              : 'CI passed; the PR author is not an active @vertesia/engineering member.',
     };
 }
 
@@ -243,6 +248,7 @@ function sleepSync(ms) {
 export function githubApi(env, call = execFileSync, sleep = sleepSync) {
     const repo = env.GITHUB_REPOSITORY;
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) throw new Error('Invalid GITHUB_REPOSITORY');
+    const owner = repo.split('/')[0];
     const request = (endpoint, { method = 'GET', body, review = false, pages = false } = {}) => {
         const token = review ? env.GH_REVIEW_TOKEN : env.GH_TOKEN;
         if (!token) throw new Error('Missing GitHub token');
@@ -283,6 +289,19 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                 }`,
             ),
         reviews: (number) => list(`repos/${repo}/pulls/${number}/reviews`),
+        engineeringMember(login) {
+            try {
+                const membership = request(
+                    `orgs/${owner}/teams/${ENGINEERING_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
+                    { review: true },
+                );
+                return membership?.state === 'active';
+            } catch (error) {
+                // A missing membership is the expected negative response. Other failures are unsafe to ignore.
+                if (/HTTP 404/i.test(`${error?.stderr ?? ''}\n${error?.message ?? ''}`)) return false;
+                throw error;
+            }
+        },
         dismiss: (number, id, message) =>
             request(`repos/${repo}/pulls/${number}/reviews/${id}/dismissals`, {
                 method: 'PUT',

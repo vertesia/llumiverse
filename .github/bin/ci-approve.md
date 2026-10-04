@@ -1,7 +1,8 @@
 # CI-based PR approval
 
 `ci-approve.yaml` uses the existing `vertesia-automerge` App to approve ready,
-same-repository PRs targeting `main` or `release/X.Y` after the current head passes
+same-repository PRs authored by active `@vertesia/engineering` members and targeting
+`main` or `release/X.Y` after the current head passes
 this repository's `automerge-ci-policy.json` against the current base branch and
 commit. The CI run's recorded PR base must match; missing or older base metadata
 blocks approval. Studio uses its selected-suite
@@ -63,7 +64,8 @@ to its locked branch. Unrelated branches can reconcile concurrently.
 
 `human-review-required` opts a PR out of automatic review. All file paths are eligible,
 including dependency manifests, lockfiles, workflows, and build/test configuration.
-Bot-authored and `deployment` PRs retain their existing review route.
+PRs from authors outside `@vertesia/engineering`, bot-authored PRs, and
+`deployment` PRs retain their existing review route.
 These PRs still receive the CI status when tests pass. Fork PRs are not approved.
 
 ## Permissions and trusted code
@@ -71,8 +73,9 @@ These PRs still receive the CI status when tests pass. Fork PRs are not approved
 The workflow checks out `github.workflow_sha`, never PR code, and installs no
 packages. Node 24 on `ubuntu-slim` runs the dependency-free scripts directly.
 `GITHUB_TOKEN` reads PR/CI metadata and writes the `PR approval gate` commit status.
-Only review creation and dismissal use the App token, scoped to the current
-repository with `pull-requests: write`. The App must remain a distinct identity
+Engineering-team membership reads and review creation and dismissal use the App
+token, scoped to the current repository with `members: read` and
+`pull-requests: write`. The App must remain a distinct identity
 from the PR author.
 
 The script and tests are identical across studio, composableai and llumiverse,
@@ -84,7 +87,8 @@ remain repository-local; update the shared approval implementation in all three.
 1. Merge the scripts and workflows into `main` in all three repositories, and
    backport them to each maintained `release/X.Y` base. `pull_request_target` uses
    the base branch's workflow; `workflow_run` uses the default branch.
-2. Confirm each `renovate-automerge` environment provides
+2. Confirm the App has organization `members: read` permission and each
+   `renovate-automerge` environment provides
    `APP_VERTESIA_RENOVATE_AUTOMERGE_PEM`, and the environment/repository/organization
    supplies `APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID` for the existing App.
 3. Exercise a same-repository PR: observe the marked approval after CI, push an

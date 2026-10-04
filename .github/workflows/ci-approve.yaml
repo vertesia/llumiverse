@@ -81,6 +81,7 @@ jobs:
         with:
           client-id: ${{ vars.APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID }}
           private-key: ${{ secrets.APP_VERTESIA_RENOVATE_AUTOMERGE_PEM }}
+          permission-members: read
           permission-pull-requests: write
       - name: Reconcile approvals
         env:

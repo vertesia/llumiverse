@@ -7,6 +7,7 @@ import {
     CI_SETTLE_POLL_MS,
     CI_SETTLE_TIMEOUT_MS,
     CONTEXT,
+    ENGINEERING_TEAM_SLUG,
     evaluate,
     githubApi,
     isAmbiguousApprovalError,
@@ -31,7 +32,7 @@ const pr = {
     draft: false,
     changed_files: 0,
     labels: [],
-    user: { type: 'User' },
+    user: { type: 'User', login: 'engineer' },
     base: { ref: 'main', sha: 'base' },
     head: { sha, ref: 'feature', repo: { full_name: 'vertesia/studio' } },
 };
@@ -43,7 +44,7 @@ const approval = {
     user: { login: APP_LOGIN, type: 'Bot' },
 };
 
-function fixture({ pulls = [pr], reviews = [], files = [] } = {}) {
+function fixture({ pulls = [pr], reviews = [], files = [], engineeringMembers = ['engineer'] } = {}) {
     let reads = 0;
     let stored = [...reviews];
     const writes = [];
@@ -55,6 +56,7 @@ function fixture({ pulls = [pr], reviews = [], files = [] } = {}) {
             changed_files: files.length,
         }),
         reviews: async () => structuredClone(stored),
+        engineeringMember: async (login) => engineeringMembers.includes(login),
         files: async () => files,
         opened: [],
         async open(branch) {
@@ -220,6 +222,28 @@ test('dependency, CI, and configuration changes receive approval after CI passes
     assert.equal(requiresHuman(pr), false);
 });
 
+test('a tested PR from outside the engineering team cannot retain or receive approval', async () => {
+    const api = fixture({ reviews: [approval], engineeringMembers: [] });
+    const result = await reconcile(api, 12, () => true);
+    assert.equal(result.approve, false);
+    assert.match(result.reason, /not an active @vertesia\/engineering member/);
+    assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === approval.id));
+    assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+});
+
+test('an engineering membership lookup failure fails closed and withdraws approval', async () => {
+    const api = fixture({ reviews: [approval] });
+    api.engineeringMember = async () => {
+        throw new Error('membership API unavailable');
+    };
+    await assert.rejects(
+        reconcile(api, 12, () => true),
+        /membership API unavailable/,
+    );
+    assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === approval.id));
+    assert.ok(api.writes.some(([kind, _sha, state]) => kind === 'status' && state === 'error'));
+});
+
 for (const [name, update] of [
     ['head', { head: { ...pr.head, sha: newer } }],
     ['base', { base: { ...pr.base, sha: 'new-base' } }],
@@ -273,7 +297,7 @@ test('review identity requires the exact App and marker at the start', () => {
 });
 
 test('eligibility reads no Copilot reviews or review threads', async () => {
-    const api = { repo: 'vertesia/studio', files: async () => [] };
+    const api = { repo: 'vertesia/studio', engineeringMember: async () => true };
     assert.equal((await evaluate(api, pr, () => true)).approve, true);
 });
 
@@ -326,13 +350,15 @@ test('manual dispatch rejects malformed PR numbers', async () => {
     await assert.rejects(targets(fixture(), { inputs: { pr_number: '-1' } }, 'workflow_dispatch'), /Invalid PR/);
 });
 
-test('API transport paginates reviews and scopes approval writes to the App token', async () => {
+test('API transport paginates reviews and scopes approval and membership calls to the App token', async () => {
     const calls = [];
     const api = githubApi(
         { GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' },
         (_cmd, args, options) => {
             calls.push({ args, options });
-            return args.includes('--paginate') ? JSON.stringify([[approval], [{ ...approval, id: 2 }]]) : '{}';
+            if (args.includes('--paginate')) return JSON.stringify([[approval], [{ ...approval, id: 2 }]]);
+            if (args[1]?.includes('/memberships/')) return JSON.stringify({ state: 'active' });
+            return '{}';
         },
     );
     assert.equal((await api.reviews(12)).length, 2);
@@ -341,6 +367,18 @@ test('API transport paginates reviews and scopes approval writes to the App toke
     await api.approve(12, sha, 'review');
     assert.equal(calls[1].options.env.GH_TOKEN, 'app');
     assert.equal(JSON.parse(calls[1].options.input).commit_id, sha);
+    assert.equal(await api.engineeringMember('engineer'), true);
+    assert.equal(calls[2].options.env.GH_TOKEN, 'app');
+    assert.match(calls[2].args[1], new RegExp(`/teams/${ENGINEERING_TEAM_SLUG}/memberships/engineer$`));
+});
+
+test('a missing engineering membership is an ineligible author, while other lookup failures surface', () => {
+    const responses = [ghFailure('gh: Not Found (HTTP 404)'), ghFailure('gh: Forbidden (HTTP 403)')];
+    const api = githubApi({ GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' }, () => {
+        throw responses.shift();
+    });
+    assert.equal(api.engineeringMember('outsider'), false);
+    assert.throws(() => api.engineeringMember('engineer'), /Command failed/);
 });
 
 function ghFailure(stderr) {
@@ -601,6 +639,7 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
     assert.match(workflow, /ref: \$\{\{ github.workflow_sha \}\}/);
     assert.match(workflow, /types: \[completed\]/);
+    assert.match(workflow, /permission-members: read/);
     assert.doesNotMatch(workflow, /schedule:|requested|in_progress/);
     assert.match(workflow, /synchronize/);
     assert.match(workflow, /converted_to_draft/);
