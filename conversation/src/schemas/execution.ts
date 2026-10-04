@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CONVERSATION_USAGE_METRICS } from '../runtime-constants.js';
-import { ContextEntrySchema } from './context-foundation.js';
+import { ContextEntrySchema, ContextRetrievalRequirementSchema } from './context-foundation.js';
 import { ContextMeasurementSchema } from './context-measurement.js';
 import { ConversationDeleteOperationSchema } from './conversation-delete-operation.js';
 import { ConversationEditOperationSchema } from './conversation-edit-operation.js';
@@ -312,6 +312,8 @@ export const OperationReceiptSchema = z
         accepted_context_entry_ids: z.array(IdentifierSchema).optional(),
         /** Immutable accepted references; active context may later remove or partition them. */
         accepted_context_entries: z.array(ContextEntrySchema).optional(),
+        /** Immutable accepted retrieval requirements; active context may later remove them. */
+        accepted_retrieval_requirements: z.array(ContextRetrievalRequirementSchema).optional(),
         accepted_tool_selection: AcceptedToolSelectionSchema.optional(),
         /** Absent on append receipts, including historical ones. */
         operation_kind: z.enum(['context_change', 'conversation_edit', 'conversation_delete', 'processing']).optional(),

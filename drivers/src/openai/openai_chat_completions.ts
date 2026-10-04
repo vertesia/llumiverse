@@ -111,6 +111,7 @@ import {
     assertOpenAIChatSelectedPreparedRequestEvidence,
     compileOpenAIChatCompletionsConversation,
     compileOpenAIChatIndexedSelectedText,
+    compileOpenAIChatPreparedDocumentWithHostAssets,
     compileOpenAIChatProspectiveJsonMinification,
     compileOpenAIChatSelectedWorkingSet,
     createOpenAIChatIndexedTextRequestReceipt,
@@ -1708,6 +1709,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const provider = getOpenAIChatDriverProvider(driver);
         const canonicalState = await prepareOpenAIChatCanonicalState({
@@ -1715,6 +1717,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             prompt,
             options,
             provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
         return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, provider, signal);
     }
@@ -1723,9 +1727,15 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         driver: DriverT,
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
         const provider = getOpenAIChatDriverProvider(driver);
-        const canonicalState = await prepareOpenAIChatCanonicalContext({ options, provider });
+        const canonicalState = await prepareOpenAIChatCanonicalContext({
+            options,
+            provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        });
         return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, provider, signal);
     }
 
@@ -2117,6 +2127,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const provider = getOpenAIChatDriverProvider(driver);
         const canonicalState = await prepareOpenAIChatCanonicalState({
@@ -2124,6 +2135,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             prompt,
             options,
             provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
         return this.requestPreparedCanonicalTextCompletionEventStream(
             driver,
@@ -2140,9 +2153,15 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         const provider = getOpenAIChatDriverProvider(driver);
-        const canonicalState = await prepareOpenAIChatCanonicalContext({ options, provider });
+        const canonicalState = await prepareOpenAIChatCanonicalContext({
+            options,
+            provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        });
         return this.requestPreparedCanonicalTextCompletionEventStream(
             driver,
             canonicalState,
@@ -2646,7 +2665,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 const owned = parseConversationDocument(document);
                 return boundedCanonicalProjectionOperation(async (boundedSignal) => {
                     boundedSignal.throwIfAborted();
-                    const compiled = compileOpenAIChatCompletionsConversation(owned, target);
+                    const compiled = await compileOpenAIChatPreparedDocumentWithHostAssets(
+                        state.native_conversation,
+                        owned,
+                        target,
+                        boundedSignal,
+                    );
                     const request = build(compiled.conversation);
                     boundedSignal.throwIfAborted();
                     return request;
@@ -2655,7 +2679,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             compileProspective: (input, compileSignal) => {
                 const owned = structuredClone(input);
                 return boundedCanonicalProjectionOperation(async (boundedSignal) => {
-                    const compiled = await compileOpenAIChatProspectiveJsonMinification(owned, target, boundedSignal);
+                    const compiled = await compileOpenAIChatProspectiveJsonMinification(
+                        owned,
+                        target,
+                        boundedSignal,
+                        state.native_conversation,
+                    );
                     return {
                         status: 'compiled',
                         source_request: build(compiled.original.conversation),
@@ -2761,6 +2790,7 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
         options: OpenAIChatCompletionsProtocolOptions,
         private readonly resolveModelName: (options: ExecutionOptions) => string,
         private readonly projectTransportBody: (payload: OpenAIChatCompletionsPayload) => JsonValue,
+        private readonly bindRequestBody: (payload: OpenAIChatCompletionsPayload) => JsonValue,
     ) {
         super(options);
     }
@@ -2771,6 +2801,14 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
 
     protected override canonicalTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
         return this.projectTransportBody(payload);
+    }
+
+    protected override requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: this.bindRequestBody(payload) };
     }
 
     protected async postChatCompletion(
@@ -2872,6 +2910,14 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
         );
     }
 
+    protected override requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: this.canonicalTransportBody(payload) };
+    }
+
     protected async postChatCompletion(
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
@@ -2924,11 +2970,17 @@ export abstract class OpenAIChatCompletionsDriverBase<
             },
             (executionOptions) => this.resolveChatCompletionsRequestModel(executionOptions),
             (payload) => this.projectChatCompletionsTransportBody(payload),
+            (payload) => this.bindChatCompletionsRequestBody(payload),
         );
     }
 
     protected projectChatCompletionsTransportBody(_payload: OpenAIChatCompletionsPayload): JsonValue {
         throw new Error('Actual native body projection is unavailable for this provider transport');
+    }
+
+    /** Existing compatible transports retain their historical receipt binding until an exact serializer is available. */
+    protected bindChatCompletionsRequestBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return providerJsonValue(payload);
     }
 
     /** Resolve the transport body model without changing canonical requested-model identity. */
@@ -2975,8 +3027,15 @@ export abstract class OpenAIChatCompletionsDriverBase<
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
-        return this.chatCompletionsProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
+        return this.chatCompletionsProtocol.requestCanonicalTextCompletion(
+            this,
+            prompt,
+            options,
+            signal,
+            hostCapabilities,
+        );
     }
 
     /** @internal Compile through this configured driver before the host stages indexed evidence. */
@@ -3020,8 +3079,9 @@ export abstract class OpenAIChatCompletionsDriverBase<
     requestCanonicalContextCompletion(
         options: CanonicalExecutionContextOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
-        return this.chatCompletionsProtocol.requestCanonicalContextCompletion(this, options, signal);
+        return this.chatCompletionsProtocol.requestCanonicalContextCompletion(this, options, signal, hostCapabilities);
     }
 
     requestTextCompletionStream(
@@ -3037,6 +3097,7 @@ export abstract class OpenAIChatCompletionsDriverBase<
         options: ExecutionOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         return this.chatCompletionsProtocol.requestCanonicalTextCompletionEventStream(
             this,
@@ -3044,6 +3105,7 @@ export abstract class OpenAIChatCompletionsDriverBase<
             options,
             signal,
             open,
+            hostCapabilities,
         );
     }
 
@@ -3051,8 +3113,15 @@ export abstract class OpenAIChatCompletionsDriverBase<
         options: CanonicalExecutionContextOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
-        return this.chatCompletionsProtocol.requestCanonicalContextCompletionEventStream(this, options, signal, open);
+        return this.chatCompletionsProtocol.requestCanonicalContextCompletionEventStream(
+            this,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
     }
 
     buildStreamingConversation(
@@ -3124,6 +3193,10 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         );
     }
 
+    protected override bindChatCompletionsRequestBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return this.projectChatCompletionsTransportBody(payload);
+    }
+
     readonly provider = Providers.openai_compatible;
     service: OpenAI;
 
@@ -3149,8 +3222,9 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         segments: PromptSegment[],
         options: CanonicalExecutionInputOptions,
         signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionResponse> {
-        if (!openAIAudioTask(options.model)) return super.executeCanonical(segments, options, signal);
+        if (!openAIAudioTask(options.model)) return super.executeCanonical(segments, options, signal, hostCapabilities);
         return executeOpenAIAudioCanonical({
             service: this.service,
             segments,
@@ -3180,9 +3254,10 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         options: CanonicalExecutionInputOptions,
         signal: AbortSignal | undefined,
         open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<CanonicalExecutionEventStream> {
         if (!openAIAudioTask(options.model)) {
-            return super.streamCanonicalEvents(segments, options, signal, open);
+            return super.streamCanonicalEvents(segments, options, signal, open, hostCapabilities);
         }
         return streamOpenAIAudioCanonicalEvents({
             segments,

@@ -7,6 +7,7 @@ import {
 } from './content-integrity.js';
 import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
 import { fingerprintJson } from './identity.js';
+import { createIndexedProcessingScratchStore } from './indexed-processing-scratch-store.js';
 import {
     applyIndexedTextExternalizationOutput,
     indexedProcessingContextFingerprint,
@@ -68,6 +69,10 @@ import {
     type IndexedProcessingClaimWorkspace,
     IndexedProcessingClaimWorkspaceSchema,
 } from './schemas/indexed-processing.js';
+import {
+    IndexedProcessingClosureCommandSchema,
+    IndexedProcessingClosureWitnessSchema,
+} from './schemas/indexed-processing-closure.js';
 import { AppendConversationRecordsOptionsSchema, ConversationRecordBatchSchema } from './schemas/ingestion.js';
 import {
     ContentHashSchema,
@@ -2151,6 +2156,9 @@ export async function stageIndexedRecordBatch(
     }
     const parsed = IndexedRecordBatchCommandSchema.parse(input);
     const { batch, options } = parsed;
+    if ((batch.retrieval_requirements?.length ?? 0) > 0) {
+        throw new IndexedRecordAppendValidationError('Indexed append does not yet accept new retrieval requirements');
+    }
     const root = IndexedConversationRootSchema.parse(rootInput);
     if (parsed.conversation_id !== root.source.conversation_id)
         throw new IndexedRecordAppendConflict('conversation_identity_conflict', 'Indexed append conversation differs');
@@ -4750,4 +4758,154 @@ export async function loadIndexedReadySelectedContext(
         }),
         coverage,
     };
+}
+
+/** A generic bounded host closure witness in the existing processing index. Opaque binding JSON
+ * is integrity evidence only: the portable core never interprets Temporal/tenant/registration
+ * fields or grants a host action. The witness binds the PREVIOUS root, avoiding a Merkle cycle.
+ */
+export async function loadIndexedProcessingClosureWitness(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    operationIdInput: string,
+) {
+    const envelope = { root: rootInput, operation_id: operationIdInput };
+    if (!preflightJsonInput(envelope).success) throw new TypeError('Indexed closure lookup is not bounded JSON');
+    const root = IndexedConversationRootSchema.parse(structuredClone(rootInput));
+    const operationId = IdentifierSchema.parse(operationIdInput);
+    const store = boundedIndexedProcessingReader(storeInput);
+    const descriptor = await getPagedRecord(
+        store,
+        root.directories.processing_records,
+        tupleKey('closures', operationId),
+    );
+    if (!descriptor) return undefined;
+    if (descriptor.storage !== 'record' || descriptor.kind !== 'processing_records' || descriptor.id !== operationId)
+        throw new Error('Indexed closure point lookup has a foreign descriptor');
+    const witness = await loadRecord(store, descriptor, IndexedProcessingClosureWitnessSchema);
+    const marker = await getPagedRecord(store, root.directories.identifiers, operationId);
+    if (
+        witness.operation_id !== operationId ||
+        witness.predecessor.source.conversation_id !== root.source.conversation_id ||
+        witness.result_revision !==
+            witness.predecessor.source.revision + (witness.publication === 'retention' ? 0 : 1) ||
+        witness.result_revision > root.source.revision ||
+        witness.binding_fingerprint !== (await fingerprintJson(witness.binding)) ||
+        marker?.storage !== 'marker' ||
+        marker.kind !== 'indexed processing closure' ||
+        marker.id !== operationId
+    )
+        throw new Error('Indexed closure witness lost its exact immutable binding/identifier');
+    return witness;
+}
+
+export async function stageIndexedProcessingClosureWitness(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    commandInput: z.infer<typeof IndexedProcessingClosureCommandSchema>,
+) {
+    const envelope = { root: rootInput, locator: locatorInput, command: commandInput };
+    if (!preflightJsonInput(envelope, { max_bytes: 512 * 1024 }).success)
+        throw new TypeError('Indexed closure publication is not bounded owned JSON');
+    const root = IndexedConversationRootSchema.parse(structuredClone(rootInput));
+    const locator = PagedRecordRefSchema.parse({ ...locatorInput });
+    const command = IndexedProcessingClosureCommandSchema.parse(structuredClone(commandInput));
+    const store = boundedIndexedProcessingReader(storeInput);
+    const rootIntegrity = await hashContentBytes(canonicalJsonContentBytes(root));
+    if (rootIntegrity.content_hash !== locator.content_hash || rootIntegrity.byte_length !== locator.size_bytes)
+        throw new Error('Indexed closure predecessor locator differs from the immutable root');
+    const retained = await loadIndexedProcessingClosureWitness(store, root, command.operation_id);
+    const bindingFingerprint = await fingerprintJson(command.binding);
+    if (retained) {
+        if (
+            retained.publication !== command.publication ||
+            retained.predecessor.source.revision !== command.expected_revision ||
+            retained.binding_fingerprint !== bindingFingerprint ||
+            retained.recorded_at !== command.recorded_at
+        )
+            throw new Error('Indexed closure retry changes its original binding/source/time');
+        return { root, locator, witness: retained, applied: false };
+    }
+    if (root.source.revision !== command.expected_revision)
+        throw new Error('Indexed closure publication lost its exact current source');
+    const pending = await loadIndexedPendingProcessingJobs(store, root, { limit: 1 });
+    if (pending.has_more || pending.jobs.length || pending.unresolved_job_count || pending.required_blocked_job_count)
+        throw new Error('Indexed closure cannot retire unresolved processing obligations');
+    const witness = IndexedProcessingClosureWitnessSchema.parse({
+        version: 1,
+        ...(command.publication === undefined ? {} : { publication: command.publication }),
+        operation_id: command.operation_id,
+        predecessor: { source: root.source, root: locator },
+        result_revision: root.source.revision + (command.publication === 'retention' ? 0 : 1),
+        binding_fingerprint: bindingFingerprint,
+        binding: command.binding,
+        recorded_at: command.recorded_at,
+    });
+    const directories = { ...root.directories };
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('closures', command.operation_id),
+        await stageRecord(store, 'processing_records', command.operation_id, witness),
+    );
+    directories.identifiers = await putPagedRecord(store, directories.identifiers, command.operation_id, {
+        storage: 'marker',
+        kind: 'indexed processing closure',
+        id: command.operation_id,
+    });
+    const next = IndexedConversationRootSchema.parse({
+        ...root,
+        directories,
+        source: { ...root.source, revision: witness.result_revision },
+        // Retention changes only the physical indexes. It is never a canonical content mutation.
+        updated_at: command.publication === 'retention' ? root.updated_at : command.recorded_at,
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, next);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed closing root exceeds its manifest bound');
+    return {
+        root: next,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        witness,
+        applied: true,
+    };
+}
+
+/** Reconstruct the exact closing root from its immutable predecessor and the witness selected by
+ * the authenticated current index. Scratch writes have no external effects. A later epoch/head is
+ * never returned in place of the historical close acknowledgement.
+ */
+export async function recoverIndexedProcessingClosureRoot(
+    store: IndexedConversationRecordStore,
+    currentRoot: IndexedConversationRoot,
+    operationId: string,
+) {
+    const witness = await loadIndexedProcessingClosureWitness(store, currentRoot, operationId);
+    if (!witness) return undefined;
+    const scratch = createIndexedProcessingScratchStore(store, async () => {
+        throw new Error('Indexed closure reconstruction cannot grant or publish an asset');
+    });
+    const body = await scratch.store.readRecord({
+        storage: 'record',
+        kind: 'root',
+        id: witness.predecessor.source.conversation_id,
+        ...witness.predecessor.root,
+    });
+    const raw: unknown = JSON.parse(new TextDecoder().decode(body));
+    if (!preflightJsonInput(raw, { max_bytes: INDEXED_CONVERSATION_ROOT_MAX_BYTES }).success)
+        throw new TypeError('Indexed closure predecessor is not bounded JSON');
+    const predecessor = IndexedConversationRootSchema.parse(raw);
+    if ((await fingerprintJson(predecessor.source)) !== (await fingerprintJson(witness.predecessor.source)))
+        throw new Error('Indexed closure predecessor has a foreign source');
+    const recovered = await stageIndexedProcessingClosureWitness(scratch.store, predecessor, witness.predecessor.root, {
+        ...(witness.publication === undefined ? {} : { publication: witness.publication }),
+        operation_id: witness.operation_id,
+        expected_revision: witness.predecessor.source.revision,
+        recorded_at: witness.recorded_at,
+        binding: witness.binding,
+    });
+    if (!recovered.applied || (await fingerprintJson(recovered.witness)) !== (await fingerprintJson(witness)))
+        throw new Error('Indexed closure reconstruction differs from its retained witness');
+    return { root: recovered.root, locator: recovered.locator, witness };
 }

@@ -1,5 +1,16 @@
 import { z } from 'zod';
+import { RetrievalCapabilitySchema } from './content.js';
 import { ContentHashSchema, IdentifierSchema } from './primitives.js';
+
+export const ContextRetrievalRequirementSchema = z
+    .strictObject({
+        id: IdentifierSchema,
+        asset_id: IdentifierSchema,
+        retrieval: RetrievalCapabilitySchema,
+        /** Canonical append receipt that accepted the original asset before context replacement. */
+        accepted_asset_operation_id: IdentifierSchema.optional(),
+    })
+    .meta({ id: 'ConversationContextRetrievalRequirement' });
 
 export const SourceTurnContextEntrySchema = z
     .strictObject({

@@ -7,6 +7,7 @@ import {
     createUserTurn,
     fingerprintJson,
     hashContentBytes,
+    processingContextFingerprint,
     type ResolveConversationAsset,
 } from '@llumiverse/conversation';
 import { type ExecutionOptions, PromptRole, resolveCanonicalExecutionContextOptions } from '@llumiverse/core';
@@ -18,6 +19,7 @@ import {
 } from '../bedrock/bedrock-converse-conversation-adapter.js';
 import { BedrockDriver } from '../bedrock/index.js';
 import { BedrockMantleDriver } from '../bedrock-mantle/index.js';
+import { OpenAIChatCompletionsDriver } from '../openai/openai_chat_completions.js';
 import { prepareClaudeCanonicalContext } from '../shared/claude-messages-conversation-adapter.js';
 import { VertexAIDriver } from '../vertexai/index.js';
 import { providerJsonValue } from './canonical-runtime.js';
@@ -149,6 +151,293 @@ function options(conversation: Awaited<ReturnType<typeof document>>, model: stri
 }
 
 describe('concrete driver canonical host image ownership', () => {
+    it('hydrates selected nested images in the actual OpenAI Chat request and binds its retained fingerprint', async () => {
+        const source = await document(true);
+        const original = structuredClone(source);
+        const driver = new OpenAIChatCompletionsDriver({ apiKey: 'test-only', endpoint: 'http://unused.invalid' });
+        const native = vi.fn((_payload: unknown) => ({
+            id: 'chatcmpl:accepted-image',
+            object: 'chat.completion' as const,
+            created: 1,
+            model: 'gpt-4.1',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant' as const, content: 'Image received.' },
+                    finish_reason: 'stop' as const,
+                    logprobs: null,
+                },
+            ],
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        }));
+        Object.defineProperty(driver.service.chat.completions, 'create', { value: native });
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        let retained: ConversationPreparedRequest | undefined;
+        const accepted = await driver.executeCanonicalContext(
+            {
+                ...options(source, 'gpt-4.1'),
+                on_canonical_request_prepared: async (prepared) => {
+                    retained = prepared;
+                },
+            },
+            undefined,
+            { resolve_canonical_asset: resolver },
+        );
+        expect(accepted.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Image received.' }),
+        );
+        expect(accepted.accepted_output.generation.usage?.total_tokens).toBe(6);
+        const sent = native.mock.calls[0]?.[0];
+        if (sent === undefined || retained === undefined)
+            throw new Error('Expected native request and retained record');
+        expect(JSON.stringify(sent)).toContain(png.toString('base64'));
+        expect(retained.record.request_receipt.request_fingerprint).toBe(
+            await fingerprintJson(providerJsonValue(sent)),
+        );
+        expect(retained.document.assets['asset:concrete-image']?.storage.type).toBe('external');
+        expect(source).toEqual(original);
+        expect(resolver).toHaveBeenCalledOnce();
+
+        const prepared = vi.fn<NonNullable<ExecutionOptions['on_canonical_request_prepared']>>(async () => {
+            throw new Error('Prepared publication gate');
+        });
+        await expect(
+            driver.streamCanonicalContextEvents(
+                { ...options(source, 'gpt-4.1'), on_canonical_request_prepared: prepared },
+                undefined,
+                { stream_id: 'stream:chat:nested-image' },
+                { resolve_canonical_asset: resolver },
+            ),
+        ).rejects.toThrow('Prepared publication gate');
+        expect(prepared).toHaveBeenCalledOnce();
+        expect(resolver).toHaveBeenCalledTimes(2);
+        expect(native).toHaveBeenCalledOnce();
+
+        await expect(
+            driver.executeCanonical(
+                [{ role: PromptRole.user, content: 'Continue after the image.' }],
+                { ...options(source, 'gpt-4.1'), on_canonical_request_prepared: prepared },
+                undefined,
+                { resolve_canonical_asset: resolver },
+            ),
+        ).rejects.toThrow('Prepared publication gate');
+        expect(prepared).toHaveBeenCalledTimes(2);
+        expect(resolver).toHaveBeenCalledTimes(3);
+        expect(native).toHaveBeenCalledOnce();
+        expect(source).toEqual(original);
+    });
+
+    it('replays the exact hydrated native request during host measurement without another image read', async () => {
+        const source = await document(true);
+        const original = structuredClone(source);
+        const driver = new OpenAIChatCompletionsDriver({ apiKey: 'test-only', endpoint: 'http://unused.invalid' });
+        const native = vi.fn((_payload: unknown) => ({
+            id: 'chatcmpl:measured-image',
+            object: 'chat.completion' as const,
+            created: 1,
+            model: 'gpt-4.1',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant' as const, content: 'Measured image.' },
+                    finish_reason: 'stop' as const,
+                    logprobs: null,
+                },
+            ],
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        }));
+        Object.defineProperty(driver.service.chat.completions, 'create', { value: native });
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        const projected = vi.fn<NonNullable<ExecutionOptions['on_canonical_request_projected']>>(
+            async (projection, compiler) => {
+                expect(await compiler.compileDocument(projection.document)).toEqual(projection.native_request);
+                const changed = structuredClone(projection.document);
+                const changedAsset = changed.assets['asset:concrete-image'];
+                if (!changedAsset) throw new Error('Selected image absent from projected source');
+                changedAsset.content_hash = `sha256:${'f'.repeat(64)}`;
+                await expect(compiler.compileDocument(changed)).rejects.toThrow('changed during native preparation');
+
+                const added = structuredClone(projection.document);
+                const oldAsset = added.assets['asset:concrete-image'];
+                const userTurn = added.turns.find((turn) => turn.kind === 'user');
+                if (!oldAsset || userTurn?.kind !== 'user') throw new Error('Selected user turn absent');
+                const newAsset = { ...oldAsset, id: 'asset:new-external-image' };
+                added.assets[newAsset.id] = newAsset;
+                userTurn.blocks.push({ id: 'block:new-external-image', type: 'image', asset_id: newAsset.id });
+                await expect(compiler.compileDocument(added)).rejects.toThrow(
+                    'introduced an external image without prepared host bytes',
+                );
+                return {
+                    counted_request_fingerprint: await fingerprintJson(projection.native_request),
+                    measurement: {
+                        input_tokens: 7,
+                        method: 'estimated' as const,
+                        tokenizer: 'named:image-fixture',
+                        tokenizer_version: '1',
+                        adapter: projection.target.protocol,
+                        adapter_version: projection.target.adapter_version,
+                        source_fingerprint: await processingContextFingerprint(projection.document),
+                        target_model: projection.target.model,
+                        measured_at: at,
+                    },
+                };
+            },
+        );
+        const accepted = await driver.executeCanonicalContext(
+            { ...options(source, 'gpt-4.1'), on_canonical_request_projected: projected },
+            undefined,
+            { resolve_canonical_asset: resolver },
+        );
+        expect(accepted.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Measured image.' }),
+        );
+        expect(projected).toHaveBeenCalledOnce();
+        expect(resolver).toHaveBeenCalledOnce();
+        expect(native).toHaveBeenCalledOnce();
+        expect(source).toEqual(original);
+    });
+
+    it('sends hydrated bytes in context and authored typed streams while retaining canonical external refs', async () => {
+        const source = await document(true);
+        const original = structuredClone(source);
+        const driver = new OpenAIChatCompletionsDriver({
+            apiKey: 'test-only',
+            endpoint: 'http://unused.invalid',
+            extraBody: {
+                model: 'forged-model',
+                messages: [{ role: 'user', content: 'forged-message' }],
+                stream_options: { include_usage: false },
+                extension: { trace: 'retained' },
+            },
+        });
+        const native = vi.fn(async (_payload: unknown) => ({
+            async *[Symbol.asyncIterator]() {
+                yield {
+                    id: 'chatcmpl:stream-image',
+                    object: 'chat.completion.chunk' as const,
+                    created: 1,
+                    model: 'gpt-4.1',
+                    choices: [
+                        {
+                            index: 0,
+                            delta: { role: 'assistant' as const, content: 'Streamed image.' },
+                            finish_reason: null,
+                        },
+                    ],
+                };
+                yield {
+                    id: 'chatcmpl:stream-image',
+                    object: 'chat.completion.chunk' as const,
+                    created: 1,
+                    model: 'gpt-4.1',
+                    choices: [{ index: 0, delta: {}, finish_reason: 'stop' as const }],
+                    usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+                };
+            },
+            controller: { abort: vi.fn() },
+        }));
+        Object.defineProperty(driver.service.chat.completions, 'create', { value: native });
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        const prepared: ConversationPreparedRequest[] = [];
+        const publish: NonNullable<ExecutionOptions['on_canonical_request_prepared']> = async (value) => {
+            prepared.push(value);
+        };
+        const context = await driver.streamCanonicalContextEvents(
+            { ...options(source, 'gpt-4.1'), on_canonical_request_prepared: publish },
+            undefined,
+            { stream_id: 'stream:chat:context-native' },
+            { resolve_canonical_asset: resolver },
+        );
+        const contextEvents = [];
+        for await (const event of context) contextEvents.push(event);
+        expect(contextEvents).toContainEqual(expect.objectContaining({ type: 'response_accepted' }));
+        expect(context.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Streamed image.' }),
+        );
+        const authored = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Continue from the retained image.' }],
+            { ...options(source, 'gpt-4.1'), on_canonical_request_prepared: publish },
+            undefined,
+            { stream_id: 'stream:chat:authored-native' },
+            { resolve_canonical_asset: resolver },
+        );
+        const authoredEvents = [];
+        for await (const event of authored) authoredEvents.push(event);
+        expect(authoredEvents).toContainEqual(expect.objectContaining({ type: 'response_accepted' }));
+        expect(prepared).toHaveLength(2);
+        expect(native).toHaveBeenCalledTimes(2);
+        expect(resolver).toHaveBeenCalledTimes(2);
+        for (let index = 0; index < native.mock.calls.length; index++) {
+            const payload = native.mock.calls[index]?.[0];
+            const record = prepared[index];
+            if (payload === undefined || record === undefined) throw new Error('Expected native stream request');
+            expect(JSON.stringify(payload)).toContain(png.toString('base64'));
+            expect(payload).toMatchObject({
+                model: 'gpt-4.1',
+                stream: true,
+                stream_options: { include_usage: true },
+                extension: { trace: 'retained' },
+            });
+            expect(JSON.stringify(payload)).not.toContain('forged-message');
+            expect(record.record.request_receipt.request_fingerprint).toBe(
+                await fingerprintJson(providerJsonValue(payload)),
+            );
+            expect(record.document.assets['asset:concrete-image']?.storage.type).toBe('external');
+        }
+        expect(source).toEqual(original);
+    });
+
+    it('rejects missing, corrupt, mismatched-MIME, and cancelled host images before Chat transport', async () => {
+        const source = await document(true);
+        const driver = new OpenAIChatCompletionsDriver({ apiKey: 'test-only', endpoint: 'http://unused.invalid' });
+        const native = vi.fn(() => {
+            throw new Error('Unexpected transport');
+        });
+        Object.defineProperty(driver.service.chat.completions, 'create', { value: native });
+        await expect(driver.executeCanonicalContext(options(source, 'gpt-4.1'))).rejects.toThrow('no host resolver');
+
+        const corrupt = vi.fn<ResolveConversationAsset>(async function* () {
+            yield Buffer.from('different bytes');
+        });
+        await expect(
+            driver.executeCanonicalContext(options(source, 'gpt-4.1'), undefined, {
+                resolve_canonical_asset: corrupt,
+            }),
+        ).rejects.toThrow();
+        expect(corrupt).toHaveBeenCalledOnce();
+
+        const wrongMime = structuredClone(source);
+        const image = wrongMime.assets['asset:concrete-image'];
+        if (image === undefined) throw new Error('Missing image fixture');
+        image.mime_type = 'image/jpeg';
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        await expect(
+            driver.executeCanonicalContext(options(wrongMime, 'gpt-4.1'), undefined, {
+                resolve_canonical_asset: resolver,
+            }),
+        ).rejects.toThrow('invalid media bytes');
+
+        const controller = new AbortController();
+        const cancelled = vi.fn<ResolveConversationAsset>(async function* () {
+            controller.abort(new DOMException('Cancelled', 'AbortError'));
+            yield png;
+        });
+        await expect(
+            driver.executeCanonicalContext(options(source, 'gpt-4.1'), controller.signal, {
+                resolve_canonical_asset: cancelled,
+            }),
+        ).rejects.toMatchObject({ name: 'AbortError' });
+        expect(native).not.toHaveBeenCalled();
+    });
+
     it('forwards owned image resolution through authored executeCanonical for the three native protocols', async () => {
         const source = await document();
         const resolver = vi.fn<ResolveConversationAsset>(async function* () {

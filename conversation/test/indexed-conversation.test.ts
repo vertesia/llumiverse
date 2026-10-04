@@ -197,6 +197,48 @@ async function toolMediaCommands(source: { conversation_id: string; revision: nu
 }
 
 describe('indexed conversation snapshot', () => {
+    it('rejects unsupported retrieval requirements before indexed record publication', async () => {
+        const memory = memoryStore();
+        const staged = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:indexed-retrieval-rejection'),
+            undefined,
+            memory.store,
+        );
+        const readsBefore = memory.recordReads.length;
+        const recordsBefore = memory.records.size;
+        await expect(
+            stageIndexedRecordBatch(
+                staged.root,
+                {
+                    conversation_id: staged.root.source.conversation_id,
+                    batch: {
+                        retrieval_requirements: [
+                            {
+                                id: 'requirement:one',
+                                asset_id: 'asset:one',
+                                retrieval: {
+                                    capability: 'read_artifact',
+                                    version: 1,
+                                    arguments: { path: 'archive.json' },
+                                    tool_definition_id: 'definition:read',
+                                },
+                                accepted_asset_operation_id: 'append:one',
+                            },
+                        ],
+                    },
+                    options: {
+                        expected_revision: staged.root.source.revision,
+                        operation_id: 'append:one',
+                        payload_fingerprint: 'sha256:append-one',
+                        recorded_at: RECORDED_AT,
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow('does not yet accept new retrieval requirements');
+        expect(memory.recordReads).toHaveLength(readsBefore);
+        expect(memory.records.size).toBe(recordsBefore);
+    });
     it('proves incoming replay dependencies without relying on call block order and rejects foreign identities', async () => {
         const source = emptyDocument('conversation:indexed-replay-dependencies');
         const memory = memoryStore();

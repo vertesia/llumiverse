@@ -12,6 +12,7 @@ export { ConversationValidationError } from './diagnostics.js';
 export * from './external-reference-retrieval.js';
 export * from './guards.js';
 export * from './indexed-conversation.js';
+export { createIndexedProcessingScratchStore } from './indexed-processing-scratch-store.js';
 export {
     buildIndexedTextExternalizationOutput,
     buildIndexedTextExternalizationProposal,

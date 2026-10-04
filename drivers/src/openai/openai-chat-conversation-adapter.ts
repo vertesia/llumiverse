@@ -35,6 +35,7 @@ import {
     type RequestReceipt,
     type RequestSourceWorkingSet,
     RequestSourceWorkingSetSchema,
+    type ResolveConversationAsset,
     type ResolvedConversationRuntimeContext,
     ResolvedConversationRuntimeContextSchema,
     type ToolDefinition,
@@ -48,6 +49,7 @@ import {
     type CanonicalStructuredOutput,
     canonicalToolSelectionPolicy,
 } from '@llumiverse/core';
+import { hydrateCanonicalHostImages } from '../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -100,6 +102,11 @@ import type {
     OpenAIChatProviderReplay,
 } from './openai_chat_completions.js';
 
+const preparedImageCache = new WeakMap<
+    OpenAIChatCompletionsPrompt,
+    Map<string, { fingerprint: string; data: string }>
+>();
+
 export const OPENAI_CHAT_COMPLETIONS_PROTOCOL = 'openai.chat.completions' as const;
 export const OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION = '2026-09-11.canonical.1' as const;
 
@@ -123,6 +130,7 @@ export interface PreparedOpenAIChatConversation
     provider: string;
     requested_model: string;
     prior_native_message_count: number;
+    native_projection?: { source_fingerprint: string; mappings: NativeItemMapping[] };
 }
 
 /** Complete response-decoder inputs retained by either full-document or indexed preparation. */
@@ -1327,6 +1335,7 @@ export async function compileOpenAIChatProspectiveJsonMinification(
     input: JsonMinificationProspectiveInput,
     targetInput: ModelTarget,
     signal?: AbortSignal,
+    preparedNativeConversation?: OpenAIChatCompletionsPrompt,
 ): Promise<OpenAIChatProspectiveJsonMinificationProjection> {
     signal?.throwIfAborted();
     if (!preflightJsonInput({ input, target: targetInput }, { max_bytes: 16 * 1024 * 1024 }).success)
@@ -1402,8 +1411,14 @@ export async function compileOpenAIChatProspectiveJsonMinification(
     }
     if (!preflightJsonInput({ selected, replacement }, { max_bytes: 16 * 1024 * 1024 }).success)
         throw new RangeError('Prospective JSON selected working set exceeds 16MiB');
-    const original = compileOpenAIChatSelectedTurns(source, selected, target);
-    const prospective = compileOpenAIChatSelectedTurns(source, replacement, target);
+    // The prepared native conversation is a private cache key, never source authority. Recheck the
+    // bound canonical source above, then hydrate only its selected assets from already verified bytes.
+    const nativeSource =
+        preparedNativeConversation === undefined
+            ? source
+            : await hydrateOpenAIChatPreparedDocumentWithHostAssets(preparedNativeConversation, source, signal);
+    const original = compileOpenAIChatSelectedTurns(nativeSource, selected, target);
+    const prospective = compileOpenAIChatSelectedTurns(nativeSource, replacement, target);
     signal?.throwIfAborted();
     const originalFingerprint = await fingerprintJson(original.conversation);
     const replacementFingerprint = await fingerprintJson(prospective.conversation);
@@ -1483,11 +1498,64 @@ export async function importOpenAIChatCompletionsHistory(
     });
 }
 
+const cacheOnlyImageResolver: ResolveConversationAsset = () => {
+    throw new TypeError('OpenAI Chat dry projection introduced an external image without prepared host bytes');
+};
+
+/** Recompile selected source under the exact private prepared image cache, without re-reading host assets. */
+export async function compileOpenAIChatPreparedDocumentWithHostAssets(
+    nativeConversation: OpenAIChatCompletionsPrompt,
+    document: ConversationDocument,
+    target: { provider: string; model: string },
+    signal?: AbortSignal,
+): Promise<ReturnType<typeof compileOpenAIChatCompletionsConversation>> {
+    const nativeDocument = await hydrateOpenAIChatPreparedDocumentWithHostAssets(nativeConversation, document, signal);
+    return compileOpenAIChatCompletionsConversation(nativeDocument, target);
+}
+
+async function hydrateOpenAIChatPreparedDocumentWithHostAssets(
+    nativeConversation: OpenAIChatCompletionsPrompt,
+    document: ConversationDocument,
+    signal?: AbortSignal,
+): Promise<ConversationDocument> {
+    return hydrateCanonicalHostImages({
+        document,
+        label: 'OpenAI Chat',
+        selection: { allow_interrupted_with_complete_tool_calls: true },
+        resolve_asset: cacheOnlyImageResolver,
+        signal,
+        hydrated: preparedImageCache.get(nativeConversation) ?? new Map(),
+        native_external: (asset) => asset.storage.type === 'external' && typeof asset.storage.locator.url === 'string',
+    });
+}
+
+async function compileOpenAIChatContextWithHostAssets(
+    document: ConversationDocument,
+    target: { provider: string; model: string },
+    resolveAsset: ResolveConversationAsset | undefined,
+    signal: AbortSignal | undefined,
+    hydrated: Map<string, { fingerprint: string; data: string }>,
+): Promise<ReturnType<typeof compileOpenAIChatCompletionsConversation>> {
+    const nativeDocument = await hydrateCanonicalHostImages({
+        document,
+        label: 'OpenAI Chat',
+        selection: { allow_interrupted_with_complete_tool_calls: true },
+        resolve_asset: resolveAsset,
+        signal,
+        hydrated,
+        native_external: (asset) => asset.storage.type === 'external' && typeof asset.storage.locator.url === 'string',
+    });
+    signal?.throwIfAborted();
+    return compileOpenAIChatCompletionsConversation(nativeDocument, target);
+}
+
 export async function prepareOpenAIChatCanonicalState(input: {
     conversation: unknown;
     prompt: OpenAIChatCompletionsPrompt;
     options: ExecutionOptions;
     provider: string;
+    signal?: AbortSignal;
+    resolve_asset?: ResolveConversationAsset;
 }): Promise<Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     let document = parseCanonicalConversation(input.conversation);
@@ -1513,8 +1581,15 @@ export async function prepareOpenAIChatCanonicalState(input: {
     }
 
     const target = { provider: input.provider, model: input.options.model };
-    const priorCompiled = compileOpenAIChatCompletionsConversation(document, target).conversation;
-    const priorNativeMessageCount = priorCompiled.messages.length;
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const priorCompiled = await compileOpenAIChatContextWithHostAssets(
+        document,
+        target,
+        input.resolve_asset,
+        input.signal,
+        hydrated,
+    );
+    const priorNativeMessageCount = priorCompiled.conversation.messages.length;
     const promptRecords = await messagesToRecords({
         messages: input.prompt.messages,
         scope: runtime.input_operation_id,
@@ -1542,7 +1617,14 @@ export async function prepareOpenAIChatCanonicalState(input: {
         acceptedResponse === undefined
             ? appended.document
             : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
-    const compiled = compileOpenAIChatCompletionsConversation(requestDocument, target);
+    const compiled = await compileOpenAIChatContextWithHostAssets(
+        requestDocument,
+        target,
+        input.resolve_asset,
+        input.signal,
+        hydrated,
+    );
+    preparedImageCache.set(compiled.conversation, hydrated);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1551,6 +1633,10 @@ export async function prepareOpenAIChatCanonicalState(input: {
     return {
         document: appended.document,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(appended.document),
+            mappings: compiled.mappings,
+        },
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
@@ -1567,6 +1653,8 @@ export async function prepareOpenAIChatCanonicalState(input: {
 export async function prepareOpenAIChatCanonicalContext(input: {
     options: CanonicalExecutionContextOptions;
     provider: string;
+    signal?: AbortSignal;
+    resolve_asset?: ResolveConversationAsset;
 }): Promise<Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const prepared = await prepareCanonicalContext({
         options: input.options,
@@ -1575,16 +1663,34 @@ export async function prepareOpenAIChatCanonicalContext(input: {
         adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
     });
     const target = { provider: input.provider, model: input.options.model };
-    const compiled = compileOpenAIChatCompletionsConversation(prepared.request_document, target);
+    const hydrated = new Map<string, { fingerprint: string; data: string }>();
+    const compiled = await compileOpenAIChatContextWithHostAssets(
+        prepared.request_document,
+        target,
+        input.resolve_asset,
+        input.signal,
+        hydrated,
+    );
+    preparedImageCache.set(compiled.conversation, hydrated);
     const priorCompiled =
         prepared.request_document === prepared.document
             ? compiled
-            : compileOpenAIChatCompletionsConversation(prepared.document, target);
+            : await compileOpenAIChatContextWithHostAssets(
+                  prepared.document,
+                  target,
+                  input.resolve_asset,
+                  input.signal,
+                  hydrated,
+              );
     const priorNativeMessageCount = priorCompiled.conversation.messages.length;
     const { request_document: _requestDocument, ...base } = prepared;
     return {
         ...base,
         native_conversation: compiled.conversation,
+        native_projection: {
+            source_fingerprint: await fingerprintJson(prepared.document),
+            mappings: compiled.mappings,
+        },
         provider: input.provider,
         requested_model: input.options.model,
         prior_native_message_count: priorNativeMessageCount,
@@ -1596,10 +1702,17 @@ export async function finalizeOpenAIChatPreparedRequest(
     payload: OpenAIChatCompletionsPayload,
     binding: { payload: JsonValue; target_options?: JsonObject } = { payload: providerJsonValue(payload) },
 ): Promise<PreparedOpenAIChatConversation> {
-    const compiled = compileOpenAIChatCompletionsConversation(state.document, {
-        provider: state.provider,
-        model: state.requested_model,
-    });
+    if (
+        state.native_projection !== undefined &&
+        state.native_projection.source_fingerprint !== (await fingerprintJson(state.document))
+    )
+        throw new TypeError('OpenAI Chat canonical source changed after native image projection');
+    const mappings =
+        state.native_projection?.mappings ??
+        compileOpenAIChatCompletionsConversation(state.document, {
+            provider: state.provider,
+            model: state.requested_model,
+        }).mappings;
     const targetOptions = canonicalToolSelectionTargetOptions(binding.target_options, state.response_selection_policy);
     const receipt = await createRequestReceipt(
         state.document,
@@ -1612,7 +1725,7 @@ export async function finalizeOpenAIChatPreparedRequest(
             ...(targetOptions === undefined ? {} : { options: targetOptions }),
         },
         binding.payload,
-        compiled.mappings,
+        mappings,
         state.tool_definitions,
     );
     return { ...state, payload, receipt, diagnostics: [] };

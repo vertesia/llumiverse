@@ -438,6 +438,150 @@ describe('canonical native adapter conformance', () => {
         expect(() => compileBedrockConverseConversation(parsed)).not.toThrow();
     });
 
+    it('compiles a selected accepted archive reference alongside nested reasoning for Chat, Responses, Claude and Gemini', () => {
+        const path = `canonical-tool-results/v1/nested/call/activity-${'b'.repeat(64)}-attempt-1-${'a'.repeat(64)}.json`;
+        const retrieval = {
+            capability: 'read_artifact',
+            version: 1,
+            tool_definition_id: 'definition:read',
+            arguments: { path, start_byte: 0, byte_count: 5000 },
+        };
+        const asset = {
+            id: 'asset:child-archive',
+            kind: 'text' as const,
+            mime_type: 'application/json',
+            storage: {
+                type: 'external' as const,
+                resolver: 'vertesia.agent_artifact',
+                locator: { storage_id: 'run:parent', artifact_path: path },
+            },
+            provenance: { type: 'received' as const },
+            byte_length: 640000,
+            content_hash: `sha256:${'a'.repeat(64)}`,
+            created_at: recordedAt,
+        };
+        const accepted = appendConversationRecords(
+            createConversationDocument({ id: 'nested-interaction-projection', created_at: recordedAt }),
+            {
+                assets: [asset],
+                tool_definitions: [
+                    {
+                        id: 'definition:read',
+                        name: 'read_artifact',
+                        version: 'content-version',
+                        input_schema: {
+                            type: 'object',
+                            properties: {
+                                path: { type: 'string' },
+                                start_byte: { type: 'integer' },
+                                byte_count: { type: 'integer' },
+                            },
+                            required: ['path'],
+                            additionalProperties: false,
+                        },
+                    },
+                ],
+                active_tool_definition_ids: ['definition:read'],
+            },
+            {
+                expected_revision: 0,
+                operation_id: 'append:child-archive',
+                payload_fingerprint: 'sha256:child-archive',
+                recorded_at: recordedAt,
+            },
+        ).document;
+        accepted.turns.push(
+            {
+                id: 'parent-call-turn',
+                kind: 'agent',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [
+                    {
+                        id: 'parent-call-block',
+                        type: 'tool_call',
+                        call_id: 'parent-call',
+                        tool_name: 'nested_interaction',
+                        executor: 'application',
+                        arguments: { type: 'json', value: {} },
+                    },
+                ],
+            },
+            createToolTurn({
+                id: 'parent-result-turn',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [
+                    {
+                        id: 'parent-result-block',
+                        type: 'tool_result',
+                        call_id: 'parent-call',
+                        status: 'success',
+                        content: [
+                            {
+                                id: 'child-reasoning',
+                                type: 'text',
+                                format: 'plain',
+                                text: '[Nested interaction reasoning (summary)]\nSearch may help.',
+                            },
+                            {
+                                id: 'child-archive',
+                                type: 'external_reference',
+                                asset_id: asset.id,
+                                original_type: 'text',
+                                description: 'Exact accepted nested JSON archive',
+                                content_hash: asset.content_hash,
+                                preview: 'Archive preview: unexecuted child call',
+                                retrieval,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        );
+        accepted.context.entries = accepted.turns.map((turn) => ({
+            id: `context-${turn.id}`,
+            type: 'source_turn' as const,
+            turn_id: turn.id,
+        }));
+        accepted.context.retrieval_requirements.push({
+            id: 'requirement:child-archive',
+            asset_id: asset.id,
+            retrieval,
+            accepted_asset_operation_id: 'append:child-archive',
+        });
+        const parsed = parseConversationDocument(accepted);
+        const chat = compileOpenAIChatCompletionsConversation(parsed);
+        const responses = compileOpenAIResponsesConversation(parsed);
+        const claude = compileClaudeMessagesConversation(parsed);
+        const gemini = compileGeminiConversation(parsed);
+        for (const compiled of [chat, responses, claude, gemini]) {
+            const native = JSON.stringify(compiled.conversation);
+            expect(native).toContain('Nested interaction reasoning (summary)');
+            expect(native).toContain(path);
+            expect(native).toContain('Preview: Archive preview');
+        }
+        const geminiNative = JSON.stringify(gemini.conversation);
+        const sourceTextAt = geminiNative.indexOf('Nested interaction reasoning (summary)');
+        const retrievalCueAt = geminiNative.indexOf('Preview: Archive preview');
+        expect(sourceTextAt).toBeGreaterThanOrEqual(0);
+        expect(retrievalCueAt).toBeGreaterThan(sourceTextAt);
+        expect(geminiNative.split(path)).toHaveLength(2);
+        const mixed = structuredClone(parsed);
+        const mixedResult = mixed.turns.find((turn) => turn.kind === 'tool')?.blocks[0];
+        if (!mixedResult) throw new Error('Expected tool result');
+        mixedResult.content[0] = { id: 'child-reasoning', type: 'json', value: { reason: 'structured' } };
+        expect(() => compileGeminiConversation(mixed)).toThrow('multiple text/JSON values');
+        parsed.context.active_tool_definition_ids = [];
+        expect(() => compileOpenAIChatCompletionsConversation(parsed)).toThrow();
+    });
+
     it('preserves OpenAI reasoning, raw tool arguments, image detail, and native call identities', async () => {
         const history: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,

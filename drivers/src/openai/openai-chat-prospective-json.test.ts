@@ -6,6 +6,7 @@ import {
     createTextBlock,
     createUserTurn,
     fingerprintJson,
+    hashContentBytes,
     JSON_MINIFICATION_PROCESSOR_ID,
     type JsonMinificationProspectiveInput,
     jsonMinificationProcessor,
@@ -13,18 +14,26 @@ import {
     type ProcessingStore,
     parseConversationDocument,
     queueProcessingForExisting,
+    type ResolveConversationAsset,
     runProcessingJob,
     setProcessingPolicy,
 } from '@llumiverse/conversation';
-import { describe, expect, it } from 'vitest';
+import { type ExecutionOptions, resolveCanonicalExecutionContextOptions } from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
+import { OpenAIChatCompletionsDriver } from './openai_chat_completions.js';
 import {
     compileOpenAIChatCompletionsConversation,
     compileOpenAIChatProspectiveJsonMinification,
     OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    prepareOpenAIChatCanonicalContext,
 } from './openai-chat-conversation-adapter.js';
 
 const at = '2026-10-02T00:00:00.000Z';
+const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+    'base64',
+);
 const target: ModelTarget = {
     provider: 'openai',
     protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
@@ -42,7 +51,11 @@ class Store implements ProcessingStore {
         return true;
     }
 }
-async function fixture(duplicate = false, historicalNoops = 0): Promise<JsonMinificationProspectiveInput> {
+async function fixture(
+    duplicate = false,
+    historicalNoops = 0,
+    withImage = false,
+): Promise<JsonMinificationProspectiveInput> {
     const user = createUserTurn({
         id: 'user',
         authority: 'ordinary',
@@ -68,13 +81,37 @@ async function fixture(duplicate = false, historicalNoops = 0): Promise<JsonMini
         provenance: { type: 'received' },
         blocks: [createTextBlock({ id: 'program-raw', text: ' [ 1e+999, true ] ', format: 'plain' })],
     });
+    const image = {
+        id: 'asset:unselected-json-image',
+        kind: 'image' as const,
+        mime_type: 'image/png',
+        storage: {
+            type: 'external' as const,
+            resolver: 'vertesia.agent_artifact',
+            locator: { storage_id: 'owner', artifact_path: 'image' },
+        },
+        provenance: { type: 'received' as const },
+        created_at: at,
+        ...(await hashContentBytes(png)),
+    };
+    const imageTurn = createUserTurn({
+        id: 'image-user',
+        authority: 'ordinary',
+        status: 'completed',
+        timestamps: { recorded_at: at },
+        model_visibility: 'include',
+        provenance: { type: 'received' },
+        blocks: [{ id: 'image-block', type: 'image', asset_id: image.id }],
+    });
     const base = appendConversationRecords(
         createConversationDocument({ id: 'dry-json', created_at: at }),
         {
-            turns: [user, program],
+            turns: withImage ? [user, program, imageTurn] : [user, program],
+            ...(withImage ? { assets: [image] } : {}),
             context_entries: [
                 { id: 'first', type: 'source_turn', turn_id: user.id },
                 { id: 'second', type: 'source_turn', turn_id: program.id },
+                ...(withImage ? [{ id: 'image-entry', type: 'source_turn' as const, turn_id: imageTurn.id }] : []),
             ],
         },
         { operation_id: 'append', expected_revision: 0, recorded_at: at, payload_fingerprint: 'sha256:append' },
@@ -119,7 +156,17 @@ async function fixture(duplicate = false, historicalNoops = 0): Promise<JsonMini
                               range: { from: { kind: 'entry', id: 'first' }, through: { kind: 'entry', id: 'first' } },
                           },
                       }
-                    : { source: { kind: 'all' } },
+                    : withImage
+                      ? {
+                            source: {
+                                kind: 'range',
+                                range: {
+                                    from: { kind: 'entry', id: 'first' },
+                                    through: { kind: 'entry', id: 'second' },
+                                },
+                            },
+                        }
+                      : { source: { kind: 'all' } },
             },
             {
                 operation_id: `queue:${index}`,
@@ -188,6 +235,86 @@ describe('OpenAI Chat prospective JSON projection', () => {
         expect(result.replacement.projection_fingerprint).toBe(await fingerprintJson(result.replacement.conversation));
         expect(input).toEqual(before);
         expect(input.source.processing.coverage).toBeUndefined();
+    });
+    it('projects selected JSON replacements with cached external image bytes without another asset read', async () => {
+        const input = await fixture(false, 0, true);
+        const original = structuredClone(input);
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        const options = resolveCanonicalExecutionContextOptions({
+            model: target.model,
+            conversation: input.source,
+            conversation_runtime: {
+                conversation_id: input.source.id,
+                request_id: 'request:prospective-image',
+                attempt_id: 'attempt:prospective-image',
+                input_operation_id: 'input:prospective-image',
+                response_operation_id: 'response:prospective-image',
+                recorded_at: at,
+            },
+        });
+        const prepared = await prepareOpenAIChatCanonicalContext({
+            options,
+            provider: target.provider,
+            resolve_asset: resolver,
+        });
+        expect(resolver).toHaveBeenCalledOnce();
+        const direct = await compileOpenAIChatProspectiveJsonMinification(
+            input,
+            target,
+            undefined,
+            prepared.native_conversation,
+        );
+        expect(JSON.stringify(direct.original.conversation)).toContain(png.toString('base64'));
+        expect(JSON.stringify(direct.replacement.conversation)).toContain(png.toString('base64'));
+        expect(direct.replacement.conversation.messages[0].content).toBe(
+            '{"n":900719925474099312345,"n":-0,"s":"\\u0061"}',
+        );
+        expect(direct.original.mappings).toEqual(direct.replacement.mappings);
+        expect(input).toEqual(original);
+        expect(resolver).toHaveBeenCalledOnce();
+
+        await expect(
+            compileOpenAIChatProspectiveJsonMinification(
+                input,
+                target,
+                undefined,
+                structuredClone(prepared.native_conversation),
+            ),
+        ).rejects.toThrow('introduced an external image without prepared host bytes');
+        const stale = structuredClone(input);
+        const staleImage = stale.source.assets['asset:unselected-json-image'];
+        if (!staleImage) throw new Error('Expected selected external image');
+        staleImage.content_hash = `sha256:${'f'.repeat(64)}`;
+        await expect(
+            compileOpenAIChatProspectiveJsonMinification(stale, target, undefined, prepared.native_conversation),
+        ).rejects.toThrow('external image asset asset:unselected-json-image changed during native preparation');
+        expect(resolver).toHaveBeenCalledOnce();
+
+        const driver = new OpenAIChatCompletionsDriver({ apiKey: 'test-only', endpoint: 'http://unused.invalid' });
+        const projected = vi.fn<NonNullable<ExecutionOptions['on_canonical_request_projected']>>(
+            async (projection, compiler) => {
+                expect(projection.document).toEqual(input.source);
+                const actual = structuredClone(input);
+                actual.target_fingerprint = await fingerprintJson(projection.target);
+                const resolution = actual.source.processing.resolved_inputs?.[actual.processing_job_id];
+                if (!resolution) throw new Error('Expected retained image processing resolution');
+                resolution.target_fingerprint = actual.target_fingerprint;
+                actual.resolved_input_fingerprint = await fingerprintJson(resolution);
+                await rebind(actual);
+                const result = await compiler.compileProspective(actual);
+                expect(JSON.stringify(result)).toContain(png.toString('base64'));
+                throw new Error('Prospective callback reached');
+            },
+        );
+        await expect(
+            driver.executeCanonicalContext({ ...options, on_canonical_request_projected: projected }, undefined, {
+                resolve_canonical_asset: resolver,
+            }),
+        ).rejects.toThrow('Prospective callback reached');
+        expect(projected).toHaveBeenCalledOnce();
+        expect(resolver).toHaveBeenCalledTimes(2);
     });
     it('changes only the selected entry and retains an unselected program turn', async () => {
         const input = await fixture(true);

@@ -1,6 +1,10 @@
 import { z } from 'zod';
-import { AssetSchema, ConversationTurnSchema, RetrievalCapabilitySchema, ToolDefinitionSchema } from './content.js';
-import { CompactionStrategySchema, ContextEntrySchema } from './context-foundation.js';
+import { AssetSchema, ConversationTurnSchema, ToolDefinitionSchema } from './content.js';
+import {
+    CompactionStrategySchema,
+    ContextEntrySchema,
+    ContextRetrievalRequirementSchema,
+} from './context-foundation.js';
 import { ConversationDeletedTurnSchema } from './conversation-delete-operation.js';
 import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from './execution.js';
 import {
@@ -29,19 +33,10 @@ import {
 export {
     CompactionStrategySchema,
     ContextEntrySchema,
+    ContextRetrievalRequirementSchema,
     ReplacementTurnContextEntrySchema,
     SourceTurnContextEntrySchema,
 } from './context-foundation.js';
-
-export const ContextRetrievalRequirementSchema = z
-    .strictObject({
-        id: IdentifierSchema,
-        asset_id: IdentifierSchema,
-        retrieval: RetrievalCapabilitySchema,
-        /** Canonical append receipt that accepted the original asset before context replacement. */
-        accepted_asset_operation_id: IdentifierSchema.optional(),
-    })
-    .meta({ id: 'ConversationContextRetrievalRequirement' });
 
 export const CacheIntentSchema = z
     .strictObject({

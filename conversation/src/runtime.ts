@@ -122,7 +122,14 @@ function assertAcceptedIds(
     return authoritative;
 }
 
-type RetryRecordKind = 'turn' | 'generation' | 'asset' | 'tool definition' | 'execution receipt' | 'context entry';
+type RetryRecordKind =
+    | 'turn'
+    | 'generation'
+    | 'asset'
+    | 'tool definition'
+    | 'execution receipt'
+    | 'context entry'
+    | 'retrieval requirement';
 
 function retryComparableRecord(kind: RetryRecordKind, value: object): Record<string, unknown> {
     const comparable: Record<string, unknown> = { ...value };
@@ -220,6 +227,19 @@ function assertExactRetry(
     );
     assertAcceptedRecords('context entry', batch.context_entries, (id) =>
         acceptedEntries.find((entry) => entry.id === id),
+    );
+    if (receipt.accepted_retrieval_requirements === undefined && (batch.retrieval_requirements?.length ?? 0) > 0) {
+        throw new Error('Historical append receipt cannot prove its accepted retrieval requirements');
+    }
+    const acceptedRequirements = receipt.accepted_retrieval_requirements ?? [];
+    assertAcceptedIds(
+        'retrieval requirements',
+        acceptedIds(batch.retrieval_requirements),
+        acceptedIds(acceptedRequirements),
+        (id) => acceptedRequirements.some((requirement) => requirement.id === id),
+    );
+    assertAcceptedRecords('retrieval requirement', batch.retrieval_requirements, (id) =>
+        acceptedRequirements.find((requirement) => requirement.id === id),
     );
     return { turn_ids: turnIds, generation_ids: generationIds };
 }
@@ -329,6 +349,9 @@ function appendConversationRecordsUnchecked(
         accepted_execution_receipt_ids: acceptedIds(batch.execution_receipts),
         accepted_context_entry_ids: acceptedIds(batch.context_entries),
         accepted_context_entries: [...(batch.context_entries ?? [])],
+        ...((batch.retrieval_requirements?.length ?? 0) > 0
+            ? { accepted_retrieval_requirements: [...(batch.retrieval_requirements ?? [])] }
+            : {}),
         accepted_tool_selection:
             batch.active_tool_definition_ids === undefined
                 ? { kind: 'unchanged' }
@@ -355,6 +378,10 @@ function appendConversationRecordsUnchecked(
             ...document.context,
             revision: resultRevision,
             entries: [...document.context.entries, ...(batch.context_entries ?? [])],
+            retrieval_requirements: [
+                ...document.context.retrieval_requirements,
+                ...(batch.retrieval_requirements ?? []),
+            ],
             active_tool_definition_ids:
                 batch.active_tool_definition_ids === undefined
                     ? document.context.active_tool_definition_ids

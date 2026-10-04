@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ConversationAppendChangeSchema } from './change.js';
 import { AssetSchema, ConversationTurnSchema, ToolDefinitionSchema } from './content.js';
 import { ConversationDiagnosticSchema } from './diagnostics.js';
-import { ContextEntrySchema, ConversationDocumentSchema } from './document.js';
+import { ContextEntrySchema, ContextRetrievalRequirementSchema, ConversationDocumentSchema } from './document.js';
 import { ExecutedGenerationSchema, ExecutionReceiptSchema, GenerationSchema } from './execution.js';
 import { ContentHashSchema, IdentifierSchema, NonnegativeSafeIntegerSchema, TimestampSchema } from './primitives.js';
 import { ProcessingAppendAcceptanceSchema } from './processing.js';
@@ -17,6 +17,7 @@ export const ConversationRecordBatchSchema = z
         tool_definitions: z.array(ToolDefinitionSchema).readonly().optional(),
         execution_receipts: z.array(ExecutionReceiptSchema).readonly().optional(),
         context_entries: z.array(ContextEntrySchema).readonly().optional(),
+        retrieval_requirements: z.array(ContextRetrievalRequirementSchema).readonly().optional(),
         active_tool_definition_ids: z.array(IdentifierSchema).readonly().optional(),
     })
     .meta({ id: 'ConversationRecordBatch' });

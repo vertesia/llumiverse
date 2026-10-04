@@ -1302,7 +1302,12 @@ function compileOrdinaryTurn(
         const primary = semanticContent.filter(
             (block) => block.type === 'json' || block.type === 'text' || block.type === 'external_reference',
         );
-        if (primary.length > 1) {
+        const orderedArchiveText =
+            primary.length > 1 &&
+            primary.some((block) => block.type === 'external_reference') &&
+            primary.every((block) => block.type === 'text' || block.type === 'external_reference') &&
+            primary.every((block, index) => semanticContent[index] === block);
+        if (primary.length > 1 && !orderedArchiveText) {
             throw new TypeError(`Gemini cannot project multiple text/JSON values for tool result ${result.id}`);
         }
         const primaryIndex = primary.length === 0 ? -1 : semanticContent.indexOf(primary[0]);
@@ -1326,18 +1331,27 @@ function compileOrdinaryTurn(
             throw new TypeError(`Gemini cannot project tool-result ${block.type} block ${block.id}`);
         });
         const primaryValue = primary[0];
-        const response =
-            primaryValue?.type === 'json'
-                ? typeof primaryValue.value === 'object' &&
-                  primaryValue.value !== null &&
-                  !Array.isArray(primaryValue.value)
-                    ? (primaryValue.value as Record<string, unknown>)
-                    : { output: primaryValue.value }
-                : primaryValue?.type === 'text'
-                  ? { output: primaryValue.text }
-                  : primaryValue?.type === 'external_reference'
-                    ? { output: retrievableTextReference(document, primaryValue) }
-                    : undefined;
+        const response = orderedArchiveText
+            ? {
+                  output: primary
+                      .map((block) => {
+                          if (block.type === 'text') return block.text;
+                          if (block.type === 'external_reference') return retrievableTextReference(document, block);
+                          throw new TypeError(`Gemini cannot project ordered archive content for ${result.id}`);
+                      })
+                      .join('\n\n'),
+              }
+            : primaryValue?.type === 'json'
+              ? typeof primaryValue.value === 'object' &&
+                primaryValue.value !== null &&
+                !Array.isArray(primaryValue.value)
+                  ? (primaryValue.value as Record<string, unknown>)
+                  : { output: primaryValue.value }
+              : primaryValue?.type === 'text'
+                ? { output: primaryValue.text }
+                : primaryValue?.type === 'external_reference'
+                  ? { output: retrievableTextReference(document, primaryValue) }
+                  : undefined;
         return {
             content: {
                 role: 'user',
