@@ -37,46 +37,59 @@ import { buildTextExternalizationProposal } from '../src/text-externalization-pr
 import { emptyDocument, userTurn } from './fixtures.js';
 import { indexedTextClaimFixture } from './indexed-processing-fixture.js';
 
+// Exhaustive CPU capacity fixtures include real immutable setup, dependency validation and retry;
+// this is not an ACK/transport latency assertion. Smaller behavior tests retain Vitest's default.
+const WORKING_SET_CAPACITY_TEST_TIMEOUT_MS = 30_000;
+
 const at = '2026-09-11T00:00:00.000Z';
 
 describe('indexed selected text processing transitions', () => {
-    it('completes a real 1024-block admitted job with grouped indexes and exact retry', async () => {
-        const { store, staged, workspace, document, pages } = await indexedTextClaimFixture(0, 'text', 1024);
-        const sourceBytes = new Map([...pages].map(([hash, bytes]) => [hash, Uint8Array.from(bytes)]));
-        const output = await buildIndexedTextExternalizationOutput(workspace);
-        const retained = await stageIndexedProcessingPhase(store, staged.root, staged.locator, {
-            phase: 'output',
-            value: output,
-        });
-        const readPages = new Set<string>();
-        const measuredStore: IndexedConversationRecordStore = {
-            ...store,
-            async read(ref) {
-                readPages.add(ref.content_hash);
-                return store.read(ref);
-            },
-        };
-        const completed = await stageIndexedTextProcessingCompletion(
-            measuredStore,
-            retained.root,
-            retained.locator,
-            workspace,
-        );
-        expect(completed.completion.status).toBe('applied');
-        expect(completed.root.context_header.size_bytes).toBeGreaterThan(PAGED_RECORD_INDEX_PAGE_MAX_BYTES);
-        expect(completed.root.context_header.size_bytes).toBeLessThan(INDEXED_CONVERSATION_ACTIVE_MAX_BYTES);
-        expect(readPages.size).toBeLessThan(512);
-        const selected = await loadIndexedProcessingSelectedContext(store, completed.root, completed.locator);
-        expect((selected.replacement_turns ?? []).flatMap((item) => item.projection.selected_blocks)).toHaveLength(
-            1024,
-        );
-        expect((await loadIndexedPendingProcessingJobs(store, completed.root)).unresolved_job_count).toBe(0);
-        const retry = await stageIndexedTextProcessingCompletion(store, completed.root, completed.locator, workspace);
-        expect(retry.applied).toBe(false);
-        expect(retry.receipt).toEqual(completed.receipt);
-        for (const [hash, bytes] of sourceBytes) expect(pages.get(hash)).toEqual(bytes);
-        expect(document.turns[0].blocks).toHaveLength(1024);
-    });
+    it(
+        'completes a real 1024-block admitted job with grouped indexes and exact retry',
+        async () => {
+            const { store, staged, workspace, document, pages } = await indexedTextClaimFixture(0, 'text', 1024);
+            const sourceBytes = new Map([...pages].map(([hash, bytes]) => [hash, Uint8Array.from(bytes)]));
+            const output = await buildIndexedTextExternalizationOutput(workspace);
+            const retained = await stageIndexedProcessingPhase(store, staged.root, staged.locator, {
+                phase: 'output',
+                value: output,
+            });
+            const readPages = new Set<string>();
+            const measuredStore: IndexedConversationRecordStore = {
+                ...store,
+                async read(ref) {
+                    readPages.add(ref.content_hash);
+                    return store.read(ref);
+                },
+            };
+            const completed = await stageIndexedTextProcessingCompletion(
+                measuredStore,
+                retained.root,
+                retained.locator,
+                workspace,
+            );
+            expect(completed.completion.status).toBe('applied');
+            expect(completed.root.context_header.size_bytes).toBeGreaterThan(PAGED_RECORD_INDEX_PAGE_MAX_BYTES);
+            expect(completed.root.context_header.size_bytes).toBeLessThan(INDEXED_CONVERSATION_ACTIVE_MAX_BYTES);
+            expect(readPages.size).toBeLessThan(512);
+            const selected = await loadIndexedProcessingSelectedContext(store, completed.root, completed.locator);
+            expect((selected.replacement_turns ?? []).flatMap((item) => item.projection.selected_blocks)).toHaveLength(
+                1024,
+            );
+            expect((await loadIndexedPendingProcessingJobs(store, completed.root)).unresolved_job_count).toBe(0);
+            const retry = await stageIndexedTextProcessingCompletion(
+                store,
+                completed.root,
+                completed.locator,
+                workspace,
+            );
+            expect(retry.applied).toBe(false);
+            expect(retry.receipt).toEqual(completed.receipt);
+            for (const [hash, bytes] of sourceBytes) expect(pages.get(hash)).toEqual(bytes);
+            expect(document.turns[0].blocks).toHaveLength(1024);
+        },
+        WORKING_SET_CAPACITY_TEST_TIMEOUT_MS,
+    );
 
     it('keeps the existing context-record ceiling and rejects impossible headers before download', async () => {
         const { store, staged, reads } = await indexedTextClaimFixture();

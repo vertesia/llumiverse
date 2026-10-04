@@ -18,6 +18,10 @@ import { appendConversationRecordsWithProcessing } from '../src/runtime.js';
 import { INDEXED_PROCESSING_SELECTED_MAX_BLOCKS } from '../src/schemas/indexed-head.js';
 import { emptyDocument, RECORDED_AT, userTurn } from './fixtures.js';
 
+// Exhaustive CPU capacity fixtures include real immutable setup, dependency validation and retry;
+// this is not an ACK/transport latency assertion. Smaller behavior tests retain Vitest's default.
+const WORKING_SET_CAPACITY_TEST_TIMEOUT_MS = 30_000;
+
 function storage() {
     const pages = new Map<string, Uint8Array>();
     const records = new Map<string, Uint8Array>();
@@ -40,7 +44,11 @@ function storage() {
             return Uint8Array.from(bytes);
         },
         async writeRecord(ref, bytes) {
-            expect(await hashContentBytes(bytes)).toMatchObject({ content_hash: ref.content_hash });
+            const actualHash = (await hashContentBytes(bytes)).content_hash;
+            if (actualHash !== ref.content_hash)
+                throw new Error(
+                    `Indexed fixture ${ref.kind}:${ref.id} write hash ${actualHash} differs from ${ref.content_hash}`,
+                );
             records.set(ref.content_hash, Uint8Array.from(bytes));
         },
     };
@@ -103,114 +111,122 @@ describe('indexed processing append index', () => {
         );
     });
 
-    it('validates the complete active block bound before acceptance and caches repeated immutable lookups per operation', async () => {
-        const document = await configured();
-        const memory = storage();
-        const turn = userTurn('turn:at-limit', 'block:at-limit');
-        turn.blocks = Array.from({ length: INDEXED_PROCESSING_SELECTED_MAX_BLOCKS }, (_, index) => ({
-            id: `block:limit:${index}`,
-            type: 'json',
-            value: { index },
-        }));
-        const batch = {
-            turns: [turn],
-            context_entries: [{ id: 'entry:at-limit', type: 'source_turn' as const, turn_id: turn.id }],
-        };
-        const options = {
-            operation_id: 'operation:at-limit',
-            expected_revision: document.revision,
-            payload_fingerprint: await fingerprintJson(batch),
-            recorded_at: RECORDED_AT,
-        };
-        const full = await appendConversationRecordsWithProcessing(document, batch, options);
-        const appended = await stageIndexedConversationSnapshot(full.document, undefined, memory.store);
-        if (!appended.locator) throw new Error('At-limit accepted append lacks its immutable root');
-        memory.reads.length = 0;
-        memory.pageReads.length = 0;
-        const selected = await loadIndexedProcessingSelectedContext(memory.store, appended.root, appended.locator);
-        expect(selected.turns[0].selected_blocks).toHaveLength(INDEXED_PROCESSING_SELECTED_MAX_BLOCKS);
-        expect(memory.reads.length).toBeGreaterThan(128);
-        expect(new Set(memory.reads).size).toBe(memory.reads.length);
-        expect(new Set(memory.pageReads).size).toBe(memory.pageReads.length);
-        const { job } = (await loadIndexedPendingProcessingJobs(memory.store, appended.root)).jobs[0];
-        expect((await resolveIndexedProcessingTextInput(selected, job, RECORDED_AT)).entry_ids).toEqual([]);
-        const nextTurn = userTurn('turn:overflow', 'block:overflow');
-        const nextBatch = {
-            turns: [nextTurn],
-            context_entries: [{ id: 'entry:overflow', type: 'source_turn' as const, turn_id: nextTurn.id }],
-        };
-        await expect(
-            stageIndexedRecordBatch(
-                appended.root,
+    it(
+        'validates the complete active block bound before acceptance and caches repeated immutable lookups per operation',
+        async () => {
+            const document = await configured();
+            const memory = storage();
+            const turn = userTurn('turn:at-limit', 'block:at-limit');
+            turn.blocks = Array.from({ length: INDEXED_PROCESSING_SELECTED_MAX_BLOCKS }, (_, index) => ({
+                id: `block:limit:${index}`,
+                type: 'json',
+                value: { index },
+            }));
+            const batch = {
+                turns: [turn],
+                context_entries: [{ id: 'entry:at-limit', type: 'source_turn' as const, turn_id: turn.id }],
+            };
+            const options = {
+                operation_id: 'operation:at-limit',
+                expected_revision: document.revision,
+                payload_fingerprint: await fingerprintJson(batch),
+                recorded_at: RECORDED_AT,
+            };
+            const full = await appendConversationRecordsWithProcessing(document, batch, options);
+            const appended = await stageIndexedConversationSnapshot(full.document, undefined, memory.store);
+            if (!appended.locator) throw new Error('At-limit accepted append lacks its immutable root');
+            memory.reads.length = 0;
+            memory.pageReads.length = 0;
+            const selected = await loadIndexedProcessingSelectedContext(memory.store, appended.root, appended.locator);
+            expect(selected.turns[0].selected_blocks).toHaveLength(INDEXED_PROCESSING_SELECTED_MAX_BLOCKS);
+            expect(memory.reads.length).toBeGreaterThan(128);
+            expect(new Set(memory.reads).size).toBe(memory.reads.length);
+            expect(new Set(memory.pageReads).size).toBe(memory.pageReads.length);
+            const { job } = (await loadIndexedPendingProcessingJobs(memory.store, appended.root)).jobs[0];
+            expect((await resolveIndexedProcessingTextInput(selected, job, RECORDED_AT)).entry_ids).toEqual([]);
+            const nextTurn = userTurn('turn:overflow', 'block:overflow');
+            const nextBatch = {
+                turns: [nextTurn],
+                context_entries: [{ id: 'entry:overflow', type: 'source_turn' as const, turn_id: nextTurn.id }],
+            };
+            await expect(
+                stageIndexedRecordBatch(
+                    appended.root,
+                    {
+                        conversation_id: document.id,
+                        batch: nextBatch,
+                        options: {
+                            operation_id: 'operation:overflow',
+                            expected_revision: appended.root.source.revision,
+                            payload_fingerprint: await fingerprintJson(nextBatch),
+                            recorded_at: RECORDED_AT,
+                        },
+                    },
+                    memory.store,
+                ),
+            ).rejects.toThrow('selected-block bound');
+            // Staged writes cannot publish a rejected root; the original receipt/jobs remain exact.
+            expect((await loadIndexedPendingProcessingJobs(memory.store, appended.root)).job_count).toBe(1);
+            const overflowing = await appendConversationRecordsWithProcessing(full.document, nextBatch, {
+                operation_id: 'operation:overflow',
+                expected_revision: full.document.revision,
+                payload_fingerprint: await fingerprintJson(nextBatch),
+                recorded_at: RECORDED_AT,
+            });
+            await expect(
+                stageIndexedConversationSnapshot(overflowing.document, undefined, memory.store),
+            ).rejects.toThrow('selected-block bound');
+        },
+        WORKING_SET_CAPACITY_TEST_TIMEOUT_MS,
+    );
+
+    it(
+        'rejects text closure without completion headroom before enqueue, while the same small shape remains supported',
+        async () => {
+            const document = await configured();
+            const memory = storage();
+            const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+            const turn = userTurn('turn:no-headroom', 'block:no-headroom');
+            turn.blocks = Array.from({ length: 3000 }, (_, index) => ({
+                id: `block:headroom:${index}`,
+                type: 'text',
+                text: 'x',
+                format: 'plain',
+            }));
+            const batch = {
+                turns: [turn],
+                context_entries: [{ id: 'entry:no-headroom', type: 'source_turn' as const, turn_id: turn.id }],
+            };
+            const options = {
+                operation_id: 'operation:no-headroom',
+                expected_revision: document.revision,
+                payload_fingerprint: await fingerprintJson(batch),
+                recorded_at: RECORDED_AT,
+            };
+            const full = await appendConversationRecordsWithProcessing(document, batch, options);
+            await expect(stageIndexedConversationSnapshot(full.document, undefined, memory.store)).rejects.toThrow(
+                'completion headroom',
+            );
+            expect((await loadIndexedPendingProcessingJobs(memory.store, initial.root)).job_count).toBe(0);
+            turn.blocks = turn.blocks.slice(0, 256);
+            const small = await stageIndexedRecordBatch(
+                initial.root,
                 {
                     conversation_id: document.id,
-                    batch: nextBatch,
-                    options: {
-                        operation_id: 'operation:overflow',
-                        expected_revision: appended.root.source.revision,
-                        payload_fingerprint: await fingerprintJson(nextBatch),
-                        recorded_at: RECORDED_AT,
-                    },
+                    batch,
+                    options: { ...options, payload_fingerprint: await fingerprintJson(batch) },
                 },
                 memory.store,
-            ),
-        ).rejects.toThrow('selected-block bound');
-        // Staged writes cannot publish a rejected root; the original receipt/jobs remain exact.
-        expect((await loadIndexedPendingProcessingJobs(memory.store, appended.root)).job_count).toBe(1);
-        const overflowing = await appendConversationRecordsWithProcessing(full.document, nextBatch, {
-            operation_id: 'operation:overflow',
-            expected_revision: full.document.revision,
-            payload_fingerprint: await fingerprintJson(nextBatch),
-            recorded_at: RECORDED_AT,
-        });
-        await expect(stageIndexedConversationSnapshot(overflowing.document, undefined, memory.store)).rejects.toThrow(
-            'selected-block bound',
-        );
-    });
-
-    it('rejects text closure without completion headroom before enqueue, while the same small shape remains supported', async () => {
-        const document = await configured();
-        const memory = storage();
-        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
-        const turn = userTurn('turn:no-headroom', 'block:no-headroom');
-        turn.blocks = Array.from({ length: 3000 }, (_, index) => ({
-            id: `block:headroom:${index}`,
-            type: 'text',
-            text: 'x',
-            format: 'plain',
-        }));
-        const batch = {
-            turns: [turn],
-            context_entries: [{ id: 'entry:no-headroom', type: 'source_turn' as const, turn_id: turn.id }],
-        };
-        const options = {
-            operation_id: 'operation:no-headroom',
-            expected_revision: document.revision,
-            payload_fingerprint: await fingerprintJson(batch),
-            recorded_at: RECORDED_AT,
-        };
-        const full = await appendConversationRecordsWithProcessing(document, batch, options);
-        await expect(stageIndexedConversationSnapshot(full.document, undefined, memory.store)).rejects.toThrow(
-            'completion headroom',
-        );
-        expect((await loadIndexedPendingProcessingJobs(memory.store, initial.root)).job_count).toBe(0);
-        turn.blocks = turn.blocks.slice(0, 256);
-        const small = await stageIndexedRecordBatch(
-            initial.root,
-            {
-                conversation_id: document.id,
-                batch,
-                options: { ...options, payload_fingerprint: await fingerprintJson(batch) },
-            },
-            memory.store,
-        );
-        if (!small.locator) throw new Error('Supported small append has no root');
-        const selected = await loadIndexedProcessingSelectedContext(memory.store, small.root, small.locator);
-        const { job } = (await loadIndexedPendingProcessingJobs(memory.store, small.root)).jobs[0];
-        expect((await resolveIndexedProcessingTextInput(selected, job, RECORDED_AT)).entry_ids).toEqual([
-            'entry:no-headroom',
-        ]);
-    });
+            );
+            if (!small.locator) throw new Error('Supported small append has no root');
+            const selected = await loadIndexedProcessingSelectedContext(memory.store, small.root, small.locator);
+            const { job } = (await loadIndexedPendingProcessingJobs(memory.store, small.root)).jobs[0];
+            expect((await resolveIndexedProcessingTextInput(selected, job, RECORDED_AT)).entry_ids).toEqual([
+                'entry:no-headroom',
+            ]);
+        },
+        WORKING_SET_CAPACITY_TEST_TIMEOUT_MS,
+    );
 
     it('preserves pure JSON and completes its real empty text-stage job without an attempt or archive', async () => {
         const document = await configured();
