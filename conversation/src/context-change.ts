@@ -559,7 +559,8 @@ export async function applyContextChange(
                     proposal.retained_asset_ids[index] !== asset.id ||
                     !readDefinition ||
                     readDefinition.name !== reference.retrieval.capability ||
-                    readDefinition.version !== String(reference.retrieval.version) ||
+                    // Capability ABI is independent of the accepted definition content version.
+                    reference.retrieval.version !== 1 ||
                     !document.context.active_tool_definition_ids.includes(readDefinition.id)
                 ) {
                     throw new Error('Retrievable compaction requires exact text asset and active read tool per block');

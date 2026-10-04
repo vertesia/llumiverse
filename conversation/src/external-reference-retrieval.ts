@@ -48,7 +48,8 @@ export function resolveActiveTextExternalReference(
                 !definition ||
                 !document.context.active_tool_definition_ids.includes(definition.id) ||
                 definition.name !== candidate.retrieval.capability ||
-                definition.version !== String(candidate.retrieval.version)
+                // Capability ABI is independent of the accepted definition content version.
+                candidate.retrieval.version !== 1
             )
                 continue;
             const requirements = document.context.retrieval_requirements.filter(

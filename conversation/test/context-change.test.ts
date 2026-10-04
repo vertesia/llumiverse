@@ -74,7 +74,12 @@ describe('pure context changes', () => {
             byte_length: integrity.byte_length,
             created_at: changeTime,
         }));
-        const tool = { id: 'definition:range-read', name: 'read_blob', version: '1', input_schema: true };
+        const tool = {
+            id: 'definition:range-read',
+            name: 'read_blob',
+            version: `sha256:${'a'.repeat(64)}`,
+            input_schema: true,
+        };
         const staged = appendConversationRecords(
             original,
             { assets, tool_definitions: [tool], active_tool_definition_ids: [tool.id] },
@@ -195,7 +200,12 @@ describe('pure context changes', () => {
             byte_length: integrity.byte_length,
             created_at: changeTime,
         };
-        const readTool = { id: 'definition:read', name: 'read_artifact', version: '1', input_schema: true };
+        const readTool = {
+            id: 'definition:read',
+            name: 'read_artifact',
+            version: `sha256:${'a'.repeat(64)}`,
+            input_schema: true,
+        };
         const staged = appendConversationRecords(
             original,
             { assets: [asset], tool_definitions: [readTool], active_tool_definition_ids: [readTool.id] },
@@ -258,6 +268,16 @@ describe('pure context changes', () => {
                 placement: { mode: 'first_selected' as const, causal_order: 'contiguous' as const },
             },
         };
+        const unsupportedAbi = structuredClone(request);
+        unsupportedAbi.proposal.replacement_turns[0].blocks[0].retrieval.version = 2;
+        await expect(applyContextChange(staged, unsupportedAbi)).rejects.toThrow('active read tool per block');
+        const wrongDefinition = structuredClone(request);
+        wrongDefinition.proposal.replacement_turns[0].blocks[0].retrieval.tool_definition_id = 'definition:foreign';
+        await expect(applyContextChange(staged, wrongDefinition)).rejects.toThrow();
+        const wrongCapability = structuredClone(request);
+        wrongCapability.proposal.replacement_turns[0].blocks[0].retrieval.capability = 'other_reader';
+        await expect(applyContextChange(staged, wrongCapability)).rejects.toThrow('active read tool per block');
+
         const applied = await applyContextChange(staged, request);
         expect(applied.applied).toBe(true);
         expect(applied.document.turns).toEqual(staged.turns);

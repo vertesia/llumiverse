@@ -1,12 +1,11 @@
 /**
  * Shared utilities for Anthropic SDK-based drivers.
  *
- * Used by the native Anthropic driver, Vertex AI Claude, and Bedrock Mantle
+ * Used by the native Anthropic driver, Vertex AI Claude, Foundry, and Bedrock Mantle
  * Claude pathways. All use the same Anthropic Messages API surface; only the
  * client and authentication wiring differ.
  */
 
-import type { AnthropicBedrockMantle } from '@anthropic-ai/bedrock-sdk';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
     AnthropicError,
@@ -35,7 +34,6 @@ import type {
 } from '@anthropic-ai/sdk/resources/index.js';
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
 import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
-import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import {
     AGENT_PROMPT_CACHE_KEY_PREFIX,
     type CanonicalProjectedRequestMeasurement,
@@ -138,7 +136,10 @@ const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
 ] as const;
 
 export interface ClaudeTransportIdentity {
+    /** Source model used for Claude capability, sampling and thinking policy. */
     model: string;
+    /** Optional provider deployment alias used only on the native wire. */
+    request_model?: string;
     target_options?: JsonObject;
 }
 
@@ -306,7 +307,7 @@ type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     abort(): void;
     finalMessage(): Promise<Message>;
 };
-type ClaudeMessagesClient = Anthropic | AnthropicVertex | AnthropicBedrockMantle;
+type ClaudeMessagesClient = { messages: Pick<Anthropic['messages'], 'stream'> };
 
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
@@ -1021,7 +1022,7 @@ export function getClaudePayload(
         tools: sanitizedTools,
         tool_choice: toolChoice,
         temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
-        model: modelName,
+        model: transport?.request_model ?? modelName,
         max_tokens: claudeMaxTokens(options),
         top_p: hasSamplingRestriction
             ? undefined
@@ -1475,7 +1476,7 @@ async function executePreparedCanonicalClaudeCompletion(
 
 /**
  * Execute a non-streaming Claude completion.
- * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
+ * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
  */
 export async function executeClaudeCompletion(
     client: ClaudeMessagesClient,
@@ -1552,12 +1553,13 @@ export async function executeClaudeCompletion(
         service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
         finish_reason: tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
         conversation: processedConversation,
+        ...(options.include_original_response ? { original_response: result } : {}),
     };
 }
 
 /**
  * Execute a streaming Claude completion.
- * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
+ * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
  */
 export async function streamClaudeCompletion(
     client: ClaudeMessagesClient,

@@ -232,7 +232,9 @@ export async function buildTextExternalizationProposal(
                 !definition ||
                 !document.context.active_tool_definition_ids.includes(definition.id) ||
                 definition.name !== retrieval.capability ||
-                definition.version !== String(retrieval.version)
+                // The capability ABI is not the tool-definition content version. Exact ID/name
+                // plus the trusted host binder retain the original accepted tool/schema binding.
+                retrieval.version !== 1
             )
                 throw new Error('Text externalization requires a host-bound active retrieval tool');
             blocks.push({

@@ -1,9 +1,14 @@
 import type { TokenCredential } from '@azure/identity';
-import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
+import {
+    type ConversationStreamEvent,
+    createConversationDocument,
+    parseConversationDocument,
+} from '@llumiverse/conversation';
 import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
+import type { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { type OpenAIChatCompletionsPayload, toOpenAINonStreamingPayload } from '../openai/openai_chat_completions.js';
 import { prepareOpenAIChatCanonicalState } from '../openai/openai-chat-conversation-adapter.js';
 import { prepareOpenAIResponsesCanonicalState } from '../openai/openai-responses-conversation-adapter.js';
@@ -19,6 +24,7 @@ type FoundryInternals = {
     getInferenceClient: () => OpenAI;
     getResourceClient: () => OpenAI;
     getInferenceProtocolDriver: () => { service: OpenAI };
+    getOpenAIProtocolDriver: () => OpenAIResponsesDriverBase;
 };
 
 function createDriver(): AzureFoundryDriver {
@@ -49,6 +55,103 @@ async function collectCanonicalEvents(stream: AsyncIterable<ConversationStreamEv
 }
 
 describe('AzureFoundryDriver protocol composition', () => {
+    it('keeps the host asset resolver through authored Responses execute and typed stream dispatch', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'OpenAI', modelName: 'gpt-5' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        const delegate = exposePrivate<FoundryInternals>(driver).getOpenAIProtocolDriver();
+        const execute = vi.spyOn(delegate, 'requestCanonicalTextCompletion').mockRejectedValue(new Error('observed'));
+        const stream = vi
+            .spyOn(delegate, 'requestCanonicalTextCompletionEventStream')
+            .mockRejectedValue(new Error('observed'));
+        const resolve = vi.fn(async function* () {
+            yield new Uint8Array([1]);
+        });
+        const options = canonicalOptions('gpt-deployment::gpt-5', 'foundry-authored-host-assets');
+        const segments = [{ role: PromptRole.user, content: 'new authored input' }];
+        try {
+            await expect(
+                driver.executeCanonical(segments, options, undefined, { resolve_canonical_asset: resolve }),
+            ).rejects.toThrow();
+            expect(execute).toHaveBeenCalledWith(
+                expect.any(Array),
+                expect.objectContaining({ model: options.model }),
+                undefined,
+                { resolve_canonical_asset: resolve },
+            );
+            await expect(
+                driver.streamCanonicalEvents(
+                    segments,
+                    options,
+                    undefined,
+                    { stream_id: 'stream:foundry:authored-host-assets' },
+                    { resolve_canonical_asset: resolve },
+                ),
+            ).rejects.toThrow('observed');
+            expect(stream).toHaveBeenCalledWith(
+                expect.any(Array),
+                expect.objectContaining({ model: options.model }),
+                undefined,
+                { stream_id: 'stream:foundry:authored-host-assets' },
+                { resolve_canonical_asset: resolve },
+            );
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('forwards the verified host asset resolver through both retained Responses context routes', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'OpenAI', modelName: 'gpt-5' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        const delegate = exposePrivate<FoundryInternals>(driver).getOpenAIProtocolDriver();
+        const execute = vi
+            .spyOn(delegate, 'requestCanonicalContextCompletion')
+            .mockRejectedValue(new Error('observed'));
+        const stream = vi
+            .spyOn(delegate, 'requestCanonicalContextCompletionEventStream')
+            .mockRejectedValue(new Error('observed'));
+        const resolve = vi.fn(async function* () {
+            yield new Uint8Array([1]);
+        });
+        const options = {
+            ...canonicalOptions('gpt-deployment::gpt-5', 'foundry-host-assets'),
+            conversation: createConversationDocument({
+                id: 'foundry-host-assets',
+                created_at: '2026-10-04T00:00:00.000Z',
+            }),
+        };
+        try {
+            await expect(
+                driver.executeCanonicalContext(options, undefined, {
+                    resolve_canonical_asset: resolve,
+                }),
+            ).rejects.toThrow();
+            expect(execute).toHaveBeenCalledWith(expect.objectContaining({ model: options.model }), undefined, {
+                resolve_canonical_asset: resolve,
+            });
+            await expect(
+                driver.streamCanonicalContextEvents(
+                    options,
+                    undefined,
+                    { stream_id: 'stream:foundry:host-assets' },
+                    { resolve_canonical_asset: resolve },
+                ),
+            ).rejects.toThrow();
+            expect(stream).toHaveBeenCalledWith(
+                expect.objectContaining({ model: options.model }),
+                undefined,
+                { stream_id: 'stream:foundry:host-assets' },
+                { resolve_canonical_asset: resolve },
+            );
+        } finally {
+            driver.destroy();
+        }
+    });
     it.each(['missing_runtime', 'cancelled'] as const)(
         'rejects %s typed audio before looking up the Foundry deployment',
         async (mode) => {
@@ -523,6 +626,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         } as unknown as AzureFoundryDriver['service'];
 
         expect((await driver.listModels()).map((model) => model.id)).toEqual([
+            'anthropic::claude-future',
             'explicit-chat::Llama-5',
             'future-chat::Future-Chat-7',
             'image::gpt-image-2.5-flare',

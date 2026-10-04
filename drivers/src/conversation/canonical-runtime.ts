@@ -713,36 +713,205 @@ function assertMaterializedInputRecords(
     if (acceptedContextEntryIds.size !== (receipt.accepted_context_entry_ids?.length ?? 0)) {
         throw new Error('Materialized canonical input receipt contains duplicate accepted context entries');
     }
+    const acceptedTurns = new Map<string, ConversationTurn>();
     for (const turnId of acceptedTurnIds) {
         const turn = document.turns.find((candidate) => candidate.id === turnId);
         if (turn === undefined || isGeneratedAgentTurn(turn) || turn.status !== 'completed') {
             throw new Error(`Materialized canonical input turn ${turnId} is not a completed input turn`);
         }
-        const entries = document.context.entries.filter(
-            (entry) => entry.type === 'source_turn' && entry.turn_id === turnId,
-        );
-        if (entries.length !== 1) {
-            throw new Error(`Materialized canonical input turn ${turnId} is not selected by exactly one context entry`);
-        }
-        const [entry] = entries;
-        if (entry === undefined || !acceptedContextEntryIds.has(entry.id)) {
-            throw new Error(`Materialized canonical input turn ${turnId} is not selected by an accepted context entry`);
-        }
-        const selectedBlockIds = entry.block_ids;
+        acceptedTurns.set(turnId, turn);
+    }
+    if (acceptedContextEntryIds.size === 0) {
+        throw new Error('Materialized canonical input is not selected by an accepted context entry');
+    }
+    const coverage = new Map<string, number>();
+    const representedTurns = new Set<string>();
+    let originVisits = 0;
+    const sourceTurns = new Map(document.turns.map((turn) => [turn.id, turn]));
+    const replacementTurns = new Map(
+        Object.values(document.compactions).flatMap((compaction) =>
+            compaction.replacement_turns.map((turn) => [turn.id, { turn, compaction }] as const),
+        ),
+    );
+    const activeEntries = new Map(document.context.entries.map((entry) => [entry.id, entry]));
+    const visitedEntries = new Set<string>();
+    const visitedChanges = new Set<string>();
+
+    const acceptedCompaction = (id: string) => {
+        const compaction = document.compactions[id];
+        const change = compaction === undefined ? undefined : document.operation_receipts[compaction.operation_id];
         if (
-            selectedBlockIds !== undefined &&
-            (selectedBlockIds.length !== turn.blocks.length ||
-                turn.blocks.some((block) => !selectedBlockIds.includes(block.id)))
+            compaction === undefined ||
+            change?.operation_kind !== 'context_change' ||
+            change.context_change?.kind !== 'replace_with_compaction' ||
+            change.context_change.source_fingerprint !== compaction.source.source_fingerprint ||
+            change.payload_fingerprint !== compaction.metadata?.payload_fingerprint ||
+            change.result_revision !== compaction.metadata?.applied_revision ||
+            change.recorded_at !== compaction.created_at ||
+            change.result_revision <= proof.result_revision ||
+            change.result_revision > document.revision ||
+            JSON.stringify(change.accepted_context_entry_ids) !==
+                JSON.stringify(change.context_change.inserted_entry_ids)
         ) {
-            throw new Error(`Materialized canonical input turn ${turnId} is only partially selected`);
+            throw new Error('Materialized canonical input replacement lacks its accepted compaction receipt');
+        }
+        return { compaction, change };
+    };
+    const includeOrigins = (turnId: string, blockIds: readonly string[] | undefined, path: Set<string>): void => {
+        originVisits += 1;
+        if (originVisits > 4096 || path.has(turnId) || path.size >= 64) {
+            throw new Error('Materialized canonical input compaction lineage exceeds its acyclic bound');
+        }
+        const source = sourceTurns.get(turnId);
+        if (source !== undefined) {
+            const selected = blockIds ?? source.blocks.map((block) => block.id);
+            if (selected.some((id) => !source.blocks.some((block) => block.id === id))) {
+                throw new Error('Materialized canonical input selects an unknown original block');
+            }
+            if (acceptedTurns.has(turnId)) {
+                if (selected.length > 0 || source.blocks.length === 0) representedTurns.add(turnId);
+                for (const id of selected) coverage.set(id, (coverage.get(id) ?? 0) + 1);
+            }
+            return;
+        }
+        const derived = replacementTurns.get(turnId);
+        if (derived === undefined || derived.turn.provenance.type !== 'derived') {
+            throw new Error('Materialized canonical input has an unbound derived replacement');
+        }
+        if (
+            blockIds !== undefined &&
+            (blockIds.length !== derived.turn.blocks.length ||
+                derived.turn.blocks.some((block) => !blockIds.includes(block.id)))
+        ) {
+            throw new Error('Materialized canonical input derived replacement is only partially selected');
+        }
+        const { compaction } = acceptedCompaction(derived.compaction.id);
+        const provenance = derived.turn.provenance;
+        if (
+            provenance.derivation_id !== compaction.id ||
+            provenance.source_hash !== compaction.source.source_fingerprint ||
+            provenance.source_turn_ids.length === 0
+        ) {
+            throw new Error('Materialized canonical input replacement lost its exact compaction provenance');
+        }
+        if (
+            compaction.source.block_ids !== undefined &&
+            (provenance.source_block_ids === undefined ||
+                provenance.source_block_ids.some((id) => !compaction.source.block_ids?.includes(id)))
+        ) {
+            throw new Error('Materialized canonical input replacement has a foreign selected source block');
+        }
+        if (
+            provenance.source_block_ids?.some(
+                (id) =>
+                    !provenance.source_turn_ids.some((sourceId) => {
+                        const source = sourceTurns.get(sourceId) ?? replacementTurns.get(sourceId)?.turn;
+                        return source?.blocks.some((block) => block.id === id) === true;
+                    }),
+            )
+        ) {
+            throw new Error('Materialized canonical input replacement has an unknown source block');
+        }
+        const nextPath = new Set(path).add(turnId);
+        for (const sourceId of provenance.source_turn_ids) {
+            const original = sourceTurns.get(sourceId) ?? replacementTurns.get(sourceId)?.turn;
+            if (original === undefined || !compaction.source.turn_ids.includes(sourceId)) {
+                throw new Error('Materialized canonical input replacement has a foreign source turn');
+            }
+            const selected =
+                provenance.source_block_ids === undefined
+                    ? undefined
+                    : original.blocks
+                          .filter((block) => provenance.source_block_ids?.includes(block.id))
+                          .map((block) => block.id);
+            includeOrigins(sourceId, selected, nextPath);
+        }
+    };
+    const visitEntry = (id: string): void => {
+        if (visitedEntries.has(id)) return;
+        if (visitedEntries.size >= 4096)
+            throw new Error('Materialized canonical input context lineage exceeds its bound');
+        visitedEntries.add(id);
+        const active = activeEntries.get(id);
+        if (active !== undefined) {
+            if (active.type === 'replacement_turn') {
+                const { change } = acceptedCompaction(active.compaction_id);
+                if (!change.context_change?.inserted_entry_ids.includes(id)) {
+                    throw new Error('Materialized canonical input replacement entry was not accepted');
+                }
+            }
+            includeOrigins(active.turn_id, active.block_ids, new Set());
+            return;
+        }
+        const changes = Object.values(document.operation_receipts).filter((candidate) =>
+            candidate.context_change?.removed_entry_ids.includes(id),
+        );
+        if (changes.length !== 1 || visitedChanges.size >= 64) {
+            throw new Error('Materialized canonical input is not selected by exactly one accepted context lineage');
+        }
+        const change = changes[0];
+        const compactions = Object.values(document.compactions).filter(
+            (candidate) => candidate.operation_id === change.id,
+        );
+        if (compactions.length !== 1) {
+            throw new Error('Materialized canonical input removed entry has no unique accepted compaction');
+        }
+        acceptedCompaction(compactions[0].id);
+        visitedChanges.add(change.id);
+        for (const insertedId of change.context_change?.inserted_entry_ids ?? []) visitEntry(insertedId);
+    };
+    for (const id of acceptedContextEntryIds) {
+        const active = activeEntries.get(id);
+        if (active !== undefined && (active.type !== 'source_turn' || !acceptedTurnIds.has(active.turn_id))) {
+            throw new Error('Materialized canonical input context entry does not select an accepted input turn');
+        }
+        if (
+            Object.values(document.operation_receipts).some(
+                (candidate) =>
+                    candidate.result_revision > proof.result_revision &&
+                    candidate.accepted_context_entry_ids?.includes(id),
+            )
+        ) {
+            throw new Error('Materialized canonical input receipt nominates a later derived context entry');
+        }
+        visitEntry(id);
+    }
+    const originMemo = new Map<string, boolean>();
+    let derivedOriginVisits = 0;
+    const hasAcceptedOrigin = (turnId: string, path: Set<string>): boolean => {
+        if (acceptedTurnIds.has(turnId)) return true;
+        if (sourceTurns.has(turnId)) return false;
+        if (path.has(turnId) || path.size >= 64)
+            throw new Error('Materialized canonical input lineage is cyclic or unbounded');
+        const cached = originMemo.get(turnId);
+        if (cached !== undefined) return cached;
+        derivedOriginVisits += 1;
+        if (derivedOriginVisits > 4096)
+            throw new Error('Materialized canonical input derived origin search exceeds its node bound');
+        const turn = replacementTurns.get(turnId)?.turn;
+        const result =
+            turn?.provenance.type === 'derived' &&
+            turn.provenance.source_turn_ids.some((sourceId) => hasAcceptedOrigin(sourceId, new Set(path).add(turnId)));
+        originMemo.set(turnId, result);
+        return result;
+    };
+    for (const entry of document.context.entries) {
+        if (!visitedEntries.has(entry.id) && hasAcceptedOrigin(entry.turn_id, new Set())) {
+            throw new Error('Materialized canonical input is selected outside its unique accepted context lineage');
         }
     }
-    for (const entryId of acceptedContextEntryIds) {
-        const entry = document.context.entries.find((candidate) => candidate.id === entryId);
-        if (entry === undefined || entry.type !== 'source_turn' || !acceptedTurnIds.has(entry.turn_id)) {
+    for (const turn of acceptedTurns.values()) {
+        if (!representedTurns.has(turn.id)) {
             throw new Error(
-                `Materialized canonical input context entry ${entryId} does not select an accepted input turn`,
+                `Materialized canonical input turn ${turn.id} is not selected by its accepted context lineage`,
             );
+        }
+        for (const block of turn.blocks) {
+            if (coverage.get(block.id) !== 1) {
+                throw new Error(
+                    `Materialized canonical input turn ${turn.id} is only partially selected or selected more than once`,
+                );
+            }
         }
     }
 }

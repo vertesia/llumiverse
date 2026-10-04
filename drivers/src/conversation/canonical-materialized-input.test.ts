@@ -1,10 +1,14 @@
 import {
     appendConversationRecords,
+    applyContextChange,
     type ConversationDocument,
     createConversationDocument,
     createTextBlock,
     createUserTurn,
+    hashUtf8Content,
+    planContextChange,
 } from '@llumiverse/conversation';
+import { ContextChangeRequestSchema } from '@llumiverse/conversation/schemas';
 import { describe, expect, it } from 'vitest';
 import {
     appendCanonicalPrompt,
@@ -318,7 +322,250 @@ describe('canonical active tool precedence', () => {
     });
 });
 
+async function compactedMaterializedDocument(partial = false) {
+    const original = materializedDocument();
+    const proof = runtime(original);
+    const turn = original.turns[0];
+    const selected = partial ? turn.blocks.slice(0, 1) : turn.blocks;
+    const assets = await Promise.all(
+        selected.map(async (block, index) => {
+            if (block.type !== 'text') throw new Error('Expected text input fixture');
+            const integrity = await hashUtf8Content(block.text);
+            return {
+                id: `asset:materialized:${index}`,
+                kind: 'text' as const,
+                mime_type: 'text/plain',
+                storage: { type: 'external' as const, resolver: 'test.archive', locator: { key: block.id } },
+                provenance: { type: 'received' as const },
+                content_hash: integrity.content_hash,
+                byte_length: integrity.byte_length,
+                created_at: RECORDED_AT,
+            };
+        }),
+    );
+    const definitions = await canonicalToolDefinitions([{ name: 'read_artifact', input_schema: { type: 'object' } }]);
+    const definition = definitions[0];
+    const staged = appendConversationRecords(
+        original,
+        {
+            assets,
+            tool_definitions: definitions,
+            active_tool_definition_ids: [definition.id],
+        },
+        {
+            operation_id: 'operation:archive-materialized',
+            expected_revision: original.revision,
+            payload_fingerprint: 'sha256:archive-materialized',
+            recorded_at: RECORDED_AT,
+        },
+    ).document;
+    const selection = {
+        expected_revision: staged.revision,
+        expected_context_revision: staged.context.revision,
+        entry_ids: ['context:materialized-input'],
+        ...(partial
+            ? {
+                  selected_entries: staged.context.entries,
+                  selected_block_ids: { 'context:materialized-input': [selected[0].id] },
+              }
+            : {}),
+    };
+    const plan = await planContextChange(staged, selection);
+    const applied = await applyContextChange(
+        staged,
+        ContextChangeRequestSchema.parse({
+            ...selection,
+            operation_id: 'operation:compact-materialized',
+            expected_source_fingerprint: plan.source_fingerprint,
+            recorded_at: RECORDED_AT,
+            proposal: {
+                kind: 'replace_with_compaction',
+                compaction_id: 'compaction:materialized',
+                strategy: { id: 'externalize-text', version: '1', configuration_fingerprint: 'sha256:config' },
+                fidelity: 'retrievable',
+                retained_asset_ids: assets.map((asset) => asset.id),
+                generation_ids: [],
+                accepted_asset_operation_id: 'operation:archive-materialized',
+                placement: { mode: 'first_selected', causal_order: 'contiguous' },
+                replacement_turns: [
+                    {
+                        ...createUserTurn({
+                            id: 'turn:materialized-reference',
+                            authority: 'ordinary',
+                            status: 'completed',
+                            timestamps: { recorded_at: RECORDED_AT },
+                            model_visibility: 'include',
+                            provenance: { type: 'received' },
+                            blocks: [],
+                        }),
+                        kind: 'agent',
+                        provenance: {
+                            type: 'derived',
+                            derivation_id: 'compaction:materialized',
+                            source_turn_ids: plan.source_turn_ids,
+                            source_hash: plan.source_fingerprint,
+                            source_block_ids: selected.map((block) => block.id),
+                        },
+                        blocks: assets.map((asset, index) => ({
+                            id: `block:materialized-reference:${index}`,
+                            type: 'external_reference',
+                            original_type: 'text',
+                            asset_id: asset.id,
+                            content_hash: asset.content_hash,
+                            description: 'Exact accepted original',
+                            preview: 'accepted original',
+                            retrieval: {
+                                capability: definition.name,
+                                version: 1,
+                                tool_definition_id: definition.id,
+                                arguments: { asset_id: asset.id },
+                            },
+                        })),
+                    },
+                ],
+            },
+        }),
+    );
+    return { original, proof, document: applied.document };
+}
+
+async function prepareMaterialized(document: ConversationDocument, proof: ResolvedConversationRuntimeContext) {
+    return prepareCanonicalContext({
+        options: { model: 'test-model', conversation: document, conversation_runtime: proof },
+        provider: 'test-provider',
+        protocol: 'test.protocol',
+        adapter_version: 'test.v1',
+    });
+}
+
 describe('materialized canonical input proof', () => {
+    for (const partial of [false, true]) {
+        it(`preserves the original accepted input through ${partial ? 'partial compaction plus remainder' : 'full compaction'}`, async () => {
+            const { original, proof, document } = await compactedMaterializedDocument(partial);
+            const prepared = await prepareMaterialized(document, proof);
+            expect(prepared.document).toEqual(document);
+            expect(prepared.document.operation_receipts[INPUT_OPERATION_ID]).toEqual(
+                original.operation_receipts[INPUT_OPERATION_ID],
+            );
+            expect(prepared.document.turns).toEqual(original.turns);
+            expect(prepared.document.context.entries.some((entry) => entry.type === 'replacement_turn')).toBe(true);
+            expect(prepared.document.revision).toBe(document.revision);
+            expect(prepared.document.operation_receipts[proof.input_operation_id]).toBeUndefined();
+            expect((await prepareMaterialized(document, proof)).document).toEqual(document);
+        });
+    }
+
+    it('rejects provenance blocks outside the exact accepted partial compaction selection', async () => {
+        const { document, proof } = await compactedMaterializedDocument(true);
+        const compaction = document.compactions['compaction:materialized'];
+        const replacement = compaction.replacement_turns[0];
+        if (replacement.provenance.type !== 'derived') throw new Error('Expected derived fixture');
+        expect(compaction.source.block_ids).toEqual(['block:materialized-a']);
+        replacement.provenance.source_block_ids = ['block:materialized-b'];
+        // Exercise the direct typed guard as well as semantic document validation; no mapping may silently drop it.
+        await expect(appendCanonicalPrompt(document, emptyRecords(), proof, undefined, null)).rejects.toThrow(
+            'foreign selected source block',
+        );
+    });
+
+    it('memoizes a repeated unrelated derived DAG without treating its provenance as input authority', async () => {
+        const { document: processed } = await compactedMaterializedDocument();
+        const document = materializedDocument();
+        const unrelated = createUserTurn({
+            id: 'turn:unrelated-leaf',
+            authority: 'ordinary',
+            status: 'completed',
+            timestamps: { recorded_at: RECORDED_AT },
+            model_visibility: 'include',
+            provenance: { type: 'received' },
+            blocks: [createTextBlock({ id: 'block:unrelated-leaf', text: 'unrelated', format: 'plain' })],
+        });
+        document.turns.push(unrelated);
+        let previousIds = [unrelated.id];
+        let sourceReads = 0;
+        for (let layer = 0; layer < 24; layer += 1) {
+            const currentIds: string[] = [];
+            for (let branch = 0; branch < 2; branch += 1) {
+                const id = `compaction:unrelated:${layer}:${branch}`;
+                const turnId = `turn:unrelated:${layer}:${branch}`;
+                const retained = structuredClone(processed.compactions['compaction:materialized']);
+                retained.id = id;
+                retained.operation_id = `operation:unrelated:${layer}:${branch}`;
+                retained.source.turn_ids = [...previousIds];
+                delete retained.source.block_ids;
+                const replacement = retained.replacement_turns[0];
+                replacement.id = turnId;
+                replacement.blocks = [
+                    createTextBlock({ id: `block:unrelated:${layer}:${branch}`, text: 'summary', format: 'plain' }),
+                ];
+                replacement.provenance = {
+                    type: 'derived',
+                    derivation_id: id,
+                    source_turn_ids: [...previousIds],
+                    source_hash: retained.source.source_fingerprint,
+                };
+                // Test-only read instrumentation bounds a regression deterministically, rather than waiting for exponential work.
+                const sources = [...previousIds];
+                Object.defineProperty(replacement.provenance, 'source_turn_ids', {
+                    enumerable: true,
+                    get() {
+                        sourceReads += 1;
+                        if (sourceReads > 4096) throw new Error('Repeated DAG traversal exceeded bounded test reads');
+                        return sources;
+                    },
+                });
+                document.compactions[id] = retained;
+                currentIds.push(turnId);
+            }
+            previousIds = currentIds;
+        }
+        for (const turnId of previousIds)
+            document.context.entries.push({
+                id: `context:${turnId}`,
+                type: 'replacement_turn',
+                turn_id: turnId,
+                compaction_id: turnId.replace('turn:', 'compaction:'),
+            });
+        // The genuine original append remains directly selected. This tests only unrelated traversal complexity,
+        // not publication/authentication of the adversarial DAG or permission to consume its content.
+        const result = await appendCanonicalPrompt(document, emptyRecords(), runtime(document), undefined, null);
+        expect(result.document).toBe(document);
+        expect(sourceReads).toBeLessThanOrEqual(48);
+        expect(document.operation_receipts[INPUT_OPERATION_ID].accepted_context_entry_ids).toEqual([
+            'context:materialized-input',
+        ]);
+    });
+
+    it('rejects missing or foreign compaction receipts, provenance drift and incomplete/duplicate selection', async () => {
+        const { proof, document } = await compactedMaterializedDocument();
+        const missing = structuredClone(document);
+        delete missing.operation_receipts['operation:compact-materialized'];
+        await expect(prepareMaterialized(missing, proof)).rejects.toThrow();
+        const foreign = structuredClone(document);
+        foreign.compactions['compaction:materialized'].operation_id = 'operation:archive-materialized';
+        await expect(prepareMaterialized(foreign, proof)).rejects.toThrow();
+        const drift = structuredClone(document);
+        const derived = drift.compactions['compaction:materialized'].replacement_turns[0];
+        if (derived.provenance.type !== 'derived') throw new Error('Expected derived fixture');
+        derived.provenance.source_hash = `sha256:${'0'.repeat(64)}`;
+        await expect(prepareMaterialized(drift, proof)).rejects.toThrow();
+        const incomplete = structuredClone(document);
+        incomplete.context.entries[0].block_ids = ['block:materialized-reference:0'];
+        await expect(prepareMaterialized(incomplete, proof)).rejects.toThrow();
+        const duplicate = structuredClone(document);
+        duplicate.context.entries.push({
+            id: 'context:duplicate-input',
+            type: 'source_turn',
+            turn_id: 'turn:materialized-input',
+        });
+        await expect(prepareMaterialized(duplicate, proof)).rejects.toThrow();
+        const laterMarker = structuredClone(document);
+        laterMarker.operation_receipts[INPUT_OPERATION_ID].accepted_context_entry_ids = [
+            document.context.entries[0].id,
+        ];
+        await expect(prepareMaterialized(laterMarker, proof)).rejects.toThrow();
+    });
+
     it('validates a retained materialized input without appending or changing its operation receipt', async () => {
         const document = materializedDocument();
         const proof = runtime(document);

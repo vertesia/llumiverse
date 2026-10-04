@@ -211,6 +211,16 @@ function assertAllowedKeys(value: object, allowed: readonly string[], label: str
     if (extras.length > 0) throw new TypeError(`${label} contains unsupported field ${extras[0]}`);
 }
 
+function directClaudeToolCaller(caller: unknown): { type: 'direct' } | undefined {
+    if (caller === undefined) return undefined;
+    if (typeof caller !== 'object' || caller === null || Array.isArray(caller) || !('type' in caller))
+        throw new TypeError('Claude tool_use caller is invalid');
+    if (caller.type !== 'direct')
+        throw new TypeError('Claude server tool caller cannot become an application tool call');
+    assertAllowedKeys(caller, ['type'], 'Claude tool_use caller');
+    return { type: 'direct' };
+}
+
 function assertTextBlock(block: TextBlockParam): void {
     assertAllowedKeys(block, ['type', 'text', 'cache_control', 'citations'], 'Claude text block');
     if (block.citations !== undefined && block.citations !== null && block.citations.length > 0) {
@@ -366,7 +376,8 @@ async function canonicalBlock(input: {
         return { replay_entry: { kind: 'redacted_thinking', data: native.data } };
     }
     if (native.type === 'tool_use') {
-        assertAllowedKeys(native, ['type', 'id', 'name', 'input', 'cache_control'], 'Claude tool_use block');
+        assertAllowedKeys(native, ['type', 'id', 'name', 'input', 'cache_control', 'caller'], 'Claude tool_use block');
+        const caller = directClaudeToolCaller(native.caller);
         const definition = input.tool_definitions.find((candidate) => candidate.name === native.name);
         const block: AgentContentBlock = {
             id: await entityId('block', input.scope, input.native_path),
@@ -378,7 +389,9 @@ async function canonicalBlock(input: {
             arguments: { type: 'json', value: providerJsonValue(native.input) },
             native_id: { protocol: CLAUDE_MESSAGES_PROTOCOL, scope: input.runtime.request_id, value: native.id },
         };
-        return { block, replay_entry: { kind: 'canonical', block_id: block.id } };
+        const replayEntry: ClaudeReplayCanonicalEntry = { kind: 'canonical', block_id: block.id };
+        if (caller !== undefined) replayEntry.caller = caller;
+        return { block, replay_entry: replayEntry };
     }
     throw new TypeError(`Claude content block type ${native.type} is not supported by the canonical adapter`);
 }
@@ -949,6 +962,19 @@ function agentContent(
             }
             if (block.type === 'native_replay' || block.type === 'reasoning') {
                 throw new Error(`Claude canonical replay entry ${entry.block_id} has incompatible block type`);
+            }
+            if (entry.kind === 'canonical') {
+                assertAllowedKeys(entry, ['kind', 'block_id', 'caller'], 'Claude canonical replay entry');
+                const caller = directClaudeToolCaller(entry.caller);
+                if (caller !== undefined && block.type !== 'tool_call') {
+                    throw new TypeError(`Claude tool caller replay ${entry.block_id} does not reference a tool call`);
+                }
+                const native = canonicalBlockToClaude(block, document);
+                if (caller !== undefined) {
+                    if (native.type !== 'tool_use') throw new TypeError('Claude replay lost its tool use block');
+                    return { ...native, caller };
+                }
+                return native;
             }
             return canonicalBlockToClaude(block, document);
         });

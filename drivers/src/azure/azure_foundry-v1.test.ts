@@ -19,7 +19,7 @@ type Internals = {
 const pngImage = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]).toString('base64');
 const webpImage = Buffer.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x01]).toString('base64');
 
-function setup(apiVersion?: string) {
+function setup(apiVersion?: string, sourceModel?: string) {
     const getToken = vi.fn<TokenCredential['getToken']>(async () => ({
         token: 'test-token',
         expiresOnTimestamp: Date.now() + 3_600_000,
@@ -28,6 +28,7 @@ function setup(apiVersion?: string) {
         endpoint: 'https://foundry.example.test/api/projects/project',
         azureADTokenProvider: { getToken },
         apiVersion,
+        sourceModel,
     });
     const requests: { url: string; body: Record<string, unknown>; headers: Headers; signal?: AbortSignal | null }[] =
         [];
@@ -58,6 +59,37 @@ const chatResponse = {
 };
 
 describe('Foundry OpenAI v1 transport', () => {
+    it.each([undefined, 'gpt-image-2'])('routes a text-named image deployment using source hint %s', async (source) => {
+        const { driver, internals, fetch, respond, requests } = setup(undefined, source);
+        const metadata = vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
+            type: 'ModelDeployment',
+            name: 'gpt-replacement',
+            modelPublisher: 'OpenAI',
+            modelName: 'gpt-image-2',
+            modelVersion: '1',
+            capabilities: { chat_completion: 'false' },
+        });
+        vi.spyOn(internals.getOpenAIProtocolDriver(), 'getDriverFetch').mockReturnValue(fetch);
+        const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==';
+        respond.mockImplementation(
+            () =>
+                new Response(JSON.stringify({ created: 1, data: [{ b64_json: png }] }), {
+                    headers: { 'content-type': 'application/json' },
+                }),
+        );
+        try {
+            const result = await driver.execute([{ role: PromptRole.user, content: 'A garden' }], {
+                model: 'gpt-replacement',
+            });
+            expect(requests[0].url).toBe('https://foundry.example.test/openai/v1/images/generations');
+            expect(requests[0].body.model).toBe('gpt-replacement');
+            expect(result.result).toEqual([{ type: 'image', value: `data:image/png;base64,${png}` }]);
+            expect(metadata).toHaveBeenCalledTimes(source ? 0 : 1);
+        } finally {
+            driver.destroy();
+        }
+    });
+
     it.each([undefined, 'explicit-version'])('uses the native SDK and preserves API version %s', async (apiVersion) => {
         const { driver, internals, respond, requests, getToken } = setup(apiVersion);
         vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({

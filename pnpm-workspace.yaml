@@ -24,6 +24,10 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/sdk@0.129.0'
   - '@anthropic-ai/vertex-sdk@0.20.0'
   - '@anthropic-ai/bedrock-sdk@0.34.0'
+  # Security fixes published inside the 3-day cooldown.
+  - brace-expansion@5.0.12
+  - fast-uri@3.1.8
+  - '@grpc/grpc-js@1.14.5'
 
 catalog:
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from

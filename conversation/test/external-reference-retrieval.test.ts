@@ -47,7 +47,14 @@ async function referencedDocument(): Promise<ConversationDocument> {
         initial,
         {
             assets: [asset],
-            tool_definitions: [{ id: 'definition:read', name: 'read_artifact', version: '1', input_schema: true }],
+            tool_definitions: [
+                {
+                    id: 'definition:read',
+                    name: 'read_artifact',
+                    version: `sha256:${'b'.repeat(64)}`,
+                    input_schema: true,
+                },
+            ],
             active_tool_definition_ids: ['definition:read'],
         },
         {
@@ -74,6 +81,8 @@ describe('resolveActiveTextExternalReference', () => {
         const resolved = resolveActiveTextExternalReference(document, 'asset:text');
         expect(resolved.accepted_asset_operation_id).toBe('archive:text');
         expect(resolved.tool_definition.name).toBe('read_artifact');
+        expect(resolved.tool_definition.version).toBe(`sha256:${'b'.repeat(64)}`);
+        expect(resolved.block.retrieval.version).toBe(1);
         expect(resolved.asset.content_hash).toBe(document.assets['asset:text'].content_hash);
         resolved.block.description = 'mutated';
         expect(document.turns[0].blocks[0]).toHaveProperty('description', 'Archived source');
@@ -82,6 +91,28 @@ describe('resolveActiveTextExternalReference', () => {
     it('rejects an inactive reference, missing requirement, wrong block, and mismatched hash', async () => {
         const document = await referencedDocument();
         expect(() => resolveActiveTextExternalReference(document, 'asset:text', 'block:other')).toThrow();
+
+        const unsupportedAbi = structuredClone(document);
+        const unsupportedBlock = unsupportedAbi.turns[0].blocks[0];
+        if (unsupportedBlock.type !== 'external_reference') throw new Error('Expected external reference fixture');
+        unsupportedBlock.retrieval.version = 2;
+        unsupportedAbi.context.retrieval_requirements[0].retrieval.version = 2;
+        expect(() => resolveActiveTextExternalReference(unsupportedAbi, 'asset:text')).toThrow();
+
+        const wrongDefinition = structuredClone(document);
+        const wrongDefinitionBlock = wrongDefinition.turns[0].blocks[0];
+        if (wrongDefinitionBlock.type !== 'external_reference') throw new Error('Expected external reference fixture');
+        wrongDefinitionBlock.retrieval.tool_definition_id = 'definition:foreign';
+        wrongDefinition.context.retrieval_requirements[0].retrieval.tool_definition_id = 'definition:foreign';
+        expect(() => resolveActiveTextExternalReference(wrongDefinition, 'asset:text')).toThrow();
+
+        const wrongName = structuredClone(document);
+        wrongName.tool_definitions['definition:read'].name = 'foreign_reader';
+        expect(() => resolveActiveTextExternalReference(wrongName, 'asset:text')).toThrow();
+
+        const inactiveDefinition = structuredClone(document);
+        inactiveDefinition.context.active_tool_definition_ids = [];
+        expect(() => resolveActiveTextExternalReference(inactiveDefinition, 'asset:text')).toThrow();
 
         const noRequirement = structuredClone(document);
         noRequirement.context.retrieval_requirements = [];
