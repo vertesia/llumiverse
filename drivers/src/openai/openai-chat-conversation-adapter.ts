@@ -37,7 +37,6 @@ import {
     RequestSourceWorkingSetSchema,
     type ResolvedConversationRuntimeContext,
     ResolvedConversationRuntimeContextSchema,
-    resolveActiveTextExternalReference,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
@@ -83,6 +82,7 @@ import {
     newNativeImportDocument,
     snapshotNativeConversationImportOptions,
 } from '../conversation/native-import.js';
+import { retrievableTextReference } from '../conversation/retrievable-text-reference.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -866,14 +866,7 @@ function contentParts(
             if (asset === undefined) throw new Error(`OpenAI Chat content references missing asset ${block.asset_id}`);
             parts.push(audioAssetPart(asset));
         } else if (block.type === 'external_reference') {
-            if (block.preview === undefined || block.preview.length > 512) {
-                throw new TypeError(`OpenAI Chat external reference ${block.id} lacks a verified read capability`);
-            }
-            const resolved = resolveActiveTextExternalReference(document, block.asset_id, block.id);
-            parts.push({
-                type: 'text',
-                text: `${block.preview}\n[Full original text is available through ${resolved.tool_definition.name} with ${JSON.stringify(resolved.block.retrieval.arguments)}.]`,
-            });
+            parts.push({ type: 'text', text: retrievableTextReference(document, block) });
         } else if (
             block.type !== 'tool_call' &&
             block.type !== 'reasoning' &&

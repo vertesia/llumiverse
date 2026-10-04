@@ -48,7 +48,7 @@ export async function compileClaudeModelSwitchRequest(input: {
         if (!definition) throw new Error(`Claude Messages model switch tool ${id} is unavailable`);
         return definition;
     });
-    const unsupported = new Set(['image', 'document', 'audio', 'video', 'extension', 'external_reference']);
+    const unsupported = new Set(['image', 'document', 'audio', 'video', 'extension']);
     for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
         for (const block of turn.blocks) {
             if (unsupported.has(block.type))

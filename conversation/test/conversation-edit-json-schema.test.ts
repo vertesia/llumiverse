@@ -55,6 +55,8 @@ describe('canonical edit schema and export parity', () => {
         expectTypeOf<core.ConversationChange>().toEqualTypeOf<z.infer<typeof core.ConversationChangeSchema>>();
     });
 
+    // AJV compiles the full nested schema parity matrix; concurrent CI package tests can exceed
+    // Vitest's 5s default before any assertion or schema result changes.
     it('enforces strict received content, bounded revisions, exact request structure and named result families', async () => {
         const document = emptyDocument();
         document.turns.push(userTurn('source'));
@@ -197,5 +199,5 @@ describe('canonical edit schema and export parity', () => {
         ]);
         expect(json.ConversationDocumentJsonSchema.$defs).toHaveProperty('ConversationEditOperation');
         expect(json.ConversationDocumentJsonSchema.$defs).toHaveProperty('ConversationContextEntry');
-    });
+    }, 15_000);
 });

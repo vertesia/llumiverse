@@ -68,6 +68,7 @@ import {
     newNativeImportDocument,
     snapshotNativeConversationImportOptions,
 } from '../conversation/native-import.js';
+import { retrievableTextReference } from '../conversation/retrievable-text-reference.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -961,6 +962,9 @@ function ordinaryBlockToParts(
 ): OpenAI.Responses.ResponseInputContent[] {
     if (block.type === 'text') return [{ type: 'input_text', text: block.text }];
     if (block.type === 'json') return [{ type: 'input_text', text: JSON.stringify(block.value) }];
+    if (block.type === 'external_reference') {
+        return [{ type: 'input_text', text: retrievableTextReference(document, block) }];
+    }
     if (block.type === 'image' || block.type === 'document') {
         const asset = document.assets[block.asset_id];
         if (asset === undefined) throw new Error(`OpenAI Responses content references missing asset ${block.asset_id}`);

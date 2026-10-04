@@ -79,6 +79,7 @@ import {
     newNativeImportDocument,
     snapshotNativeConversationImportOptions,
 } from '../conversation/native-import.js';
+import { retrievableTextReference } from '../conversation/retrievable-text-reference.js';
 import {
     assertStructuredOutputEvidence,
     type CanonicalStructuredOutputEvidence,
@@ -1422,6 +1423,7 @@ function compileBlock(
     target?: { provider?: string; model?: string },
 ): ContentBlock | undefined {
     if (block.type === 'text') return { text: block.text };
+    if (block.type === 'external_reference') return { text: retrievableTextReference(document, block) };
     if (block.type === 'tool_call') {
         if (block.arguments.type === 'invalid') {
             throw new TypeError(`Bedrock Converse cannot project invalid arguments for call ${block.call_id}`);

@@ -63,25 +63,30 @@ function records(count: number) {
 }
 
 describe('paged record index', () => {
-    it.each([10_000, 100_000])('reads and appends through bounded index paths with %i cold records', async (count) => {
-        const memory = memoryStore();
-        const oldRoot = await buildPagedRecordIndex(memory.store, records(count));
-        expect(oldRoot).toBeDefined();
-        memory.reset();
-        expect(await getPagedRecord(memory.store, oldRoot, 'turn:000007')).toEqual(value('turn:000007'));
-        expect(memory.counters()).toMatchObject({ writes: 0 });
-        expect(memory.counters().reads).toBeLessThanOrEqual(5);
+    // A 100k cold import writes and verifies roughly 1,600 immutable pages before bounded-path checks.
+    it.each([10_000, 100_000])(
+        'reads and appends through bounded index paths with %i cold records',
+        async (count) => {
+            const memory = memoryStore();
+            const oldRoot = await buildPagedRecordIndex(memory.store, records(count));
+            expect(oldRoot).toBeDefined();
+            memory.reset();
+            expect(await getPagedRecord(memory.store, oldRoot, 'turn:000007')).toEqual(value('turn:000007'));
+            expect(memory.counters()).toMatchObject({ writes: 0 });
+            expect(memory.counters().reads).toBeLessThanOrEqual(5);
 
-        memory.reset();
-        const newId = `turn:${count.toString().padStart(6, '0')}`;
-        const newRoot = await putPagedRecord(memory.store, oldRoot, newId, value(newId));
-        expect(memory.counters().reads).toBeLessThanOrEqual(12);
-        expect(memory.counters().writes).toBeLessThanOrEqual(6);
-        expect(memory.counters().readBytes).toBeLessThan(1024 * 1024);
-        expect(memory.counters().writtenBytes).toBeLessThan(1024 * 1024);
-        expect(await getPagedRecord(memory.store, oldRoot, newId)).toBeUndefined();
-        expect(await getPagedRecord(memory.store, newRoot, newId)).toEqual(value(newId));
-    });
+            memory.reset();
+            const newId = `turn:${count.toString().padStart(6, '0')}`;
+            const newRoot = await putPagedRecord(memory.store, oldRoot, newId, value(newId));
+            expect(memory.counters().reads).toBeLessThanOrEqual(12);
+            expect(memory.counters().writes).toBeLessThanOrEqual(6);
+            expect(memory.counters().readBytes).toBeLessThan(1024 * 1024);
+            expect(memory.counters().writtenBytes).toBeLessThan(1024 * 1024);
+            expect(await getPagedRecord(memory.store, oldRoot, newId)).toBeUndefined();
+            expect(await getPagedRecord(memory.store, newRoot, newId)).toEqual(value(newId));
+        },
+        15_000,
+    );
 
     it('preserves ordinal keys, rejects duplicate identities, and retains the old root after conflict', async () => {
         const memory = memoryStore();

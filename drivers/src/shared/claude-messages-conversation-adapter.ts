@@ -76,6 +76,7 @@ import {
     newNativeImportDocument,
     snapshotNativeConversationImportOptions,
 } from '../conversation/native-import.js';
+import { retrievableTextReference } from '../conversation/retrievable-text-reference.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -859,6 +860,9 @@ function assetToClaudeBlock(asset: Asset): ImageBlockParam | DocumentBlockParam 
 function canonicalBlockToClaude(block: ContentBlock, document: ConversationDocument): ContentBlockParam {
     if (block.type === 'text') return { type: 'text', text: block.text };
     if (block.type === 'json') return { type: 'text', text: JSON.stringify(block.value) };
+    if (block.type === 'external_reference') {
+        return { type: 'text', text: retrievableTextReference(document, block) };
+    }
     if (block.type === 'image' || block.type === 'document') {
         const asset = document.assets[block.asset_id];
         if (asset === undefined) throw new Error(`Claude content references missing asset ${block.asset_id}`);
@@ -1006,7 +1010,7 @@ function ordinaryContent(turn: ConversationTurn, document: ConversationDocument)
         if (block.type === 'extension') {
             throw new TypeError(`Claude has no registered projection for extension block ${block.id}`);
         }
-        if (block.type === 'external_reference' || block.type === 'audio' || block.type === 'video') {
+        if (block.type === 'audio' || block.type === 'video') {
             throw new TypeError(`Claude cannot project canonical ${block.type} block ${block.id}`);
         }
         return [canonicalBlockToClaude(block, document)];

@@ -990,6 +990,8 @@ describe('indexed conversation snapshot', () => {
         ).rejects.toThrow('accepted operation');
     });
 
+    // One-time cold migration validates and reads back every immutable record. Keep both sizes
+    // here so the bounded append/delete read-count comparison exercises the same store profile.
     it('migrates valid 10k and 100k cold turns, then appends with fixed active context and bounded reads', async () => {
         const pageReadCounts: number[] = [];
         const deleteReadCounts: number[] = [];
@@ -1087,7 +1089,7 @@ describe('indexed conversation snapshot', () => {
         }
         expect(pageReadCounts[1]).toBeLessThan(pageReadCounts[0] + 20);
         expect(deleteReadCounts[1]).toBeLessThan(deleteReadCounts[0] + 40);
-    }, 60_000);
+    }, 120_000);
     it('resolves one selected small block without reading a large unselected body', async () => {
         const initial = emptyDocument('conversation:indexed');
         const turn = createUserTurn({

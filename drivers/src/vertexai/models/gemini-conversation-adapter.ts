@@ -78,6 +78,7 @@ import {
     newNativeImportDocument,
     snapshotNativeConversationImportOptions,
 } from '../../conversation/native-import.js';
+import { retrievableTextReference } from '../../conversation/retrievable-text-reference.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -1243,6 +1244,7 @@ function ordinaryBlockToPart(
 ): Part {
     if (block.type === 'text') return { text: block.text };
     if (block.type === 'json') return { text: JSON.stringify(block.value) };
+    if (block.type === 'external_reference') return { text: retrievableTextReference(document, block) };
     if (block.type === 'image' || block.type === 'document' || block.type === 'audio' || block.type === 'video') {
         const asset = document.assets[block.asset_id];
         if (asset === undefined) throw new Error(`Gemini content references missing asset ${block.asset_id}`);
