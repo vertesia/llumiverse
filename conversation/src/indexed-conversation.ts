@@ -366,29 +366,45 @@ export async function stageIndexedConversationSnapshot(
         for (const block of blocks) await stageFamily('blocks', block.id, block);
     };
 
-    for (let index = 0; index < document.turns.length; index += 1) {
-        const turn = document.turns[index];
-        await stageTurn(turn, 'ordinary');
-        await stageFamily(
-            'turn_links',
-            turn.id,
-            IndexedConversationTurnLinkSchema.parse({
-                id: turn.id,
-                ordinal: index,
-                ...(index === 0 ? {} : { previous_turn_id: document.turns[index - 1].id }),
-                ...(index === document.turns.length - 1 ? {} : { next_turn_id: document.turns[index + 1].id }),
-            }),
-        );
-        for (const block of turn.blocks) {
-            families.block_owners.push({
-                key: block.id,
-                value: { storage: 'marker', kind: 'block_owner', id: turn.id },
+    // Cold turns are independent. Keep immutable write/read-back work bounded rather than serializing
+    // every remote record round trip; no directory root is published until every batch succeeds.
+    const migrationWriteWindow = 32;
+    for (let offset = 0; offset < document.turns.length; offset += migrationWriteWindow) {
+        const staged: Promise<void>[] = [];
+        for (let index = offset; index < Math.min(offset + migrationWriteWindow, document.turns.length); index += 1) {
+            const turn = document.turns[index];
+            staged.push(
+                (async () => {
+                    await stageTurn(turn, 'ordinary');
+                    await stageFamily(
+                        'turn_links',
+                        turn.id,
+                        IndexedConversationTurnLinkSchema.parse({
+                            id: turn.id,
+                            ordinal: index,
+                            ...(index === 0 ? {} : { previous_turn_id: document.turns[index - 1].id }),
+                            ...(index === document.turns.length - 1
+                                ? {}
+                                : { next_turn_id: document.turns[index + 1].id }),
+                        }),
+                    );
+                })(),
+            );
+            for (const block of turn.blocks) {
+                families.block_owners.push({
+                    key: block.id,
+                    value: { storage: 'marker', kind: 'block_owner', id: turn.id },
+                });
+            }
+            families.turn_order.push({
+                key: indexedOrderedKey(index),
+                value: { storage: 'marker', kind: 'turn_order', id: turn.id },
             });
         }
-        families.turn_order.push({
-            key: indexedOrderedKey(index),
-            value: { storage: 'marker', kind: 'turn_order', id: turn.id },
-        });
+        // A failed write must not leave other writes running after the import rejects.
+        for (const result of await Promise.allSettled(staged)) {
+            if (result.status === 'rejected') throw result.reason;
+        }
     }
     for (const [id, compaction] of Object.entries(document.compactions)) {
         const { replacement_turns: replacementTurns, ...header } = compaction;

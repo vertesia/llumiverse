@@ -58,6 +58,69 @@ function memoryStore() {
 }
 
 describe('indexed conversation snapshot', () => {
+    it('stages independent cold turns with bounded concurrent read-back before publishing a root', async () => {
+        const source = emptyDocument('conversation:indexed-bounded-migration');
+        const turns = Array.from({ length: 96 }, (_, index) => userTurn(`turn:cold:${index}`, `block:cold:${index}`));
+        const memory = memoryStore();
+        let inFlight = 0;
+        let peak = 0;
+        const store: IndexedConversationRecordStore = {
+            ...memory.store,
+            async writeRecord(value, bytes) {
+                inFlight += 1;
+                peak = Math.max(peak, inFlight);
+                try {
+                    await new Promise((resolve) => setTimeout(resolve, 1));
+                    await memory.store.writeRecord(value, bytes);
+                } finally {
+                    inFlight -= 1;
+                }
+            },
+        };
+        const staged = await stageIndexedConversationSnapshot(
+            {
+                ...source,
+                turns,
+                context: {
+                    ...source.context,
+                    entries: [{ id: 'entry:active', type: 'source_turn', turn_id: turns[95].id }],
+                },
+            },
+            undefined,
+            store,
+        );
+        expect(staged.root.turn_count).toBe(turns.length);
+        expect(peak).toBeGreaterThan(1);
+        expect(peak).toBeLessThanOrEqual(32);
+        expect((await loadIndexedActiveContext(store, staged.root)).entries).toEqual([
+            { id: 'entry:active', type: 'source_turn', turn_id: turns[95].id },
+        ]);
+    });
+    it('drains a failed cold import window before rejecting without publishing a root', async () => {
+        const source = emptyDocument('conversation:indexed-failed-migration');
+        const turns = Array.from({ length: 64 }, (_, index) => userTurn(`turn:cold:${index}`, `block:cold:${index}`));
+        const memory = memoryStore();
+        let inFlight = 0;
+        const store: IndexedConversationRecordStore = {
+            ...memory.store,
+            async writeRecord(value, bytes) {
+                inFlight += 1;
+                try {
+                    await new Promise((resolve) => setTimeout(resolve, 1));
+                    if (value.kind === 'turns' && value.id === turns[0].id) throw new Error('failed immutable write');
+                    await memory.store.writeRecord(value, bytes);
+                } finally {
+                    inFlight -= 1;
+                }
+            },
+        };
+        await expect(stageIndexedConversationSnapshot({ ...source, turns }, undefined, store)).rejects.toThrow(
+            'failed immutable write',
+        );
+        expect(inFlight).toBe(0);
+        expect([...memory.records.keys()].some((key) => key.startsWith('root:'))).toBe(false);
+    });
+
     it('maintains live links through consecutive, disjoint and final deletions before fresh selected preparation', async () => {
         const source = emptyDocument('conversation:indexed-delete-links');
         const memory = memoryStore();
