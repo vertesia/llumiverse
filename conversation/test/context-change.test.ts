@@ -53,6 +53,142 @@ async function exclude(document = documentWithEntries(), entryIds = ['first-entr
 }
 
 describe('pure context changes', () => {
+    it('retires only affected discardable replay from a partial remainder, with exact retry evidence', async () => {
+        const source = emptyDocument();
+        const turn = {
+            ...userTurn('answer'),
+            kind: 'agent' as const,
+            provenance: { type: 'received' as const },
+            blocks: [
+                textBlock('answer-text'),
+                {
+                    ...replayBlock('answer-wire', { block_ids: ['answer-text'] }),
+                    dependency_policy: 'discard_on_dependency_change' as const,
+                },
+                textBlock('unrelated-text'),
+                {
+                    ...replayBlock('unrelated-wire', { block_ids: ['unrelated-text'] }),
+                    dependency_policy: 'discard_on_dependency_change' as const,
+                },
+            ],
+        };
+        source.turns.push(turn);
+        source.context.entries.push({ id: 'answer-entry', type: 'source_turn', turn_id: turn.id });
+        const valid = parseConversationDocument(source);
+        const selection = {
+            expected_revision: valid.revision,
+            expected_context_revision: valid.context.revision,
+            entry_ids: ['answer-entry'],
+            selected_entries: valid.context.entries,
+            selected_block_ids: { 'answer-entry': ['answer-text'] },
+        };
+        const plan = await planContextChange(valid, selection);
+        expect(plan.discarded_replay_block_ids).toEqual(['answer-wire']);
+        const request = {
+            ...selection,
+            operation_id: 'edit:answer',
+            expected_source_fingerprint: plan.source_fingerprint,
+            recorded_at: changeTime,
+            proposal: { kind: 'exclude' as const },
+        };
+        const result = await applyContextChange(valid, request);
+        expect(result.document.turns).toEqual(valid.turns);
+        expect(result.document.generations).toEqual(valid.generations);
+        expect(result.document.context.entries).toMatchObject([{ block_ids: ['unrelated-text', 'unrelated-wire'] }]);
+        expect(result.document.operation_receipts[request.operation_id].context_change).toMatchObject({
+            discarded_replay_block_ids: ['answer-wire'],
+        });
+        expect((await applyContextChange(result.document, request)).document).toEqual(result.document);
+        const tampered = structuredClone(result.document);
+        const receipt = tampered.operation_receipts[request.operation_id].context_change;
+        if (!receipt) throw new Error('Actual context receipt missing');
+        receipt.discarded_replay_block_ids = ['unrelated-wire'];
+        await expect(applyContextChange(tampered, request)).rejects.toThrow('conflicting retained details');
+        const differentPayload = structuredClone(valid);
+        const wire = differentPayload.turns[0].blocks.find((block) => block.id === 'answer-wire');
+        if (wire?.type !== 'native_replay') throw new Error('Actual replay missing');
+        wire.payload = { opaque: 'different accepted wire bytes' };
+        expect((await planContextChange(differentPayload, selection)).source_fingerprint).not.toBe(
+            plan.source_fingerprint,
+        );
+    });
+
+    it.each(['protected', 'discardable'] as const)(
+        'rejects a retained %s replay depending on an automatically retired wire block',
+        async (policy) => {
+            const source = emptyDocument();
+            const answer = {
+                ...userTurn('answer'),
+                kind: 'agent' as const,
+                provenance: { type: 'received' as const },
+                blocks: [
+                    textBlock('answer-text'),
+                    {
+                        ...replayBlock('answer-wire', { block_ids: ['answer-text'] }),
+                        dependency_policy: 'discard_on_dependency_change' as const,
+                    },
+                ],
+            };
+            const dependent = {
+                ...userTurn('dependent'),
+                kind: 'agent' as const,
+                provenance: { type: 'received' as const },
+                blocks: [
+                    {
+                        ...replayBlock('dependent-wire', { block_ids: ['answer-wire'] }),
+                        ...(policy === 'discardable'
+                            ? { dependency_policy: 'discard_on_dependency_change' as const }
+                            : {}),
+                    },
+                ],
+            };
+            source.turns.push(answer, dependent);
+            source.context.entries.push(
+                { id: 'answer-entry', type: 'source_turn', turn_id: answer.id },
+                { id: 'dependent-entry', type: 'source_turn', turn_id: dependent.id },
+            );
+            const valid = parseConversationDocument(source);
+            const selection = {
+                expected_revision: valid.revision,
+                expected_context_revision: valid.context.revision,
+                entry_ids: ['answer-entry'],
+                selected_entries: [valid.context.entries[0]],
+                selected_block_ids: { 'answer-entry': ['answer-text'] },
+            };
+            await expect(planContextChange(valid, selection)).rejects.toThrow(
+                'orphan native replay dependency dependent-wire',
+            );
+            // No publication and no cascading removal, including when the dependent itself is disposable.
+            expect(valid.turns).toEqual(source.turns);
+            expect(valid.context.entries).toEqual(source.context.entries);
+            expect(valid.operation_receipts).toEqual(source.operation_receipts);
+        },
+    );
+
+    it('keeps protected replay and direct replay selection fail closed', async () => {
+        const source = emptyDocument();
+        const turn = {
+            ...userTurn('protected-answer'),
+            kind: 'agent' as const,
+            provenance: { type: 'received' as const },
+            blocks: [textBlock('answer-text'), replayBlock('protected-wire', { block_ids: ['answer-text'] })],
+        };
+        source.turns.push(turn);
+        source.context.entries.push({ id: 'protected-entry', type: 'source_turn', turn_id: turn.id });
+        const valid = parseConversationDocument(source);
+        const selection = {
+            expected_revision: valid.revision,
+            expected_context_revision: valid.context.revision,
+            entry_ids: ['protected-entry'],
+            selected_entries: valid.context.entries,
+            selected_block_ids: { 'protected-entry': ['answer-text'] },
+        };
+        await expect(planContextChange(valid, selection)).rejects.toThrow('orphan native replay dependency');
+        await expect(
+            planContextChange(valid, { ...selection, selected_block_ids: { 'protected-entry': ['protected-wire'] } }),
+        ).rejects.toThrow('protected native replay unit');
+    });
+
     it('keeps disjoint archived text at its original range positions with exact per-block proof', async () => {
         const source = structuredClone(documentWithEntries());
         source.turns.push(userTurn('third'));

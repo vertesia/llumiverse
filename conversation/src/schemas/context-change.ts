@@ -66,6 +66,8 @@ const planShape = {
     source_turn_ids: z.array(IdentifierSchema).min(1),
     source_block_ids: z.array(IdentifierSchema),
     selected_asset_ids: z.array(IdentifierSchema),
+    /** Explicit ordinary replay retired from active partial remainders; original payload is retained. */
+    discarded_replay_block_ids: z.array(IdentifierSchema).min(1).max(4096).optional(),
     disjoint_ranges: NonnegativeSafeIntegerSchema,
 };
 export const ContextChangePlanSchema = z

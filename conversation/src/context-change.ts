@@ -101,7 +101,39 @@ function partitionSelection(
             inRange = isSelected;
         }
     }
-    return { removed, retained, segments, ranges };
+    // Ordinary replay is a retained wire representation, not immutable reasoning authority. A partial
+    // semantic edit may retire an explicitly discardable replay in THAT original entry's remainder.
+    // Keep its full payload in the original turn; only the active block selection changes. Replay in
+    // another entry and nested replay still go through the unchanged dependency-closure guard.
+    const changed = selectedIdentities(document, removed);
+    const discardedReplayIds = new Set<string>();
+    for (const segment of segments) {
+        if (segment.selected || segment.block_ids === undefined || segment.block_ids.length === 0) continue;
+        const blocks = resolveContextEntry(turns, segment.entry).blocks;
+        for (const block of blocks) {
+            if (
+                !segment.block_ids.includes(block.id) ||
+                block.type !== 'native_replay' ||
+                block.dependency_policy !== 'discard_on_dependency_change' ||
+                !(
+                    block.dependencies.turn_ids.some((id) => changed.turnIds.has(id)) ||
+                    block.dependencies.block_ids.some((id) => changed.blockIds.has(id)) ||
+                    block.dependencies.call_ids.some((id) => changed.callIds.has(id))
+                )
+            )
+                continue;
+            if (document.context.protected_entry_ids.includes(segment.entry.id))
+                throw new Error('Context change selects a protected entry');
+            discardedReplayIds.add(block.id);
+        }
+        segment.block_ids = segment.block_ids.filter((id) => !discardedReplayIds.has(id));
+    }
+    const activeRetained = retained.flatMap((entry) => {
+        if (entry.block_ids === undefined) return [entry];
+        const remaining = entry.block_ids.filter((id) => !discardedReplayIds.has(id));
+        return remaining.length ? [{ ...entry, block_ids: remaining }] : [];
+    });
+    return { removed, retained: activeRetained, segments, ranges, discardedReplayIds };
 }
 
 /** Each replacement maps to one ordered selected range; intervening content remains in place. */
@@ -144,7 +176,7 @@ async function remainderEntries(
     let ordinal = 0;
     for (let index = 0; index < partition.segments.length; index += 1) {
         const segment = partition.segments[index];
-        if (segment.selected || segment.block_ids === undefined) continue;
+        if (segment.selected || segment.block_ids === undefined || segment.block_ids.length === 0) continue;
         const id = await deriveConversationId('context_entry', operationId, 'remainder', String(ordinal++));
         result.set(index, { ...segment.entry, id, block_ids: segment.block_ids });
     }
@@ -212,6 +244,12 @@ export function assertContextMutationDependencyClosure(
     const selected = selectedIdentities(document, removed);
     const before = selectedIdentities(document, document.context.entries);
     const after = selectedIdentities(document, retained);
+    // Partial remainder construction can retire an explicitly discardable wire unit as well as the
+    // nominated semantic blocks. Every disappearing active block participates in dependency closure;
+    // a protected or separate discardable dependent must not become an implicit cascading edit.
+    for (const id of before.blockIds) {
+        if (!after.blockIds.has(id)) selected.blockIds.add(id);
+    }
     if (selected.replay.length > 0) throw new Error('Context change selects a protected native replay unit');
     for (const callId of selected.calls) {
         if (!before.results.has(callId)) throw new Error(`Context change selects pending tool call ${callId}`);
@@ -262,7 +300,8 @@ export async function planContextChange(sourceInput: ConversationDocument, input
     if (entryIds.length === 0 || new Set(entryIds).size !== entryIds.length) {
         throw new Error('Context change requires unique selected entry IDs');
     }
-    const { removed, retained, ranges } = partitionSelection(document, ownedInput);
+    const partition = partitionSelection(document, ownedInput);
+    const { removed, retained, ranges } = partition;
     assertContextMutationDependencyClosure(document, removed, retained);
     const turns = createContextTurnIndex(document);
     const source = removed.map((entry) => {
@@ -291,7 +330,15 @@ export async function planContextChange(sourceInput: ConversationDocument, input
             context_revision: document.context.revision,
             selected: source,
             assets,
+            ...(partition.discardedReplayIds.size
+                ? {
+                      discarded_replay: document.turns.flatMap((turn) =>
+                          turn.blocks.filter((block) => partition.discardedReplayIds.has(block.id)),
+                      ),
+                  }
+                : {}),
         }),
+        ...(partition.discardedReplayIds.size ? { discarded_replay_block_ids: [...partition.discardedReplayIds] } : {}),
         entry_ids: removed.map((entry) => entry.id),
         ...(Object.hasOwn(ownedInput, 'selected_block_ids')
             ? { selected_block_ids: ownedInput.selected_block_ids }
@@ -426,6 +473,8 @@ export async function applyContextChange(
                 canonicalJsonContentString(
                     request.selected_block_ids ? [...retryRemainders.values()].map((entry) => entry.id) : null,
                 ) ||
+            canonicalJsonContentString(detail.discarded_replay_block_ids ?? []) !==
+                canonicalJsonContentString([...(retryPartition?.discardedReplayIds ?? [])]) ||
             detail.kind !== request.proposal.kind ||
             detail.source_fingerprint !== request.expected_source_fingerprint ||
             JSON.stringify(detail.removed_entry_ids) !== JSON.stringify(request.entry_ids) ||
@@ -660,6 +709,10 @@ export async function applyContextChange(
     let inSelectedRange = false;
     for (const [index, segment] of partition.segments.entries()) {
         if (!segment.selected) {
+            if (segment.block_ids?.length === 0) {
+                inSelectedRange = false;
+                continue;
+            }
             const remainder = remainders.get(index);
             entries.push(remainder ?? segment.entry);
             if (remainder) insertedEntryIds.push(remainder.id);
@@ -693,6 +746,9 @@ export async function applyContextChange(
                 removed_entry_ids: plan.entry_ids,
                 inserted_entry_ids: insertedEntryIds,
                 source_fingerprint: plan.source_fingerprint,
+                ...(plan.discarded_replay_block_ids
+                    ? { discarded_replay_block_ids: plan.discarded_replay_block_ids }
+                    : {}),
                 ...(request.selected_block_ids
                     ? {
                           selected_block_ids: request.selected_block_ids,

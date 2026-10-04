@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
     appendConversationRecords,
     appendToolExecutionResult,
+    applyContextChange,
     type ConversationDocument,
     type ConversationStreamEvent,
     createConversationDocument,
@@ -9,6 +10,7 @@ import {
     createUserTurn,
     fingerprintJson,
     parseConversationDocument,
+    planContextChange,
     processingContextFingerprint,
 } from '@llumiverse/conversation';
 import {
@@ -23,6 +25,7 @@ import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
 import {
+    compileOpenAIResponsesConversation,
     exportLegacyOpenAIResponsesConversation,
     finalizeOpenAIResponsesPreparedRequest,
     OPENAI_RESPONSES_ADAPTER_VERSION,
@@ -1052,6 +1055,86 @@ describe('OpenAI Responses canonical lifecycle', () => {
             conversation_id: materialized.id,
             revision: materialized.revision,
         });
+    });
+
+    it('compacts an actual accepted answer without reactivating its discardable native representation', async () => {
+        const originalText = 'Actual accepted terminal answer with immutable native payload.';
+        const create = vi.fn(async () =>
+            response({
+                id: 'response:terminal-compaction',
+                output: [messageItem('message:terminal-compaction', originalText)],
+            }),
+        );
+        const driver = new TestOpenAIResponsesDriver(create);
+        const first = await driver.executeCanonical(
+            [{ role: PromptRole.user, content: 'Answer once.' }],
+            runtimeOptions({
+                flow: 'terminal-compaction',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+        );
+        const answer = first.conversation.turns.find((turn) => turn.id === first.accepted_output.turn.id);
+        if (!answer) throw new Error('Actual retained answer absent');
+        const entry = first.conversation.context.entries.find((candidate) => candidate.turn_id === answer.id);
+        const text = answer.blocks.find((block) => block.type === 'text');
+        const replay = answer.blocks.find((block) => block.type === 'native_replay');
+        if (!entry || !text || replay?.type !== 'native_replay') throw new Error('Actual answer/replay absent');
+        expect(replay.dependency_policy).toBe('discard_on_dependency_change');
+        const selection = {
+            expected_revision: first.conversation.revision,
+            expected_context_revision: first.conversation.context.revision,
+            entry_ids: [entry.id],
+            selected_entries: [entry],
+            selected_block_ids: { [entry.id]: [text.id] },
+        };
+        const plan = await planContextChange(first.conversation, selection);
+        expect(plan.discarded_replay_block_ids).toEqual([replay.id]);
+        const replacement = {
+            id: 'turn:terminal-summary',
+            kind: 'agent' as const,
+            authority: 'ordinary' as const,
+            status: 'completed' as const,
+            model_visibility: 'include' as const,
+            timestamps: { recorded_at: '2026-09-12T01:01:00.000Z' },
+            blocks: [
+                createTextBlock({ id: 'block:terminal-summary', text: 'Compacted accepted answer.', format: 'plain' }),
+            ],
+            provenance: {
+                type: 'derived' as const,
+                derivation_id: 'compaction:terminal',
+                source_turn_ids: plan.source_turn_ids,
+                source_block_ids: plan.source_block_ids,
+                source_hash: plan.source_fingerprint,
+            },
+        };
+        const request = {
+            ...selection,
+            operation_id: 'context:terminal-compaction',
+            expected_source_fingerprint: plan.source_fingerprint,
+            recorded_at: '2026-09-12T01:01:00.000Z',
+            proposal: {
+                kind: 'replace_with_compaction' as const,
+                compaction_id: 'compaction:terminal',
+                strategy: { id: 'test-compaction', version: '1', configuration_fingerprint: 'sha256:config' },
+                replacement_turns: [replacement],
+                fidelity: 'heuristic' as const,
+                retained_asset_ids: [],
+                generation_ids: [],
+                placement: { mode: 'first_selected' as const, causal_order: 'contiguous' as const },
+            },
+        };
+        const edited = await applyContextChange(first.conversation, request);
+        expect(edited.document.turns).toEqual(first.conversation.turns);
+        expect(edited.document.generations).toEqual(first.conversation.generations);
+        for (const [id, receipt] of Object.entries(first.conversation.operation_receipts))
+            expect(edited.document.operation_receipts[id]).toEqual(receipt);
+        const projected = compileOpenAIResponsesConversation(edited.document, { provider: 'openai', model: 'gpt-5' });
+        expect(JSON.stringify(projected.conversation)).toContain('Compacted accepted answer.');
+        expect(JSON.stringify(projected.conversation)).not.toContain(originalText);
+        expect((await applyContextChange(edited.document, request)).document).toEqual(edited.document);
+        expect(create).toHaveBeenCalledOnce();
     });
 
     it('executes directly into canonical output and recovers an accepted retry without transport', async () => {

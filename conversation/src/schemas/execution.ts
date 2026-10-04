@@ -283,6 +283,7 @@ export const ContextChangeOperationSchema = z
         placement: ContextChangePlacementSchema.optional(),
         selected_block_ids: SelectedContextBlocksSchema.optional(),
         remainder_entry_ids: z.array(IdentifierSchema).optional(),
+        discarded_replay_block_ids: z.array(IdentifierSchema).min(1).max(4096).optional(),
     })
     .meta({ id: 'ConversationContextChangeOperation' });
 
