@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { canonicalJsonContentBytes, canonicalJsonContentString, hashContentBytes } from './content-integrity.js';
+import {
+    canonicalJsonContentBytes,
+    canonicalJsonContentString,
+    hashContentBytes,
+    inlineAssetContentIntegrity,
+} from './content-integrity.js';
 import { fingerprintJson } from './identity.js';
 import { DEFAULT_JSON_INPUT_LIMITS, preflightJsonInput } from './json-preflight.js';
 import {
@@ -7,6 +12,7 @@ import {
     getPagedRecord,
     type PagedRecordIndexStore,
     type PagedRecordRef,
+    PagedRecordRefSchema,
     type PagedRecordValue,
     putPagedRecord,
     scanPagedRecords,
@@ -23,10 +29,12 @@ import {
     INDEXED_CONVERSATION_DELETE_PROFILE,
     INDEXED_CONVERSATION_PROFILE,
     INDEXED_CONVERSATION_ROOT_MAX_BYTES,
+    IndexedConversationCompactionHeaderSchema,
     IndexedConversationContextHeaderSchema,
     type IndexedConversationDeleteCommand,
     IndexedConversationDeleteCommandSchema,
     IndexedConversationDeletedTurnSchema,
+    type IndexedConversationDirectories,
     IndexedConversationProcessingHeaderSchema,
     type IndexedConversationRoot,
     IndexedConversationRootSchema,
@@ -42,6 +50,7 @@ import { conversationDocumentFromJson } from './serialization.js';
 import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
 import type {
     AppendConversationRecordsOptions,
+    Asset,
     ConversationDocument,
     ConversationRecordBatch,
     ConversationTurn,
@@ -70,6 +79,28 @@ const IndexedCallStateSchema = z.strictObject({
 });
 type IndexedCallState = z.infer<typeof IndexedCallStateSchema>;
 
+/** Semantic conflicts in one bounded append; storage/deadline failures retain their original errors. */
+export class IndexedRecordAppendConflict extends Error {
+    constructor(
+        readonly code:
+            | 'conversation_identity_conflict'
+            | 'revision_conflict'
+            | 'operation_conflict'
+            | 'record_conflict',
+        message: string,
+    ) {
+        super(message);
+        this.name = 'IndexedRecordAppendConflict';
+    }
+}
+
+export class IndexedRecordAppendValidationError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexedRecordAppendValidationError';
+    }
+}
+
 /** A bounded canonical batch whose publication remains the host's exact-head CAS. */
 export const IndexedRecordBatchCommandSchema = z.strictObject({
     conversation_id: IdentifierSchema,
@@ -83,6 +114,8 @@ export interface IndexedConversationRecordStore extends PagedRecordIndexStore {
     readRecord(value: Extract<PagedRecordValue, { storage: 'record' }>): Promise<Uint8Array>;
     /** Immutable create-only write, with segmentation for bodies over 64KiB. */
     writeRecord(value: Extract<PagedRecordValue, { storage: 'record' }>, bytes: Uint8Array): Promise<void>;
+    /** Host custody check for incoming external bytes, before immutable record staging or head publication. */
+    assertExternalAssetIntegrity?(asset: Asset): Promise<void>;
 }
 
 export interface StagedIndexedConversationRoot {
@@ -195,11 +228,15 @@ function processingRecordGroups(processing: ConversationDocument['processing']):
 /** A conservative one-pass reverse witness. A marker may reject a closed deletion, but never permit a dependent one. */
 function migrationDeleteBlockers(document: ConversationDocument): Set<string> {
     const blocked = new Set<string>();
-    const turnIds = new Set(document.turns.map((turn) => turn.id));
+    const turns = [
+        ...document.turns,
+        ...Object.values(document.compactions).flatMap((compaction) => compaction.replacement_turns),
+    ];
+    const turnIds = new Set(turns.map((turn) => turn.id));
     const blockOwner = new Map<string, string>();
     const entryTurn = new Map<string, string>();
     const acceptedTurns = new Map<string, string[]>();
-    for (const turn of document.turns) {
+    for (const turn of turns) {
         for (const block of turn.blocks) blockOwner.set(block.id, turn.id);
         if (turn.blocks.some((block) => ['tool_call', 'tool_result', 'native_replay'].includes(block.type))) {
             blocked.add(turn.id);
@@ -214,7 +251,7 @@ function migrationDeleteBlockers(document: ConversationDocument): Set<string> {
         if (id && turnIds.has(id)) blocked.add(id);
     };
     const markBlock = (id: string) => mark(blockOwner.get(id));
-    for (const turn of document.turns) {
+    for (const turn of turns) {
         mark(turn.parent_turn_id);
         if (turn.provenance.type === 'derived') for (const id of turn.provenance.source_turn_ids) mark(id);
         for (const block of turn.blocks) {
@@ -363,7 +400,13 @@ export async function stageIndexedConversationSnapshot(
             block_ids: blockIds,
             block_ids_hash: blockIdsHash,
         } satisfies IndexedConversationTurnHeader);
-        for (const block of blocks) await stageFamily('blocks', block.id, block);
+        for (const block of blocks) {
+            await stageFamily('blocks', block.id, block);
+            families.block_owners.push({
+                key: block.id,
+                value: { storage: 'marker', kind: 'block_owner', id: turn.id },
+            });
+        }
     };
 
     // Cold turns are independent. Keep immutable write/read-back work bounded rather than serializing
@@ -390,12 +433,6 @@ export async function stageIndexedConversationSnapshot(
                     );
                 })(),
             );
-            for (const block of turn.blocks) {
-                families.block_owners.push({
-                    key: block.id,
-                    value: { storage: 'marker', kind: 'block_owner', id: turn.id },
-                });
-            }
             families.turn_order.push({
                 key: indexedOrderedKey(index),
                 value: { storage: 'marker', kind: 'turn_order', id: turn.id },
@@ -807,12 +844,14 @@ export async function loadIndexedProjectedTurn(
     };
 }
 
-/** Load only selected text, active tool definitions, and exact accepted generation witnesses. */
-export async function loadIndexedSelectedTextContext(
+/** Shared bounded resolver; dependent content requires the explicit dependency-complete profile. */
+async function loadIndexedSelectedContext(
     store: IndexedConversationRecordStore,
     rootInput: IndexedConversationRoot,
     rootLocator: PagedRecordRef,
     maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+    includeDependencies = false,
+    includeMediaCompaction = false,
 ) {
     if (
         !Number.isSafeInteger(maxSelectedBytes) ||
@@ -821,7 +860,13 @@ export async function loadIndexedSelectedTextContext(
     ) {
         throw new RangeError('Indexed selected context byte budget is invalid');
     }
-    const root = IndexedConversationRootSchema.parse(rootInput);
+    if (
+        !preflightJsonInput(rootInput, { max_bytes: INDEXED_CONVERSATION_ROOT_MAX_BYTES }).success ||
+        !preflightJsonInput(rootLocator).success
+    )
+        throw new TypeError('Indexed selected root/locator is not bounded owned JSON');
+    const root = IndexedConversationRootSchema.parse(structuredClone(rootInput));
+    rootLocator = PagedRecordRefSchema.parse(structuredClone(rootLocator));
     const context = await loadIndexedActiveContext(store, root);
     if (context.revision > root.source.revision) {
         throw new Error('Indexed active context revision exceeds its authenticated root');
@@ -844,8 +889,19 @@ export async function loadIndexedSelectedTextContext(
         throw new Error('Indexed selected preparation has accepted processing jobs outstanding');
     }
     const selections = new Map<string, Set<string> | undefined>();
+    const replacementIds = new Map<string, string>();
     for (const entry of context.entries) {
-        if (entry.type !== 'source_turn') throw new Error('Indexed text preparation needs a compaction witness');
+        if (entry.type === 'replacement_turn') {
+            if (selections.has(entry.turn_id) && !replacementIds.has(entry.turn_id))
+                throw new Error('Indexed selected turn is both an original and a replacement');
+            if (!includeMediaCompaction) throw new Error('Indexed text preparation needs a compaction witness');
+            const prior = replacementIds.get(entry.turn_id);
+            if (prior !== undefined && prior !== entry.compaction_id)
+                throw new Error('Indexed replacement has conflicting selected compaction identities');
+            replacementIds.set(entry.turn_id, entry.compaction_id);
+        } else if (replacementIds.has(entry.turn_id)) {
+            throw new Error('Indexed selected turn is both an original and a replacement');
+        }
         const prior = selections.get(entry.turn_id);
         if (!selections.has(entry.turn_id)) {
             selections.set(entry.turn_id, entry.block_ids === undefined ? undefined : new Set(entry.block_ids));
@@ -855,6 +911,14 @@ export async function loadIndexedSelectedTextContext(
         }
     }
     const turns = [];
+    const compactionWitnesses = new Map<
+        string,
+        {
+            compaction: z.infer<typeof IndexedConversationCompactionHeaderSchema>;
+            acceptance: OperationReceipt;
+        }
+    >();
+    const operationWitnesses = new Map<string, OperationReceipt>();
     const generationWitnesses = new Map<
         string,
         { generation: z.infer<typeof GenerationSchema>; acceptance: OperationReceipt }
@@ -877,14 +941,66 @@ export async function loadIndexedSelectedTextContext(
             blockIds === undefined ? undefined : [...blockIds],
             reserve,
         );
+        const compactionId = replacementIds.get(turnId);
+        if (compactionId !== undefined) {
+            const turnDescriptor = await getPagedRecord(store, root.directories.turns, turnId);
+            if (turnDescriptor?.storage === 'record') reserve(turnDescriptor.size_bytes);
+            const replacementHeader = await loadRecord(store, turnDescriptor, IndexedConversationTurnHeaderSchema);
+            if (replacementHeader.source !== 'replacement' || replacementHeader.compaction_id !== compactionId)
+                throw new Error('Indexed replacement entry differs from its exact stored compaction identity');
+            let witness = compactionWitnesses.get(compactionId);
+            if (!witness) {
+                const descriptor = await getPagedRecord(store, root.directories.compactions, compactionId);
+                if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+                const compaction = await loadRecord(store, descriptor, IndexedConversationCompactionHeaderSchema);
+                const operation = await getPagedRecord(
+                    store,
+                    root.directories.operation_receipts,
+                    compaction.operation_id,
+                );
+                if (operation?.storage === 'record') reserve(operation.size_bytes);
+                const acceptance = await loadRecord(store, operation, OperationReceiptSchema);
+                if (
+                    compaction.id !== compactionId ||
+                    acceptance.id !== compaction.operation_id ||
+                    acceptance.conversation_id !== root.source.conversation_id ||
+                    acceptance.operation_kind !== 'context_change' ||
+                    acceptance.context_change?.kind !== 'replace_with_compaction' ||
+                    acceptance.context_change.source_fingerprint !== compaction.source.source_fingerprint ||
+                    acceptance.result_revision !== acceptance.base_revision + 1 ||
+                    compaction.created_at !== acceptance.recorded_at ||
+                    acceptance.result_revision > root.source.revision ||
+                    compaction.metadata?.applied_revision !== acceptance.result_revision ||
+                    compaction.metadata?.payload_fingerprint !== acceptance.payload_fingerprint
+                )
+                    throw new Error('Indexed replacement lacks its exact accepted compaction operation');
+                witness = { compaction, acceptance };
+                compactionWitnesses.set(compactionId, witness);
+                operationWitnesses.set(acceptance.id, acceptance);
+            }
+            const provenance = turn.header.provenance;
+            if (
+                provenance.type !== 'derived' ||
+                provenance.derivation_id !== compactionId ||
+                provenance.source_hash !== witness.compaction.source.source_fingerprint ||
+                provenance.source_turn_ids.length === 0 ||
+                provenance.source_turn_ids.some((id) => !witness.compaction.source.turn_ids.includes(id)) ||
+                (witness.compaction.source.block_ids !== undefined &&
+                    (provenance.source_block_ids ?? []).some(
+                        (id) => !witness.compaction.source.block_ids?.includes(id),
+                    ))
+            )
+                throw new Error('Indexed replacement provenance differs from its retained selected-source witness');
+        }
         if (
-            turn.header.kind === 'tool' ||
-            turn.header.provenance.type === 'derived' ||
-            turn.header.provenance.type === 'imported' ||
-            turn.header.parent_turn_id !== undefined ||
-            turn.header.execution_id !== undefined ||
-            turn.header.exchange_id !== undefined ||
-            turn.selected_blocks.some((block) => block.type !== 'text')
+            !includeDependencies &&
+            (turn.header.kind === 'tool' ||
+                turn.header.provenance.type === 'derived' ||
+                turn.header.provenance.type === 'imported' ||
+                turn.header.parent_turn_id !== undefined ||
+                turn.header.execution_id !== undefined ||
+                turn.header.exchange_id !== undefined ||
+                turn.selected_blocks.some((block) => block.type !== 'text' && block.type !== 'native_replay'))
         ) {
             throw new Error('Indexed text preparation has unsupported selected content or derivation');
         }
@@ -946,6 +1062,253 @@ export async function loadIndexedSelectedTextContext(
         if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
         toolDefinitions.set(id, await loadRecord(store, descriptor, ToolDefinitionSchema));
     }
+    const assets = new Map<string, z.infer<typeof AssetSchema>>();
+    const executionWitnesses = new Map<string, z.infer<typeof ExecutionReceiptSchema>>();
+    if (includeDependencies) {
+        if (!root.tool_call_state_complete)
+            throw new Error('Indexed dependency projection has incomplete call indexes');
+        // Required identities come only from selected canonical blocks, never a caller nomination.
+        const selectedBlocks = new Map(
+            turns.flatMap((turn) =>
+                turn.selected_blocks.flatMap((block) =>
+                    (block.type === 'tool_result' ? [block, ...block.content] : [block]).map(
+                        (item) => [item.id, item] as const,
+                    ),
+                ),
+            ),
+        );
+        const selectedTurns = new Set(turns.map((turn) => turn.header.id));
+        const selectedCalls = new Map(
+            turns.flatMap((turn) =>
+                turn.selected_blocks.flatMap((block) =>
+                    block.type === 'tool_call' ? [[block.call_id, { turn, block }] as const] : [],
+                ),
+            ),
+        );
+        const selectedResults = new Map(
+            turns.flatMap((turn) =>
+                turn.selected_blocks.flatMap((block) =>
+                    block.type === 'tool_result' ? [[block.call_id, { turn, block }] as const] : [],
+                ),
+            ),
+        );
+        const readDependency = async <Schema extends z.ZodType>(
+            family: keyof IndexedConversationDirectories,
+            id: string,
+            schema: Schema,
+        ): Promise<z.output<Schema>> => {
+            const descriptor = await getPagedRecord(store, root.directories[family], id);
+            if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+            return loadRecord(store, descriptor, schema);
+        };
+        for (const turn of turns) {
+            if (
+                (turn.header.provenance.type === 'derived' && !replacementIds.has(turn.header.id)) ||
+                turn.header.provenance.type === 'imported'
+            ) {
+                throw new Error('Indexed dependency projection requires an explicit compaction/import witness');
+            }
+            for (const block of turn.selected_blocks) {
+                const nested = block.type === 'tool_result' ? block.content : [block];
+                for (const content of nested) {
+                    if (
+                        content.type === 'native_replay' &&
+                        content.dependency_policy !== 'discard_on_dependency_change'
+                    ) {
+                        if (
+                            content.dependencies.turn_ids.some((id) => !selectedTurns.has(id)) ||
+                            content.dependencies.block_ids.some((id) => !selectedBlocks.has(id)) ||
+                            content.dependencies.call_ids.some((id) => !selectedCalls.has(id)) ||
+                            content.dependencies.request_ids.some(
+                                (id) =>
+                                    ![...generationWitnesses.values()].some(
+                                        (witness) => witness.generation.request_id === id,
+                                    ),
+                            )
+                        ) {
+                            throw new Error('Indexed protected replay has an unavailable selected dependency witness');
+                        }
+                    }
+                    if (content.type === 'external_reference') {
+                        if (!includeMediaCompaction || content.original_type !== 'text')
+                            throw new Error('Indexed dependency projection needs an externalization receipt witness');
+                        const asset = await readDependency('assets', content.asset_id, AssetSchema);
+                        const requirement = context.retrieval_requirements.filter(
+                            (item) =>
+                                item.asset_id === asset.id &&
+                                canonicalJsonContentString(item.retrieval) ===
+                                    canonicalJsonContentString(content.retrieval),
+                        );
+                        const definition = toolDefinitions.get(content.retrieval.tool_definition_id ?? '');
+                        const operationId =
+                            requirement.length === 1 ? requirement[0].accepted_asset_operation_id : undefined;
+                        if (
+                            !operationId ||
+                            !definition ||
+                            definition.name !== content.retrieval.capability ||
+                            content.retrieval.version !== 1 ||
+                            asset.id !== content.asset_id ||
+                            asset.kind !== 'text' ||
+                            asset.storage.type !== 'external' ||
+                            asset.content_hash !== content.content_hash ||
+                            asset.byte_length === undefined ||
+                            !asset.content_hash
+                        )
+                            throw new Error('Indexed external reference lacks its exact asset/read-tool binding');
+                        const compactionId = replacementIds.get(turn.header.id);
+                        if (
+                            compactionId !== undefined &&
+                            !compactionWitnesses.get(compactionId)?.compaction.retained_asset_ids.includes(asset.id)
+                        )
+                            throw new Error(
+                                'Indexed replacement reference is absent from its retained compaction assets',
+                            );
+                        const acceptance = await readDependency(
+                            'operation_receipts',
+                            operationId,
+                            OperationReceiptSchema,
+                        );
+                        if (
+                            acceptance.id !== operationId ||
+                            acceptance.conversation_id !== root.source.conversation_id ||
+                            acceptance.operation_kind !== undefined ||
+                            acceptance.result_revision > root.source.revision ||
+                            acceptance.accepted_asset_ids?.filter((id) => id === asset.id).length !== 1
+                        )
+                            throw new Error('Indexed external reference lacks its accepted asset publication');
+                        assets.set(asset.id, asset);
+                        operationWitnesses.set(acceptance.id, acceptance);
+                    }
+                    if ('asset_id' in content && !assets.has(content.asset_id)) {
+                        const asset = await readDependency('assets', content.asset_id, AssetSchema);
+                        if (
+                            asset.id !== content.asset_id ||
+                            asset.kind !== content.type ||
+                            asset.provenance.type === 'derived'
+                        ) {
+                            throw new Error('Indexed selected media differs from its exact asset identity/provenance');
+                        }
+                        if (
+                            asset.provenance.type === 'generated' &&
+                            !generationWitnesses.has(asset.provenance.generation_id)
+                        ) {
+                            throw new Error('Indexed selected media lacks its accepted generation witness');
+                        }
+                        const integrity = await inlineAssetContentIntegrity(asset.storage);
+                        const external =
+                            includeMediaCompaction &&
+                            asset.kind === 'image' &&
+                            asset.storage.type === 'external' &&
+                            asset.storage.resolver === 'url' &&
+                            typeof asset.storage.locator.url === 'string' &&
+                            asset.content_hash !== undefined &&
+                            asset.byte_length !== undefined;
+                        if (
+                            !external &&
+                            (integrity === undefined ||
+                                asset.content_hash !== integrity.content_hash ||
+                                asset.byte_length !== integrity.byte_length)
+                        ) {
+                            throw new Error('Indexed selected media bytes differ from their immutable asset binding');
+                        }
+                        assets.set(asset.id, asset);
+                    }
+                }
+                if (block.type !== 'tool_call' && block.type !== 'tool_result') continue;
+                const call = selectedCalls.get(block.call_id);
+                const result = selectedResults.get(block.call_id);
+                if (!call) throw new Error('Indexed tool result has no selected accepted call');
+                if (call.block.arguments.type === 'externalized_json') {
+                    throw new Error('Indexed tool arguments require an exact hydration witness');
+                }
+                const callState = await readDependency('tool_call_states', block.call_id, IndexedCallStateSchema);
+                if (
+                    callState.call_id !== block.call_id ||
+                    callState.turn_id !== call.turn.header.id ||
+                    callState.block_id !== call.block.id ||
+                    callState.call_fingerprint !==
+                        (await hashContentBytes(canonicalJsonContentBytes(call.block))).content_hash ||
+                    call.turn.header.kind !== 'agent' ||
+                    call.turn.header.provenance.type !== 'generated' ||
+                    !('generation_id' in call.turn.header) ||
+                    call.turn.header.generation_id === undefined ||
+                    !generationWitnesses.has(call.turn.header.generation_id)
+                ) {
+                    throw new Error('Indexed selected call differs from its accepted generation and exact call index');
+                }
+                if (!result) {
+                    // Preparation of a dependent request cannot silently omit a completed result or
+                    // execute an unresolved application call on behalf of the caller.
+                    throw new Error('Indexed selected call requires its exact selected terminal result');
+                }
+                if (callState.result_block_id !== result.block.id || !callState.terminal_receipt_id) {
+                    throw new Error('Indexed selected result lacks its exact terminal receipt index');
+                }
+                if (!executionWitnesses.has(callState.terminal_receipt_id)) {
+                    const receipt = await readDependency(
+                        'execution_receipts',
+                        callState.terminal_receipt_id,
+                        ExecutionReceiptSchema,
+                    );
+                    if (
+                        receipt.id !== callState.terminal_receipt_id ||
+                        receipt.call_id !== block.call_id ||
+                        receipt.result_turn_id !== result.turn.header.id ||
+                        receipt.status !== result.block.status ||
+                        receipt.executor !== call.block.executor ||
+                        (receipt.executor === 'application' && receipt.call_source === undefined) ||
+                        (result.turn.header.execution_id !== undefined &&
+                            result.turn.header.execution_id !== receipt.id) ||
+                        (receipt.call_source !== undefined &&
+                            (receipt.call_source.call_id !== block.call_id ||
+                                receipt.call_source.turn_id !== call.turn.header.id ||
+                                receipt.call_source.block_id !== call.block.id ||
+                                receipt.call_source.call_fingerprint !== callState.call_fingerprint ||
+                                receipt.call_source.conversation.conversation_id !== root.source.conversation_id ||
+                                receipt.call_source.conversation.revision > root.source.revision))
+                    ) {
+                        throw new Error('Indexed selected result differs from its exact execution/source receipt');
+                    }
+                    if (root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE) {
+                        throw new Error('Indexed selected result lacks a complete operation-acceptance index');
+                    }
+                    const accepted = await getPagedRecord(
+                        store,
+                        root.directories.turn_acceptances,
+                        result.turn.header.id,
+                    );
+                    const operation =
+                        accepted?.storage === 'marker' && accepted.kind === 'turn_acceptance'
+                            ? await readDependency('operation_receipts', accepted.id, OperationReceiptSchema)
+                            : undefined;
+                    if (
+                        !operation?.accepted_turn_ids?.includes(result.turn.header.id) ||
+                        !operation.accepted_execution_receipt_ids?.includes(receipt.id) ||
+                        operation.conversation_id !== root.source.conversation_id ||
+                        operation.result_revision > root.source.revision
+                    ) {
+                        throw new Error('Indexed selected result lacks its accepted operation/receipt witness');
+                    }
+                    await assertToolResultReceiptFingerprint(result.block, receipt);
+                    executionWitnesses.set(receipt.id, receipt);
+                }
+                if (call.block.definition_id !== undefined) {
+                    let definition = toolDefinitions.get(call.block.definition_id);
+                    if (!definition) {
+                        definition = await readDependency(
+                            'tool_definitions',
+                            call.block.definition_id,
+                            ToolDefinitionSchema,
+                        );
+                        toolDefinitions.set(definition.id, definition);
+                    }
+                    if (definition.id !== call.block.definition_id || definition.name !== call.block.tool_name) {
+                        throw new Error('Indexed selected call differs from its pinned tool definition');
+                    }
+                }
+            }
+        }
+    }
     const tail =
         root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE
             ? root.active_tail_turn_id === null
@@ -960,14 +1323,29 @@ export async function loadIndexedSelectedTextContext(
         throw new Error('Indexed source tail turn is unavailable');
     }
     const selected = IndexedConversationSelectedContextSchema.parse({
-        completeness: 'selected_text_pending_admission',
+        completeness: includeMediaCompaction
+            ? 'selected_media_compaction_pending_admission'
+            : includeDependencies
+              ? 'selected_dependencies_pending_admission'
+              : 'selected_text_pending_admission',
         source: root.source,
         root: rootLocator,
         source_turn_count: root.live_turn_count ?? root.turn_count,
         context,
-        turns,
+        turns: turns.filter((turn) => !replacementIds.has(turn.header.id)),
+        ...(includeMediaCompaction
+            ? {
+                  replacement_turns: turns.flatMap((projection) => {
+                      const compaction_id = replacementIds.get(projection.header.id);
+                      return compaction_id === undefined ? [] : [{ compaction_id, projection }];
+                  }),
+                  compaction_witnesses: Object.fromEntries(compactionWitnesses),
+                  operation_witnesses: Object.fromEntries(operationWitnesses),
+              }
+            : {}),
         tool_definitions: Object.fromEntries(toolDefinitions),
-        assets: {},
+        assets: Object.fromEntries(assets),
+        ...(includeDependencies ? { execution_witnesses: Object.fromEntries(executionWitnesses) } : {}),
         generation_witnesses: Object.fromEntries(generationWitnesses),
         ...(tail === undefined ? {} : { source_tail_turn_id: tail.id }),
     });
@@ -975,6 +1353,36 @@ export async function loadIndexedSelectedTextContext(
         throw new RangeError('Indexed selected context exceeds the bounded working-set profile');
     }
     return selected;
+}
+
+/** Selected media/replacement projection with exact accepted witnesses; no byte custody or processing authority. */
+export async function loadIndexedSelectedMediaCompactionContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    rootLocator: PagedRecordRef,
+    maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+) {
+    return loadIndexedSelectedContext(store, root, rootLocator, maxSelectedBytes, true, true);
+}
+
+/** Original strict text profile retained for historical prepared records. */
+export async function loadIndexedSelectedTextContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+    maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+) {
+    return loadIndexedSelectedContext(store, root, locator, maxSelectedBytes, false);
+}
+
+/** Selected tools/media plus exact point-looked-up dependencies; processing remains an explicit unsupported gate. */
+export async function loadIndexedSelectedDependencyContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+    maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+) {
+    return loadIndexedSelectedContext(store, root, locator, maxSelectedBytes, true);
 }
 
 /** A fresh inference after program append must bind that accepted input and have no accepted response. */
@@ -1013,6 +1421,88 @@ export async function assertIndexedFreshProgramInput(
         throw new Error('Indexed response is already accepted; use exact recovery instead of fresh inference');
     }
     return receipt;
+}
+
+/** A single ordinary received text turn may be the next indexed interaction input. */
+export async function assertIndexedFreshReceivedTextInput(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    input: { operation_id: string; result_revision: number; response_operation_id: string },
+): Promise<OperationReceipt> {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        input.operation_id,
+        OperationReceiptSchema,
+    );
+    if (
+        !receipt ||
+        receipt.operation_kind !== undefined ||
+        receipt.result_revision !== root.source.revision ||
+        receipt.result_revision !== input.result_revision ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.accepted_turn_ids?.length !== 1 ||
+        receipt.accepted_context_entry_ids?.length !== 1 ||
+        (receipt.accepted_generation_ids?.length ?? 0) !== 0 ||
+        (receipt.accepted_asset_ids?.length ?? 0) !== 0 ||
+        (receipt.accepted_execution_receipt_ids?.length ?? 0) !== 0 ||
+        (receipt.accepted_tool_definition_ids?.length ?? 0) !== 0 ||
+        receipt.accepted_tool_selection?.kind === 'replace'
+    ) {
+        throw new Error('Indexed fresh text preparation is not pinned to one received input');
+    }
+    const turn = await loadIndexedProjectedTurn(store, root, receipt.accepted_turn_ids[0]);
+    const entry = await indexedRecordById(
+        store,
+        root,
+        'context_entries',
+        receipt.accepted_context_entry_ids[0],
+        ContextEntrySchema,
+    );
+    if (
+        turn.header.kind !== 'user' ||
+        turn.header.authority !== 'ordinary' ||
+        turn.header.status !== 'completed' ||
+        turn.header.provenance.type !== 'received' ||
+        turn.header.model_visibility !== 'include' ||
+        turn.completeness !== 'full_turn' ||
+        turn.selected_blocks.length === 0 ||
+        turn.selected_blocks.some((block) => block.type !== 'text') ||
+        entry?.type !== 'source_turn' ||
+        entry.turn_id !== receipt.accepted_turn_ids[0] ||
+        entry.block_ids !== undefined
+    ) {
+        throw new Error('Indexed fresh input is not an ordinary complete received text turn');
+    }
+    if (await getPagedRecord(store, root.directories.operation_receipts, input.response_operation_id)) {
+        throw new Error('Indexed response is already accepted; use exact recovery instead of fresh inference');
+    }
+    return receipt;
+}
+
+/** Dispatch only the two explicitly supported materialized text-input provenances. */
+export async function assertIndexedFreshTextInput(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    input: { operation_id: string; result_revision: number; response_operation_id: string },
+): Promise<OperationReceipt> {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        input.operation_id,
+        OperationReceiptSchema,
+    );
+    if (receipt?.accepted_turn_ids?.length !== 1) {
+        throw new Error('Indexed fresh text input has no single accepted turn');
+    }
+    const turn = await loadIndexedProjectedTurn(store, root, receipt.accepted_turn_ids[0]);
+    if (turn.header.kind === 'program') return assertIndexedFreshProgramInput(store, root, input);
+    if (turn.header.kind === 'user') return assertIndexedFreshReceivedTextInput(store, root, input);
+    throw new Error('Indexed fresh text input has an unsupported turn role');
 }
 
 /** Stage one ordinary program append against an authenticated indexed root; the caller CASes the locator. */
@@ -1379,7 +1869,10 @@ async function acceptedIndexedBatch(
             ? batch.active_tool_definition_ids !== undefined
             : !sameIndexedRecord(receipt.accepted_tool_selection, selections))
     )
-        throw new Error('Indexed append conflicts with its accepted operation');
+        throw new IndexedRecordAppendConflict(
+            'operation_conflict',
+            'Indexed append conflicts with its accepted operation',
+        );
     const families = [
         ['turns', batch.turns, receipt.accepted_turn_ids],
         ['generations', batch.generations, receipt.accepted_generation_ids],
@@ -1390,11 +1883,14 @@ async function acceptedIndexedBatch(
     ] as const;
     for (const [family, records, accepted] of families) {
         if (!sameIndexedRecord(idsOf(records), accepted ?? [])) {
-            throw new Error(`Indexed append changes accepted ${family} identities`);
+            throw new IndexedRecordAppendConflict(
+                'operation_conflict',
+                `Indexed append changes accepted ${family} identities`,
+            );
         }
     }
     if (!sameIndexedRecord(batch.context_entries ?? [], receipt.accepted_context_entries ?? [])) {
-        throw new Error('Indexed append changes accepted context entries');
+        throw new IndexedRecordAppendConflict('operation_conflict', 'Indexed append changes accepted context entries');
     }
     for (const turn of batch.turns ?? []) {
         const retained = await loadIndexedAcceptedTurn(store, root, turn.id, receipt);
@@ -1405,7 +1901,7 @@ async function acceptedIndexedBatch(
                 comparableIndexedRecord('turn', turn),
             )
         )
-            throw new Error('Indexed append changes accepted turn');
+            throw new IndexedRecordAppendConflict('operation_conflict', 'Indexed append changes accepted turn');
     }
     const schemas = {
         generations: GenerationSchema,
@@ -1431,7 +1927,10 @@ async function acceptedIndexedBatch(
                     comparableIndexedRecord(comparableKind, record),
                 )
             )
-                throw new Error(`Indexed append changes accepted ${family} record`);
+                throw new IndexedRecordAppendConflict(
+                    'operation_conflict',
+                    `Indexed append changes accepted ${family} record`,
+                );
         }
     }
 }
@@ -1452,7 +1951,8 @@ export async function stageIndexedRecordBatch(
     const parsed = IndexedRecordBatchCommandSchema.parse(input);
     const { batch, options } = parsed;
     const root = IndexedConversationRootSchema.parse(rootInput);
-    if (parsed.conversation_id !== root.source.conversation_id) throw new Error('Indexed append conversation differs');
+    if (parsed.conversation_id !== root.source.conversation_id)
+        throw new IndexedRecordAppendConflict('conversation_identity_conflict', 'Indexed append conversation differs');
     const prior = await indexedRecordById(
         store,
         root,
@@ -1464,7 +1964,8 @@ export async function stageIndexedRecordBatch(
         await acceptedIndexedBatch(root, batch, options, prior, store);
         return { root, receipt: prior, applied: false };
     }
-    if (options.expected_revision !== root.source.revision) throw new Error('Indexed append revision conflict');
+    if (options.expected_revision !== root.source.revision)
+        throw new IndexedRecordAppendConflict('revision_conflict', 'Indexed append revision conflict');
     if (
         root.source.revision === Number.MAX_SAFE_INTEGER ||
         root.turn_count + (batch.turns?.length ?? 0) > Number.MAX_SAFE_INTEGER
@@ -1506,7 +2007,7 @@ export async function stageIndexedRecordBatch(
         globalIds.set(id, kind);
         const retained = await getPagedRecord(store, root.directories.identifiers, id);
         if (retained !== undefined && !(allowRetainedDefinition && retained.kind === 'tool definition')) {
-            throw new Error(`Indexed append identity ${id} already exists`);
+            throw new IndexedRecordAppendConflict('record_conflict', `Indexed append identity ${id} already exists`);
         }
     };
     await register(options.operation_id, 'operation receipt');
@@ -1524,7 +2025,20 @@ export async function stageIndexedRecordBatch(
         await register(generation.id, 'generation');
         if (generation.request_receipt) await register(generation.request_receipt.id, 'request receipt');
     }
-    for (const asset of batch.assets ?? []) await register(asset.id, 'asset');
+    const verifiedExternalAssetIds = new Set<string>();
+    const verifyExternalAsset = async (asset: Asset): Promise<void> => {
+        if (verifiedExternalAssetIds.has(asset.id)) return;
+        if (!store.assertExternalAssetIntegrity)
+            throw new IndexedRecordAppendValidationError('Indexed external media has no authenticated host custody');
+        await store.assertExternalAssetIntegrity(structuredClone(asset));
+        verifiedExternalAssetIds.add(asset.id);
+    };
+    for (const asset of batch.assets ?? []) {
+        await register(asset.id, 'asset');
+        // Even an unattached new asset is durable adoption, not previously accepted provenance.
+        // Exact operation retries returned above without requiring another byte grant/read.
+        if (asset.storage.type === 'external') await verifyExternalAsset(asset);
+    }
     for (const definition of batch.tool_definitions ?? []) await register(definition.id, 'tool definition', true);
     for (const receipt of batch.execution_receipts ?? []) await register(receipt.id, 'execution receipt');
     for (const entry of batch.context_entries ?? []) await register(entry.id, 'context entry');
@@ -1549,6 +2063,19 @@ export async function stageIndexedRecordBatch(
     const turnExists = async (id: string) =>
         newTurns.has(id) || (await getPagedRecord(store, root.directories.turns, id))?.storage === 'record';
     const callStates = new Map<string, IndexedCallState>();
+    const callAcceptedRevisions = new Map<string, number>();
+    const incomingBlockIds = new Set(
+        (batch.turns ?? []).flatMap((turn) =>
+            turn.blocks.flatMap((block) =>
+                block.type === 'tool_result' ? [block.id, ...block.content.map((content) => content.id)] : [block.id],
+            ),
+        ),
+    );
+    const incomingCallIds = new Set(
+        (batch.turns ?? []).flatMap((turn) =>
+            turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : [])),
+        ),
+    );
     const readCall = async (id: string): Promise<IndexedCallState | undefined> => {
         if (callStates.has(id)) return callStates.get(id);
         if (!root.tool_call_state_complete) throw new Error('Indexed tool-call lookup is unavailable on this root');
@@ -1585,6 +2112,7 @@ export async function stageIndexedRecordBatch(
                 receipt.result_revision > root.source.revision
             )
                 throw new Error('Indexed tool call lacks an accepted generation chain');
+            callAcceptedRevisions.set(id, receipt.result_revision);
         }
         if (existing) callStates.set(id, existing);
         return existing;
@@ -1641,8 +2169,50 @@ export async function stageIndexedRecordBatch(
             }
         }
         for (const block of turn.blocks) {
-            if (block.type === 'native_replay' || block.type === 'external_reference') {
-                throw new Error('Indexed append cannot validate this replay or external reference');
+            if (block.type === 'external_reference') {
+                throw new Error('Indexed append cannot validate this external reference');
+            }
+            if (block.type === 'native_replay') {
+                const record =
+                    turn.kind === 'agent' && 'generation_id' in turn && turn.generation_id !== undefined
+                        ? newGenerations.get(turn.generation_id)
+                        : undefined;
+                if (record?.record_source !== 'executed') {
+                    throw new Error('Indexed response replay lacks its exact executed generation/dependency receipt');
+                }
+                const request = record.request_receipt;
+                if (
+                    block.compatibility_scope.provider !== record.provider ||
+                    block.protocol !== record.protocol ||
+                    block.compatibility_scope.protocol !== record.protocol ||
+                    block.compatibility_scope.adapter_version !== record.adapter_version ||
+                    (block.compatibility_scope.model !== undefined &&
+                        block.compatibility_scope.model !== record.requested_model) ||
+                    block.dependencies.request_ids.some((id) => id !== record.request_id) ||
+                    block.dependencies.turn_ids.some(
+                        (id) =>
+                            !newTurns.has(id) &&
+                            !request.item_mappings.some(
+                                (mapping) => mapping.kind === 'turn' && mapping.canonical_id === id,
+                            ),
+                    ) ||
+                    block.dependencies.block_ids.some(
+                        (id) =>
+                            !incomingBlockIds.has(id) &&
+                            !request.item_mappings.some(
+                                (mapping) => mapping.kind === 'block' && mapping.canonical_id === id,
+                            ),
+                    ) ||
+                    block.dependencies.call_ids.some(
+                        (id) =>
+                            !incomingCallIds.has(id) &&
+                            !request.item_mappings.some(
+                                (mapping) => mapping.kind === 'call' && mapping.canonical_id === id,
+                            ),
+                    )
+                ) {
+                    throw new Error('Indexed response replay lacks its exact executed generation/dependency receipt');
+                }
             }
             if (block.type === 'tool_call') {
                 if (
@@ -1662,6 +2232,7 @@ export async function stageIndexedRecordBatch(
                     if (!pinned || pinned.name !== block.tool_name)
                         throw new Error('Indexed tool definition is unavailable or mismatched');
                 }
+                callAcceptedRevisions.set(block.call_id, root.source.revision + 1);
                 callStates.set(
                     block.call_id,
                     IndexedCallStateSchema.parse({
@@ -1686,8 +2257,40 @@ export async function stageIndexedRecordBatch(
                 ) {
                     throw new Error('Indexed tool result call proof is unavailable');
                 }
-                if (block.content.some((item) => !['text', 'json'].includes(item.type))) {
-                    throw new Error('Indexed tool-result content dependency is unsupported');
+                for (const content of block.content) {
+                    if (content.type === 'text' || content.type === 'json') continue;
+                    if (
+                        content.type !== 'image' &&
+                        content.type !== 'audio' &&
+                        content.type !== 'video' &&
+                        content.type !== 'document'
+                    ) {
+                        throw new Error('Indexed tool-result content dependency is unsupported');
+                    }
+                    const retained = await asset(content.asset_id);
+                    if (content.selection !== undefined || !retained || retained.kind !== content.type) {
+                        throw new IndexedRecordAppendValidationError(
+                            'Indexed tool-result media lacks its exact whole-asset binding',
+                        );
+                    }
+                    const integrity = await inlineAssetContentIntegrity(retained.storage);
+                    const external =
+                        retained.kind === 'image' &&
+                        retained.storage.type === 'external' &&
+                        retained.storage.resolver === 'url' &&
+                        retained.content_hash !== undefined &&
+                        retained.byte_length !== undefined;
+                    if (external) await verifyExternalAsset(retained);
+                    if (
+                        !external &&
+                        (!integrity ||
+                            retained.content_hash !== integrity.content_hash ||
+                            retained.byte_length !== integrity.byte_length)
+                    ) {
+                        throw new IndexedRecordAppendValidationError(
+                            'Indexed tool-result media requires integrity-bound inline custody',
+                        );
+                    }
                 }
                 if (call.terminal_receipt_id) {
                     const terminal = await indexedRecordById(
@@ -1822,9 +2425,10 @@ export async function stageIndexedRecordBatch(
                 item.call_source.block_id !== call.block_id ||
                 item.call_source.call_fingerprint !== call.call_fingerprint ||
                 item.call_source.conversation.conversation_id !== root.source.conversation_id ||
-                item.call_source.conversation.revision > root.source.revision)
+                item.call_source.conversation.revision > root.source.revision ||
+                (callAcceptedRevisions.get(item.call_id) ?? 0) > item.call_source.conversation.revision)
         )
-            throw new Error('Indexed execution receipt source differs from retained call');
+            throw new IndexedRecordAppendValidationError('Indexed execution receipt source differs from retained call');
         if (item.result_turn_id) {
             const resultTurn = newTurns.get(item.result_turn_id);
             const resultBlock = resultTurn?.blocks.find(
@@ -1833,6 +2437,23 @@ export async function stageIndexedRecordBatch(
             );
             if (resultBlock?.type !== 'tool_result') {
                 throw new Error('Indexed execution receipt result turn is unavailable or mismatched');
+            }
+            if (
+                item.executor === 'application' &&
+                (item.call_source === undefined ||
+                    resultTurn?.execution_id !== item.id ||
+                    resultTurn.blocks.length !== 1)
+            ) {
+                throw new IndexedRecordAppendValidationError(
+                    'Indexed application result requires its exact source/execution identity',
+                );
+            }
+            if (item.metadata?.retrieval_excerpt) {
+                // No first-publication byte custody reader is supplied by the ordinary run append route.
+                // Retained exact retries return above before staging, preserving committed provenance.
+                throw new IndexedRecordAppendValidationError(
+                    'Indexed retrieval receipt requires authenticated asset byte verification',
+                );
             }
             await assertToolResultReceiptFingerprint(resultBlock, item);
         }

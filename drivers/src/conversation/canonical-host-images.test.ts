@@ -16,6 +16,7 @@ import {
     finalizeGeminiPreparedRequest,
     prepareGeminiCanonicalContext,
 } from '../vertexai/models/gemini-conversation-adapter.js';
+import { hydrateCanonicalHostImages } from './canonical-host-images.js';
 import { providerJsonValue } from './canonical-runtime.js';
 
 const at = '2026-10-04T00:00:00.000Z';
@@ -137,6 +138,46 @@ function options(conversation: Awaited<ReturnType<typeof source>>, model: string
 }
 
 describe('owned canonical host image projection', () => {
+    it.each([false, true])('rejects absent selected images before hydration (nested=%s)', async (nested) => {
+        const document = await source(nested);
+        delete document.assets['asset:received-image'];
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        await expect(
+            hydrateCanonicalHostImages({
+                document,
+                label: 'Missing selected media',
+                selection: { allow_interrupted_with_complete_tool_calls: true },
+                hydrated: new Map(),
+                native_external: () => false,
+                resolve_asset: resolver,
+            }),
+        ).rejects.toThrow('selected image asset asset:received-image is missing');
+        expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it('checks every selected asset before reading an earlier external image', async () => {
+        const document = await source();
+        const user = document.turns.find((turn) => turn.kind === 'user');
+        if (user?.kind !== 'user') throw new Error('Selected user fixture is absent');
+        user.blocks.push({ id: 'block:missing-image', type: 'image', asset_id: 'asset:missing' });
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield png;
+        });
+        await expect(
+            hydrateCanonicalHostImages({
+                document,
+                label: 'Partially missing selected media',
+                selection: {},
+                hydrated: new Map(),
+                native_external: () => false,
+                resolve_asset: resolver,
+            }),
+        ).rejects.toThrow('selected image asset asset:missing is missing');
+        expect(resolver).not.toHaveBeenCalled();
+    });
+
     it('hydrates selected received images in Claude, Gemini and Bedrock without changing canonical refs', async () => {
         const document = await source();
         const original = structuredClone(document);

@@ -16,6 +16,7 @@ import type {
     AppendConversationRecordsWithProcessingResult,
     ConversationDiagnostic,
     ConversationDocument,
+    ConversationPreparedRequestRecord,
     ConversationRecordBatch,
     DecodedConversationResponse,
     OperationReceipt,
@@ -404,8 +405,12 @@ export async function appendConversationRecordsWithProcessing(
     });
 }
 
-function decodedResponseAppend<NativePayload>(
-    prepared: PreparedConversationRequest<NativePayload>,
+/** Validate the response against a durable prepared record without materializing lifetime history. */
+export function decodedResponseBatchFromAcceptedRecord(
+    prepared: Pick<
+        ConversationPreparedRequestRecord,
+        'source' | 'request_receipt' | 'generation_id' | 'response_turn_id'
+    >,
     decodedInput: DecodedConversationResponse,
     optionsInput: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
 ): { batch: ConversationRecordBatch; options: AppendConversationRecordsOptions } {
@@ -426,20 +431,22 @@ function decodedResponseAppend<NativePayload>(
     const decoded = DecodedConversationResponseSchema.parse(decodedInput);
     const options = AppendConversationRecordsOptionsSchema.parse({
         ...optionsInput,
-        expected_revision: prepared.document.revision,
+        expected_revision: prepared.source.revision,
         payload_fingerprint: decoded.payload_fingerprint,
     });
     if (
+        prepared.request_receipt.source.conversation_id !== prepared.source.conversation_id ||
+        prepared.request_receipt.source.revision !== prepared.source.revision ||
         decoded.generation.id !== prepared.generation_id ||
-        decoded.generation.request_id !== prepared.receipt.request_id ||
-        decoded.generation.attempt_id !== prepared.receipt.attempt_id ||
-        decoded.generation.source.conversation_id !== prepared.receipt.source.conversation_id ||
-        decoded.generation.source.revision !== prepared.receipt.source.revision ||
-        decoded.generation.requested_model !== prepared.receipt.target.model ||
-        decoded.generation.provider !== prepared.receipt.target.provider ||
-        decoded.generation.protocol !== prepared.receipt.target.protocol ||
-        decoded.generation.adapter_version !== prepared.receipt.target.adapter_version ||
-        stableJson(decoded.generation.request_receipt) !== stableJson(prepared.receipt)
+        decoded.generation.request_id !== prepared.request_receipt.request_id ||
+        decoded.generation.attempt_id !== prepared.request_receipt.attempt_id ||
+        decoded.generation.source.conversation_id !== prepared.request_receipt.source.conversation_id ||
+        decoded.generation.source.revision !== prepared.request_receipt.source.revision ||
+        decoded.generation.requested_model !== prepared.request_receipt.target.model ||
+        decoded.generation.provider !== prepared.request_receipt.target.provider ||
+        decoded.generation.protocol !== prepared.request_receipt.target.protocol ||
+        decoded.generation.adapter_version !== prepared.request_receipt.target.adapter_version ||
+        stableJson(decoded.generation.request_receipt) !== stableJson(prepared.request_receipt)
     ) {
         throw new Error('Decoded generation request receipt does not match the prepared request');
     }
@@ -465,6 +472,26 @@ function decodedResponseAppend<NativePayload>(
         ...(decoded.execution_receipts === undefined ? {} : { execution_receipts: decoded.execution_receipts }),
     };
     return { batch, options };
+}
+
+function decodedResponseAppend<NativePayload>(
+    prepared: PreparedConversationRequest<NativePayload>,
+    decodedInput: DecodedConversationResponse,
+    optionsInput: Omit<AppendConversationRecordsOptions, 'expected_revision' | 'payload_fingerprint'>,
+): { batch: ConversationRecordBatch; options: AppendConversationRecordsOptions } {
+    if (prepared.document.id !== prepared.receipt.source.conversation_id) {
+        throw new Error('Materialized response document differs from its immutable prepared conversation');
+    }
+    return decodedResponseBatchFromAcceptedRecord(
+        {
+            source: prepared.receipt.source,
+            request_receipt: prepared.receipt,
+            generation_id: prepared.generation_id,
+            response_turn_id: prepared.response_turn_id,
+        },
+        decodedInput,
+        optionsInput,
+    );
 }
 
 export function appendDecodedConversationResponse<NativePayload>(

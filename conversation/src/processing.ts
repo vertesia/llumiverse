@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { canonicalJsonContentString } from './content-integrity.js';
-import { applyContextChange, planContextChange } from './context-change.js';
+import { applyContextChange, contextChangeSelectedRanges, planContextChange } from './context-change.js';
 import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
 import { resolveContextSelection } from './context-selection.js';
 import { deriveConversationId, fingerprintJson } from './identity.js';
@@ -1033,30 +1033,34 @@ export async function buildProcessingCompletionDocument(
         const proposal = ContextChangeProposalSchema.parse(output.proposal);
         if ((await processingContextFingerprint(document)) !== retainedResolution.context_fingerprint)
             throw new Error('Processing source context changed before applying its durable result');
-        const currentPlan = await planContextChange(
-            document,
-            ContextChangePlanInputSchema.parse({
-                expected_revision: document.revision,
-                expected_context_revision: document.context.revision,
-                entry_ids: retainedResolution.entry_ids,
-                ...(retainedResolution.selected_block_ids === undefined
-                    ? {}
-                    : {
-                          selected_block_ids: retainedResolution.selected_block_ids,
-                          selected_entries: retainedResolution.selected_entries,
-                      }),
-            }),
-        );
+        const selection = ContextChangePlanInputSchema.parse({
+            expected_revision: document.revision,
+            expected_context_revision: document.context.revision,
+            entry_ids: retainedResolution.entry_ids,
+            ...(retainedResolution.selected_block_ids === undefined
+                ? {}
+                : {
+                      selected_block_ids: retainedResolution.selected_block_ids,
+                      selected_entries: retainedResolution.selected_entries,
+                  }),
+        });
+        const currentPlan = await planContextChange(document, selection);
+        const ranges =
+            proposal.kind === 'replace_with_compaction' && proposal.fidelity === 'retrievable'
+                ? contextChangeSelectedRanges(document, selection)
+                : undefined;
         const appliedProposal =
             proposal.kind === 'replace_with_compaction'
                 ? {
                       ...proposal,
-                      replacement_turns: proposal.replacement_turns.map((turn) => {
+                      replacement_turns: proposal.replacement_turns.map((turn, index) => {
+                          const sourceTurnIds = ranges ? ranges[index]?.turn_ids : retainedResolution.source_turn_ids;
                           if (
                               turn.provenance.type !== 'derived' ||
                               turn.provenance.source_hash !== retainedResolution.source_fingerprint ||
+                              !sourceTurnIds ||
                               canonicalJsonContentString(turn.provenance.source_turn_ids) !==
-                                  canonicalJsonContentString(retainedResolution.source_turn_ids)
+                                  canonicalJsonContentString(sourceTurnIds)
                           )
                               throw new Error('Processing proposal is not derived from its resolved source');
                           return {

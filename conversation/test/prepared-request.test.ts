@@ -8,6 +8,7 @@ import {
     type ConversationPreparedRequest,
     createConversationDocument,
     type DecodedConversationResponse,
+    decodedResponseBatchFromAcceptedRecord,
     deriveConversationId,
     INDEXED_TEXT_PREPARED_VALIDATOR_PROFILE,
     parseConversationPreparedRequest,
@@ -302,6 +303,15 @@ describe('prepared canonical request evidence', () => {
             decoded(source),
             options,
         );
+        const bounded = decodedResponseBatchFromAcceptedRecord(source.record, decoded(source), options);
+        expect(appendConversationRecords(source.document, bounded.batch, bounded.options)).toEqual(ordinary);
+        expect(() =>
+            decodedResponseBatchFromAcceptedRecord(
+                { ...source.record, request_receipt: { ...source.record.request_receipt, attempt_id: 'changed' } },
+                decoded(source),
+                options,
+            ),
+        ).toThrow('prepared request');
         const ordinaryAsync = await appendDecodedConversationResponseWithProcessing(
             {
                 ...source,
@@ -316,6 +326,59 @@ describe('prepared canonical request evidence', () => {
         );
         expect(ordinaryAsync.document).toEqual(ordinary.document);
         expect(ordinaryAsync.acceptance.processing.status).toBe('ready');
+
+        const materialized = {
+            ...source,
+            receipt: source.record.request_receipt,
+            generation_id: source.record.generation_id,
+            response_turn_id: source.record.response_turn_id,
+            diagnostics: [],
+            payload: {},
+        };
+        const user = source.document.turns[0];
+        if (user?.kind !== 'user') throw new Error('Prepared fixture has no original user');
+        const unrelated = (document: ConversationPreparedRequest['document']) =>
+            appendConversationRecords(
+                document,
+                {
+                    turns: [
+                        {
+                            ...user,
+                            id: 'later-user',
+                            blocks: [{ id: 'later-text', type: 'text', text: 'Later input', format: 'plain' }],
+                        },
+                    ],
+                    context_entries: [{ id: 'later-context', type: 'source_turn', turn_id: 'later-user' }],
+                },
+                {
+                    expected_revision: document.revision,
+                    operation_id: 'later-input',
+                    payload_fingerprint: 'sha256:later',
+                    recorded_at: RECORDED_AT,
+                },
+            ).document;
+        const advancedFresh = unrelated(source.document);
+        expect(() =>
+            appendDecodedConversationResponse({ ...materialized, document: advancedFresh }, decoded(source), options),
+        ).toThrow('Conversation revision conflict');
+        const advancedAccepted = unrelated(ordinary.document);
+        const recovered = appendDecodedConversationResponse(
+            { ...materialized, document: advancedAccepted },
+            decoded(source),
+            options,
+        );
+        expect(recovered.applied).toBe(false);
+        expect(recovered.document).toEqual(advancedAccepted);
+        expect(recovered.document.operation_receipts[options.operation_id]).toEqual(
+            ordinary.document.operation_receipts[options.operation_id],
+        );
+        expect(() =>
+            appendDecodedConversationResponse(
+                { ...materialized, document: { ...ordinary.document, id: 'foreign-conversation' } },
+                decoded(source),
+                options,
+            ),
+        ).toThrow('immutable prepared conversation');
 
         const configured = await setProcessingPolicy(source.document, {
             operation_id: 'policy:response',

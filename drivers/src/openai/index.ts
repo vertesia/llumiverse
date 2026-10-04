@@ -4,14 +4,21 @@ import {
     type ToolDefinition as CanonicalToolDefinition,
     type ConversationDocument,
     type ConversationModelSwitchProjection,
+    type ConversationPreparedRequestRecord,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
     fingerprintJson,
+    type IndexedConversationSelectedContext,
+    IndexedConversationSelectedContextSchema,
     isConversationDocumentFormat,
     type JsonValue,
     type ModelTarget,
     type NativeStreamPosition,
     parseConversationDocument,
+    parseConversationPreparedRequestRecord,
+    preflightJsonInput,
+    type ResolvedConversationRuntimeContext,
+    ResolvedConversationRuntimeContextSchema,
 } from '@llumiverse/conversation';
 import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
 import {
@@ -53,6 +60,7 @@ import {
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
     type OpenAiImageGenerationOptions,
+    ownCanonicalHostCapabilities,
     type PromptOptions,
     type PromptSegment,
     Providers,
@@ -77,6 +85,7 @@ import {
     type CanonicalNativeStreamWriter,
     canonicalNativeExecutionEventStream,
 } from '../conversation/canonical-execution-event-stream.js';
+import { hydrateCanonicalSelectedImageAssets } from '../conversation/canonical-host-images.js';
 import {
     assertAcceptedCanonicalRequest,
     canonicalConversationTurnNumber,
@@ -108,9 +117,12 @@ import {
 import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
+import { selectedWorkingSetSource } from './openai-chat-conversation-adapter.js';
 import {
     appendOpenAIResponsesCanonicalResponseWithProcessing,
     compileOpenAIResponsesConversation,
+    compileOpenAIResponsesIndexedSelectedText,
+    createOpenAIResponsesIndexedTextRequestReceipt,
     decodeOpenAIResponsesCanonicalResponse,
     finalizeOpenAIResponsesPreparedRequest,
     OPENAI_RESPONSES_ADAPTER_VERSION,
@@ -338,11 +350,18 @@ const supportFineTunning = new Set([
 
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
+type OpenAIResponsesBuilderState = Pick<
+    PreparedOpenAIResponsesConversation,
+    'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
+> &
+    ({ document: ConversationDocument; current_turn?: never } | { current_turn: number; document?: never });
+
 function projectCanonicalResponsesHistory(
-    prepared: Pick<PreparedOpenAIResponsesConversation, 'document' | 'native_conversation' | 'prior_native_item_count'>,
+    prepared: OpenAIResponsesBuilderState,
     options: ExecutionOptions,
 ): { conversation: ResponseInputItem[]; current_items: ResponseInputItem[] } {
-    const currentTurn = canonicalConversationTurnNumber(prepared.document);
+    const currentTurn =
+        prepared.document === undefined ? prepared.current_turn : canonicalConversationTurnNumber(prepared.document);
     const preserveSubtree = (value: unknown): boolean => {
         if (!value || typeof value !== 'object') return false;
         const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
@@ -382,20 +401,14 @@ interface OpenAIResponsesBuiltRequest<Request> {
 }
 
 function buildOpenAIResponsesRequest(
-    state: Pick<
-        PreparedOpenAIResponsesConversation,
-        'document' | 'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
-    >,
+    state: OpenAIResponsesBuilderState,
     driver: OpenAIResponsesDriverBase,
     options: ExecutionOptions,
     operation: 'execute',
     imageToolPrompt?: ResponseInputItem[],
 ): OpenAIResponsesBuiltRequest<OpenAI.Responses.ResponseCreateParamsNonStreaming>;
 function buildOpenAIResponsesRequest(
-    state: Pick<
-        PreparedOpenAIResponsesConversation,
-        'document' | 'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
-    >,
+    state: OpenAIResponsesBuilderState,
     driver: OpenAIResponsesDriverBase,
     options: ExecutionOptions,
     operation: 'stream',
@@ -403,10 +416,7 @@ function buildOpenAIResponsesRequest(
 ): OpenAIResponsesBuiltRequest<OpenAI.Responses.ResponseCreateParamsStreaming>;
 /** The one transport payload builder used by execute, stream and dry model-switch projection. */
 function buildOpenAIResponsesRequest(
-    state: Pick<
-        PreparedOpenAIResponsesConversation,
-        'document' | 'native_conversation' | 'prior_native_item_count' | 'tool_definitions'
-    >,
+    state: OpenAIResponsesBuilderState,
     driver: OpenAIResponsesDriverBase,
     options: ExecutionOptions,
     operation: 'execute' | 'stream',
@@ -681,6 +691,256 @@ export class OpenAIResponsesProtocol {
                 api_version: 'preview',
             },
         };
+    }
+
+    /** Compile the configured Responses body from a bounded selected source before any target reservation. */
+    async prepareIndexedTextRequest(
+        driver: OpenAIResponsesDriverBase,
+        input: {
+            selection: IndexedConversationSelectedContext;
+            runtime: ResolvedConversationRuntimeContext;
+            options: ExecutionOptions;
+            stream: boolean;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ) {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        if (driver.provider !== Providers.openai) {
+            throw new TypeError('Indexed Responses text requires the configured OpenAI provider');
+        }
+        if (!preflightJsonInput(input.selection).success || !preflightJsonInput(input.runtime).success) {
+            throw new TypeError('Indexed Responses source or runtime is not bounded JSON');
+        }
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const runtime = ResolvedConversationRuntimeContextSchema.parse(structuredClone(input.runtime));
+        const ownField = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed Responses option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownField('model');
+        if (typeof model !== 'string') throw new TypeError('Indexed Responses configured model is unavailable');
+        const modelOptions = ownField('model_options');
+        const resultSchema = ownField('result_schema');
+        const promptCacheKey = ownField('prompt_cache_key');
+        const promptCacheSchemaSuffix = ownField('prompt_cache_schema_suffix');
+        const stripImagesAfterTurns = ownField('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownField('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownField('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(promptCacheKey === undefined ? {} : { prompt_cache_key: promptCacheKey }),
+            ...(promptCacheSchemaSuffix === undefined ? {} : { prompt_cache_schema_suffix: promptCacheSchemaSuffix }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success)
+            throw new TypeError('Indexed Responses controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        if (input.stream) {
+            throw new TypeError('Indexed Responses text requires a non-streaming configured model');
+        }
+        if (
+            options.result_schema !== undefined ||
+            options.stripImagesAfterTurns !== undefined ||
+            options.stripHeartbeatsAfterTurns !== undefined ||
+            options.stripTextMaxTokens !== undefined
+        ) {
+            throw new TypeError('Indexed Responses text has unsupported output or history transformation');
+        }
+        const nativeOptions = options.model_options as OpenAIRequestOptions | undefined;
+        if (nativeOptions?.image_generation !== undefined) {
+            throw new TypeError('Indexed Responses text cannot invoke image generation');
+        }
+        const reservedBodyFields = new Set([
+            'model',
+            'input',
+            'tools',
+            'tool_choice',
+            'stream',
+            'previous_response_id',
+            'conversation',
+        ]);
+        if (
+            nativeOptions?.extra_body &&
+            Object.keys(nativeOptions.extra_body).some((key) => reservedBodyFields.has(key))
+        ) {
+            throw new TypeError('Indexed Responses extra body overrides canonical request state');
+        }
+        const resolver = ownedHostCapabilities?.resolve_canonical_asset;
+        const signal = input.signal;
+        signal?.throwIfAborted();
+        const imageIds = new Set<string>();
+        for (const projection of [
+            ...selection.turns,
+            ...(selection.replacement_turns ?? []).map((value) => value.projection),
+        ]) {
+            for (const block of projection.selected_blocks) {
+                for (const item of block.type === 'tool_result' ? block.content : [block])
+                    if (item.type === 'image') imageIds.add(item.asset_id);
+            }
+        }
+        const nativeAssets = await hydrateCanonicalSelectedImageAssets({
+            label: 'Indexed native preparation',
+            assets: selection.assets,
+            selected_ids: imageIds,
+            resolve_asset: resolver,
+            signal,
+            hydrated: new Map(),
+            native_external: () => false,
+        });
+        signal?.throwIfAborted();
+        const compiled = compileOpenAIResponsesIndexedSelectedText(
+            { ...selection, assets: nativeAssets },
+            {
+                provider: driver.provider,
+                model: options.model,
+            },
+        );
+        const selectedDefinitions = selection.context.active_tool_definition_ids.map((id) => {
+            const definition = selection.tool_definitions[id];
+            if (!definition) throw new Error(`Indexed Responses active tool ${id} is unavailable`);
+            return definition;
+        });
+        const built = buildOpenAIResponsesRequest(
+            {
+                native_conversation: structuredClone(compiled.conversation),
+                prior_native_item_count: compiled.conversation.length,
+                tool_definitions: selectedDefinitions,
+                current_turn: selection.source_turn_count,
+            },
+            driver,
+            options,
+            'execute',
+        );
+        if (
+            (await fingerprintJson(providerJsonValue(built.conversation))) !==
+            (await fingerprintJson(providerJsonValue(compiled.conversation)))
+        ) {
+            throw new TypeError('Indexed Responses preparation rewrote selected canonical history');
+        }
+        if (built.request.previous_response_id !== undefined || built.request.conversation !== undefined) {
+            throw new TypeError('Indexed Responses request depends on hidden server-side conversation state');
+        }
+        const payload = structuredClone(built.request);
+        const receipt = await createOpenAIResponsesIndexedTextRequestReceipt({
+            selection,
+            runtime,
+            target: {
+                provider: driver.provider,
+                protocol: OPENAI_RESPONSES_PROTOCOL,
+                model: options.model,
+                adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+            },
+            native_payload: this.requestFingerprintPayload(driver, options, payload),
+            mappings: compiled.mappings,
+        });
+        return { status: 'awaiting_durable_prepared_record' as const, source: selection.source, payload, receipt };
+    }
+
+    /** Recompile and verify the exact committed request before the configured Responses transport. */
+    async executeCommittedIndexedTextRequest(
+        driver: OpenAIResponsesDriverBase,
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            assert_committed: () => Promise<void>;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<DecodedConversationResponse> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const record = parseConversationPreparedRequestRecord(structuredClone(input.record));
+        const ownOption = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed Responses option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownOption('model');
+        if (typeof model !== 'string') throw new TypeError('Indexed Responses committed model is unavailable');
+        const signal = input.signal;
+        const assertCommitted = input.assert_committed;
+        const options: ExecutionOptions = {
+            model,
+            ...(ownOption('model_options') === undefined ? {} : { model_options: ownOption('model_options') }),
+            ...(ownOption('result_schema') === undefined ? {} : { result_schema: ownOption('result_schema') }),
+            ...(ownOption('prompt_cache_key') === undefined ? {} : { prompt_cache_key: ownOption('prompt_cache_key') }),
+            ...(ownOption('prompt_cache_schema_suffix') === undefined
+                ? {}
+                : { prompt_cache_schema_suffix: ownOption('prompt_cache_schema_suffix') }),
+            ...(ownOption('stripImagesAfterTurns') === undefined
+                ? {}
+                : { stripImagesAfterTurns: ownOption('stripImagesAfterTurns') }),
+            ...(ownOption('stripHeartbeatsAfterTurns') === undefined
+                ? {}
+                : { stripHeartbeatsAfterTurns: ownOption('stripHeartbeatsAfterTurns') }),
+            ...(ownOption('stripTextMaxTokens') === undefined
+                ? {}
+                : { stripTextMaxTokens: ownOption('stripTextMaxTokens') }),
+            ...(ownOption('httpTimeout') === undefined ? {} : { httpTimeout: ownOption('httpTimeout') }),
+        };
+        if (typeof options.model !== 'string' || !preflightJsonInput(options).success) {
+            throw new TypeError('Indexed Responses committed controls are not bounded JSON');
+        }
+        const prepared = await this.prepareIndexedTextRequest(
+            driver,
+            {
+                selection,
+                runtime: record.runtime,
+                options,
+                stream: false,
+                signal,
+            },
+            ownedHostCapabilities,
+        );
+        if (
+            record.source.conversation_id !== selection.source.conversation_id ||
+            record.source.revision !== selection.source.revision ||
+            (await fingerprintJson(record.request_receipt)) !== (await fingerprintJson(prepared.receipt))
+        ) {
+            throw new TypeError('Indexed Responses native request differs from its durable prepared receipt');
+        }
+        signal?.throwIfAborted();
+        await assertCommitted();
+        signal?.throwIfAborted();
+        const requestOptions = this.getRequestOptions(driver, options, signal);
+        const response = requestOptions
+            ? await driver.getResponsesService(options).responses.create(prepared.payload, requestOptions)
+            : await driver.getResponsesService(options).responses.create(prepared.payload);
+        assertOpenAIResponseSucceeded(response);
+        if (response.output.length === 0) throw new Error('Indexed Responses completed without native output');
+        const selectedTurns = selectedCanonicalTurns(selectedWorkingSetSource(selection));
+        return decodeOpenAIResponsesCanonicalResponse({
+            response,
+            prepared: {
+                runtime: record.runtime,
+                receipt: record.request_receipt,
+                provider: driver.provider,
+                requested_model: record.request_receipt.target.model,
+                tool_definitions: selection.context.active_tool_definition_ids.map((id) => {
+                    const definition = selection.tool_definitions[id];
+                    if (!definition) throw new Error(`Indexed Responses active tool ${id} is unavailable`);
+                    return definition;
+                }),
+                generation_id: record.generation_id,
+                response_turn_id: record.response_turn_id,
+                selected_turns: selectedTurns,
+            },
+        });
     }
 
     private requestFingerprintPayload(
@@ -1447,6 +1707,34 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
+
+    /** @internal Compile a paged text request through this configured Responses driver. */
+    prepareIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            runtime: ResolvedConversationRuntimeContext;
+            options: ExecutionOptions;
+            stream: boolean;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ) {
+        return this.responsesProtocol.prepareIndexedTextRequest(this, input, hostCapabilities);
+    }
+
+    /** @internal The host must prove current durable ownership immediately before dispatch. */
+    executeCommittedIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            assert_committed: () => Promise<void>;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<DecodedConversationResponse> {
+        return this.responsesProtocol.executeCommittedIndexedTextRequest(this, input, hostCapabilities);
+    }
 
     override async resolveCanonicalModelSwitchTarget(
         model: string,

@@ -14,16 +14,22 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    type IndexedConversationSelectedContext,
+    IndexedConversationSelectedContextSchema,
     inlineAssetContentIntegrity,
     type JsonObject,
     type JsonValue,
+    type ModelTarget,
     type NativeItemMapping,
     type NestedToolResultContentBlock,
     type PreparedConversationRequest,
     type ProgramContentBlock,
     parseConversationDocument,
     preflightJsonInput,
+    type RequestReceipt,
     type ResolveConversationAsset,
+    type ResolvedConversationRuntimeContext,
+    ResolvedConversationRuntimeContextSchema,
     readBoundedConversationAsset,
     type ToolDefinition,
     type ToolResultBlock,
@@ -49,6 +55,7 @@ import {
     canonicalToolSelectionTargetOptions,
     createExecutedGeneration,
     createRequestReceipt,
+    createRequestReceiptFromSelectedSource,
     newCanonicalConversation,
     parseCanonicalConversation,
     prepareCanonicalContext,
@@ -76,6 +83,7 @@ import {
     remapStructuredOutputReplayDependencies,
     structuredOutputEvidence,
 } from '../conversation/structured-output.js';
+import { selectedWorkingSetSource } from './openai-chat-conversation-adapter.js';
 
 export const OPENAI_RESPONSES_PROTOCOL = 'openai.responses' as const;
 export const OPENAI_RESPONSES_ADAPTER_VERSION = '2026-09-12.canonical.1' as const;
@@ -955,7 +963,9 @@ export function openAIResponsesImageInput(
 
 function ordinaryBlockToParts(
     block: ContentBlock,
-    document: ConversationDocument,
+    document: Pick<ConversationDocument, 'assets'> & {
+        indexed_reference_evidence?: IndexedConversationSelectedContext;
+    },
     target?: { provider?: string },
     projection?: OpenAIResponsesProjectionOptions,
     owner?: ConversationTurn,
@@ -1054,7 +1064,7 @@ function stableJson(value: unknown): string {
 
 function assertReplaySemantics(
     turn: ConversationTurn,
-    document: ConversationDocument,
+    document: Pick<ConversationDocument, 'turns' | 'assets'>,
     block: Extract<ContentBlock, { type: 'native_replay' }>,
     payload: OpenAIResponsesReplayPayload,
     target?: { provider?: string },
@@ -1200,7 +1210,7 @@ function canonicalToolCallItem(block: Extract<ContentBlock, { type: 'tool_call' 
 
 function replayItems(
     turn: ConversationTurn,
-    document: ConversationDocument,
+    document: Pick<ConversationDocument, 'turns' | 'assets'>,
     target?: { provider?: string; model?: string },
     projection?: OpenAIResponsesProjectionOptions,
 ): OpenAIResponsesInputItem[] | undefined {
@@ -1311,7 +1321,9 @@ function replayItems(
 
 function compileOrdinaryTurn(
     turn: ConversationTurn,
-    document: ConversationDocument,
+    document: Pick<ConversationDocument, 'assets'> & {
+        indexed_reference_evidence?: IndexedConversationSelectedContext;
+    },
     target?: { provider?: string },
     projection?: OpenAIResponsesProjectionOptions,
 ): OpenAIResponsesInputItem[] {
@@ -1362,6 +1374,178 @@ export function compileOpenAIResponsesConversation(
     projection?: OpenAIResponsesProjectionOptions,
 ): ReturnType<typeof projectOpenAIResponsesConversation> {
     return projectOpenAIResponsesConversation(document, target, false, projection);
+}
+
+/** Compile only the authenticated indexed text selection; this is never a complete document. */
+export function compileOpenAIResponsesIndexedSelectedText(
+    input: IndexedConversationSelectedContext,
+    target: { provider: string; model: string },
+): { conversation: OpenAIResponsesInputItem[]; mappings: NativeItemMapping[] } {
+    const selection = IndexedConversationSelectedContextSchema.parse(input);
+    const source = selectedWorkingSetSource({ ...selection, indexed_reference_evidence: selection });
+    if (selection.completeness !== 'selected_text_pending_admission') {
+        return projectOpenAIResponsesConversation(
+            {
+                ...source,
+                generations: Object.fromEntries(
+                    Object.entries(selection.generation_witnesses).map(([id, witness]) => [id, witness.generation]),
+                ),
+            },
+            target,
+        );
+    }
+    const turns = selectedCanonicalTurns(source);
+    assertCanonicalContextProjection(source, turns, {
+        label: 'OpenAI Responses indexed text',
+        program_authorities: ['system', 'developer', 'ordinary'],
+    });
+    if (selection.context.active_tool_definition_ids.length !== 0 || Object.keys(selection.assets).length !== 0) {
+        throw new TypeError('Indexed OpenAI Responses text requires no selected tools or assets');
+    }
+    const conversation: OpenAIResponsesInputItem[] = [];
+    const mappings: NativeItemMapping[] = [];
+    const selectedTurnIds = new Set(turns.map((turn) => turn.id));
+    for (const turn of turns) {
+        if (
+            turn.kind === 'tool' ||
+            turn.blocks.length === 0 ||
+            turn.blocks.some((block) => block.type !== 'text' && block.type !== 'native_replay')
+        ) {
+            throw new TypeError('Indexed OpenAI Responses text selection contains unsupported content');
+        }
+        const contentBlocks: readonly ContentBlock[] = turn.blocks;
+        const replayBlocks = contentBlocks.filter(
+            (block): block is Extract<ContentBlock, { type: 'native_replay' }> => block.type === 'native_replay',
+        );
+        if (replayBlocks.length > 0 && turn.kind !== 'agent') {
+            throw new TypeError('Indexed Responses replay must belong to a generated agent turn');
+        }
+        for (const replay of replayBlocks) {
+            if (replay.protocol !== OPENAI_RESPONSES_PROTOCOL) {
+                throw new TypeError(`Indexed Responses cannot transform foreign replay ${replay.id}`);
+            }
+            const generationId = turn.kind === 'agent' && 'generation_id' in turn ? turn.generation_id : undefined;
+            const witness = typeof generationId === 'string' ? selection.generation_witnesses[generationId] : undefined;
+            if (
+                witness === undefined ||
+                witness.generation.record_source !== 'executed' ||
+                witness.generation.request_id !== witness.generation.request_receipt.request_id ||
+                !witness.acceptance.accepted_generation_ids?.includes(witness.generation.id) ||
+                !witness.acceptance.accepted_turn_ids?.includes(turn.id) ||
+                replay.dependencies.request_ids.some((id) => id !== witness.generation.request_id) ||
+                replay.dependencies.turn_ids.some((id) => !selectedTurnIds.has(id))
+            ) {
+                throw new TypeError(`Indexed Responses replay ${replay.id} lacks its accepted generation dependencies`);
+            }
+            if (replay.dependency_policy !== 'discard_on_dependency_change') {
+                const origin = replay.compatibility_scope.model ?? witness.generation.request_receipt.target.model;
+                if (
+                    origin !== target.model ||
+                    witness.generation.request_receipt.target.provider !== target.provider ||
+                    witness.generation.request_receipt.target.protocol !== OPENAI_RESPONSES_PROTOCOL ||
+                    witness.generation.request_receipt.target.adapter_version !== OPENAI_RESPONSES_ADAPTER_VERSION
+                ) {
+                    throw new TypeError(`Indexed Responses protected replay ${replay.id} changed model origin`);
+                }
+            }
+            const payload = rawReplayPayload(replay);
+            const raw = payload.items[0];
+            const content =
+                typeof raw === 'object' && raw !== null && !Array.isArray(raw) && Array.isArray(raw.content)
+                    ? raw.content
+                    : undefined;
+            if (
+                payload.items.length !== 1 ||
+                typeof raw !== 'object' ||
+                raw === null ||
+                Array.isArray(raw) ||
+                raw.type !== 'message' ||
+                raw.role !== 'assistant' ||
+                content === undefined ||
+                content.some(
+                    (part) =>
+                        typeof part !== 'object' || part === null || Array.isArray(part) || part.type !== 'output_text',
+                ) ||
+                payload.semantic_entries.length !== content.length ||
+                payload.semantic_entries.some(
+                    (entry, index) => entry.kind !== 'text' || entry.content_index !== index || entry.item_index !== 0,
+                )
+            ) {
+                throw new TypeError(`Indexed Responses replay ${replay.id} is not a complete text message`);
+            }
+        }
+        const parts = turn.blocks.flatMap((block) =>
+            block.type === 'text' ? [{ type: 'input_text' as const, text: block.text }] : [],
+        );
+        const role =
+            turn.kind === 'program' && turn.authority === 'system'
+                ? 'system'
+                : turn.kind === 'program' && turn.authority === 'developer'
+                  ? 'developer'
+                  : turn.kind === 'agent'
+                    ? 'assistant'
+                    : 'user';
+        const itemIndex = conversation.length;
+        const replayed = replayBlocks.length === 0 ? undefined : replayItems(turn, source, target);
+        conversation.push(
+            ...(replayed ?? [
+                {
+                    role,
+                    content: parts.length === 1 && parts[0] !== undefined ? parts[0].text : parts,
+                } as OpenAIResponsesInputItem,
+            ]),
+        );
+        mappings.push({ canonical_id: turn.id, native_id: `items/${itemIndex}`, kind: 'turn' });
+        for (const block of turn.blocks) {
+            mappings.push({
+                canonical_id: block.id,
+                native_id: `items/${itemIndex}/blocks/${block.id}`,
+                kind: 'block',
+            });
+        }
+    }
+    return { conversation, mappings };
+}
+
+/** Bind the exact Responses transport body to the selected paged source and original runtime. */
+export async function createOpenAIResponsesIndexedTextRequestReceipt(input: {
+    selection: IndexedConversationSelectedContext;
+    runtime: ResolvedConversationRuntimeContext;
+    target: ModelTarget;
+    native_payload: JsonValue;
+    mappings: readonly NativeItemMapping[];
+}): Promise<RequestReceipt> {
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed Responses evidence is not bounded JSON');
+    const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+    const runtime = ResolvedConversationRuntimeContextSchema.parse(structuredClone(input.runtime));
+    const target = structuredClone(input.target);
+    if (
+        runtime.conversation_id !== selection.source.conversation_id ||
+        target.protocol !== OPENAI_RESPONSES_PROTOCOL ||
+        target.adapter_version !== OPENAI_RESPONSES_ADAPTER_VERSION
+    ) {
+        throw new Error('Indexed Responses request differs from selected source or protocol');
+    }
+    const source = selectedWorkingSetSource(selection);
+    return createRequestReceiptFromSelectedSource(
+        {
+            ...source,
+            id: selection.source.conversation_id,
+            revision: selection.source.revision,
+            ...(selection.source_tail_turn_id === undefined
+                ? {}
+                : { source_tail_turn_id: selection.source_tail_turn_id }),
+        },
+        runtime,
+        target,
+        input.native_payload,
+        input.mappings,
+        selection.context.active_tool_definition_ids.map((id) => {
+            const definition = selection.tool_definitions[id];
+            if (!definition) throw new Error(`Indexed Responses active tool ${id} is unavailable`);
+            return definition;
+        }),
+    );
 }
 
 /** Resolve selected, integrity-declared external images that Responses cannot represent natively. */
@@ -1435,7 +1619,7 @@ async function compileOpenAIResponsesContextWithHostAssets(
 }
 
 function projectOpenAIResponsesConversation(
-    document: ConversationDocument,
+    document: ReturnType<typeof selectedWorkingSetSource> & Pick<ConversationDocument, 'generations'>,
     target?: { provider?: string; model?: string },
     readOnlyCompatibilityProjection = false,
     projection?: OpenAIResponsesProjectionOptions,
@@ -1836,7 +2020,18 @@ function openAIResponsesUsage(native: OpenAI.Responses.ResponseUsage | null | un
 
 export async function decodeOpenAIResponsesCanonicalResponse(input: {
     response: OpenAI.Responses.Response;
-    prepared: PreparedOpenAIResponsesConversation;
+    prepared:
+        | PreparedOpenAIResponsesConversation
+        | (Pick<
+              PreparedOpenAIResponsesConversation,
+              | 'runtime'
+              | 'provider'
+              | 'requested_model'
+              | 'tool_definitions'
+              | 'response_turn_id'
+              | 'generation_id'
+              | 'receipt'
+          > & { selected_turns: ConversationTurn[] });
     fallback_items?: OpenAIResponsesInputItem[];
     structured_output?: CanonicalStructuredOutput;
 }): Promise<DecodedConversationResponse> {
@@ -1858,13 +2053,14 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     });
     const received = records.turns[0];
     if (received?.kind !== 'agent') throw new Error('OpenAI Responses response did not decode to an agent turn');
-    const boundReceived = bindProtectedResponsesExchange([
-        ...selectedCanonicalTurns(prepared.document, {
-            allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
-            allow_interrupted_with_complete_tool_calls: true,
-        }),
-        received,
-    ]).at(-1);
+    const selectedTurns =
+        'selected_turns' in prepared
+            ? prepared.selected_turns
+            : selectedCanonicalTurns(prepared.document, {
+                  allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
+                  allow_interrupted_with_complete_tool_calls: true,
+              });
+    const boundReceived = bindProtectedResponsesExchange([...selectedTurns, received]).at(-1);
     if (boundReceived?.kind !== 'agent') throw new Error('OpenAI Responses response dependency binding failed');
     const hasTools = boundReceived.blocks.some((block) => block.type === 'tool_call');
     const finishReason =

@@ -128,8 +128,12 @@ describe('durable processing jobs', () => {
                             createTextBlock({ id: 'block:first', text: 'first', format: 'plain' }),
                             createTextBlock({ id: 'block:second', text: 'second', format: 'plain' }),
                             { id: 'block:image', type: 'image', asset_id: 'asset:image' },
-                            createTextBlock({ id: 'block:third', text: 'third', format: 'plain' }),
                         ],
+                    },
+                    {
+                        ...turn,
+                        id: 'turn:third',
+                        blocks: [createTextBlock({ id: 'block:third', text: 'third', format: 'plain' })],
                     },
                 ],
                 assets: [
@@ -142,7 +146,10 @@ describe('durable processing jobs', () => {
                         created_at: at,
                     },
                 ],
-                context_entries: [{ id: 'entry:multi', type: 'source_turn', turn_id: 'turn:multi' }],
+                context_entries: [
+                    { id: 'entry:multi', type: 'source_turn', turn_id: 'turn:multi' },
+                    { id: 'entry:third', type: 'source_turn', turn_id: 'turn:third' },
+                ],
                 tool_definitions: [
                     { id: 'definition:read-multi', name: 'read_blob', version: '1', input_schema: true },
                 ],
@@ -193,6 +200,12 @@ describe('durable processing jobs', () => {
         );
         const replacementTurns = store.current.compactions[Object.keys(store.current.compactions)[0]].replacement_turns;
         expect(
+            replacementTurns.map((replacement) => {
+                if (replacement.provenance.type !== 'derived') throw new Error('Fixture requires derived replacements');
+                return replacement.provenance.source_turn_ids;
+            }),
+        ).toEqual([['turn:multi'], ['turn:third']]);
+        expect(
             replacementTurns.map((replacement) =>
                 replacement.blocks.map((block) =>
                     block.type === 'external_reference' ? block.asset_id : 'unexpected-non-reference',
@@ -234,6 +247,51 @@ describe('durable processing jobs', () => {
         expect(
             (await runProcessingJob(store, { resolve: () => processor }, job.id, 'attempt:multi', () => at)).status,
         ).toBe('completed');
+
+        for (const sourceTurnIds of [['turn:multi', 'turn:third'], ['turn:third'], ['turn:unknown']]) {
+            const malformed = new MemoryStore(archived.document);
+            const tamperedProcessor = {
+                run: async (input: Parameters<typeof processor.run>[0]) => {
+                    const result = await processor.run(input);
+                    if (result.kind !== 'proposal' || result.proposal.kind !== 'replace_with_compaction')
+                        throw new Error('Fixture requires a retrievable compaction proposal');
+                    const proposal = structuredClone(result.proposal);
+                    const first = proposal.replacement_turns[0];
+                    if (first?.provenance.type !== 'derived') throw new Error('Fixture requires a derived replacement');
+                    first.provenance.source_turn_ids = sourceTurnIds;
+                    return { ...result, proposal };
+                },
+            };
+            await expect(
+                runProcessingJob(malformed, { resolve: () => tamperedProcessor }, job.id, 'attempt:forged', () => at),
+            ).rejects.toThrow('Processing proposal is not derived from its resolved source');
+            expect(malformed.current.context.entries.map((entry) => entry.id)).toEqual(['entry:multi', 'entry:third']);
+        }
+        const missingRange = new MemoryStore(archived.document);
+        const missingRangeProcessor = {
+            run: async (input: Parameters<typeof processor.run>[0]) => {
+                const result = await processor.run(input);
+                if (result.kind !== 'proposal' || result.proposal.kind !== 'replace_with_compaction')
+                    throw new Error('Fixture requires a retrievable compaction proposal');
+                return {
+                    ...result,
+                    proposal: {
+                        ...result.proposal,
+                        replacement_turns: result.proposal.replacement_turns.slice(0, 1),
+                    },
+                };
+            },
+        };
+        await expect(
+            runProcessingJob(
+                missingRange,
+                { resolve: () => missingRangeProcessor },
+                job.id,
+                'attempt:missing',
+                () => at,
+            ),
+        ).rejects.toThrow('Compaction replacements do not map exactly to selected ranges');
+        expect(missingRange.current.context.entries.map((entry) => entry.id)).toEqual(['entry:multi', 'entry:third']);
     });
 
     it('classifies a text archive selection before the host performs asset I/O', async () => {

@@ -125,6 +125,12 @@ export interface PreparedOpenAIChatConversation
     prior_native_message_count: number;
 }
 
+/** Complete response-decoder inputs retained by either full-document or indexed preparation. */
+export type OpenAIChatResponseDecodeEvidence = Pick<
+    PreparedOpenAIChatConversation,
+    'runtime' | 'provider' | 'requested_model' | 'tool_definitions' | 'response_turn_id' | 'generation_id' | 'receipt'
+>;
+
 function ownValue(value: object, key: string): unknown {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && 'value' in descriptor ? descriptor.value : undefined;
@@ -851,7 +857,9 @@ function audioAssetPart(asset: Asset): Extract<OpenAIChatCompletionsContentPart,
 function contentParts(
     turn: ConversationTurn,
     document: Pick<ConversationDocument, 'assets'> &
-        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>>,
+        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>> & {
+            indexed_reference_evidence?: IndexedConversationSelectedContext;
+        },
 ): OpenAIChatCompletionsContentPart[] {
     const parts: OpenAIChatCompletionsContentPart[] = [];
     for (const block of turn.blocks) {
@@ -908,7 +916,9 @@ function structuredChatContent(
 function compileTurn(
     turn: ConversationTurn,
     document: Pick<ConversationDocument, 'assets'> &
-        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>>,
+        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>> & {
+            indexed_reference_evidence?: IndexedConversationSelectedContext;
+        },
     target?: { provider?: string; model?: string },
 ): OpenAIChatCompletionsMessage[] {
     if (turn.kind === 'tool') {
@@ -1013,7 +1023,9 @@ function projectOpenAIChatCompletionsConversation(
 /** Shared native compilation; prospective turns are ephemeral projections, never accepted records. */
 function compileOpenAIChatSelectedTurns(
     document: Pick<ConversationDocument, 'assets'> &
-        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>>,
+        Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>> & {
+            indexed_reference_evidence?: IndexedConversationSelectedContext;
+        },
     selectedTurns: ConversationTurn[],
     target?: { provider?: string; model?: string },
 ): { conversation: OpenAIChatCompletionsPrompt; mappings: NativeItemMapping[] } {
@@ -1043,9 +1055,10 @@ function compileOpenAIChatSelectedTurns(
  * The caller must separately authenticate its prepared-record CAS and prove native-request parity;
  * this pure projection cannot authorize provider transport or a new derived edit.
  */
-function selectedWorkingSetSource(
+export function selectedWorkingSetSource(
     workingSet: Pick<RequestSourceWorkingSet, 'turns' | 'context' | 'assets'> & {
         replacement_turns?: RequestSourceWorkingSet['replacement_turns'];
+        indexed_reference_evidence?: IndexedConversationSelectedContext;
     },
 ) {
     const materialize = (projection: RequestSourceWorkingSet['turns'][number]): ConversationTurn =>
@@ -1058,7 +1071,15 @@ function selectedWorkingSetSource(
         grouped.set(compaction_id, prior);
     }
     const compactions = Object.fromEntries([...grouped].map(([id, replacement_turns]) => [id, { replacement_turns }]));
-    return { turns, context: workingSet.context, compactions, assets: workingSet.assets };
+    return {
+        turns,
+        context: workingSet.context,
+        compactions,
+        assets: workingSet.assets,
+        ...(workingSet.indexed_reference_evidence === undefined
+            ? {}
+            : { indexed_reference_evidence: workingSet.indexed_reference_evidence }),
+    };
 }
 
 /** Compile a host-verified indexed text selection without representing it as a full conversation document. */
@@ -1067,16 +1088,32 @@ export function compileOpenAIChatIndexedSelectedText(
     target?: { provider?: string; model?: string },
 ): ReturnType<typeof compileOpenAIChatSelectedTurns> {
     const selectedContext = IndexedConversationSelectedContextSchema.parse(input);
-    const source = selectedWorkingSetSource(selectedContext);
+    const source = selectedWorkingSetSource({ ...selectedContext, indexed_reference_evidence: selectedContext });
     const selected = selectedCanonicalTurns(source, { allow_interrupted_with_complete_tool_calls: true });
     assertCanonicalContextProjection(source, selected, {
         label: 'OpenAI Chat indexed text',
         program_authorities: ['system', 'developer', 'ordinary'],
     });
-    if (selected.some((turn) => turn.blocks.some((block) => block.type !== 'text'))) {
+    if (
+        selectedContext.completeness === 'selected_text_pending_admission' &&
+        selected.some((turn) => turn.blocks.some((block) => block.type !== 'text'))
+    ) {
         throw new TypeError('Indexed OpenAI Chat text selection contains unsupported content');
     }
-    return compileOpenAIChatSelectedTurns({ assets: selectedContext.assets }, selected, target);
+    const generations = Object.fromEntries(
+        Object.entries(selectedContext.generation_witnesses).map(([id, witness]) => [id, witness.generation]),
+    );
+    for (const turn of selected)
+        assertProtectedReplayCompatibility({ generations }, turn, OPENAI_CHAT_COMPLETIONS_PROTOCOL, target);
+    return compileOpenAIChatSelectedTurns(
+        {
+            ...source,
+            tool_definitions: selectedContext.tool_definitions,
+            operation_receipts: selectedContext.operation_witnesses,
+        },
+        selected,
+        target,
+    );
 }
 
 /** Finalize a fresh receipt from the same bounded source used by the indexed native compiler. */
@@ -1659,7 +1696,7 @@ function openAIUsage(response: OpenAIChatCompletionsResponse): GenerationUsage |
 
 export async function decodeOpenAIChatCanonicalResponse(
     response: OpenAIChatCompletionsResponse,
-    prepared: PreparedOpenAIChatConversation,
+    prepared: OpenAIChatResponseDecodeEvidence,
     finishReason: string | undefined,
     structuredOutput?: CanonicalStructuredOutput,
 ): Promise<DecodedConversationResponse> {

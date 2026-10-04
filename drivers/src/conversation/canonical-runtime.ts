@@ -1401,12 +1401,14 @@ export function providerJsonValue(value: unknown): JsonValue {
 
 /** Protected native state requires recorded invocation evidence, never the newly requested target. */
 export function assertProtectedReplayCompatibility(
-    document: ConversationDocument,
+    document: Pick<ConversationDocument, 'generations'>,
     turn: ConversationTurn,
     protocol: string,
     target?: { provider?: string; model?: string },
 ): void {
-    for (const block of turn.blocks) {
+    for (const block of turn.blocks.flatMap((item): ContentBlock[] =>
+        item.type === 'tool_result' ? [item, ...item.content] : [item],
+    )) {
         if (
             block.type !== 'native_replay' ||
             block.protocol !== protocol ||

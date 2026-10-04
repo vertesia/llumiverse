@@ -33,6 +33,7 @@ import {
     type CanonicalExecutionEventStream,
     type CanonicalExecutionInputOptions,
     type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
     type CanonicalModelSwitchProjectionControls,
     type CanonicalStreamOpenOptions,
     type Completion,
@@ -59,6 +60,7 @@ import {
     markCanonicalAcceptedRecovery,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
+    ownCanonicalHostCapabilities,
     type PromptOptions,
     PromptRole,
     type PromptSegment,
@@ -124,6 +126,9 @@ import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
 export type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
+
+import { hydrateCanonicalSelectedImageAssets } from '../conversation/canonical-host-images.js';
+
 export { compileOpenAIChatIndexedSelectedText } from './openai-chat-conversation-adapter.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
@@ -1258,13 +1263,20 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     }
 
     /** Prepare exact native payload and receipt from a bounded indexed selection; host durability still gates dispatch. */
-    async prepareIndexedTextRequest(input: {
-        selection: IndexedConversationSelectedContext;
-        runtime: ResolvedConversationRuntimeContext;
-        options: ExecutionOptions;
-        provider: string;
-        stream: boolean;
-    }) {
+    async prepareIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            runtime: ResolvedConversationRuntimeContext;
+            options: ExecutionOptions;
+            provider: string;
+            stream: boolean;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ) {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
         // Own every JSON input used after receipt hashing yields. ExecutionOptions may also contain
         // callbacks, so copy only the request controls consumed by this indexed compiler.
         if (!preflightJsonInput(input.selection).success || !preflightJsonInput(input.runtime).success) {
@@ -1295,12 +1307,62 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
         if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
         const options: ExecutionOptions = structuredClone(controls);
+        // Hydration is the first await. Capture constructor-owned native controls before it,
+        // including nested extra-body values and the configured model alias.
+        const ownProtocolField = <Key extends keyof OpenAIChatCompletionsProtocolOptions>(
+            key: Key,
+        ): OpenAIChatCompletionsProtocolOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(this.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value'))
+                throw new TypeError(`Indexed OpenAI protocol option ${key} must be an owned value`);
+            return descriptor?.value;
+        };
+        const defaultMaxTokens = ownProtocolField('defaultMaxTokens');
+        const extraBody = ownProtocolField('extraBody');
+        const resultSchemaMode = ownProtocolField('resultSchemaMode');
+        const toolSchemaMode = ownProtocolField('toolSchemaMode');
+        const protocolControls = {
+            ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
+            ...(extraBody === undefined ? {} : { extraBody }),
+            ...(resultSchemaMode === undefined ? {} : { resultSchemaMode }),
+            ...(toolSchemaMode === undefined ? {} : { toolSchemaMode }),
+        };
+        if (!preflightJsonInput(protocolControls).success)
+            throw new TypeError('Indexed OpenAI protocol controls are not bounded JSON');
+        const ownedProtocolControls = structuredClone(protocolControls);
+        const actualModel = this.getModelName(options);
         const provider = input.provider;
         const stream = input.stream;
-        const compiled = compileOpenAIChatIndexedSelectedText(selection, {
-            provider,
-            model: options.model,
+        const resolver = ownedHostCapabilities?.resolve_canonical_asset;
+        const signal = input.signal;
+        signal?.throwIfAborted();
+        const imageIds = new Set<string>();
+        for (const projection of [
+            ...selection.turns,
+            ...(selection.replacement_turns ?? []).map((value) => value.projection),
+        ]) {
+            for (const block of projection.selected_blocks) {
+                for (const item of block.type === 'tool_result' ? block.content : [block])
+                    if (item.type === 'image') imageIds.add(item.asset_id);
+            }
+        }
+        const nativeAssets = await hydrateCanonicalSelectedImageAssets({
+            label: 'Indexed native preparation',
+            assets: selection.assets,
+            selected_ids: imageIds,
+            resolve_asset: resolver,
+            signal,
+            hydrated: new Map(),
+            native_external: () => false,
         });
+        signal?.throwIfAborted();
+        const compiled = compileOpenAIChatIndexedSelectedText(
+            { ...selection, assets: nativeAssets },
+            {
+                provider,
+                model: options.model,
+            },
+        );
         const tools = selection.context.active_tool_definition_ids.map((id) => {
             const tool = Object.hasOwn(selection.tool_definitions, id) ? selection.tool_definitions[id] : undefined;
             if (!tool) throw new Error(`Indexed OpenAI Chat tool ${id} is unavailable`);
@@ -1313,7 +1375,15 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             selection.source_turn_count,
             tools,
         );
-        const builtPayload = this.buildPayload(nativeConversation, options, stream, provider, tools);
+        const builtPayload = buildOpenAIChatCompletionsPayload(
+            nativeConversation,
+            options,
+            ownedProtocolControls,
+            actualModel,
+            stream,
+            provider,
+            tools,
+        );
         if (builtPayload.extra_body !== undefined && !preflightJsonInput(builtPayload.extra_body).success) {
             throw new TypeError('Indexed OpenAI extra body is not bounded JSON');
         }
@@ -1345,6 +1415,96 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             payload,
             receipt,
         };
+    }
+
+    /** Dispatch only an exact, already committed indexed text request through this configured transport. */
+    async executeCommittedIndexedTextRequest(
+        driver: DriverT,
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            provider: string;
+            assert_committed: () => Promise<void>;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<DecodedConversationResponse> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const record = parseConversationPreparedRequestRecord(structuredClone(input.record));
+        const ownOption = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed OpenAI option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownOption('model');
+        if (typeof model !== 'string') throw new TypeError('Indexed OpenAI model is unavailable');
+        const modelOptions = ownOption('model_options');
+        const resultSchema = ownOption('result_schema');
+        const stripImagesAfterTurns = ownOption('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownOption('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownOption('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        const provider = input.provider;
+        const assertCommitted = input.assert_committed;
+        const signal = input.signal;
+        if (options.result_schema !== undefined) {
+            throw new Error('Indexed OpenAI Chat text transport does not support structured output');
+        }
+        const prepared = await this.prepareIndexedTextRequest(
+            {
+                selection,
+                runtime: record.runtime,
+                options,
+                provider,
+                stream: false,
+                signal,
+            },
+            ownedHostCapabilities,
+        );
+        if (
+            record.source.conversation_id !== selection.source.conversation_id ||
+            record.source.revision !== selection.source.revision ||
+            (await fingerprintJson(record.request_receipt)) !== (await fingerprintJson(prepared.receipt))
+        ) {
+            throw new Error('Indexed native request differs from its durably prepared receipt');
+        }
+        signal?.throwIfAborted();
+        await assertCommitted();
+        signal?.throwIfAborted();
+        const response = await this.postChatCompletion(driver, prepared.payload, options, signal);
+        const toolDefinitions = selection.context.active_tool_definition_ids.map((id) => {
+            const tool = Object.hasOwn(selection.tool_definitions, id) ? selection.tool_definitions[id] : undefined;
+            if (!tool) throw new Error(`Indexed OpenAI Chat tool ${id} is unavailable`);
+            return tool;
+        });
+        return decodeOpenAIChatCanonicalResponse(
+            response,
+            {
+                runtime: record.runtime,
+                receipt: record.request_receipt,
+                provider,
+                requested_model: record.request_receipt.target.model,
+                tool_definitions: toolDefinitions,
+                generation_id: record.generation_id,
+                response_turn_id: record.response_turn_id,
+            },
+            typeof response.choices[0]?.finish_reason === 'string' ? response.choices[0].finish_reason : undefined,
+        );
     }
 
     /**
@@ -2817,6 +2977,44 @@ export abstract class OpenAIChatCompletionsDriverBase<
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         return this.chatCompletionsProtocol.requestCanonicalTextCompletion(this, prompt, options, signal);
+    }
+
+    /** @internal Compile through this configured driver before the host stages indexed evidence. */
+    prepareIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            runtime: ResolvedConversationRuntimeContext;
+            options: ExecutionOptions;
+            stream: boolean;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ) {
+        return this.chatCompletionsProtocol.prepareIndexedTextRequest(
+            { ...input, provider: this.provider },
+            hostCapabilities,
+        );
+    }
+
+    /** @internal The host must supply a durable current-owner assertion before native dispatch. */
+    executeCommittedIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            assert_committed: () => Promise<void>;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<DecodedConversationResponse> {
+        return this.chatCompletionsProtocol.executeCommittedIndexedTextRequest(
+            this,
+            {
+                ...input,
+                provider: this.provider,
+            },
+            hostCapabilities,
+        );
     }
 
     requestCanonicalContextCompletion(

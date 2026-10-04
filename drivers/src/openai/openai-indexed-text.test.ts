@@ -3,14 +3,17 @@ import {
     createConversationDocument,
     createTextBlock,
     createUserTurn,
+    deriveConversationId,
     hashContentBytes,
     type IndexedConversationRecordStore,
     loadIndexedSelectedTextContext,
+    parseConversationPreparedRequestRecord,
     stageIndexedConversationSnapshot,
 } from '@llumiverse/conversation';
+import OpenAI from 'openai';
 import { describe, expect, it } from 'vitest';
 import { createRequestReceipt, providerJsonValue } from '../conversation/canonical-runtime.js';
-import { OpenAISDKChatCompletionsProtocol } from './openai_chat_completions.js';
+import { OpenAIChatCompletionsDriver, OpenAISDKChatCompletionsProtocol } from './openai_chat_completions.js';
 import {
     compileOpenAIChatCompletionsConversation,
     compileOpenAIChatIndexedSelectedText,
@@ -117,6 +120,63 @@ describe('indexed OpenAI Chat selected text', () => {
         expect(prepared.status).toBe('awaiting_durable_prepared_record');
         expect(reads).not.toContain('blocks:block:cold');
         expect(selected.completeness).toBe('selected_text_pending_admission');
+
+        const nativeBodies: unknown[] = [];
+        const driver = new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://indexed.test/v1' });
+        driver.service = new OpenAI({
+            apiKey: 'test',
+            baseURL: 'https://indexed.test/v1',
+            fetch: async (_url, init) => {
+                nativeBodies.push(JSON.parse(String(init?.body)));
+                return Response.json({
+                    id: 'chatcmpl-indexed',
+                    object: 'chat.completion',
+                    created: 1,
+                    model: target.model,
+                    choices: [
+                        {
+                            index: 0,
+                            message: { role: 'assistant', content: 'Done', refusal: null },
+                            finish_reason: 'stop',
+                            logprobs: null,
+                        },
+                    ],
+                    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+                });
+            },
+        });
+        const configured = await driver.prepareIndexedTextRequest({
+            selection: selected,
+            runtime,
+            options: { model: target.model },
+            stream: false,
+        });
+        const record = parseConversationPreparedRequestRecord({
+            source: selected.source,
+            runtime,
+            request_receipt: configured.receipt,
+            generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+        });
+        let committed = false;
+        const dispatch = () =>
+            driver.executeCommittedIndexedTextRequest({
+                selection: selected,
+                record,
+                options: { model: target.model },
+                assert_committed: async () => {
+                    if (!committed) throw new Error('target has no durable indexed prepared record');
+                },
+            });
+        await expect(dispatch()).rejects.toThrow('target has no durable indexed prepared record');
+        expect(nativeBodies).toHaveLength(0);
+        committed = true;
+        const decoded = await dispatch();
+        expect(nativeBodies).toHaveLength(1);
+        expect(nativeBodies[0]).toMatchObject({ model: target.model, messages: [{ role: 'user', content: 'Hello' }] });
+        expect(JSON.stringify(nativeBodies[0])).not.toContain('Not selected');
+        expect(decoded.generation.request_receipt).toEqual(configured.receipt);
+        expect(decoded.turns[0]?.blocks).toMatchObject([{ type: 'text', text: 'Done' }]);
 
         const mutableSelection = structuredClone(selected);
         const mutableRuntime = structuredClone(runtime);

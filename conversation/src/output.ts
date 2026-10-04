@@ -18,7 +18,7 @@ import {
 } from './schemas/output.js';
 import { IdentifierSchema } from './schemas/primitives.js';
 import { assertHistoricalToolArgumentExternalization } from './tool-arguments.js';
-import type { Asset, ConversationDocument, GeneratedAgentTurn } from './types.js';
+import type { Asset, ConversationDocument, ExecutedGeneration, GeneratedAgentTurn, OperationReceipt } from './types.js';
 import { diagnosticsFromZodError, parseConversationDocument } from './validation.js';
 
 export type ConversationAcceptedOutputFragment = z.infer<typeof ConversationAcceptedOutputFragmentSchema>;
@@ -304,6 +304,128 @@ export async function matchesRetainedAcceptedOutputFragment(
         if (!current || !same(current, acceptedAsset)) return false;
     }
     return true;
+}
+
+/** Project one indexed, text-only accepted response from independently verified record bodies. */
+export function createAcceptedIndexedTextOutputFragment(input: {
+    source: { conversation_id: string; revision: number };
+    receipt: OperationReceipt;
+    turn: GeneratedAgentTurn;
+    generation: ExecutedGeneration;
+}): ConversationAcceptedOutputFragment {
+    const { source, receipt, turn, generation } = input;
+    if (
+        receipt.conversation_id !== source.conversation_id ||
+        receipt.result_revision !== source.revision ||
+        receipt.base_revision + 1 !== receipt.result_revision ||
+        receipt.accepted_turn_ids?.length !== 1 ||
+        receipt.accepted_turn_ids[0] !== turn.id ||
+        receipt.accepted_generation_ids?.length !== 1 ||
+        receipt.accepted_generation_ids[0] !== generation.id ||
+        (receipt.accepted_asset_ids?.length ?? 0) !== 0 ||
+        turn.generation_id !== generation.id ||
+        generation.record_source !== 'executed' ||
+        generation.source.conversation_id !== source.conversation_id ||
+        generation.source.revision !== receipt.base_revision ||
+        turn.blocks.some((block) => block.type !== 'text' && block.type !== 'native_replay')
+    ) {
+        throw new ConversationOutputProjectionError(
+            'receipt_mismatch',
+            'Indexed text output differs from its accepted response receipt',
+        );
+    }
+    return parseAcceptedOutputFragment({
+        format: CONVERSATION_ACCEPTED_OUTPUT_FORMAT,
+        schema_version: CONVERSATION_SCHEMA_VERSION,
+        experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+        source,
+        receipt: projectReceipt(receipt),
+        turn: ConversationOutputTurnSchema.parse({
+            id: turn.id,
+            kind: turn.kind,
+            authority: turn.authority,
+            status: turn.status,
+            timestamps: turn.timestamps,
+            model_visibility: turn.model_visibility,
+            provenance: turn.provenance,
+            generation_id: turn.generation_id,
+            blocks: turn.blocks.filter((block) => block.type === 'text'),
+        }),
+        generation: projectGeneration(generation),
+        assets: {},
+        completeness: {
+            history: 'omitted',
+            native_replay: 'omitted',
+            metadata: 'omitted',
+            semantic_content: 'complete',
+            omitted_block_ids: turn.blocks.filter((block) => block.type === 'native_replay').map((block) => block.id),
+            omitted_asset_ids: [],
+        },
+    });
+}
+
+/** Output-only semantic projection from exact indexed response acceptance; native replay stays cold. */
+export function createAcceptedIndexedOutputFragment(input: {
+    source: { conversation_id: string; revision: number };
+    receipt: OperationReceipt;
+    turn: GeneratedAgentTurn;
+    generation: ExecutedGeneration;
+}): ConversationAcceptedOutputFragment {
+    const { source, receipt, turn, generation } = input;
+    if (
+        receipt.conversation_id !== source.conversation_id ||
+        receipt.result_revision !== source.revision ||
+        receipt.base_revision + 1 !== receipt.result_revision ||
+        receipt.accepted_turn_ids?.length !== 1 ||
+        receipt.accepted_turn_ids[0] !== turn.id ||
+        receipt.accepted_generation_ids?.length !== 1 ||
+        receipt.accepted_generation_ids[0] !== generation.id ||
+        (receipt.accepted_asset_ids?.length ?? 0) !== 0 ||
+        turn.generation_id !== generation.id ||
+        generation.record_source !== 'executed' ||
+        generation.source.conversation_id !== source.conversation_id ||
+        generation.source.revision !== receipt.base_revision ||
+        turn.blocks.some((block) => !['text', 'json', 'tool_call', 'native_replay'].includes(block.type))
+    ) {
+        throw new ConversationOutputProjectionError(
+            'receipt_mismatch',
+            'Indexed dependent output differs from its accepted response receipt',
+        );
+    }
+    return parseAcceptedOutputFragment({
+        format: CONVERSATION_ACCEPTED_OUTPUT_FORMAT,
+        schema_version: CONVERSATION_SCHEMA_VERSION,
+        experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+        source,
+        receipt: projectReceipt(receipt),
+        turn: ConversationOutputTurnSchema.parse({
+            id: turn.id,
+            kind: turn.kind,
+            authority: turn.authority,
+            status: turn.status,
+            timestamps: turn.timestamps,
+            model_visibility: turn.model_visibility,
+            provenance: turn.provenance,
+            generation_id: turn.generation_id,
+            blocks: turn.blocks.flatMap((block): ConversationOutputBlock[] =>
+                block.type === 'tool_call'
+                    ? [projectToolCall(block)]
+                    : block.type === 'text' || block.type === 'json'
+                      ? [block]
+                      : [],
+            ),
+        }),
+        generation: projectGeneration(generation),
+        assets: {},
+        completeness: {
+            history: 'omitted',
+            native_replay: 'omitted',
+            metadata: 'omitted',
+            semantic_content: 'complete',
+            omitted_block_ids: turn.blocks.filter((block) => block.type === 'native_replay').map((block) => block.id),
+            omitted_asset_ids: [],
+        },
+    });
 }
 
 /**

@@ -144,6 +144,42 @@ export interface CanonicalHostCapabilities {
 }
 
 /**
+ * Own the per-call callback record synchronously. Only an own data-property function is accepted;
+ * the function and its closure remain host-owned, while later mutation of the supplied record cannot
+ * redirect an in-flight call after prompt preparation or the durable prepared-request barrier.
+ */
+export function ownCanonicalHostCapabilities(input?: CanonicalHostCapabilities): CanonicalHostCapabilities | undefined {
+    if (input === undefined) return undefined;
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+        throw new TypeError('Canonical host capabilities must be a callback record');
+    }
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError('Canonical host capabilities must be a plain callback record');
+    }
+    if (Reflect.ownKeys(input).some((key) => key !== 'resolve_canonical_asset')) {
+        throw new TypeError('Canonical host capabilities contain an unsupported callback');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, 'resolve_canonical_asset');
+    if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+        throw new TypeError('Canonical host capability callbacks must be own data properties');
+    }
+    const resolver: unknown = descriptor?.value;
+    if (resolver !== undefined && typeof resolver !== 'function') {
+        throw new TypeError('Canonical asset host capability must be a function');
+    }
+    return Object.freeze(
+        resolver === undefined
+            ? {}
+            : {
+                  resolve_canonical_asset: resolver as NonNullable<
+                      CanonicalHostCapabilities['resolve_canonical_asset']
+                  >,
+              },
+    );
+}
+
+/**
  * Transport and response policy for current canonical execution.
  *
  * This is intentionally declared independently from legacy `ExecutionOptions`: prompt formatters,

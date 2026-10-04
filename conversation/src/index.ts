@@ -1,5 +1,6 @@
 export * from './asset-resolution.js';
 export * from './builders.js';
+export * from './checkpoint-summary-fork.js';
 export * from './content-integrity.js';
 export * from './context-change.js';
 export * from './context-selection.js';

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createConversationDocument } from '../src/builders.js';
+import { isGeneratedAgentTurn } from '../src/guards.js';
 import {
     ConversationOutputProjectionError,
     type ConversationOutputReceipt,
+    createAcceptedIndexedTextOutputFragment,
     createAcceptedOutputFragment,
     matchesRetainedAcceptedOutputFragment,
     parseAcceptedOutputFragment,
@@ -145,6 +147,60 @@ function acceptedDocument(options: { assetId?: string; receivedMedia?: boolean }
 }
 
 describe('accepted conversation output projection', () => {
+    it('projects the same text-only accepted output from bounded records without a full document', () => {
+        const original = acceptedDocument();
+        const generated = original.turns[0];
+        const text = generated?.blocks.find((block) => block.type === 'text');
+        const replay = generated?.blocks.find((block) => block.type === 'native_replay');
+        const generation = original.generations['generation:1'];
+        if (
+            !generated ||
+            !isGeneratedAgentTurn(generated) ||
+            !text ||
+            !replay ||
+            !generation ||
+            generation.record_source !== 'executed'
+        )
+            throw new Error('Missing executed text fixture');
+        const source = createConversationDocument({ id: original.id, created_at: recordedAt });
+        const turn = { ...generated, blocks: [text, replay] };
+        const accepted = appendConversationRecords(
+            source,
+            { turns: [turn], generations: [generation] },
+            {
+                expected_revision: source.revision,
+                operation_id: 'response:1',
+                payload_fingerprint: 'response-fingerprint',
+                recorded_at: recordedAt,
+            },
+        ).document;
+        const receipt = accepted.operation_receipts['response:1'];
+        if (!receipt) throw new Error('Missing accepted operation receipt');
+        const bounded = createAcceptedIndexedTextOutputFragment({
+            source: { conversation_id: accepted.id, revision: accepted.revision },
+            receipt,
+            turn,
+            generation,
+        });
+        expect(bounded).toEqual(createAcceptedOutputFragment(accepted, 'response:1'));
+        expect(() =>
+            createAcceptedIndexedTextOutputFragment({
+                source: { conversation_id: accepted.id, revision: accepted.revision },
+                receipt: { ...receipt, accepted_turn_ids: ['turn:other'] },
+                turn,
+                generation,
+            }),
+        ).toThrow('accepted response receipt');
+        expect(() =>
+            createAcceptedIndexedTextOutputFragment({
+                source: { conversation_id: accepted.id, revision: accepted.revision },
+                receipt,
+                turn: generated,
+                generation,
+            }),
+        ).toThrow('accepted response receipt');
+    });
+
     it('compares every accepted-output receipt field independently of object key order', () => {
         const receipt = createAcceptedOutputFragment(acceptedDocument(), 'response:1').receipt;
         const reordered = {

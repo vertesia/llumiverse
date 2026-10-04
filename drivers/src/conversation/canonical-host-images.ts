@@ -2,9 +2,11 @@ import {
     type Asset,
     type ConversationDocument,
     fingerprintJson,
+    preflightJsonInput,
     type ResolveConversationAsset,
     readBoundedConversationAsset,
 } from '@llumiverse/conversation';
+import { AssetSchema } from '@llumiverse/conversation/schemas';
 import { selectedCanonicalTurns } from './canonical-runtime.js';
 
 const MAX_NATIVE_IMAGE_BYTES = 32 * 1024 * 1024;
@@ -54,47 +56,82 @@ export async function hydrateCanonicalHostImages(input: CanonicalHostImageOption
             for (const item of content) if (item.type === 'image') selectedIds.add(item.asset_id);
         }
     }
-    const ids = [...selectedIds].filter((id) => {
+    const externalIds = [...selectedIds].filter((id) => {
         const asset = input.document.assets[id];
         if (asset === undefined) throw new TypeError(`${input.label} selected image asset ${id} is missing`);
         return asset.storage.type === 'external' && !input.native_external(asset);
     });
-    if (ids.length === 0) return input.document;
-    const nativeDocument = { ...input.document, assets: { ...input.document.assets } };
+    if (externalIds.length === 0) return input.document;
+    const assets = await hydrateCanonicalSelectedImageAssets({
+        ...input,
+        assets: input.document.assets,
+        selected_ids: selectedIds,
+    });
+    return assets === input.document.assets ? input.document : { ...input.document, assets };
+}
+
+/** Explicit selected assets only; works for a bounded projection without manufacturing a full document. */
+export async function hydrateCanonicalSelectedImageAssets(
+    input: Omit<CanonicalHostImageOptions, 'document' | 'selection'> & {
+        assets: Readonly<Record<string, Asset>>;
+        selected_ids: ReadonlySet<string>;
+    },
+): Promise<Record<string, Asset>> {
+    const label = input.label;
+    const signal = input.signal;
+    const resolver = input.resolve_asset;
+    const nativeExternal = input.native_external;
+    const inlineAsset = input.inline_asset;
+    const hydrated = input.hydrated;
+    const selected = [...input.selected_ids];
+    const owned: Record<string, Asset> = Object.fromEntries(
+        Object.entries(input.assets).map(([id, value]) => {
+            if (!preflightJsonInput(value).success)
+                throw new TypeError(`${label} selected asset is not owned bounded JSON`);
+            return [id, AssetSchema.parse(value)];
+        }),
+    );
+    const ids = selected.filter((id) => {
+        const asset = owned[id];
+        if (asset === undefined) throw new TypeError(`${label} selected image asset ${id} is missing`);
+        return asset.storage.type === 'external' && !nativeExternal(asset);
+    });
+    if (ids.length === 0) return Object.fromEntries(Object.entries(owned));
+    const nativeAssets = { ...owned };
     let aggregateBytes = 0;
     for (const id of ids) {
-        const asset = input.document.assets[id];
-        if (asset === undefined || asset.kind !== 'image' || input.resolve_asset === undefined)
-            throw new TypeError(`${input.label} external image asset ${id} has no host resolver`);
+        const asset = owned[id];
+        if (asset === undefined || asset.kind !== 'image' || resolver === undefined)
+            throw new TypeError(`${label} external image asset ${id} has no host resolver`);
         if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(asset.mime_type))
-            throw new TypeError(`${input.label} external image asset ${id} has unsupported MIME`);
+            throw new TypeError(`${label} external image asset ${id} has unsupported MIME`);
         if (asset.byte_length === undefined || asset.byte_length > MAX_NATIVE_IMAGE_BYTES - aggregateBytes)
-            throw new RangeError(`${input.label} external images exceed the native projection budget`);
+            throw new RangeError(`${label} external images exceed the native projection budget`);
         const fingerprint = await fingerprintJson(asset);
-        input.signal?.throwIfAborted();
-        let data = input.hydrated.get(id)?.data;
-        if (data !== undefined && input.hydrated.get(id)?.fingerprint !== fingerprint)
-            throw new TypeError(`${input.label} external image asset ${id} changed during native preparation`);
+        signal?.throwIfAborted();
+        let data = hydrated.get(id)?.data;
+        if (data !== undefined && hydrated.get(id)?.fingerprint !== fingerprint)
+            throw new TypeError(`${label} external image asset ${id} changed during native preparation`);
         if (data === undefined) {
-            const bytes = await readBoundedConversationAsset(asset, input.resolve_asset, {
+            const bytes = await readBoundedConversationAsset(asset, resolver, {
                 max_bytes: MAX_NATIVE_IMAGE_BYTES,
                 max_chunks: MAX_NATIVE_IMAGE_CHUNKS,
-                signal: input.signal,
+                signal,
                 require_integrity: true,
-                label: `${input.label} external image`,
+                label: `${label} external image`,
             });
-            input.signal?.throwIfAborted();
+            signal?.throwIfAborted();
             if (!hasImageSignature(bytes, asset.mime_type))
-                throw new TypeError(`${input.label} external image asset ${id} has invalid media bytes`);
+                throw new TypeError(`${label} external image asset ${id} has invalid media bytes`);
             data = Buffer.from(bytes).toString('base64');
-            input.hydrated.set(id, { fingerprint, data });
+            hydrated.set(id, { fingerprint, data });
         }
         aggregateBytes += asset.byte_length;
-        nativeDocument.assets[id] = input.inline_asset?.(asset, data) ?? {
+        nativeAssets[id] = inlineAsset?.(asset, data) ?? {
             ...asset,
             storage: { type: 'inline_base64', data },
         };
     }
-    input.signal?.throwIfAborted();
-    return nativeDocument;
+    signal?.throwIfAborted();
+    return nativeAssets;
 }

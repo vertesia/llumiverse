@@ -8,7 +8,7 @@ import {
     ConversationLineageSchema,
     ProcessingStateSchema,
 } from './document.js';
-import { GenerationSchema, OperationReceiptSchema } from './execution.js';
+import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from './execution.js';
 import {
     CONVERSATION_EXPERIMENTAL_REVISION,
     CONVERSATION_FORMAT,
@@ -154,7 +154,11 @@ export const IndexedConversationProcessingHeaderSchema = ProcessingStateSchema.o
 
 /** A bounded selected projection, never a complete ConversationDocument or permission to dispatch. */
 export const IndexedConversationSelectedContextSchema = z.strictObject({
-    completeness: z.literal('selected_text_pending_admission'),
+    completeness: z.enum([
+        'selected_text_pending_admission',
+        'selected_dependencies_pending_admission',
+        'selected_media_compaction_pending_admission',
+    ]),
     source: ConversationRefSchema,
     root: PagedRecordRefSchema,
     source_turn_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -169,6 +173,22 @@ export const IndexedConversationSelectedContextSchema = z.strictObject({
             acceptance: OperationReceiptSchema,
         }),
     ),
+    /** Exact selected-call terminal facts, absent on the original text-only profile. */
+    execution_witnesses: z.record(IdentifierSchema, ExecutionReceiptSchema).optional(),
+    /** Exact replacement projections and their accepted provenance, never retained original bodies. */
+    replacement_turns: z
+        .array(z.strictObject({ compaction_id: IdentifierSchema, projection: RequestSourceProjectedTurnSchema }))
+        .optional(),
+    compaction_witnesses: z
+        .record(
+            IdentifierSchema,
+            z.strictObject({
+                compaction: IndexedConversationCompactionHeaderSchema,
+                acceptance: OperationReceiptSchema,
+            }),
+        )
+        .optional(),
+    operation_witnesses: z.record(IdentifierSchema, OperationReceiptSchema).optional(),
     source_tail_turn_id: IdentifierSchema.optional(),
 });
 export type IndexedConversationSelectedContext = z.infer<typeof IndexedConversationSelectedContextSchema>;
