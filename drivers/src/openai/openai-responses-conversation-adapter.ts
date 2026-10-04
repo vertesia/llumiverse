@@ -2018,7 +2018,7 @@ function openAIResponsesUsage(native: OpenAI.Responses.ResponseUsage | null | un
     };
 }
 
-export async function decodeOpenAIResponsesCanonicalResponse(input: {
+type DecodeOpenAIResponsesCanonicalResponseInput = {
     response: OpenAI.Responses.Response;
     prepared:
         | PreparedOpenAIResponsesConversation
@@ -2034,13 +2034,75 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
           > & { selected_turns: ConversationTurn[] });
     fallback_items?: OpenAIResponsesInputItem[];
     structured_output?: CanonicalStructuredOutput;
-}): Promise<DecodedConversationResponse> {
+};
+
+export async function decodeOpenAIResponsesCanonicalResponse(
+    input: DecodeOpenAIResponsesCanonicalResponseInput,
+): Promise<DecodedConversationResponse> {
+    return decodeOpenAIResponsesTerminalResponse(input, false);
+}
+
+/** Received failure is retained as failed execution evidence; never converted to successful output. */
+export async function decodeOpenAIResponsesFailedCanonicalResponse(
+    input: DecodeOpenAIResponsesCanonicalResponseInput,
+): Promise<DecodedConversationResponse> {
+    if (input.response.status !== 'failed')
+        throw new TypeError('Failed response evidence requires actual provider failure');
+    try {
+        return await decodeOpenAIResponsesTerminalResponse(input, true);
+    } catch (_conversionError: unknown) {
+        // A received terminal may contain incomplete/malformed output. Keep its exact native payload and
+        // paid generation facts without repairing arguments or inventing runnable canonical blocks.
+        return generationOnlyOpenAIResponsesFailure(input);
+    }
+}
+
+async function generationOnlyOpenAIResponsesFailure(
+    input: DecodeOpenAIResponsesCanonicalResponseInput,
+): Promise<DecodedConversationResponse> {
+    const { prepared, response } = input;
+    const actual = await createExecutedGeneration({
+        id: prepared.generation_id,
+        runtime: prepared.runtime,
+        receipt: prepared.receipt,
+        provider: prepared.provider,
+        protocol: OPENAI_RESPONSES_PROTOCOL,
+        adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+        requested_model: prepared.requested_model,
+        resolved_model: response.model,
+        provider_response_id: response.id,
+        finish_reason: response.error?.code ?? 'failed',
+        usage: openAIResponsesUsage(response.usage),
+    });
+    return {
+        turns: [],
+        generation: {
+            ...actual,
+            status: 'failed',
+            metadata: { openai_responses_failure: providerJsonValue(response) },
+        },
+        assets: [],
+        diagnostics: [],
+        payload_fingerprint: await fingerprintJson(providerJsonValue(response)),
+    };
+}
+
+async function decodeOpenAIResponsesTerminalResponse(
+    input: DecodeOpenAIResponsesCanonicalResponseInput,
+    failed: boolean,
+): Promise<DecodedConversationResponse> {
     const { response, prepared } = input;
-    if (response.status !== 'completed' && response.status !== 'incomplete') {
+    if (!failed && response.status !== 'completed' && response.status !== 'incomplete') {
         throw new Error(`OpenAI Responses response ${response.id} is not a completed terminal response`);
     }
-    const items = response.output.length > 0 ? response.output : (input.fallback_items ?? []);
+    // A failed terminal owns its actual output, including []; drafts must not invent received output.
+    const items = failed
+        ? response.output
+        : response.output.length > 0
+          ? response.output
+          : (input.fallback_items ?? []);
     const completedAt = prepared.runtime.completed_at ?? new Date().toISOString();
+    if (failed && items.length === 0) return generationOnlyOpenAIResponsesFailure(input);
     const records = await assistantItemsRecords({
         items: providerJsonValue(items) as unknown as Record<string, unknown>[],
         first_item_index: 0,
@@ -2063,18 +2125,20 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     const boundReceived = bindProtectedResponsesExchange([...selectedTurns, received]).at(-1);
     if (boundReceived?.kind !== 'agent') throw new Error('OpenAI Responses response dependency binding failed');
     const hasTools = boundReceived.blocks.some((block) => block.type === 'tool_call');
-    const finishReason =
-        response.status === 'incomplete'
-            ? response.incomplete_details?.reason === 'max_output_tokens'
-                ? 'length'
-                : (response.incomplete_details?.reason ?? 'incomplete')
-            : hasTools
-              ? 'tool_use'
-              : 'stop';
+    const finishReason = failed
+        ? (response.error?.code ?? 'failed')
+        : response.status === 'incomplete'
+          ? response.incomplete_details?.reason === 'max_output_tokens'
+              ? 'length'
+              : (response.incomplete_details?.reason ?? 'incomplete')
+          : hasTools
+            ? 'tool_use'
+            : 'stop';
     const turn: ConversationTurn = {
         ...received,
         id: prepared.response_turn_id,
-        status: response.status === 'incomplete' ? 'interrupted' : 'completed',
+        status: failed ? 'failed' : response.status === 'incomplete' ? 'interrupted' : 'completed',
+        ...(failed ? { model_visibility: 'exclude' as const } : {}),
         timestamps: {
             recorded_at: completedAt,
             ...(prepared.runtime.started_at === undefined ? {} : { started_at: prepared.runtime.started_at }),
@@ -2112,8 +2176,9 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     });
     const generation: ExecutedGeneration = {
         ...baseGeneration,
-        status: response.status === 'incomplete' ? 'cancelled' : 'completed',
-        ...(typeof response.service_tier === 'string'
+        status: failed ? 'failed' : response.status === 'incomplete' ? 'cancelled' : 'completed',
+        ...(failed ? { metadata: { openai_responses_failure: providerJsonValue(response) } } : {}),
+        ...(!failed && typeof response.service_tier === 'string'
             ? { metadata: { openai_responses: { service_tier: response.service_tier } } }
             : {}),
     };
@@ -2127,7 +2192,7 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
         diagnostics: [],
         payload_fingerprint: await fingerprintJson(providerJsonValue(response)),
     };
-    if (input.structured_output === undefined) return decoded;
+    if (failed || input.structured_output === undefined) return decoded;
     return normalizeDecodedStructuredOutput(decoded, input.structured_output, ({ replay_blocks, binding }) => {
         const sources = new Set(binding.source_block_ids);
         let sourceCount = 0;

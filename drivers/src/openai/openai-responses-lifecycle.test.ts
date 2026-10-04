@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
+import type { CanonicalProjectedRequestMeasurement } from '@llumiverse/common';
+import { deriveCanonicalProjectedMeasurementIdentity } from '@llumiverse/common/schemas';
 import {
     appendConversationRecords,
     appendToolExecutionResult,
     applyContextChange,
     type ConversationDocument,
+    type ConversationPreparedRequest,
+    type ConversationPreparedRequestRecord,
     type ConversationStreamEvent,
     createConversationDocument,
     createTextBlock,
@@ -12,9 +16,13 @@ import {
     parseConversationDocument,
     planContextChange,
     processingContextFingerprint,
+    recordProcessingCoverage,
+    toolArgumentsForModel,
 } from '@llumiverse/conversation';
 import {
+    assertCanonicalFailedExecutionMatchesPreparedRecord,
     type CanonicalExecutionInputOptions,
+    canonicalFailedExecution,
     type ExecutionOptions,
     legacyCompletionFromCanonicalExecution,
     PromptRole,
@@ -2384,3 +2392,388 @@ describe('OpenAI Responses canonical lifecycle', () => {
         expect(create).toHaveBeenCalledOnce();
     });
 });
+
+describe('received canonical Responses failure evidence', () => {
+    it.each(['finite', 'stream'] as const)(
+        'retains actual %s failure bytes without accepting a response',
+        async (transport) => {
+            for (const hasOutput of [false, true]) {
+                const native = response({
+                    id: `response:failed:${transport}:${hasOutput}`,
+                    status: 'failed',
+                    output: hasOutput ? [messageItem('failed:message', 'Received partial output.', 'incomplete')] : [],
+                });
+                let record: ConversationPreparedRequestRecord | undefined;
+                let source: ConversationDocument | undefined;
+                const options: CanonicalExecutionInputOptions = {
+                    ...runtimeOptions({
+                        flow: `failed:${transport}:${hasOutput}`,
+                        operation: 'generate',
+                        attempt: 'first',
+                        recordedAt: '2026-10-04T00:00:00.000Z',
+                    }),
+                    on_canonical_request_prepared: async (prepared) => {
+                        record = prepared.record;
+                        source = prepared.document;
+                    },
+                };
+                const create = vi.fn(async () =>
+                    transport === 'finite'
+                        ? native
+                        : (async function* () {
+                              yield { type: 'response.failed' as const, sequence_number: 1, response: native };
+                          })(),
+                );
+                const driver = new TestOpenAIResponsesDriver(create);
+                let failure: unknown;
+                if (transport === 'finite') {
+                    try {
+                        await driver.executeCanonical([{ role: PromptRole.user, content: 'Continue.' }], options);
+                    } catch (error: unknown) {
+                        failure = error;
+                    }
+                } else {
+                    const stream = await driver.streamCanonicalEvents(
+                        [{ role: PromptRole.user, content: 'Continue.' }],
+                        options,
+                        undefined,
+                        { stream_id: `stream:failed:${hasOutput}` },
+                    );
+                    const events = await collectCanonicalEvents(stream);
+                    expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
+                    expect(stream.terminal_event).toMatchObject({ type: 'stream_terminated', outcome: 'failed' });
+                    expect(stream.completion).toBeUndefined();
+                    failure = stream.failure;
+                    await stream.closed;
+                }
+                expect(failure).toBeDefined();
+                const evidence = canonicalFailedExecution(failure);
+                if (!evidence || !record || !source)
+                    throw new Error('Actual provider failure lost its durably prepared evidence');
+                await assertCanonicalFailedExecutionMatchesPreparedRecord(evidence, record);
+                const generation = evidence.decoded_response.generation;
+                expect(generation).toMatchObject({
+                    status: 'failed',
+                    provider_response_id: native.id,
+                    finish_reason: 'server_error',
+                    usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+                    request_receipt: record.request_receipt,
+                    metadata: { openai_responses_failure: native },
+                });
+                expect(evidence.prepared_request).toEqual(record);
+                expect(source.generations[record.generation_id]).toBeUndefined();
+                expect(source.operation_receipts[record.runtime.response_operation_id]).toBeUndefined();
+                const failedTurns = evidence.decoded_response.turns;
+                expect(failedTurns).toHaveLength(hasOutput ? 1 : 0);
+                expect(
+                    failedTurns.every((turn) => turn.status === 'failed' && turn.model_visibility === 'exclude'),
+                ).toBe(true);
+                expect(
+                    source.context.entries.some(
+                        (entry) =>
+                            entry.type === 'source_turn' && failedTurns.some((turn) => turn.id === entry.turn_id),
+                    ),
+                ).toBe(false);
+                expect(create).toHaveBeenCalledOnce();
+                const changed = { ...record, runtime: { ...record.runtime, attempt_id: 'foreign:attempt' } };
+                await expect(assertCanonicalFailedExecutionMatchesPreparedRecord(evidence, changed)).rejects.toThrow();
+                expect(canonicalFailedExecution(new Error('caller metadata', { cause: { evidence } }))).toBeUndefined();
+            }
+        },
+    );
+
+    it('retains absent usage as unavailable rather than a fabricated zero', async () => {
+        const native = { ...response({ id: 'failed:unknown-usage', status: 'failed', output: [] }), usage: null };
+        const driver = new TestOpenAIResponsesDriver(async () => native);
+        let failure: unknown;
+        try {
+            await driver.executeCanonical(
+                [{ role: PromptRole.user, content: 'Continue.' }],
+                runtimeOptions({
+                    flow: 'unknown-usage',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-10-04T00:00:00.000Z',
+                }),
+            );
+        } catch (error: unknown) {
+            failure = error;
+        }
+        const evidence = canonicalFailedExecution(failure);
+        if (!evidence) throw new Error('Received failed response has no execution evidence');
+        const generation = evidence.decoded_response.generation;
+        expect(generation?.usage).toBeUndefined();
+    });
+
+    it.each(['finite', 'stream'] as const)(
+        'retains %s partial function arguments as invalid failed evidence, never repaired calls',
+        async (transport) => {
+            const native = response({
+                id: `failed:partial-tool:${transport}`,
+                status: 'failed',
+                output: [
+                    {
+                        type: 'function_call',
+                        id: 'partial:call',
+                        call_id: 'call:partial',
+                        name: 'read_artifact',
+                        arguments: '{"path":',
+                        status: 'incomplete',
+                    },
+                ],
+            });
+            const driver = new TestOpenAIResponsesDriver(async () =>
+                transport === 'finite'
+                    ? native
+                    : (async function* () {
+                          yield { type: 'response.failed' as const, sequence_number: 1, response: native };
+                      })(),
+            );
+            const options = runtimeOptions({
+                flow: `partial-tool:${transport}`,
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-10-04T00:00:00.000Z',
+            });
+            let failure: unknown;
+            if (transport === 'finite') {
+                try {
+                    await driver.executeCanonical([{ role: PromptRole.user, content: 'Continue.' }], options);
+                } catch (error: unknown) {
+                    failure = error;
+                }
+            } else {
+                const stream = await driver.streamCanonicalEvents(
+                    [{ role: PromptRole.user, content: 'Continue.' }],
+                    options,
+                    undefined,
+                    { stream_id: `stream:partial-tool:${transport}` },
+                );
+                const events = await collectCanonicalEvents(stream);
+                expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
+                expect(stream.completion).toBeUndefined();
+                failure = stream.failure;
+                await stream.closed;
+            }
+            const evidence = canonicalFailedExecution(failure);
+            if (!evidence) throw new Error('Received partial failed native payload lost its provenance');
+            expect(evidence.decoded_response.turns).toHaveLength(1);
+            const failedTurn = evidence.decoded_response.turns[0];
+            expect(failedTurn).toMatchObject({ kind: 'agent', status: 'failed', model_visibility: 'exclude' });
+            if (failedTurn.kind !== 'agent') throw new Error('Actual failed response lost its agent turn');
+            const call = failedTurn.blocks.find((block) => block.type === 'tool_call');
+            if (call?.type !== 'tool_call') throw new Error('Actual partial failed call is unavailable');
+            expect(call.arguments).toMatchObject({ type: 'invalid', raw: '{"path":' });
+            expect(() => toolArgumentsForModel(call.arguments)).toThrow('Invalid tool arguments');
+            expect(failedTurn.blocks.some((block) => block.type === 'native_replay')).toBe(true);
+            expect('accepted_output' in evidence).toBe(false);
+
+            expect(evidence.decoded_response.generation).toMatchObject({
+                status: 'failed',
+                finish_reason: 'server_error',
+                usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+                metadata: { openai_responses_failure: native },
+            });
+            expect(evidence.decoded_response.payload_fingerprint).toBe(await fingerprintJson(native));
+        },
+    );
+
+    it('does not lower the normal prepared-source bound for a paid failed native result', async () => {
+        const native = response({ id: 'failed:large-prepared-source', status: 'failed', output: [] });
+        const driver = new TestOpenAIResponsesDriver(async () => native);
+        let source: ConversationDocument | undefined;
+        let failure: unknown;
+        try {
+            await driver.executeCanonical([{ role: PromptRole.user, content: 'x'.repeat(17 * 1024 * 1024) }], {
+                ...runtimeOptions({
+                    flow: 'large-prepared',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-10-04T00:00:00.000Z',
+                }),
+                on_canonical_request_prepared: async (prepared) => {
+                    source = prepared.document;
+                },
+            });
+        } catch (error: unknown) {
+            failure = error;
+        }
+        const evidence = canonicalFailedExecution(failure);
+        if (!source || !evidence) throw new Error('Valid large preparation lost failed execution facts');
+        expect(JSON.stringify(source).length).toBeGreaterThan(16 * 1024 * 1024);
+        expect(JSON.stringify(evidence).length).toBeLessThan(64 * 1024);
+        expect(evidence.decoded_response.generation.usage?.total_tokens).toBe(18);
+        expect(evidence.decoded_response.turns).toHaveLength(0);
+        expect(source.generations[evidence.prepared_request.generation_id]).toBeUndefined();
+    });
+
+    it('retains received failed facts from an enabled processing source without changing policy or creating append work', async () => {
+        const original = materializedInputDocument();
+        const create = vi.fn(async () => response({ id: 'failed:processing-enabled', status: 'failed', output: [] }));
+        const driver = new TestOpenAIResponsesDriver(create);
+        const captures: ConversationPreparedRequest[] = [];
+        let counted: CanonicalProjectedRequestMeasurement | undefined;
+        const options = runtimeOptions({
+            flow: 'materialized-driver-retry',
+            operation: 'failed-processing',
+            attempt: 'first',
+            recordedAt: '2026-09-12T00:02:00.000Z',
+            conversation: original,
+        });
+        await expect(
+            driver.executeCanonicalContext({
+                ...options,
+                conversation: original,
+                on_canonical_request_projected: async (projection) => {
+                    counted = {
+                        counted_request_fingerprint: await fingerprintJson(projection.native_request),
+                        measurement: {
+                            input_tokens: 42,
+                            method: 'estimated',
+                            tokenizer: 'full-native-json-bpe-v1',
+                            tokenizer_version: '1.0.22',
+                            adapter: projection.target.protocol,
+                            adapter_version: projection.target.adapter_version,
+                            source_fingerprint: await processingContextFingerprint(projection.document),
+                            target_model: projection.target.model,
+                            measured_at: '2026-09-12T00:02:00.000Z',
+                        },
+                        readiness: { profile: 'test-processing', context_limit: 1000, output_reserve_tokens: 100 },
+                    };
+                    return counted;
+                },
+                on_canonical_request_prepared: async (prepared) => {
+                    captures.push(prepared);
+                    throw new Error('Captured dry native preparation');
+                },
+            }),
+        ).rejects.toThrow('Captured dry native preparation');
+        expect(create).not.toHaveBeenCalled();
+        const dry = captures[0];
+        if (!dry || !counted || counted.measurement.tokenizer === undefined)
+            throw new Error('Actual native count/preparation is unavailable');
+        const enabled = structuredClone(original);
+        enabled.processing.enabled = true;
+        const ready = (
+            await recordProcessingCoverage(enabled, {
+                expected_revision: enabled.revision,
+                operation_id: 'processing:failed-native:coverage',
+                target_fingerprint: await fingerprintJson(dry.record.request_receipt.target),
+                measured_input_tokens: counted.measurement.input_tokens,
+                tokenizer_id: counted.measurement.tokenizer,
+                measurement_fingerprint: await deriveCanonicalProjectedMeasurementIdentity(
+                    counted,
+                    dry.record.request_receipt.target,
+                ),
+                recorded_at: '2026-09-12T00:02:00.000Z',
+            })
+        ).document;
+        const before = structuredClone(ready);
+        let failure: unknown;
+        try {
+            await driver.executeCanonicalContext({
+                ...options,
+                conversation: ready,
+                on_canonical_request_projected: async () => counted,
+                on_canonical_request_prepared: async (prepared) => {
+                    captures.push(prepared);
+                },
+            });
+        } catch (error: unknown) {
+            failure = error;
+        }
+        const evidence = canonicalFailedExecution(failure);
+        if (!evidence) throw new Error('Processing-enabled received failure lost authentic evidence');
+        expect(create).toHaveBeenCalledOnce();
+        expect(ready).toEqual(before);
+        expect(captures.at(-1)?.document.processing.enabled).toBe(true);
+        expect(evidence.decoded_response.generation.usage?.total_tokens).toBe(18);
+        expect(evidence.decoded_response.turns).toEqual([]);
+        expect(Object.keys(ready.processing.jobs ?? {})).toEqual([]);
+    });
+
+    it('does not grant failure evidence to a truncated transport without a received failed response', async () => {
+        const driver = new TestOpenAIResponsesDriver(async () =>
+            (async function* () {
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    sequence_number: 1,
+                    output_index: 0,
+                    content_index: 0,
+                    item_id: 'draft:only',
+                    delta: 'unconfirmed',
+                    logprobs: [],
+                };
+            })(),
+        );
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Continue.' }],
+            runtimeOptions({
+                flow: 'truncated-failure',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-10-04T00:00:00.000Z',
+            }),
+            undefined,
+            { stream_id: 'stream:truncated' },
+        );
+        await collectCanonicalEvents(stream);
+        expect(stream.completion).toBeUndefined();
+        expect(canonicalFailedExecution(stream.failure)).toBeUndefined();
+        await stream.closed;
+    });
+});
+
+it.each(['finite', 'stream'] as const)(
+    'retains %s truly unconvertible received output as generation-only failure',
+    async (transport) => {
+        const native = {
+            ...response({ id: `failed:unconvertible:${transport}`, status: 'failed', output: [] }),
+            // A received terminal can be incomplete beyond the SDK's declared successful item shape.
+            output: [{ type: 'function_call', id: 'partial:item', arguments: '{"path":', status: 'incomplete' }],
+        };
+        const driver = new TestOpenAIResponsesDriver(async () =>
+            transport === 'finite'
+                ? native
+                : (async function* () {
+                      yield { type: 'response.failed', sequence_number: 1, response: native };
+                  })(),
+        );
+        const options = runtimeOptions({
+            flow: `unconvertible:${transport}`,
+            operation: 'generate',
+            attempt: 'first',
+            recordedAt: '2026-10-04T00:00:00.000Z',
+        });
+        let failure: unknown;
+        if (transport === 'finite') {
+            try {
+                await driver.executeCanonical([{ role: PromptRole.user, content: 'Continue.' }], options);
+            } catch (error: unknown) {
+                failure = error;
+            }
+        } else {
+            const stream = await driver.streamCanonicalEvents(
+                [{ role: PromptRole.user, content: 'Continue.' }],
+                options,
+                undefined,
+                { stream_id: `stream:unconvertible:${transport}` },
+            );
+            const events = await collectCanonicalEvents(stream);
+            expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
+            expect(stream.completion).toBeUndefined();
+            failure = stream.failure;
+            await stream.closed;
+        }
+        const evidence = canonicalFailedExecution(failure);
+        if (!evidence) throw new Error('Actual incomplete terminal lost its real failed generation');
+        expect(evidence.decoded_response.turns).toEqual([]);
+        expect(evidence.decoded_response.payload_fingerprint).toBe(await fingerprintJson(native));
+        expect(evidence.decoded_response.generation).toMatchObject({
+            status: 'failed',
+            finish_reason: 'server_error',
+            usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+            metadata: { openai_responses_failure: native },
+        });
+    },
+);

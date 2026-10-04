@@ -27,14 +27,19 @@ import {
     ConversationRuntimeContextSchema,
     createAcceptedOutputFragment,
     createConversationDocument,
+    type DecodedConversationResponse,
+    fingerprintJson,
+    isGeneratedAgentTurn,
     parseAcceptedOutputFragment,
     parseConversationDocument,
     parseConversationPreparedRequestRecord,
+    preflightJsonInput,
     type ResolveConversationAsset,
     type ResolvedConversationRuntimeContext,
     ResolvedConversationRuntimeContextSchema,
     toolArgumentsForModel,
 } from '@llumiverse/conversation';
+import { DecodedConversationResponseSchema } from '@llumiverse/conversation/schemas';
 import { MalformedStreamingToolArgumentsError } from './stream-errors.js';
 
 /** Runtime-only provenance. Symbol keys survive internal object spreads but are never serialized on the wire. */
@@ -117,6 +122,90 @@ export interface CanonicalExecutionResponse {
     service_tier?: string;
     prompt_cache_diagnostic?: PromptCacheDiagnostic;
     original_response?: unknown;
+}
+
+/** Received failed native output plus its finalized request, without duplicating the prepared source history. */
+export interface CanonicalFailedExecutionEvidence {
+    prepared_request: ConversationPreparedRequestRecord;
+    decoded_response: DecodedConversationResponse;
+}
+
+const canonicalFailedExecutions = new WeakMap<object, CanonicalFailedExecutionEvidence>();
+
+export function parseCanonicalFailedExecutionEvidence(
+    input: CanonicalFailedExecutionEvidence,
+): CanonicalFailedExecutionEvidence {
+    // Each leaf uses the ordinary JSON/prepared-record bound; a 16–32MiB input source is not copied here.
+    const prepared_request = parseConversationPreparedRequestRecord(input.prepared_request);
+    if (!preflightJsonInput(input.decoded_response).success)
+        throw new TypeError('Canonical failed native result exceeds the ordinary decoded-response bound');
+    const decoded_response = DecodedConversationResponseSchema.parse(input.decoded_response);
+    const generation = decoded_response.generation;
+    if (
+        generation.status !== 'failed' ||
+        generation.id !== prepared_request.generation_id ||
+        generation.request_id !== prepared_request.runtime.request_id ||
+        generation.attempt_id !== prepared_request.runtime.attempt_id ||
+        generation.purpose !== prepared_request.runtime.purpose ||
+        generation.source.conversation_id !== prepared_request.source.conversation_id ||
+        generation.source.revision !== prepared_request.source.revision ||
+        decoded_response.turns.length > 1 ||
+        decoded_response.execution_receipts?.length ||
+        decoded_response.turns.some(
+            (turn) =>
+                !isGeneratedAgentTurn(turn) ||
+                turn.id !== prepared_request.response_turn_id ||
+                turn.generation_id !== generation.id ||
+                turn.status !== 'failed' ||
+                turn.model_visibility !== 'exclude',
+        )
+    )
+        throw new TypeError('Canonical failure changed its exact unselected prepared generation');
+    return structuredClone({ prepared_request, decoded_response });
+}
+
+export async function assertCanonicalFailedExecutionMatchesPreparedRecord(
+    input: CanonicalFailedExecutionEvidence,
+    recordInput: ConversationPreparedRequestRecord,
+): Promise<CanonicalFailedExecutionEvidence> {
+    const evidence = parseCanonicalFailedExecutionEvidence(input);
+    const record = parseConversationPreparedRequestRecord(recordInput);
+    if (
+        (await fingerprintJson(record)) !== (await fingerprintJson(evidence.prepared_request)) ||
+        (await fingerprintJson(record.request_receipt)) !==
+            (await fingerprintJson(evidence.decoded_response.generation.request_receipt))
+    )
+        throw new TypeError('Canonical failed execution changed its durably prepared request');
+    return evidence;
+}
+
+/** Provider-only provenance. Serialized metadata/imported JSON cannot mint this mark; callers still receive the error. */
+export async function markCanonicalFailedExecution(
+    error: Error,
+    input: CanonicalFailedExecutionEvidence,
+): Promise<Error> {
+    const evidence = await assertCanonicalFailedExecutionMatchesPreparedRecord(input, input.prepared_request);
+    if (canonicalFailedExecutions.has(error))
+        throw new TypeError('Canonical provider error already retains failed execution evidence');
+    canonicalFailedExecutions.set(error, evidence);
+    return error;
+}
+
+/** Follow only existing error wrappers, never caller-written metadata or arbitrary response fields. */
+export function canonicalFailedExecution(error: unknown): CanonicalFailedExecutionEvidence | undefined {
+    const visited = new Set<unknown>();
+    let current = error;
+    while (current !== undefined && current !== null && !visited.has(current)) {
+        if (isWeakKey(current)) {
+            const evidence = canonicalFailedExecutions.get(current);
+            if (evidence) return structuredClone(evidence);
+        }
+        visited.add(current);
+        if (LlumiverseError.isLlumiverseError(current)) current = current.originalError;
+        else if (current instanceof Error && 'cause' in current) current = current.cause;
+        else break;
+    }
+    return undefined;
 }
 
 /**
@@ -686,7 +775,7 @@ function bedrockOneHourCacheWriteTokens(response: CanonicalExecutionResponse): n
 }
 
 function legacyUsage(
-    fragment: ConversationAcceptedOutputFragment,
+    fragment: Pick<ConversationAcceptedOutputFragment, 'generation'>,
     response?: CanonicalExecutionResponse,
 ): ExecutionTokenUsage | undefined {
     const usage = fragment.generation.usage;
@@ -744,6 +833,14 @@ export function canonicalExecutionAccounting(
         ...(tokenUsage === undefined ? {} : { token_usage: tokenUsage }),
         finish_reason: legacyFinishReason(fragment, hasTools),
     };
+}
+
+/** Known failed usage is projected independently of successful output; absent metrics stay absent. */
+export function canonicalFailedExecutionAccounting(
+    input: CanonicalFailedExecutionEvidence,
+): Pick<Completion, 'token_usage' | 'finish_reason'> {
+    const generation = parseCanonicalFailedExecutionEvidence(input).decoded_response.generation;
+    return { token_usage: legacyUsage({ generation }), finish_reason: generation.finish_reason };
 }
 
 function ownString(value: unknown, key: string): string | undefined {

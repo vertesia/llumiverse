@@ -12,6 +12,7 @@ export * from './document.js';
 export * from './execution.js';
 export * from './indexed-head.js';
 export * from './indexed-prepared-source.js';
+export * from './indexed-processing.js';
 export * from './ingestion.js';
 export * from './inspection.js';
 export * from './json-minification.js';

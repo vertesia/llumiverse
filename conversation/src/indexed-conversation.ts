@@ -5,19 +5,31 @@ import {
     hashContentBytes,
     inlineAssetContentIntegrity,
 } from './content-integrity.js';
+import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
 import { fingerprintJson } from './identity.js';
+import {
+    applyIndexedTextExternalizationOutput,
+    indexedProcessingContextFingerprint,
+    resolveIndexedProcessingTextInput,
+} from './indexed-processing-working-set.js';
 import { DEFAULT_JSON_INPUT_LIMITS, preflightJsonInput } from './json-preflight.js';
 import {
     buildPagedRecordIndex,
     getPagedRecord,
+    insertPagedRecords,
     type PagedRecordIndexStore,
     type PagedRecordRef,
     PagedRecordRefSchema,
     type PagedRecordValue,
     putPagedRecord,
+    readPagedRecordRange,
+    removePagedRecord,
     scanPagedRecords,
 } from './paged-record-index.js';
+import { eligibleProcessingAppendRecords } from './processing-append-selection.js';
+import { constructProcessingJobs } from './processing-job-construction.js';
 import { countUnresolvedProcessingJobs } from './processing-job-status.js';
+import { createProcessingTransitionReceipt } from './processing-transition-receipt.js';
 import { ConversationDeleteChangeSchema } from './schemas/change.js';
 import { AssetSchema, ContentBlockSchema, ConversationTurnSchema, ToolDefinitionSchema } from './schemas/content.js';
 import { ContextEntrySchema } from './schemas/context-foundation.js';
@@ -27,8 +39,13 @@ import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from
 import {
     INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
     INDEXED_CONVERSATION_DELETE_PROFILE,
+    INDEXED_CONVERSATION_PROCESSING_PROFILE,
     INDEXED_CONVERSATION_PROFILE,
     INDEXED_CONVERSATION_ROOT_MAX_BYTES,
+    INDEXED_PROCESSING_MAX_IO_BYTES,
+    INDEXED_PROCESSING_MAX_PAGE_READS,
+    INDEXED_PROCESSING_MAX_RECORD_READS,
+    INDEXED_PROCESSING_SELECTED_MAX_BLOCKS,
     IndexedConversationCompactionHeaderSchema,
     IndexedConversationContextHeaderSchema,
     type IndexedConversationDeleteCommand,
@@ -42,9 +59,31 @@ import {
     type IndexedConversationTurnHeader,
     IndexedConversationTurnHeaderSchema,
     IndexedConversationTurnLinkSchema,
+    type IndexedProcessingReadinessCoverage,
+    IndexedProcessingReadinessCoverageSchema,
+    IndexedProcessingSelectedContextSchema,
 } from './schemas/indexed-head.js';
+import {
+    IndexedProcessingArchiveAssetSchema,
+    type IndexedProcessingClaimWorkspace,
+    IndexedProcessingClaimWorkspaceSchema,
+} from './schemas/indexed-processing.js';
 import { AppendConversationRecordsOptionsSchema, ConversationRecordBatchSchema } from './schemas/ingestion.js';
-import { IdentifierSchema } from './schemas/primitives.js';
+import {
+    ContentHashSchema,
+    IdentifierSchema,
+    NonnegativeSafeIntegerSchema,
+    TimestampSchema,
+} from './schemas/primitives.js';
+import {
+    ProcessingAttemptReceiptSchema,
+    ProcessingCompletionReceiptSchema,
+    ProcessingJobSchema,
+    ProcessingOutputReceiptSchema,
+    type ProcessingReadinessCoverageSchema,
+    ProcessingResolvedInputSchema,
+    ProcessingSupersessionReceiptSchema,
+} from './schemas/processing.js';
 import { validateConversationSemantics, validateUsage } from './semantic-validation.js';
 import { conversationDocumentFromJson } from './serialization.js';
 import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
@@ -55,6 +94,7 @@ import type {
     ConversationRecordBatch,
     ConversationTurn,
     OperationReceipt,
+    ProcessingJob,
 } from './types.js';
 import { parseConversationDocument } from './validation.js';
 
@@ -213,6 +253,28 @@ function acceptedResponse(document: ConversationDocument, operationId: string) {
     };
 }
 
+const IndexedProcessingOperationJobsSchema = z.strictObject({
+    version: z.literal(1),
+    operation_id: IdentifierSchema,
+    receipt_fingerprint: ContentHashSchema,
+    job_ids: z.array(IdentifierSchema).max(16),
+});
+
+async function indexedCoverageIdentity(coverage: z.infer<typeof ProcessingReadinessCoverageSchema>): Promise<string> {
+    return fingerprintJson({
+        context_fingerprint: coverage.context_fingerprint,
+        policy_revision: coverage.policy_revision,
+        target_fingerprint: coverage.target_fingerprint,
+        measurement: coverage.measurement,
+        required_job_ids: coverage.required_job_ids,
+    });
+}
+
+function isIndexedProcessingUnresolved(processing: ConversationDocument['processing'], jobId: string): boolean {
+    const completion = processing.completions?.[jobId];
+    return (!completion || completion.status === 'blocked') && !processing.supersessions?.[jobId];
+}
+
 function processingRecordGroups(processing: ConversationDocument['processing']): [string, Record<string, unknown>][] {
     return [
         ['jobs', processing.jobs ?? {}],
@@ -353,6 +415,21 @@ export async function stageIndexedConversationSnapshot(
     if (Object.keys(document.deleted_turns ?? {}).length > 0) {
         throw new Error('Indexed migration cannot retain logical-delete tombstone witnesses yet');
     }
+    if (document.processing.enabled) {
+        assertSupportedIndexedReadinessPolicy(document.processing);
+        const turns = createContextTurnIndex(document);
+        const blockCount = document.context.entries.reduce(
+            (count, entry) =>
+                count +
+                resolveContextEntry(turns, entry).blocks.reduce(
+                    (total, block) => total + 1 + (block.type === 'tool_result' ? block.content.length : 0),
+                    0,
+                ),
+            0,
+        );
+        if (blockCount > INDEXED_PROCESSING_SELECTED_MAX_BLOCKS)
+            throw new RangeError('Indexed processing active dependency closure exceeds its selected-block bound');
+    }
     const families: Record<keyof IndexedConversationRoot['directories'], Entry[]> = {
         identifiers: [],
         turns: [],
@@ -365,6 +442,10 @@ export async function stageIndexedConversationSnapshot(
         tool_definitions: [],
         compactions: [],
         processing_records: [],
+        processing_pending: [],
+        processing_required: [],
+        processing_by_operation: [],
+        processing_coverage: [],
         open_tool_calls: [],
         tool_call_states: [],
         context_entries: [],
@@ -480,6 +561,54 @@ export async function stageIndexedConversationSnapshot(
         for (const [id, record] of Object.entries(records))
             await stageFamily('processing_records', id, record, tupleKey(family, id));
     }
+    const operationJobs = new Map<string, ProcessingJob[]>();
+    for (const job of Object.values(document.processing.jobs ?? {})) {
+        const jobs = operationJobs.get(job.source_operation_id) ?? [];
+        jobs.push(job);
+        operationJobs.set(job.source_operation_id, jobs);
+        if (job.required && !document.processing.supersessions?.[job.id])
+            families.processing_required.push({
+                key: job.id,
+                value: { storage: 'marker', kind: 'processing_required', id: job.id },
+            });
+        if (isIndexedProcessingUnresolved(document.processing, job.id)) {
+            families.processing_pending.push({
+                key: job.id,
+                value: { storage: 'marker', kind: 'processing_pending', id: job.id },
+            });
+        }
+    }
+    for (const [operationId, jobs] of operationJobs) {
+        const receipt = document.operation_receipts[operationId];
+        if (!receipt) throw new Error('Indexed processing job source has no accepted operation');
+        jobs.sort((a, b) => a.stage_index - b.stage_index);
+        await stageFamily(
+            'processing_by_operation',
+            operationId,
+            IndexedProcessingOperationJobsSchema.parse({
+                version: 1,
+                operation_id: operationId,
+                receipt_fingerprint: await fingerprintJson(receipt),
+                job_ids: jobs.map((job) => job.id),
+            }),
+        );
+    }
+    const latestCoverage = new Map<
+        string,
+        { id: string; coverage: z.infer<typeof ProcessingReadinessCoverageSchema> }
+    >();
+    for (const [id, coverage] of Object.entries(document.processing.coverage_receipts ?? {})) {
+        const identity = await indexedCoverageIdentity(coverage);
+        const previous = latestCoverage.get(identity);
+        if (!previous || coverage.evaluated_at_revision > previous.coverage.evaluated_at_revision)
+            latestCoverage.set(identity, { id, coverage });
+    }
+    for (const [identity, { id }] of latestCoverage) {
+        families.processing_coverage.push({
+            key: identity,
+            value: { storage: 'marker', kind: 'processing_coverage', id },
+        });
+    }
     for (const id of Object.keys(document.processing.jobs ?? {})) {
         if (idKinds.has(id)) throw new Error('Indexed processing job identity conflicts with a canonical record');
         idKinds.set(id, 'processing job');
@@ -569,6 +698,19 @@ export async function stageIndexedConversationSnapshot(
         IndexedConversationProcessingHeaderSchema.parse({
             ...processingHeader,
             unresolved_job_count: countUnresolvedProcessingJobs(document.processing),
+            job_count: Object.keys(document.processing.jobs ?? {}).length,
+            required_job_count: Object.values(document.processing.jobs ?? {}).filter(
+                (job) => job.required && !document.processing.supersessions?.[job.id],
+            ).length,
+            required_unresolved_job_count: Object.values(document.processing.jobs ?? {}).filter(
+                (job) => job.required && isIndexedProcessingUnresolved(document.processing, job.id),
+            ).length,
+            required_blocked_job_count: Object.values(document.processing.jobs ?? {}).filter(
+                (job) =>
+                    job.required &&
+                    document.processing.completions?.[job.id]?.status === 'blocked' &&
+                    !document.processing.supersessions?.[job.id],
+            ).length,
         }),
     );
     const builtDirectories = await Promise.all(
@@ -585,6 +727,7 @@ export async function stageIndexedConversationSnapshot(
         validator_profile: INDEXED_CONVERSATION_PROFILE,
         delete_index_profile: INDEXED_CONVERSATION_DELETE_PROFILE,
         tool_call_state_complete: true,
+        processing_index_profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
         format: document.format,
         schema_version: document.schema_version,
         experimental_revision: document.experimental_revision,
@@ -610,7 +753,9 @@ export async function stageIndexedConversationSnapshot(
     if (rootValue.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES) {
         throw new RangeError('Indexed conversation root exceeds its manifest bound');
     }
-    return { root, locator: { content_hash: rootValue.content_hash, size_bytes: rootValue.size_bytes } };
+    const locator = { content_hash: rootValue.content_hash, size_bytes: rootValue.size_bytes };
+    if (document.processing.enabled) await assertIndexedProcessingAcceptanceWorkingSet(store, root, locator);
+    return { root, locator };
 }
 
 /** Maintain the complete reverse-delete witness for every record family this indexed append accepts. */
@@ -757,6 +902,10 @@ export async function loadIndexedActiveContext(store: IndexedConversationRecordS
         },
         IndexedConversationContextHeaderSchema,
     );
+    // Both the metadata body and the complete ordered-entry body belong to this active window.
+    // Charge their authenticated lengths even if there are zero selected turns/entries.
+    if (root.context_header.size_bytes + header.active_entry_bytes > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES)
+        throw new RangeError('Indexed active context header and entries exceed the aggregate working-set bound');
     const entries: z.infer<typeof ContextEntrySchema>[] = [];
     let aggregate = 0;
     for await (const ordered of scanPagedRecords(store, root.directories.active_context_order)) {
@@ -766,14 +915,15 @@ export async function loadIndexedActiveContext(store: IndexedConversationRecordS
         const descriptor = await getPagedRecord(store, root.directories.context_entries, ordered.value.id);
         if (
             descriptor?.storage === 'record' &&
-            aggregate + descriptor.size_bytes > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES
+            root.context_header.size_bytes + aggregate + descriptor.size_bytes > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES
         ) {
             throw new RangeError('Active context exceeds bound before record read');
         }
         const entry = await loadRecord(store, descriptor, ContextEntrySchema);
         entries.push(entry);
         aggregate += canonicalJsonContentBytes(entry).byteLength;
-        if (aggregate > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES) throw new RangeError('Active context exceeds bound');
+        if (root.context_header.size_bytes + aggregate > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES)
+            throw new RangeError('Active context exceeds aggregate metadata/entry bound');
     }
     if (
         entries.length !== header.active_entry_count ||
@@ -801,7 +951,7 @@ export async function loadIndexedProjectedTurn(
     root: IndexedConversationRoot,
     turnId: string,
     selectedBlockIds?: readonly string[],
-    reserveRecordBytes?: (byteLength: number) => void,
+    reserveRecordBytes?: (byteLength: number, contentHash?: string) => void,
 ) {
     let localBytes = 0;
     const reserve =
@@ -813,7 +963,7 @@ export async function loadIndexedProjectedTurn(
             }
         });
     const descriptor = await getPagedRecord(store, root.directories.turns, turnId);
-    if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+    if (descriptor?.storage === 'record') reserve(descriptor.size_bytes, descriptor.content_hash);
     const header = await loadRecord(store, descriptor, IndexedConversationTurnHeaderSchema);
     if ((await hashContentBytes(canonicalJsonContentBytes(header.block_ids))).content_hash !== header.block_ids_hash) {
         throw new Error('Indexed turn block order differs from its retained hash');
@@ -829,7 +979,7 @@ export async function loadIndexedProjectedTurn(
     const blocks: z.infer<typeof ContentBlockSchema>[] = [];
     for (const item of ordered) {
         const descriptor = await getPagedRecord(store, root.directories.blocks, item.id);
-        if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+        if (descriptor?.storage === 'record') reserve(descriptor.size_bytes, descriptor.content_hash);
         const block = await loadRecord(store, descriptor, ContentBlockSchema);
         if (block.id !== item.id) throw new Error('Indexed selected block identity differs from its turn header');
         blocks.push(block);
@@ -852,6 +1002,7 @@ async function loadIndexedSelectedContext(
     maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
     includeDependencies = false,
     includeMediaCompaction = false,
+    purpose: 'preparation' | 'processing' = 'preparation',
 ) {
     if (
         !Number.isSafeInteger(maxSelectedBytes) ||
@@ -867,6 +1018,10 @@ async function loadIndexedSelectedContext(
         throw new TypeError('Indexed selected root/locator is not bounded owned JSON');
     const root = IndexedConversationRootSchema.parse(structuredClone(rootInput));
     rootLocator = PagedRecordRefSchema.parse(structuredClone(rootLocator));
+    // Header metadata is charged before its record download, independently of index-page limits.
+    // An impossible active envelope cannot consume its entire budget before the first selected body.
+    if (root.context_header.size_bytes + rootLocator.size_bytes + root.processing_header.size_bytes > maxSelectedBytes)
+        throw new RangeError('Indexed selected context headers exceed working-set bound before record read');
     const context = await loadIndexedActiveContext(store, root);
     if (context.revision > root.source.revision) {
         throw new Error('Indexed active context revision exceeds its authenticated root');
@@ -881,11 +1036,17 @@ async function loadIndexedSelectedContext(
         },
         IndexedConversationProcessingHeaderSchema,
     );
-    if (processing.enabled) throw new Error('Indexed selected preparation requires processing readiness');
+    if (purpose === 'preparation' && processing.enabled)
+        throw new Error('Indexed selected preparation requires processing readiness');
+    if (purpose === 'processing') {
+        if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+            throw new Error('Indexed processing selection lacks the complete processing profile');
+        assertIndexedProcessingCounts(processing);
+    }
     if (processing.unresolved_job_count === undefined && root.directories.processing_records !== undefined) {
         throw new Error('Indexed selected preparation has no accepted processing job-drain witness');
     }
-    if ((processing.unresolved_job_count ?? 0) > 0) {
+    if (purpose === 'preparation' && (processing.unresolved_job_count ?? 0) > 0) {
         throw new Error('Indexed selected preparation has accepted processing jobs outstanding');
     }
     const selections = new Map<string, Set<string> | undefined>();
@@ -925,11 +1086,22 @@ async function loadIndexedSelectedContext(
     >();
     let totalBytes =
         canonicalJsonContentBytes(context).byteLength + rootLocator.size_bytes + root.processing_header.size_bytes;
+    if (totalBytes > maxSelectedBytes)
+        throw new RangeError('Indexed selected context metadata exceeds working-set bound before record read');
     let selectedRecords = 0;
-    const reserve = (byteLength: number) => {
+    const reservedRecords = new Set<string>();
+    const reserve = (byteLength: number, contentHash?: string) => {
+        if (contentHash !== undefined) {
+            const identity = `${contentHash}:${byteLength}`;
+            if (reservedRecords.has(identity)) return;
+            reservedRecords.add(identity);
+        }
         selectedRecords += 1;
         totalBytes += byteLength;
-        if (selectedRecords > 100_000 || totalBytes > maxSelectedBytes) {
+        if (
+            selectedRecords > (purpose === 'processing' ? INDEXED_PROCESSING_MAX_RECORD_READS : 100_000) ||
+            totalBytes > maxSelectedBytes
+        ) {
             throw new RangeError('Indexed selected context exceeds working-set bound before record read');
         }
     };
@@ -944,21 +1116,21 @@ async function loadIndexedSelectedContext(
         const compactionId = replacementIds.get(turnId);
         if (compactionId !== undefined) {
             const turnDescriptor = await getPagedRecord(store, root.directories.turns, turnId);
-            if (turnDescriptor?.storage === 'record') reserve(turnDescriptor.size_bytes);
+            if (turnDescriptor?.storage === 'record') reserve(turnDescriptor.size_bytes, turnDescriptor.content_hash);
             const replacementHeader = await loadRecord(store, turnDescriptor, IndexedConversationTurnHeaderSchema);
             if (replacementHeader.source !== 'replacement' || replacementHeader.compaction_id !== compactionId)
                 throw new Error('Indexed replacement entry differs from its exact stored compaction identity');
             let witness = compactionWitnesses.get(compactionId);
             if (!witness) {
                 const descriptor = await getPagedRecord(store, root.directories.compactions, compactionId);
-                if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+                if (descriptor?.storage === 'record') reserve(descriptor.size_bytes, descriptor.content_hash);
                 const compaction = await loadRecord(store, descriptor, IndexedConversationCompactionHeaderSchema);
                 const operation = await getPagedRecord(
                     store,
                     root.directories.operation_receipts,
                     compaction.operation_id,
                 );
-                if (operation?.storage === 'record') reserve(operation.size_bytes);
+                if (operation?.storage === 'record') reserve(operation.size_bytes, operation.content_hash);
                 const acceptance = await loadRecord(store, operation, OperationReceiptSchema);
                 if (
                     compaction.id !== compactionId ||
@@ -1010,14 +1182,16 @@ async function loadIndexedSelectedContext(
                 root.directories.generations,
                 turn.header.generation_id,
             );
-            if (generationDescriptor?.storage === 'record') reserve(generationDescriptor.size_bytes);
+            if (generationDescriptor?.storage === 'record')
+                reserve(generationDescriptor.size_bytes, generationDescriptor.content_hash);
             const generation = await loadRecord(store, generationDescriptor, GenerationSchema);
             const accepted = await getPagedRecord(store, root.directories.generation_acceptances, generation.id);
             if (accepted?.storage !== 'marker' || accepted.kind !== 'generation_acceptance') {
                 throw new Error('Indexed generated turn has no accepted generation operation');
             }
             const acceptanceDescriptor = await getPagedRecord(store, root.directories.operation_receipts, accepted.id);
-            if (acceptanceDescriptor?.storage === 'record') reserve(acceptanceDescriptor.size_bytes);
+            if (acceptanceDescriptor?.storage === 'record')
+                reserve(acceptanceDescriptor.size_bytes, acceptanceDescriptor.content_hash);
             const acceptance = await loadRecord(store, acceptanceDescriptor, OperationReceiptSchema);
             if (
                 generation.record_source !== 'executed' ||
@@ -1045,7 +1219,8 @@ async function loadIndexedSelectedContext(
                 root.directories.operation_receipts,
                 turn.header.provenance.operation_id,
             );
-            if (receiptDescriptor?.storage === 'record') reserve(receiptDescriptor.size_bytes);
+            if (receiptDescriptor?.storage === 'record')
+                reserve(receiptDescriptor.size_bytes, receiptDescriptor.content_hash);
             const receipt = await loadRecord(store, receiptDescriptor, OperationReceiptSchema);
             if (
                 !receipt.accepted_turn_ids?.includes(turn.header.id) ||
@@ -1056,10 +1231,23 @@ async function loadIndexedSelectedContext(
         }
         turns.push(turn);
     }
+    if (purpose === 'processing') {
+        const blockCount = turns.reduce(
+            (count, turn) =>
+                count +
+                turn.selected_blocks.reduce(
+                    (blocks, block) => blocks + 1 + (block.type === 'tool_result' ? block.content.length : 0),
+                    0,
+                ),
+            0,
+        );
+        if (blockCount > INDEXED_PROCESSING_SELECTED_MAX_BLOCKS)
+            throw new RangeError('Indexed processing active dependency closure exceeds its selected-block bound');
+    }
     const toolDefinitions = new Map<string, z.infer<typeof ToolDefinitionSchema>>();
     for (const id of context.active_tool_definition_ids) {
         const descriptor = await getPagedRecord(store, root.directories.tool_definitions, id);
-        if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+        if (descriptor?.storage === 'record') reserve(descriptor.size_bytes, descriptor.content_hash);
         toolDefinitions.set(id, await loadRecord(store, descriptor, ToolDefinitionSchema));
     }
     const assets = new Map<string, z.infer<typeof AssetSchema>>();
@@ -1098,7 +1286,7 @@ async function loadIndexedSelectedContext(
             schema: Schema,
         ): Promise<z.output<Schema>> => {
             const descriptor = await getPagedRecord(store, root.directories[family], id);
-            if (descriptor?.storage === 'record') reserve(descriptor.size_bytes);
+            if (descriptor?.storage === 'record') reserve(descriptor.size_bytes, descriptor.content_hash);
             return loadRecord(store, descriptor, schema);
         };
         for (const turn of turns) {
@@ -1322,7 +1510,7 @@ async function loadIndexedSelectedContext(
     if (tail === null || (tail !== undefined && (tail.storage !== 'marker' || tail.kind !== 'turn_order'))) {
         throw new Error('Indexed source tail turn is unavailable');
     }
-    const selected = IndexedConversationSelectedContextSchema.parse({
+    const selectedInput = {
         completeness: includeMediaCompaction
             ? 'selected_media_compaction_pending_admission'
             : includeDependencies
@@ -1348,7 +1536,14 @@ async function loadIndexedSelectedContext(
         ...(includeDependencies ? { execution_witnesses: Object.fromEntries(executionWitnesses) } : {}),
         generation_witnesses: Object.fromEntries(generationWitnesses),
         ...(tail === undefined ? {} : { source_tail_turn_id: tail.id }),
-    });
+    };
+    const selected =
+        purpose === 'processing'
+            ? IndexedProcessingSelectedContextSchema.parse({
+                  ...selectedInput,
+                  completeness: 'active_processing_dependencies_verified',
+              })
+            : IndexedConversationSelectedContextSchema.parse(selectedInput);
     if (canonicalJsonContentBytes(selected).byteLength > maxSelectedBytes) {
         throw new RangeError('Indexed selected context exceeds the bounded working-set profile');
     }
@@ -1362,7 +1557,9 @@ export async function loadIndexedSelectedMediaCompactionContext(
     rootLocator: PagedRecordRef,
     maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
 ) {
-    return loadIndexedSelectedContext(store, root, rootLocator, maxSelectedBytes, true, true);
+    return IndexedConversationSelectedContextSchema.parse(
+        await loadIndexedSelectedContext(store, root, rootLocator, maxSelectedBytes, true, true),
+    );
 }
 
 /** Original strict text profile retained for historical prepared records. */
@@ -1372,7 +1569,9 @@ export async function loadIndexedSelectedTextContext(
     locator: PagedRecordRef,
     maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
 ) {
-    return loadIndexedSelectedContext(store, root, locator, maxSelectedBytes, false);
+    return IndexedConversationSelectedContextSchema.parse(
+        await loadIndexedSelectedContext(store, root, locator, maxSelectedBytes, false),
+    );
 }
 
 /** Selected tools/media plus exact point-looked-up dependencies; processing remains an explicit unsupported gate. */
@@ -1382,7 +1581,9 @@ export async function loadIndexedSelectedDependencyContext(
     locator: PagedRecordRef,
     maxSelectedBytes = INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
 ) {
-    return loadIndexedSelectedContext(store, root, locator, maxSelectedBytes, true);
+    return IndexedConversationSelectedContextSchema.parse(
+        await loadIndexedSelectedContext(store, root, locator, maxSelectedBytes, true),
+    );
 }
 
 /** A fresh inference after program append must bind that accepted input and have no accepted response. */
@@ -1984,7 +2185,9 @@ export async function stageIndexedRecordBatch(
         },
         IndexedConversationProcessingHeaderSchema,
     );
-    if (processing.enabled) throw new Error('Indexed append requires the processing outbox');
+    if (processing.enabled && root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed enabled append requires a complete processing outbox index');
+    if (processing.enabled) assertSupportedIndexedReadinessPolicy(processing);
     const newTurns = new Map((batch.turns ?? []).map((turn) => [turn.id, turn]));
     const newGenerations = new Map((batch.generations ?? []).map((generation) => [generation.id, generation]));
     const newAssets = new Map((batch.assets ?? []).map((asset) => [asset.id, asset]));
@@ -2537,6 +2740,38 @@ export async function stageIndexedRecordBatch(
                 ? { kind: 'unchanged' }
                 : { kind: 'replace', definition_ids: [...batch.active_tool_definition_ids] },
     });
+    const selection = eligibleProcessingAppendRecords(
+        nextContext.entries,
+        newTurns,
+        receipt.accepted_context_entry_ids ?? [],
+        nextContext.protected_entry_ids,
+        processing.enabled,
+    );
+    // Match materialized append: archive publication feeds an existing job and must not recursively enqueue.
+    const assetOnly = batch.assets !== undefined && Object.keys(batch).every((key) => key === 'assets');
+    const processingArchive = processing.enabled && assetOnly && options.operation_id.startsWith('processing:archive:');
+    if (processingArchive) {
+        for (const asset of batch.assets ?? []) IndexedProcessingArchiveAssetSchema.parse(asset);
+    }
+    const processorIndices =
+        processing.enabled && !assetOnly
+            ? processing.processors.flatMap((processor, index) => (processor.scope === 'on_append' ? [index] : []))
+            : [];
+    const acceptedJobs = await constructProcessingJobs({
+        conversation_id: root.source.conversation_id,
+        revision: nextRevision,
+        source_operation_id: receipt.id,
+        policy_revision: processing.policy_revision,
+        processors: processing.processors,
+        processor_indices: processorIndices,
+        entry_ids: selection.entryIds,
+        ...(selection.selectedBlockIds === undefined ? {} : { selected_block_ids: selection.selectedBlockIds }),
+        ...(selection.selectedEntries === undefined ? {} : { selected_entries: selection.selectedEntries }),
+    });
+    for (const job of acceptedJobs) {
+        if (globalIds.has(job.id) || (await getPagedRecord(store, root.directories.identifiers, job.id)))
+            throw new Error('Indexed append processing job identity conflicts');
+    }
     const directories = { ...root.directories };
     const write = async (
         family: keyof typeof directories,
@@ -2575,7 +2810,15 @@ export async function stageIndexedRecordBatch(
             id: options.operation_id,
         });
     }
-    for (const item of batch.assets ?? []) await write('assets', item.id, item);
+    if (processingArchive && (batch.assets?.length ?? 0) > 0) {
+        const commands: { key: string; value: PagedRecordValue }[] = [];
+        for (const item of batch.assets ?? []) {
+            commands.push({ key: item.id, value: await stageRecord(store, 'assets', item.id, item) });
+        }
+        directories.assets = await insertPagedRecords(store, directories.assets, commands);
+    } else {
+        for (const item of batch.assets ?? []) await write('assets', item.id, item);
+    }
     for (const item of batch.tool_definitions ?? []) {
         const retained = await indexedRecordById(store, root, 'tool_definitions', item.id, ToolDefinitionSchema);
         if (!retained) await write('tool_definitions', item.id, item);
@@ -2583,6 +2826,43 @@ export async function stageIndexedRecordBatch(
     for (const item of batch.execution_receipts ?? []) await write('execution_receipts', item.id, item);
     for (const item of batch.context_entries ?? []) await write('context_entries', item.id, item);
     await write('operation_receipts', receipt.id, receipt);
+    if (root.processing_index_profile === INDEXED_CONVERSATION_PROCESSING_PROFILE) {
+        for (const job of acceptedJobs) {
+            directories.processing_records = await putPagedRecord(
+                store,
+                directories.processing_records,
+                tupleKey('jobs', job.id),
+                await stageRecord(store, 'processing_records', job.id, job),
+            );
+            if (job.required)
+                directories.processing_required = await putPagedRecord(store, directories.processing_required, job.id, {
+                    storage: 'marker',
+                    kind: 'processing_required',
+                    id: job.id,
+                });
+            directories.processing_pending = await putPagedRecord(store, directories.processing_pending, job.id, {
+                storage: 'marker',
+                kind: 'processing_pending',
+                id: job.id,
+            });
+            directories.identifiers = await putPagedRecord(store, directories.identifiers, job.id, {
+                storage: 'marker',
+                kind: 'processing_job',
+                id: job.id,
+            });
+        }
+        await write(
+            'processing_by_operation',
+            receipt.id,
+            IndexedProcessingOperationJobsSchema.parse({
+                version: 1,
+                operation_id: receipt.id,
+                receipt_fingerprint: await fingerprintJson(receipt),
+                job_ids: acceptedJobs.map((job) => job.id),
+            }),
+        );
+    }
+
     for (const [id, state] of callStates) {
         const retainedCall = await getPagedRecord(store, root.directories.tool_call_states, id);
         await write('tool_call_states', id, state, retainedCall ? 'replace' : 'insert');
@@ -2606,13 +2886,21 @@ export async function stageIndexedRecordBatch(
             });
         }
     }
-    for (const [id, kind] of globalIds) {
-        if (kind === 'tool definition' && (await getPagedRecord(store, root.directories.identifiers, id))) continue;
-        directories.identifiers = await putPagedRecord(store, directories.identifiers, id, {
-            storage: 'marker',
-            kind,
-            id,
-        });
+    if (processingArchive && globalIds.size > 0) {
+        directories.identifiers = await insertPagedRecords(
+            store,
+            directories.identifiers,
+            [...globalIds].map(([id, kind]) => ({ key: id, value: { storage: 'marker', kind, id } })),
+        );
+    } else {
+        for (const [id, kind] of globalIds) {
+            if (kind === 'tool definition' && (await getPagedRecord(store, root.directories.identifiers, id))) continue;
+            directories.identifiers = await putPagedRecord(store, directories.identifiers, id, {
+                storage: 'marker',
+                kind,
+                id,
+            });
+        }
     }
     for (const [index, turn] of (batch.turns ?? []).entries()) {
         directories.turn_order = await putPagedRecord(
@@ -2655,12 +2943,36 @@ export async function stageIndexedRecordBatch(
         batch.turns[0].generation_id === acceptedGeneration.id
             ? batch.turns[0]
             : undefined;
+    let nextProcessingHeader = root.processing_header;
+    if (root.processing_index_profile === INDEXED_CONVERSATION_PROCESSING_PROFILE) {
+        if (
+            processing.job_count === undefined ||
+            processing.unresolved_job_count === undefined ||
+            processing.required_unresolved_job_count === undefined ||
+            processing.required_job_count === undefined ||
+            processing.required_blocked_job_count === undefined
+        )
+            throw new Error('Indexed processing profile has no complete counts');
+        const increment = acceptedJobs.length;
+        const requiredIncrement = acceptedJobs.filter((job) => job.required).length;
+        const { coverage: _previousCoverage, ...retainedProcessing } = processing;
+        const header = IndexedConversationProcessingHeaderSchema.parse({
+            ...retainedProcessing,
+            job_count: processing.job_count + increment,
+            unresolved_job_count: processing.unresolved_job_count + increment,
+            required_unresolved_job_count: processing.required_unresolved_job_count + requiredIncrement,
+            required_job_count: processing.required_job_count + requiredIncrement,
+        });
+        const headerRecord = await stageRecord(store, 'processing_header', root.source.conversation_id, header);
+        nextProcessingHeader = { content_hash: headerRecord.content_hash, size_bytes: headerRecord.size_bytes };
+    }
     const nextRoot = IndexedConversationRootSchema.parse({
         ...root,
         source: { ...root.source, revision: nextRevision },
         turn_count: root.turn_count + (batch.turns?.length ?? 0),
         ...deleteIndex,
         updated_at: options.recorded_at,
+        processing_header: nextProcessingHeader,
         context_header: { content_hash: contextHeader.content_hash, size_bytes: contextHeader.size_bytes },
         directories,
         ...(acceptedGeneration && acceptedTurn
@@ -2678,15 +2990,11 @@ export async function stageIndexedRecordBatch(
     if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES) {
         throw new RangeError('Indexed conversation root exceeds its manifest bound');
     }
-    return {
-        root: nextRoot,
-        locator: {
-            content_hash: rootRecord.content_hash,
-            size_bytes: rootRecord.size_bytes,
-        },
-        receipt,
-        applied: true,
-    };
+    const locator = { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes };
+    // Staged immutable writes are not acceptance. An oversized active dependency closure must
+    // fail before the host receives a publishable root/receipt or commits any enabled job.
+    if (processing.enabled) await assertIndexedProcessingAcceptanceWorkingSet(store, nextRoot, locator);
+    return { root: nextRoot, locator, receipt, applied: true };
 }
 
 /** Stage body-free logical deletion using only authenticated index point reads and the active context. */
@@ -3056,5 +3364,1390 @@ export async function stageIndexedConversationDelete(
             diagnostics: [],
         }),
         applied: true,
+    };
+}
+
+interface IndexedProcessingReadProfile {
+    recordReads: number;
+    pageReads: number;
+    bytes: number;
+}
+function boundedIndexedProcessingReader(
+    store: IndexedConversationRecordStore,
+    profile?: IndexedProcessingReadProfile,
+): IndexedConversationRecordStore {
+    let pageReads = 0;
+    let recordReads = 0;
+    let bytes = 0;
+    const charge = (size: number, family: 'page' | 'record') => {
+        if (family === 'page') pageReads++;
+        else recordReads++;
+        bytes += size;
+        if (profile) Object.assign(profile, { recordReads, pageReads, bytes });
+        if (
+            pageReads > INDEXED_PROCESSING_MAX_PAGE_READS ||
+            recordReads > INDEXED_PROCESSING_MAX_RECORD_READS ||
+            bytes > INDEXED_PROCESSING_MAX_IO_BYTES
+        )
+            throw new RangeError('Indexed processing inspection exceeds its working-set bound');
+    };
+    const read = store.read;
+    const readRecord = store.readRecord;
+    const write = store.write;
+    const writeRecord = store.writeRecord;
+    const assertIntegrity = store.assertExternalAssetIntegrity;
+    // The cache belongs to this single operation. Integrity-addressed keys may share immutable
+    // bytes, while fresh copies prevent either the underlying store or a caller mutating cache data.
+    const pages = new Map<string, Promise<Uint8Array>>();
+    const records = new Map<string, Promise<Uint8Array>>();
+    const cachedRead = async (
+        ref: PagedRecordRef,
+        family: 'page' | 'record',
+        cache: Map<string, Promise<Uint8Array>>,
+        load: () => Promise<Uint8Array>,
+    ) => {
+        const key = `${ref.content_hash}:${ref.size_bytes}`;
+        let pending = cache.get(key);
+        if (!pending) {
+            charge(ref.size_bytes, family);
+            pending = load().then((bytes) => Uint8Array.from(bytes));
+            cache.set(key, pending);
+        }
+        return Uint8Array.from(await pending);
+    };
+    return {
+        ...(assertIntegrity === undefined
+            ? {}
+            : { assertExternalAssetIntegrity: (asset) => assertIntegrity.call(store, asset) }),
+        write(bytes, ref) {
+            return write.call(store, bytes, ref);
+        },
+        writeRecord(ref, bytes) {
+            return writeRecord.call(store, ref, bytes);
+        },
+        async read(ref) {
+            return cachedRead(ref, 'page', pages, () => read.call(store, ref));
+        },
+        async readRecord(ref) {
+            return cachedRead(ref, 'record', records, () => readRecord.call(store, ref));
+        },
+    };
+}
+
+/** Reserve conservative completion headroom before acceptance. A selected text block may add
+ * an archive asset, replacement block and replacement header while unrelated active dependencies remain selected.
+ * Phase/archive/compaction receipts also need point reads. Limits apply simultaneously; the block
+ * ceiling is not a promise that every maximum-size shape fits every other resource ceiling. */
+async function assertIndexedProcessingAcceptanceWorkingSet(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+): Promise<void> {
+    const profile = { recordReads: 0, pageReads: 0, bytes: 0 };
+    const selected = await loadIndexedProcessingSelectedContext(
+        boundedIndexedProcessingReader(store, profile),
+        root,
+        locator,
+    );
+    const textCount = selected.turns.reduce(
+        (count, turn) =>
+            count +
+            (turn.header.authority === 'ordinary' && (turn.header.kind === 'user' || turn.header.kind === 'agent')
+                ? turn.selected_blocks.filter((block) => block.type === 'text').length
+                : 0),
+        0,
+    );
+    // The shared indexed archive schema bounds each asset and retrieval binding to two KiB.
+    // Sixteen KiB per text also reserves replacement/provenance/index/receipt evidence. The exact
+    // claim/workspace and output still undergo their independent 32MiB validation.
+    const completionRecordReserve = textCount === 0 ? 16 : 16 + textCount * 3;
+    const completionByteReserve = 32 * 1024 + textCount * 16 * 1024;
+    if (
+        profile.recordReads + completionRecordReserve > INDEXED_PROCESSING_MAX_RECORD_READS ||
+        profile.bytes + completionByteReserve > INDEXED_PROCESSING_MAX_IO_BYTES ||
+        canonicalJsonContentBytes(selected).byteLength + completionByteReserve > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES
+    )
+        throw new RangeError('Indexed processing active dependency closure has no bounded completion headroom');
+}
+
+async function indexedProcessingRecord<Shape extends z.ZodType>(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    family: string,
+    jobId: string,
+    schema: Shape,
+): Promise<z.infer<Shape> | undefined> {
+    const record = await getPagedRecord(store, root.directories.processing_records, tupleKey(family, jobId));
+    if (record === undefined) return undefined;
+    if (record.storage !== 'record' || record.kind !== 'processing_records' || record.id !== jobId)
+        throw new Error('Indexed processing record identity differs from its exact family/key');
+    return loadRecord(store, record, schema);
+}
+
+async function ownedIndexedProcessingJob(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    jobId: string,
+): Promise<ProcessingJob> {
+    const job = await indexedProcessingRecord(store, root, 'jobs', jobId, ProcessingJobSchema);
+    if (!job || job.id !== jobId || job.enqueue_revision > root.source.revision)
+        throw new Error('Indexed pending job lacks its retained canonical source');
+    const acceptance = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        job.source_operation_id,
+        OperationReceiptSchema,
+    );
+    const relation = await indexedRecordById(
+        store,
+        root,
+        'processing_by_operation',
+        job.source_operation_id,
+        IndexedProcessingOperationJobsSchema,
+    );
+    if (
+        !acceptance ||
+        !relation ||
+        acceptance.conversation_id !== root.source.conversation_id ||
+        relation.operation_id !== acceptance.id ||
+        relation.receipt_fingerprint !== (await fingerprintJson(acceptance)) ||
+        relation.job_ids.filter((id) => id === job.id).length !== 1 ||
+        acceptance.result_revision !== job.enqueue_revision ||
+        job.configuration_fingerprint !== (await fingerprintJson(job.configuration)) ||
+        job.selection_fingerprint !== (await fingerprintJson(job.selection))
+    )
+        throw new Error('Indexed processing job differs from its accepted operation/configuration/selection');
+    return job;
+}
+
+/** Point-read exact canonical processing evidence. This is a bounded data reader, not a job claim,
+ * processor capability or provider admission. Hosts still prove run/namespace/current-task custody.
+ */
+export async function loadIndexedProcessingJobState(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    jobIdInput: string,
+) {
+    const input = { root: rootInput, job_id: jobIdInput };
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed job inspection is not bounded JSON');
+    const { root, job_id: jobId } = z
+        .strictObject({ root: IndexedConversationRootSchema, job_id: IdentifierSchema })
+        .parse(structuredClone(input));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed job inspection requires complete processing indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, jobId);
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    assertIndexedProcessingCounts(header);
+    const configuration = header.processors[job.processor_index];
+    if (
+        !configuration ||
+        configuration.id !== job.processor_id ||
+        configuration.version !== job.processor_version ||
+        configuration.scope !== job.scope ||
+        configuration.required !== job.required ||
+        configuration.failure_behavior !== job.failure_behavior ||
+        header.policy_revision !== job.policy_revision ||
+        (await fingerprintJson(configuration.config)) !== job.configuration_fingerprint
+    )
+        throw new Error('Indexed job is not bound to its retained policy stage');
+    const resolution = await indexedProcessingRecord(
+        store,
+        root,
+        'resolved_inputs',
+        jobId,
+        ProcessingResolvedInputSchema,
+    );
+    const attempt = await indexedProcessingRecord(store, root, 'attempts', jobId, ProcessingAttemptReceiptSchema);
+    const output = await indexedProcessingRecord(store, root, 'outputs', jobId, ProcessingOutputReceiptSchema);
+    const completion = await indexedProcessingRecord(
+        store,
+        root,
+        'completions',
+        jobId,
+        ProcessingCompletionReceiptSchema,
+    );
+    const supersession = await indexedProcessingRecord(
+        store,
+        root,
+        'supersessions',
+        jobId,
+        ProcessingSupersessionReceiptSchema,
+    );
+    return {
+        job,
+        configuration,
+        header,
+        ...(resolution === undefined ? {} : { resolution }),
+        ...(attempt === undefined ? {} : { attempt }),
+        ...(output === undefined ? {} : { output }),
+        ...(completion === undefined ? {} : { completion }),
+        ...(supersession === undefined ? {} : { supersession }),
+    };
+}
+
+/** Exact asset append witness, point-loaded independently of the claim workspace or active preview. */
+export async function loadIndexedProcessingArchiveState(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    jobIdInput: string,
+) {
+    const input = { root: rootInput, job_id: jobIdInput };
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed archive inspection is not bounded JSON');
+    const { root, job_id: jobId } = z
+        .strictObject({ root: IndexedConversationRootSchema, job_id: IdentifierSchema })
+        .parse(structuredClone(input));
+    const store = boundedIndexedProcessingReader(storeInput);
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        `processing:archive:${jobId}`,
+        OperationReceiptSchema,
+    );
+    if (!receipt) return undefined;
+    const ids = receipt.accepted_asset_ids ?? [];
+    if (
+        receipt.operation_kind !== undefined ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.result_revision > root.source.revision ||
+        ids.length < 1 ||
+        ids.length > 4096 ||
+        new Set(ids).size !== ids.length
+    )
+        throw new Error('Indexed archive receipt has a foreign or incomplete asset binding');
+    const assets = [];
+    for (const id of ids) {
+        const asset = await indexedRecordById(store, root, 'assets', id, AssetSchema);
+        if (
+            asset?.kind !== 'text' ||
+            asset.storage.type !== 'external' ||
+            asset.content_hash === undefined ||
+            asset.byte_length === undefined
+        )
+            throw new Error('Indexed archive receipt has a missing immutable text asset');
+        assets.push(asset);
+    }
+    return { receipt, assets };
+}
+
+function assertIndexedProcessingCounts(header: z.infer<typeof IndexedConversationProcessingHeaderSchema>) {
+    if (
+        header.job_count === undefined ||
+        header.unresolved_job_count === undefined ||
+        header.required_unresolved_job_count === undefined ||
+        header.required_job_count === undefined ||
+        header.required_blocked_job_count === undefined ||
+        header.unresolved_job_count > header.job_count ||
+        header.required_unresolved_job_count > header.unresolved_job_count ||
+        header.required_job_count > header.job_count ||
+        header.required_unresolved_job_count > header.required_job_count ||
+        header.required_blocked_job_count > header.required_unresolved_job_count
+    )
+        throw new Error('Indexed processing profile lacks its complete bounded counts');
+    return {
+        job_count: header.job_count,
+        unresolved_job_count: header.unresolved_job_count,
+        required_unresolved_job_count: header.required_unresolved_job_count,
+        required_job_count: header.required_job_count,
+        required_blocked_job_count: header.required_blocked_job_count,
+    };
+}
+
+/** Bounded current-root discovery only. It creates no claim, output, readiness or provider authority. */
+export async function loadIndexedPendingProcessingJobs(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    optionsInput: { cursor?: string; limit?: number } = {},
+) {
+    const input = { root: rootInput, options: optionsInput };
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed pending discovery is not bounded JSON');
+    const { root, options } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            options: z.strictObject({
+                cursor: z.string().min(1).max(2048).optional(),
+                limit: z.number().int().min(1).max(16).default(16),
+            }),
+        })
+        .parse(input);
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed pending discovery requires the complete processing index profile');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    const counts = assertIndexedProcessingCounts(header);
+    const page = await readPagedRecordRange(store, root.directories.processing_pending, {
+        ...(options.cursor === undefined ? {} : { after: options.cursor }),
+        limit: options.limit,
+    });
+    if (
+        (root.directories.processing_pending === undefined) !== (counts.unresolved_job_count === 0) ||
+        (options.cursor === undefined && page.entries.length === 0 && counts.unresolved_job_count !== 0)
+    )
+        throw new Error('Indexed pending index and complete header count disagree');
+    const jobs = [];
+    for (const entry of page.entries) {
+        if (
+            entry.value.storage !== 'marker' ||
+            entry.value.kind !== 'processing_pending' ||
+            entry.value.id !== entry.key
+        )
+            throw new Error('Indexed pending index has a foreign job marker');
+        const job = await ownedIndexedProcessingJob(store, root, entry.key);
+        const completion = await indexedProcessingRecord(
+            store,
+            root,
+            'completions',
+            job.id,
+            ProcessingCompletionReceiptSchema,
+        );
+        const supersession = await indexedProcessingRecord(
+            store,
+            root,
+            'supersessions',
+            job.id,
+            ProcessingSupersessionReceiptSchema,
+        );
+        if (
+            supersession ||
+            (completion &&
+                (completion.job_id !== job.id ||
+                    completion.status !== 'blocked' ||
+                    completion.result_revision > root.source.revision))
+        )
+            throw new Error('Indexed pending index contains a completed or superseded job');
+        jobs.push({ job, ...(completion === undefined ? {} : { completion }) });
+    }
+    return {
+        source: root.source,
+        policy_revision: header.policy_revision,
+        enabled: header.enabled,
+        ...counts,
+        jobs,
+        has_more: page.has_more,
+        ...(page.next_cursor === undefined ? {} : { next_cursor: page.next_cursor }),
+    };
+}
+
+/** Exact append receipt and its own immutable jobs, separate from all outstanding obligations. */
+export async function loadIndexedProcessingAppendAcceptance(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    operationIdInput: string,
+) {
+    const input = { root: rootInput, operation_id: operationIdInput };
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed append acceptance is not bounded JSON');
+    const { root, operation_id: operationId } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            operation_id: IdentifierSchema,
+        })
+        .parse(input);
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed append acceptance requires the complete processing index profile');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const receipt = await indexedRecordById(store, root, 'operation_receipts', operationId, OperationReceiptSchema);
+    if (
+        !receipt ||
+        receipt.operation_kind !== undefined ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.result_revision > root.source.revision
+    )
+        throw new Error('Indexed append acceptance has no exact accepted append receipt');
+    const association = await indexedRecordById(
+        store,
+        root,
+        'processing_by_operation',
+        operationId,
+        IndexedProcessingOperationJobsSchema,
+    );
+    if (
+        association &&
+        (association.operation_id !== receipt.id ||
+            association.receipt_fingerprint !== (await fingerprintJson(receipt)))
+    )
+        throw new Error('Indexed append acceptance job association differs from its exact receipt');
+    const jobs = [];
+    for (const jobId of association?.job_ids ?? []) jobs.push(await ownedIndexedProcessingJob(store, root, jobId));
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    const counts = assertIndexedProcessingCounts(header);
+    return {
+        receipt,
+        jobs,
+        processing: {
+            status: header.enabled ? (counts.required_blocked_job_count ? 'blocked' : 'pending') : 'ready',
+            job_ids: jobs.map((job) => job.id),
+        },
+    };
+}
+
+/** Authenticated active data for a separate processor, with explicit processing-only completeness.
+ * It cannot bypass native readiness. The reader bounds all active dependencies, never cold history.
+ */
+export async function loadIndexedProcessingSelectedContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+) {
+    return IndexedProcessingSelectedContextSchema.parse(
+        await loadIndexedSelectedContext(
+            boundedIndexedProcessingReader(store),
+            root,
+            locator,
+            INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+            true,
+            true,
+            'processing',
+        ),
+    );
+}
+
+const IndexedProcessingPhaseCommandSchema = z.discriminatedUnion('phase', [
+    z.strictObject({ phase: z.literal('resolve'), value: ProcessingResolvedInputSchema }),
+    z.strictObject({ phase: z.literal('attempt'), value: ProcessingAttemptReceiptSchema }),
+    z.strictObject({ phase: z.literal('output'), value: ProcessingOutputReceiptSchema }),
+]);
+export type IndexedProcessingPhaseCommand = z.infer<typeof IndexedProcessingPhaseCommandSchema>;
+export interface StagedIndexedProcessingPhase extends StagedIndexedConversationRoot {
+    receipt: OperationReceipt;
+    applied: boolean;
+}
+
+/** Durable phase records are keyed by the original immutable job, independent of HTTP attempts.
+ * The host still owns current scheduler/task proof and exact current-root publication CAS.
+ * First publication is validated against the real active projection; exact retained retry reads
+ * only the original phase record/receipt and never invokes a processor or resets an attempt.
+ */
+export async function stageIndexedProcessingPhase(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    rootLocatorInput: PagedRecordRef,
+    commandInput: IndexedProcessingPhaseCommand,
+): Promise<StagedIndexedProcessingPhase> {
+    const envelope = { root: rootInput, locator: rootLocatorInput, command: commandInput };
+    if (!preflightJsonInput(envelope, { max_bytes: 32 * 1024 * 1024 }).success)
+        throw new TypeError('Indexed processing phase is not bounded JSON');
+    const { root, locator, command } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            command: IndexedProcessingPhaseCommandSchema,
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed processing phase requires its complete processing indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, command.value.job_id);
+    const operationId = `processing:${command.phase}:${job.id}`;
+    const payloadFingerprint = await fingerprintJson(command.value);
+    const family =
+        command.phase === 'resolve' ? 'resolved_inputs' : command.phase === 'attempt' ? 'attempts' : 'outputs';
+    const phaseRecord = await getPagedRecord(store, root.directories.processing_records, tupleKey(family, job.id));
+    const retained = await indexedRecordById(store, root, 'operation_receipts', operationId, OperationReceiptSchema);
+    if (retained || phaseRecord) {
+        if (
+            !retained ||
+            !phaseRecord ||
+            phaseRecord.storage !== 'record' ||
+            phaseRecord.kind !== 'processing_records' ||
+            phaseRecord.id !== job.id
+        )
+            throw new Error('Indexed processing retry lacks its exact phase record and operation receipt');
+        const retainedValue = await loadRecord(store, phaseRecord, z.unknown());
+        if (
+            retained.conversation_id !== root.source.conversation_id ||
+            retained.operation_kind !== 'processing' ||
+            retained.processing_operation?.phase !== command.phase ||
+            retained.processing_operation.job_id !== job.id ||
+            retained.payload_fingerprint !== payloadFingerprint ||
+            retained.result_revision !== retained.base_revision + 1 ||
+            retained.result_revision > root.source.revision ||
+            (await fingerprintJson(retainedValue)) !== payloadFingerprint
+        )
+            throw new Error('Indexed processing retry differs from its immutable phase evidence');
+        return { root, locator, receipt: retained, applied: false };
+    }
+    const completion = await indexedProcessingRecord(
+        store,
+        root,
+        'completions',
+        job.id,
+        ProcessingCompletionReceiptSchema,
+    );
+    const supersession = await indexedProcessingRecord(
+        store,
+        root,
+        'supersessions',
+        job.id,
+        ProcessingSupersessionReceiptSchema,
+    );
+    if (completion || supersession)
+        throw new Error('Indexed processing cannot create a phase for a completed or superseded job');
+    const header = await loadRecord(
+        store,
+        {
+            storage: 'record',
+            kind: 'processing_header',
+            id: root.source.conversation_id,
+            ...root.processing_header,
+        },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    assertIndexedProcessingCounts(header);
+    if (!header.enabled) throw new Error('Indexed processing first publication requires activated policy');
+    const configuration = header.processors[job.processor_index];
+    if (
+        !configuration ||
+        configuration.id !== job.processor_id ||
+        configuration.version !== job.processor_version ||
+        configuration.scope !== job.scope ||
+        configuration.required !== job.required ||
+        configuration.failure_behavior !== job.failure_behavior ||
+        header.policy_revision !== job.policy_revision ||
+        (await fingerprintJson(configuration.config)) !== job.configuration_fingerprint
+    )
+        throw new Error('Indexed processing phase differs from its exact accepted policy stage');
+    let recordedAt: string;
+    if (command.phase === 'resolve') {
+        const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+        const resolution = await resolveIndexedProcessingTextInput(selected, job, command.value.recorded_at);
+        if (!sameIndexedRecord(resolution, command.value))
+            throw new Error('Indexed resolution is not derived from the exact selected source');
+        recordedAt = command.value.recorded_at;
+    } else {
+        const resolution = await indexedProcessingRecord(
+            store,
+            root,
+            'resolved_inputs',
+            job.id,
+            ProcessingResolvedInputSchema,
+        );
+        if (!resolution || (await fingerprintJson(resolution)) !== command.value.resolved_input_fingerprint)
+            throw new Error('Indexed processing phase lost its exact durable resolution');
+        if (command.phase === 'attempt') {
+            const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+            const current = await resolveIndexedProcessingTextInput(selected, job, resolution.recorded_at);
+            if (current.context_fingerprint !== resolution.context_fingerprint)
+                throw new Error('Indexed attempt lost its active dependency context');
+            recordedAt = command.value.started_at;
+        } else {
+            const attempt = await indexedProcessingRecord(
+                store,
+                root,
+                'attempts',
+                job.id,
+                ProcessingAttemptReceiptSchema,
+            );
+            if (
+                command.value.attempt_token === undefined
+                    ? attempt !== undefined
+                    : attempt?.attempt_token !== command.value.attempt_token
+            )
+                throw new Error('Indexed output lost its exact durable attempt');
+            const { output_fingerprint: fingerprint, ...payload } = command.value;
+            if ((await fingerprintJson(payload)) !== fingerprint)
+                throw new Error('Indexed processing output fingerprint changed');
+            recordedAt = command.value.recorded_at;
+        }
+    }
+    const receipt = createProcessingTransitionReceipt({
+        source: root.source,
+        operation_id: operationId,
+        recorded_at: recordedAt,
+        payload_fingerprint: payloadFingerprint,
+        processing_operation: {
+            phase: command.phase,
+            job_id: job.id,
+            policy_revision: header.policy_revision,
+            result_fingerprint: payloadFingerprint,
+        },
+    });
+    const directories = { ...root.directories };
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey(family, job.id),
+        await stageRecord(store, 'processing_records', job.id, command.value),
+    );
+    directories.operation_receipts = await putPagedRecord(
+        store,
+        directories.operation_receipts,
+        receipt.id,
+        await stageRecord(store, 'operation_receipts', receipt.id, receipt),
+    );
+    directories.identifiers = await putPagedRecord(store, directories.identifiers, receipt.id, {
+        storage: 'marker',
+        kind: 'operation receipt',
+        id: receipt.id,
+    });
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        source: { ...root.source, revision: receipt.result_revision },
+        updated_at: recordedAt,
+        directories,
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed processing phase root exceeds its manifest bound');
+    return {
+        root: nextRoot,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        receipt,
+        applied: true,
+    };
+}
+
+export interface StagedIndexedProcessingCompletion extends StagedIndexedProcessingPhase {
+    completion: z.infer<typeof ProcessingCompletionReceiptSchema>;
+}
+
+/** Settle an already durably stored pure text output. Global identifiers and archive records are
+ * looked up individually; originals stay immutable and cold. A completion removes only this job's
+ * unresolved marker, retains its full resolution/attempt/output/receipts, and invalidates readiness.
+ */
+export async function stageIndexedTextProcessingCompletion(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    workspaceInput: IndexedProcessingClaimWorkspace,
+): Promise<StagedIndexedProcessingCompletion> {
+    const envelope = { root: rootInput, locator: locatorInput, workspace: workspaceInput };
+    if (!preflightJsonInput(envelope, { max_bytes: 32 * 1024 * 1024 }).success)
+        throw new TypeError('Indexed text completion is not bounded JSON');
+    const { root, locator, workspace } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            workspace: IndexedProcessingClaimWorkspaceSchema,
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed completion needs its complete processing indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, workspace.job.id);
+    const resolution = await indexedProcessingRecord(
+        store,
+        root,
+        'resolved_inputs',
+        job.id,
+        ProcessingResolvedInputSchema,
+    );
+    const attempt = await indexedProcessingRecord(store, root, 'attempts', job.id, ProcessingAttemptReceiptSchema);
+    const output = await indexedProcessingRecord(store, root, 'outputs', job.id, ProcessingOutputReceiptSchema);
+    if (
+        !sameIndexedRecord(job, workspace.job) ||
+        !resolution ||
+        !attempt ||
+        !output ||
+        !sameIndexedRecord(resolution, workspace.resolution) ||
+        !sameIndexedRecord(attempt, workspace.attempt) ||
+        attempt.resolved_input_fingerprint !== output.resolved_input_fingerprint ||
+        output.attempt_token !== attempt.attempt_token
+    )
+        throw new Error('Indexed completion lost its exact durable job/resolution/attempt/output');
+    const { output_fingerprint: outputFingerprint, ...outputPayload } = output;
+    if ((await fingerprintJson(outputPayload)) !== outputFingerprint)
+        throw new Error('Indexed completion output integrity changed');
+    const retained = await indexedProcessingRecord(
+        store,
+        root,
+        'completions',
+        job.id,
+        ProcessingCompletionReceiptSchema,
+    );
+    if (retained) {
+        const receiptId = retained.context_change_operation_id ?? `processing:complete:${job.id}`;
+        const receipt = await indexedRecordById(store, root, 'operation_receipts', receiptId, OperationReceiptSchema);
+        if (
+            !receipt ||
+            receipt.conversation_id !== root.source.conversation_id ||
+            retained.output_fingerprint !== outputFingerprint ||
+            retained.result_revision !== receipt.result_revision ||
+            receipt.result_revision > root.source.revision ||
+            canonicalJsonContentString(retained.inserted_entry_ids) !==
+                canonicalJsonContentString(receipt.accepted_context_entry_ids ?? []) ||
+            (retained.status === 'applied'
+                ? receipt.operation_kind !== 'context_change'
+                : receipt.processing_operation?.phase !== 'complete')
+        )
+            throw new Error('Indexed completion retry differs from its immutable result receipt');
+        return { root, locator, receipt, completion: retained, applied: false };
+    }
+    if (await indexedProcessingRecord(store, root, 'supersessions', job.id, ProcessingSupersessionReceiptSchema))
+        throw new Error('Indexed completion job has been superseded');
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const currentWorkspace = { ...workspace, selected };
+    // Replay validates unchanged active-context identity against retained resolution, plus full
+    // deterministic output equality. Merely having a job/output marker never proves the delta.
+    for (const asset of workspace.archives.assets) {
+        const accepted = await indexedRecordById(store, root, 'assets', asset.id, AssetSchema);
+        if (!accepted || !sameIndexedRecord(accepted, asset))
+            throw new Error('Indexed completion archive differs from its actual accepted asset');
+    }
+    const archiveReceipt = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        workspace.archives.acceptance.id,
+        OperationReceiptSchema,
+    );
+    if (!archiveReceipt || !sameIndexedRecord(archiveReceipt, workspace.archives.acceptance))
+        throw new Error('Indexed completion archive receipt differs from its actual retained acceptance');
+    const mutation = await applyIndexedTextExternalizationOutput(currentWorkspace, output);
+    const compaction = mutation.compaction;
+    if (!compaction) throw new Error('Indexed text output lost its exact new compaction');
+    const newIds = [
+        compaction.id,
+        mutation.receipt.id,
+        ...compaction.replacement_turns.flatMap((turn) => [turn.id, ...turn.blocks.map((block) => block.id)]),
+        ...mutation.change.operations[0].inserted_entry_ids,
+        ...mutation.context.retrieval_requirements
+            .filter((item) => !selected.context.retrieval_requirements.some((old) => old.id === item.id))
+            .map((item) => item.id),
+    ];
+    if (new Set(newIds).size !== newIds.length)
+        throw new Error('Indexed processing creates duplicate record identities');
+    for (const id of newIds)
+        if (await getPagedRecord(store, root.directories.identifiers, id))
+            throw new Error('Indexed processing identity already belongs to a retained record');
+    const directories = { ...root.directories };
+    const insertions = new Map<keyof IndexedConversationDirectories, { key: string; value: PagedRecordValue }[]>();
+    const nominate = (family: keyof IndexedConversationDirectories, key: string, value: PagedRecordValue) => {
+        const commands = insertions.get(family) ?? [];
+        commands.push({ key, value });
+        insertions.set(family, commands);
+    };
+    const write = async (family: keyof IndexedConversationDirectories, id: string, value: unknown, key = id) => {
+        nominate(family, key, await stageRecord(store, family, id, value));
+    };
+    const { replacement_turns: replacementTurns, ...compactionHeader } = compaction;
+    await write('compactions', compaction.id, compactionHeader);
+    for (const turn of replacementTurns) {
+        const { blocks, ...header } = turn;
+        const blockIds = blocks.map((block) => block.id);
+        await write(
+            'turns',
+            turn.id,
+            IndexedConversationTurnHeaderSchema.parse({
+                turn: header,
+                source: 'replacement',
+                compaction_id: compaction.id,
+                block_ids: blockIds,
+                block_ids_hash: (await hashContentBytes(canonicalJsonContentBytes(blockIds))).content_hash,
+            }),
+        );
+        for (const block of blocks) {
+            await write('blocks', block.id, block);
+            nominate('block_owners', block.id, {
+                storage: 'marker',
+                kind: 'block_owner',
+                id: turn.id,
+            });
+        }
+    }
+    // Complete reverse delete witnesses: compaction originals and replacement block owners remain
+    // protected even when subsequent provider receipts refer only to the replacement.
+    const protectedTurns = new Set([...compaction.source.turn_ids, ...replacementTurns.map((turn) => turn.id)]);
+    for (const blockId of compaction.source.block_ids ?? []) {
+        const owner = await getPagedRecord(store, root.directories.block_owners, blockId);
+        if (owner?.storage !== 'marker' || owner.kind !== 'block_owner')
+            throw new Error('Indexed compaction source block loses its immutable owner');
+        protectedTurns.add(owner.id);
+    }
+    for (const turnId of protectedTurns)
+        if (!(await getPagedRecord(store, directories.deletion_blockers, turnId)))
+            nominate('deletion_blockers', turnId, {
+                storage: 'marker',
+                kind: 'delete_blocker',
+                id: turnId,
+            });
+    for (const entry of mutation.context.entries) {
+        const existing = await getPagedRecord(store, directories.context_entries, entry.id);
+        if (!existing) await write('context_entries', entry.id, entry);
+        else {
+            const actual = await loadRecord(store, existing, ContextEntrySchema);
+            if (!sameIndexedRecord(actual, entry)) throw new Error('Indexed retained context entry differs');
+        }
+    }
+    directories.active_context_order = await buildPagedRecordIndex(
+        store,
+        mutation.context.entries.map((entry, i) => ({
+            key: indexedOrderedKey(i),
+            value: { storage: 'marker' as const, kind: 'context_order', id: entry.id },
+        })),
+    );
+    for (const id of newIds)
+        nominate('identifiers', id, {
+            storage: 'marker',
+            kind: 'processing context record',
+            id,
+        });
+    const completion = ProcessingCompletionReceiptSchema.parse({
+        job_id: job.id,
+        output_fingerprint: outputFingerprint,
+        status: 'applied',
+        result_revision: mutation.receipt.result_revision,
+        inserted_entry_ids: mutation.change.operations[0].inserted_entry_ids,
+        context_change_operation_id: mutation.receipt.id,
+        recorded_at: workspace.snapshot_at,
+    });
+    await write('processing_records', job.id, completion, tupleKey('completions', job.id));
+    await write('operation_receipts', mutation.receipt.id, mutation.receipt);
+    for (const [family, commands] of insertions) {
+        directories[family] = await insertPagedRecords(store, directories[family], commands);
+    }
+    const removed = await removePagedRecord(store, directories.processing_pending, job.id);
+    if (
+        !removed.applied ||
+        removed.removed?.storage !== 'marker' ||
+        removed.removed.kind !== 'processing_pending' ||
+        removed.removed.id !== job.id
+    )
+        throw new Error('Indexed completion lost its exact unresolved marker');
+    if (removed.root === undefined) delete directories.processing_pending;
+    else directories.processing_pending = removed.root;
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    const counts = assertIndexedProcessingCounts(header);
+    if (counts.unresolved_job_count < 1 || (job.required && counts.required_unresolved_job_count < 1))
+        throw new Error('Indexed completion cannot decrement an absent unresolved obligation');
+    const { coverage: _coverage, ...processing } = header;
+    const processingHeader = await stageRecord(
+        store,
+        'processing_header',
+        root.source.conversation_id,
+        IndexedConversationProcessingHeaderSchema.parse({
+            ...processing,
+            unresolved_job_count: counts.unresolved_job_count - 1,
+            required_unresolved_job_count: counts.required_unresolved_job_count - (job.required ? 1 : 0),
+        }),
+    );
+    const { entries: _entries, ...contextFields } = mutation.context;
+    const contextHeader = await stageRecord(
+        store,
+        'context_header',
+        root.source.conversation_id,
+        IndexedConversationContextHeaderSchema.parse({
+            ...contextFields,
+            active_entry_count: mutation.context.entries.length,
+            active_entry_bytes: canonicalJsonContentBytes(mutation.context.entries).byteLength,
+            context_fingerprint: (await hashContentBytes(canonicalJsonContentBytes(mutation.context))).content_hash,
+        }),
+    );
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        directories,
+        source: { ...root.source, revision: completion.result_revision },
+        updated_at: workspace.snapshot_at,
+        context_header: { content_hash: contextHeader.content_hash, size_bytes: contextHeader.size_bytes },
+        processing_header: { content_hash: processingHeader.content_hash, size_bytes: processingHeader.size_bytes },
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed processing completion root exceeds its manifest bound');
+    await loadIndexedProcessingSelectedContext(store, nextRoot, {
+        content_hash: rootRecord.content_hash,
+        size_bytes: rootRecord.size_bytes,
+    });
+    return {
+        root: nextRoot,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        receipt: mutation.receipt,
+        completion,
+        applied: true,
+    };
+}
+
+/** Complete only the exact no-eligible-blocks output for an immutable empty text-stage selection.
+ * Archive-only append jobs are genuine canonical jobs; they do not require fabricated archives,
+ * provider admission or another processor invocation just to settle their zero-content obligation.
+ */
+export async function stageIndexedProcessingNoOpCompletion(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    jobIdInput: string,
+): Promise<StagedIndexedProcessingCompletion> {
+    const envelope = { root: rootInput, locator: locatorInput, job_id: jobIdInput };
+    if (!preflightJsonInput(envelope).success) throw new TypeError('Indexed no-op completion is not bounded JSON');
+    const {
+        root,
+        locator,
+        job_id: jobId,
+    } = z
+        .strictObject({ root: IndexedConversationRootSchema, locator: PagedRecordRefSchema, job_id: IdentifierSchema })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed no-op completion requires complete processing indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, jobId);
+    const resolution = await indexedProcessingRecord(
+        store,
+        root,
+        'resolved_inputs',
+        jobId,
+        ProcessingResolvedInputSchema,
+    );
+    const output = await indexedProcessingRecord(store, root, 'outputs', jobId, ProcessingOutputReceiptSchema);
+    const attempt = await indexedProcessingRecord(store, root, 'attempts', jobId, ProcessingAttemptReceiptSchema);
+    if (
+        job.processor_id !== 'externalize-text' ||
+        job.processor_version !== '1' ||
+        job.scope !== 'on_append' ||
+        job.stage_index !== 0 ||
+        job.selection.kind !== 'entries' ||
+        job.selection.entry_ids.length !== 0 ||
+        !resolution ||
+        resolution.entry_ids.length !== 0 ||
+        resolution.source_turn_ids.length !== 0 ||
+        !output ||
+        output.kind !== 'no_op' ||
+        output.reason !== 'no_eligible_blocks' ||
+        output.attempt_token !== undefined ||
+        attempt
+    )
+        throw new Error('Indexed no-op completion requires its exact empty text selection and unattempted output');
+    const { output_fingerprint: outputFingerprint, ...payload } = output;
+    if (
+        (await fingerprintJson(payload)) !== outputFingerprint ||
+        (await fingerprintJson(resolution)) !== output.resolved_input_fingerprint
+    )
+        throw new Error('Indexed no-op completion lost its retained output/resolution identity');
+    const operationId = `processing:complete:${jobId}`;
+    const retained = await indexedProcessingRecord(
+        store,
+        root,
+        'completions',
+        jobId,
+        ProcessingCompletionReceiptSchema,
+    );
+    const prior = await indexedRecordById(store, root, 'operation_receipts', operationId, OperationReceiptSchema);
+    if (retained || prior) {
+        if (
+            !retained ||
+            !prior ||
+            retained.status !== 'no_op' ||
+            retained.output_fingerprint !== outputFingerprint ||
+            retained.result_revision !== prior.result_revision ||
+            prior.result_revision > root.source.revision ||
+            prior.conversation_id !== root.source.conversation_id ||
+            prior.processing_operation?.phase !== 'complete' ||
+            prior.processing_operation.job_id !== jobId ||
+            prior.payload_fingerprint !== (await fingerprintJson(retained))
+        )
+            throw new Error('Indexed no-op retry differs from its exact retained completion');
+        return { root, locator, receipt: prior, completion: retained, applied: false };
+    }
+    if (await indexedProcessingRecord(store, root, 'supersessions', jobId, ProcessingSupersessionReceiptSchema))
+        throw new Error('Indexed no-op job has been superseded');
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    const counts = assertIndexedProcessingCounts(header);
+    if (counts.unresolved_job_count < 1 || (job.required && counts.required_unresolved_job_count < 1))
+        throw new Error('Indexed no-op cannot remove an absent obligation');
+    const completion = ProcessingCompletionReceiptSchema.parse({
+        job_id: jobId,
+        output_fingerprint: outputFingerprint,
+        status: 'no_op',
+        result_revision: root.source.revision + 1,
+        inserted_entry_ids: [],
+        recorded_at: output.recorded_at,
+    });
+    const completionFingerprint = await fingerprintJson(completion);
+    const receipt = createProcessingTransitionReceipt({
+        source: root.source,
+        operation_id: operationId,
+        payload_fingerprint: completionFingerprint,
+        recorded_at: output.recorded_at,
+        processing_operation: {
+            phase: 'complete',
+            job_id: jobId,
+            policy_revision: header.policy_revision,
+            result_fingerprint: completionFingerprint,
+        },
+    });
+    const directories = { ...root.directories };
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('completions', jobId),
+        await stageRecord(store, 'processing_records', jobId, completion),
+    );
+    directories.operation_receipts = await putPagedRecord(
+        store,
+        directories.operation_receipts,
+        operationId,
+        await stageRecord(store, 'operation_receipts', operationId, receipt),
+    );
+    directories.identifiers = await putPagedRecord(store, directories.identifiers, operationId, {
+        storage: 'marker',
+        kind: 'operation receipt',
+        id: operationId,
+    });
+    const removed = await removePagedRecord(store, directories.processing_pending, jobId);
+    if (
+        !removed.applied ||
+        removed.removed?.storage !== 'marker' ||
+        removed.removed.kind !== 'processing_pending' ||
+        removed.removed.id !== jobId
+    )
+        throw new Error('Indexed no-op lost its exact unresolved marker');
+    if (removed.root === undefined) delete directories.processing_pending;
+    else directories.processing_pending = removed.root;
+    const { coverage: _coverage, ...processing } = header;
+    const nextHeader = await stageRecord(
+        store,
+        'processing_header',
+        root.source.conversation_id,
+        IndexedConversationProcessingHeaderSchema.parse({
+            ...processing,
+            unresolved_job_count: counts.unresolved_job_count - 1,
+            required_unresolved_job_count: counts.required_unresolved_job_count - (job.required ? 1 : 0),
+        }),
+    );
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        directories,
+        source: { ...root.source, revision: receipt.result_revision },
+        updated_at: output.recorded_at,
+        processing_header: { content_hash: nextHeader.content_hash, size_bytes: nextHeader.size_bytes },
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed no-op completion root exceeds manifest bound');
+    await loadIndexedProcessingSelectedContext(store, nextRoot, {
+        content_hash: rootRecord.content_hash,
+        size_bytes: rootRecord.size_bytes,
+    });
+    return {
+        root: nextRoot,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        receipt,
+        completion,
+        applied: true,
+    };
+}
+
+export const IndexedProcessingCoverageCommandSchema = z.strictObject({
+    operation_id: IdentifierSchema,
+    expected_revision: NonnegativeSafeIntegerSchema,
+    target_fingerprint: ContentHashSchema,
+    measured_input_tokens: NonnegativeSafeIntegerSchema,
+    tokenizer_id: IdentifierSchema,
+    measurement_fingerprint: ContentHashSchema,
+    recorded_at: TimestampSchema,
+});
+export type IndexedProcessingCoverageCommand = z.infer<typeof IndexedProcessingCoverageCommandSchema>;
+export interface StagedIndexedProcessingCoverage extends StagedIndexedProcessingPhase {
+    coverage: IndexedProcessingReadinessCoverage;
+}
+
+async function indexedReadinessIdentity(coverage: IndexedProcessingReadinessCoverage): Promise<string> {
+    return fingerprintJson({
+        profile: coverage.profile,
+        context_fingerprint: coverage.context_fingerprint,
+        policy_revision: coverage.policy_revision,
+        target_fingerprint: coverage.target_fingerprint,
+        measurement: coverage.measurement,
+        required_job_count: coverage.required_job_count,
+        ...(coverage.required_jobs_root === undefined ? {} : { required_jobs_root: coverage.required_jobs_root }),
+    });
+}
+
+function assertSupportedIndexedReadinessPolicy(
+    header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
+): void {
+    if (
+        !header.enabled ||
+        header.processors.length !== 1 ||
+        header.processors.some(
+            (processor) =>
+                processor.id !== 'externalize-text' ||
+                processor.version !== '1' ||
+                processor.scope !== 'on_append' ||
+                Object.keys(processor.config).length !== 0,
+        )
+    )
+        throw new Error('Indexed readiness currently supports only registered on-append ordinary text');
+}
+
+function assertIndexedRequiredIdentity(
+    root: IndexedConversationRoot,
+    header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
+) {
+    const counts = assertIndexedProcessingCounts(header);
+    if ((root.directories.processing_required === undefined) !== (counts.required_job_count === 0))
+        throw new Error('Indexed required-job identity root differs from its complete count');
+    return counts;
+}
+
+/** Actual native measurement is supplied by the authenticated host compiler/count capability.
+ * This data function cannot produce that capability. No completed-job or receipt history is scanned:
+ * the persistent required-job root/count binds exact obligations independently of their pending set.
+ */
+export async function stageIndexedProcessingCoverage(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    commandInput: IndexedProcessingCoverageCommand,
+): Promise<StagedIndexedProcessingCoverage> {
+    const envelope = { root: rootInput, locator: locatorInput, command: commandInput };
+    if (!preflightJsonInput(envelope).success) throw new TypeError('Indexed readiness input is not bounded JSON');
+    const { root, locator, command } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            command: IndexedProcessingCoverageCommandSchema,
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed readiness requires its complete processing index profile');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const requestFingerprint = await fingerprintJson(command);
+    const prior = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        command.operation_id,
+        OperationReceiptSchema,
+    );
+    if (prior) {
+        const coverage = await indexedProcessingRecord(
+            store,
+            root,
+            'indexed_coverage',
+            command.operation_id,
+            IndexedProcessingReadinessCoverageSchema,
+        );
+        if (
+            !coverage ||
+            prior.operation_kind !== 'processing' ||
+            prior.processing_operation?.phase !== 'coverage' ||
+            prior.payload_fingerprint !== requestFingerprint ||
+            prior.base_revision !== command.expected_revision ||
+            prior.result_revision !== coverage.evaluated_at_revision ||
+            prior.result_revision > root.source.revision ||
+            prior.conversation_id !== root.source.conversation_id ||
+            prior.processing_operation.result_fingerprint !== (await fingerprintJson(coverage))
+        )
+            throw new Error('Indexed coverage retry differs from its exact retained evaluation');
+        return { root, locator, receipt: prior, coverage, applied: false };
+    }
+    if (root.source.revision !== command.expected_revision)
+        throw new Error('Indexed readiness source revision conflict');
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    assertSupportedIndexedReadinessPolicy(header);
+    const counts = assertIndexedRequiredIdentity(root, header);
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const coverage = IndexedProcessingReadinessCoverageSchema.parse({
+        version: 1,
+        profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
+        context_fingerprint: await indexedProcessingContextFingerprint(selected),
+        policy_revision: header.policy_revision,
+        target_fingerprint: command.target_fingerprint,
+        measurement: {
+            input_tokens: command.measured_input_tokens,
+            tokenizer_id: command.tokenizer_id,
+            fingerprint: command.measurement_fingerprint,
+        },
+        required_job_count: counts.required_job_count,
+        ...(root.directories.processing_required === undefined
+            ? {}
+            : { required_jobs_root: root.directories.processing_required }),
+        status:
+            counts.required_blocked_job_count > 0 ||
+            (header.budget !== undefined && command.measured_input_tokens > header.budget.max_input_tokens)
+                ? 'blocked'
+                : counts.unresolved_job_count > 0
+                  ? 'pending'
+                  : 'ready',
+        evaluated_at_revision: root.source.revision + 1,
+        recorded_at: command.recorded_at,
+    });
+    const receipt = createProcessingTransitionReceipt({
+        source: root.source,
+        operation_id: command.operation_id,
+        payload_fingerprint: requestFingerprint,
+        recorded_at: command.recorded_at,
+        processing_operation: {
+            phase: 'coverage',
+            policy_revision: header.policy_revision,
+            result_fingerprint: await fingerprintJson(coverage),
+        },
+    });
+    const identity = await indexedReadinessIdentity(coverage);
+    const directories = { ...root.directories };
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('indexed_coverage', receipt.id),
+        await stageRecord(store, 'processing_records', receipt.id, coverage),
+    );
+    const existingIdentity = await getPagedRecord(store, directories.processing_coverage, identity);
+    if (
+        existingIdentity &&
+        (existingIdentity.storage !== 'marker' || existingIdentity.kind !== 'indexed_processing_coverage')
+    )
+        throw new Error('Indexed coverage identity is occupied by a foreign record');
+    directories.processing_coverage = await putPagedRecord(
+        store,
+        directories.processing_coverage,
+        identity,
+        { storage: 'marker', kind: 'indexed_processing_coverage', id: receipt.id },
+        existingIdentity ? 'replace' : 'insert',
+    );
+    directories.operation_receipts = await putPagedRecord(
+        store,
+        directories.operation_receipts,
+        receipt.id,
+        await stageRecord(store, 'operation_receipts', receipt.id, receipt),
+    );
+    directories.identifiers = await putPagedRecord(store, directories.identifiers, receipt.id, {
+        storage: 'marker',
+        kind: 'operation receipt',
+        id: receipt.id,
+    });
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        directories,
+        source: { ...root.source, revision: receipt.result_revision },
+        updated_at: command.recorded_at,
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed readiness root exceeds manifest bound');
+    return {
+        root: nextRoot,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        receipt,
+        coverage,
+        applied: true,
+    };
+}
+
+export interface IndexedReadySelectedContext {
+    selection: z.infer<typeof IndexedConversationSelectedContextSchema>;
+    coverage: IndexedProcessingReadinessCoverage;
+}
+
+/** Target/count-specific read barrier. An earlier ready evaluation cannot cover new jobs, context,
+ * policy, target or native count. Coverage-only successors can reuse the same immutable index entry.
+ * Hosts additionally recheck actual current execution/ownership and prepared bytes before transport.
+ */
+export async function loadIndexedReadySelectedContext(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    bindingInput: {
+        target_fingerprint: string;
+        measured_input_tokens: number;
+        tokenizer_id: string;
+        measurement_fingerprint: string;
+    },
+): Promise<IndexedReadySelectedContext> {
+    const envelope = { root: rootInput, locator: locatorInput, binding: bindingInput };
+    if (!preflightJsonInput(envelope).success) throw new TypeError('Indexed readiness barrier is not bounded JSON');
+    const { root, locator, binding } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            binding: IndexedProcessingCoverageCommandSchema.omit({
+                operation_id: true,
+                expected_revision: true,
+                recorded_at: true,
+            }),
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed readiness barrier requires complete processing indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    assertSupportedIndexedReadinessPolicy(header);
+    const counts = assertIndexedRequiredIdentity(root, header);
+    if (
+        counts.unresolved_job_count !== 0 ||
+        counts.required_blocked_job_count !== 0 ||
+        root.directories.processing_pending !== undefined
+    )
+        throw new Error('Indexed readiness still has unresolved processing obligations');
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const draft = IndexedProcessingReadinessCoverageSchema.parse({
+        version: 1,
+        profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
+        context_fingerprint: await indexedProcessingContextFingerprint(selected),
+        policy_revision: header.policy_revision,
+        target_fingerprint: binding.target_fingerprint,
+        measurement: {
+            input_tokens: binding.measured_input_tokens,
+            tokenizer_id: binding.tokenizer_id,
+            fingerprint: binding.measurement_fingerprint,
+        },
+        required_job_count: counts.required_job_count,
+        ...(root.directories.processing_required === undefined
+            ? {}
+            : { required_jobs_root: root.directories.processing_required }),
+        status: 'ready',
+        evaluated_at_revision: root.source.revision,
+        recorded_at: root.updated_at,
+    });
+    const candidate = await getPagedRecord(
+        store,
+        root.directories.processing_coverage,
+        await indexedReadinessIdentity(draft),
+    );
+    if (candidate?.storage !== 'marker' || candidate.kind !== 'indexed_processing_coverage')
+        throw new Error('Indexed ready coverage for exact context/target/count is unavailable');
+    const coverage = await indexedProcessingRecord(
+        store,
+        root,
+        'indexed_coverage',
+        candidate.id,
+        IndexedProcessingReadinessCoverageSchema,
+    );
+    const receipt = await indexedRecordById(store, root, 'operation_receipts', candidate.id, OperationReceiptSchema);
+    if (
+        coverage?.status !== 'ready' ||
+        !receipt ||
+        receipt.operation_kind !== 'processing' ||
+        receipt.processing_operation?.phase !== 'coverage' ||
+        receipt.result_revision !== coverage.evaluated_at_revision ||
+        receipt.result_revision > root.source.revision ||
+        receipt.processing_operation.result_fingerprint !== (await fingerprintJson(coverage)) ||
+        (await indexedReadinessIdentity(coverage)) !== (await indexedReadinessIdentity(draft))
+    )
+        throw new Error('Indexed ready coverage lost its exact retained receipt or obligation identity');
+    return {
+        selection: IndexedConversationSelectedContextSchema.parse({
+            ...selected,
+            completeness: 'selected_media_compaction_pending_admission',
+        }),
+        coverage,
     };
 }

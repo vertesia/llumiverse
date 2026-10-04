@@ -12,6 +12,13 @@ export { ConversationValidationError } from './diagnostics.js';
 export * from './external-reference-retrieval.js';
 export * from './guards.js';
 export * from './indexed-conversation.js';
+export {
+    buildIndexedTextExternalizationOutput,
+    buildIndexedTextExternalizationProposal,
+    indexedProcessingContextFingerprint,
+    indexedTextExternalizationOriginals,
+    resolveIndexedProcessingTextInput,
+} from './indexed-processing-working-set.js';
 export * from './inspection.js';
 export * from './json-minification.js';
 export * from './json-minification-processor.js';
@@ -55,6 +62,8 @@ export * from './rendering.js';
 export * from './request-source-view.js';
 export * from './runtime.js';
 export * from './schemas/index.js';
+export type { IndexedProcessingReadinessCoverage, IndexedProcessingSelectedContext } from './schemas/indexed-head.js';
+export type { IndexedProcessingClaimWorkspace } from './schemas/indexed-processing.js';
 export * from './scope.js';
 export * from './selection.js';
 export { validateConversationSemantics } from './semantic-validation.js';

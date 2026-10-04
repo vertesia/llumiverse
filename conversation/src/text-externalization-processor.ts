@@ -1,24 +1,33 @@
+import {
+    MAX_TEXT_EXTERNALIZATION_BLOCKS,
+    MAX_TEXT_EXTERNALIZATION_BYTES,
+    TEXT_EXTERNALIZATION_PROCESSOR_ID,
+    TEXT_EXTERNALIZATION_PROCESSOR_VERSION,
+} from './text-externalization-constants.js';
+
+export {
+    MAX_TEXT_EXTERNALIZATION_BLOCKS,
+    MAX_TEXT_EXTERNALIZATION_BYTES,
+    TEXT_EXTERNALIZATION_PROCESSOR_ID,
+    TEXT_EXTERNALIZATION_PROCESSOR_VERSION,
+} from './text-externalization-constants.js';
+
 import { hashUtf8Content } from './content-integrity.js';
-import { contextChangeSelectedRanges, planContextChange } from './context-change.js';
+import { materializedContextChangeWorkingSet } from './context-change-working-set.js';
 import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
 import { deriveConversationId, fingerprintJson } from './identity.js';
 import type { ConversationProcessor, ProcessorResult } from './processing.js';
 import { RetrievalCapabilitySchema } from './schemas/content.js';
+import { buildTextWorkingSetProposal } from './text-externalization-working-set.js';
 import type {
     Asset,
     ConversationDocument,
-    ExternalReferenceBlock,
     OperationReceipt,
     ProcessingJob,
     ProcessingResolvedInput,
     ProcessorConfiguration,
     RetrievalCapability,
 } from './types.js';
-
-export const TEXT_EXTERNALIZATION_PROCESSOR_ID = 'externalize-text';
-export const TEXT_EXTERNALIZATION_PROCESSOR_VERSION = '1';
-export const MAX_TEXT_EXTERNALIZATION_BYTES = 32 * 1024 * 1024;
-export const MAX_TEXT_EXTERNALIZATION_BLOCKS = 4096;
 
 export function textExternalizationAssetOperationId(jobId: string): string {
     return `processing:archive:${jobId}`;
@@ -121,15 +130,6 @@ function archivedAssets(
     return { assets, receipt };
 }
 
-function preview(text: string): string {
-    let result = '';
-    for (const scalar of text) {
-        if (result.length + scalar.length > 160) break;
-        result += scalar;
-    }
-    return result || '[archived empty text]';
-}
-
 export type TextExternalizationRetrievalBinder = (input: {
     asset: Asset;
     receipt: OperationReceipt;
@@ -180,124 +180,18 @@ export async function buildTextExternalizationProposal(
     configuration: ProcessorConfiguration,
     retrievals: readonly RetrievalCapability[],
 ): Promise<Extract<ProcessorResult, { kind: 'proposal' }>> {
-    const { texts, integrities, assets, receipt } = await validatedTextExternalizationArchives(
-        document,
+    const { assets, receipt } = await validatedTextExternalizationArchives(document, job, resolution, configuration);
+    return buildTextWorkingSetProposal(
+        materializedContextChangeWorkingSet(document),
+        document.tool_definitions,
+        document.updated_at,
         job,
         resolution,
         configuration,
+        assets,
+        receipt,
+        retrievals,
     );
-    if (retrievals.length !== texts.length) throw new Error('Text externalization retrieval bindings are incomplete');
-    const plan = await planContextChange(document, {
-        expected_revision: document.revision,
-        expected_context_revision: document.context.revision,
-        entry_ids: resolution.entry_ids,
-        ...(resolution.selected_block_ids === undefined
-            ? {}
-            : {
-                  selected_block_ids: resolution.selected_block_ids,
-                  selected_entries: resolution.selected_entries,
-              }),
-    });
-    const compactionId = await deriveConversationId('text-externalization', job.id);
-    const ranges = contextChangeSelectedRanges(document, {
-        expected_revision: document.revision,
-        expected_context_revision: document.context.revision,
-        entry_ids: resolution.entry_ids,
-        ...(resolution.selected_block_ids === undefined
-            ? {}
-            : {
-                  selected_block_ids: resolution.selected_block_ids,
-                  selected_entries: resolution.selected_entries,
-              }),
-    });
-    let ordinal = 0;
-    const replacementTurns = [];
-    for (const [index, range] of ranges.entries()) {
-        const blocks: ExternalReferenceBlock[] = [];
-        for (const source of range.blocks) {
-            const selectedBlock = texts[ordinal];
-            const integrity = integrities[ordinal];
-            const asset = assets[ordinal];
-            if (
-                source.id !== selectedBlock?.block_id ||
-                asset.content_hash !== integrity.content_hash ||
-                asset.byte_length !== integrity.byte_length
-            ) {
-                throw new Error('Accepted archive is not the exact ordered selected originals');
-            }
-            const retrieval = RetrievalCapabilitySchema.parse(retrievals[ordinal]);
-            const definitionId = retrieval.tool_definition_id;
-            const definition = definitionId ? document.tool_definitions[definitionId] : undefined;
-            if (
-                !definition ||
-                !document.context.active_tool_definition_ids.includes(definition.id) ||
-                definition.name !== retrieval.capability ||
-                // The capability ABI is not the tool-definition content version. Exact ID/name
-                // plus the trusted host binder retain the original accepted tool/schema binding.
-                retrieval.version !== 1
-            )
-                throw new Error('Text externalization requires a host-bound active retrieval tool');
-            blocks.push({
-                id:
-                    texts.length === 1
-                        ? await deriveConversationId('text-externalization-block', job.id)
-                        : await deriveConversationId('text-externalization-block', job.id, source.id),
-                type: 'external_reference',
-                asset_id: asset.id,
-                original_type: 'text',
-                description: 'Exact original text is available on demand',
-                content_hash: asset.content_hash,
-                preview: preview(selectedBlock.text),
-                retrieval: structuredClone(retrieval),
-            });
-            ordinal += 1;
-        }
-        replacementTurns.push({
-            id:
-                ranges.length === 1
-                    ? await deriveConversationId('text-externalization-turn', job.id)
-                    : await deriveConversationId('text-externalization-turn', job.id, String(index)),
-            kind: 'agent' as const,
-            authority: 'ordinary' as const,
-            status: 'completed' as const,
-            model_visibility: 'include' as const,
-            timestamps: { recorded_at: document.updated_at },
-            provenance: {
-                type: 'derived' as const,
-                derivation_id: compactionId,
-                source_turn_ids: ranges.length === 1 ? resolution.source_turn_ids : range.turn_ids,
-                ...(ranges.length > 1 || range.blocks.length > 1
-                    ? { source_block_ids: range.block_ids }
-                    : plan.source_block_ids.length
-                      ? { source_block_ids: plan.source_block_ids }
-                      : {}),
-                source_hash: resolution.source_fingerprint,
-            },
-            blocks,
-        });
-    }
-    if (ordinal !== texts.length) throw new Error('Text archive does not cover every selected source block');
-    return {
-        kind: 'proposal',
-        proposal: {
-            kind: 'replace_with_compaction',
-            compaction_id: compactionId,
-            strategy: {
-                id: TEXT_EXTERNALIZATION_PROCESSOR_ID,
-                version: TEXT_EXTERNALIZATION_PROCESSOR_VERSION,
-                configuration_fingerprint: await fingerprintJson(configuration.config),
-            },
-            replacement_turns: replacementTurns,
-            fidelity: 'retrievable',
-            accepted_asset_operation_id: receipt.id,
-            retained_asset_ids: assets.map((asset) => asset.id),
-            generation_ids: [],
-            placement: {
-                mode: ranges.length > 1 ? 'per_selected_range' : 'first_selected',
-                causal_order: ranges.length > 1 ? 'preserved_disjoint_ranges' : 'contiguous',
-            },
-        },
-    };
 }
 
 /** The binder is host-injected at runtime; only a prior accepted asset append can become a proposal. */

@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { canonicalJsonContentString } from './content-integrity.js';
 import { applyContextChange, contextChangeSelectedRanges, planContextChange } from './context-change.js';
-import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
+import { createContextTurnIndex } from './context-entry-resolution.js';
 import { resolveContextSelection } from './context-selection.js';
-import { deriveConversationId, fingerprintJson } from './identity.js';
+import { fingerprintJson } from './identity.js';
 import { applyJsonMinificationOutput } from './json-minification-application.js';
 import {
     captureJsonMinificationHostCapability,
@@ -12,7 +12,10 @@ import {
     validateJsonMinificationCandidate,
 } from './json-minification-processor.js';
 import { preflightJsonInput } from './json-preflight.js';
+import { eligibleProcessingAppendRecords } from './processing-append-selection.js';
+import { constructProcessingJobs, MAX_PROCESSING_STAGES_PER_OPERATION } from './processing-job-construction.js';
 import { countUnresolvedProcessingJobs } from './processing-job-status.js';
+import { createProcessingTransitionReceipt } from './processing-transition-receipt.js';
 import {
     ContextChangePlanInputSchema,
     ContextChangeProposalSchema,
@@ -32,7 +35,6 @@ import {
     MAX_PROCESSING_OUTPUT_BYTES,
     MAX_PROCESSOR_CONFIGURATION_BYTES,
     ProcessingAppendAcceptanceSchema,
-    ProcessingJobSchema,
     ProcessingOutputReceiptSchema,
     ProcessingReadinessCoverageSchema,
     ProcessingResolvedInputSchema,
@@ -74,7 +76,6 @@ import { parseConversationDocument } from './validation.js';
 
 export { MAX_PROCESSING_OUTPUT_BYTES, MAX_PROCESSOR_CONFIGURATION_BYTES } from './schemas/processing.js';
 
-const MAX_PROCESSING_STAGES_PER_OPERATION = 16;
 const MAX_PROCESSING_JOBS = 256;
 
 const ProcessingPolicyCommandSchema = z.strictObject({
@@ -190,27 +191,18 @@ function processingReceipt(
     jobId?: string,
     supersededJobIds?: readonly string[],
 ): OperationReceipt {
-    return {
-        id,
-        conversation_id: document.id,
+    return createProcessingTransitionReceipt({
+        source: { conversation_id: document.id, revision: document.revision },
+        operation_id: id,
         payload_fingerprint: payloadFingerprint,
-        base_revision: document.revision,
-        result_revision: nextRevision(document.revision),
         recorded_at: recordedAt,
-        accepted_turn_ids: [],
-        accepted_generation_ids: [],
-        accepted_asset_ids: [],
-        accepted_tool_definition_ids: [],
-        accepted_execution_receipt_ids: [],
-        accepted_context_entry_ids: [],
-        operation_kind: 'processing',
         processing_operation: {
             phase,
             policy_revision: document.processing.policy_revision,
             ...(jobId === undefined ? {} : { job_id: jobId }),
             ...(supersededJobIds === undefined ? {} : { superseded_job_ids: [...supersededJobIds] }),
         },
-    };
+    });
 }
 
 /** Reconstruct the exact atomic change from an accepted processing receipt, including on retry. */
@@ -384,94 +376,40 @@ async function createJobs(
         throw new RangeError('Materialized processing job limit exceeded');
     if (processors.length > MAX_PROCESSING_STAGES_PER_OPERATION)
         throw new RangeError('Processing stage limit exceeded');
-    const jobs: ProcessingJob[] = [];
-    for (const [index, processor] of processors.entries()) {
-        const id = await deriveConversationId('processing_job', document.id, sourceOperationId, String(index));
-        const policyIndex = document.processing.processors.findIndex(
-            (candidate) =>
-                candidate.id === processor.id &&
-                candidate.version === processor.version &&
-                candidate.scope === processor.scope,
-        );
-        if (policyIndex < 0) throw new Error('Processing configuration is not in its accepted policy');
-        const toolResultStage =
-            processor.id === TOOL_RESULT_TEXT_PROCESSOR_ID && processor.version === TOOL_RESULT_TEXT_PROCESSOR_VERSION;
-        if (toolResultStage && processor.scope !== 'on_append')
-            throw new Error('Tool-result text externalization supports only accepted on-append results');
-        if (toolResultStage && index !== processors.length - 1)
-            throw new Error('Tool-result text externalization must be the final on-append stage');
-        if (toolResultStage && toolResultEntryIds?.length === 0) continue;
-        const selection = toolResultStage
-            ? { kind: 'entries', entry_ids: [...(toolResultEntryIds ?? entryIds)] }
-            : index === 0
-              ? {
-                    kind: 'entries',
-                    entry_ids: [...entryIds],
-                    ...(selectedBlockIds === undefined
-                        ? {}
-                        : { selected_block_ids: structuredClone(selectedBlockIds) }),
-                    ...(selectedEntries === undefined ? {} : { selected_entries: structuredClone(selectedEntries) }),
-                }
-              : { kind: 'predecessor_output', job_id: jobs[index - 1].id };
-        jobs.push(
-            ProcessingJobSchema.parse({
-                id,
-                source_operation_id: sourceOperationId,
-                enqueue_revision: document.revision,
-                policy_revision: document.processing.policy_revision,
-                stage_index: index,
-                processor_index: policyIndex,
-                processor_id: processor.id,
-                processor_version: processor.version,
-                configuration_fingerprint: await fingerprintJson(processor.config),
-                configuration: structuredClone(processor.config),
-                scope: processor.scope,
-                required: processor.required,
-                failure_behavior: processor.failure_behavior,
-                selection,
-                selection_fingerprint: await fingerprintJson(selection),
-                ...(targetFingerprint === undefined ? {} : { target_fingerprint: targetFingerprint }),
-            }),
-        );
-    }
-    return jobs;
+    return constructProcessingJobs({
+        conversation_id: document.id,
+        revision: document.revision,
+        source_operation_id: sourceOperationId,
+        policy_revision: document.processing.policy_revision,
+        processors: document.processing.processors,
+        processor_indices: processors.map((processor) => {
+            const policyIndex = document.processing.processors.findIndex(
+                (candidate) =>
+                    candidate.id === processor.id &&
+                    candidate.version === processor.version &&
+                    candidate.scope === processor.scope,
+            );
+            if (policyIndex < 0) throw new Error('Processing configuration is not in its accepted policy');
+            return policyIndex;
+        }),
+        entry_ids: entryIds,
+        ...(selectedBlockIds === undefined ? {} : { selected_block_ids: selectedBlockIds }),
+        ...(selectedEntries === undefined ? {} : { selected_entries: [...selectedEntries] }),
+        ...(targetFingerprint === undefined ? {} : { target_fingerprint: targetFingerprint }),
+        ...(toolResultEntryIds === undefined ? {} : { tool_result_entry_ids: [...toolResultEntryIds] }),
+    });
 }
 
 function eligibleAppendSelection(document: ConversationDocument, acceptedEntryIds: readonly string[]) {
-    const accepted = new Set(acceptedEntryIds);
-    const protectedIds = new Set(document.context.protected_entry_ids);
-    const turns = createContextTurnIndex(document);
-    const entryIds: string[] = [];
-    const selectedEntries: ContextEntry[] = [];
-    const selectedBlockIds: Record<string, string[]> = {};
-    let partial = false;
-    for (const entry of document.context.entries) {
-        if (!accepted.has(entry.id) || protectedIds.has(entry.id)) continue;
-        const { turn, blocks } = resolveContextEntry(turns, entry);
-        if (
-            turn.status !== 'completed' ||
-            turn.kind === 'program' ||
-            turn.kind === 'tool' ||
-            turn.authority !== 'ordinary'
-        )
-            continue;
-        const eligible = blocks.filter((block) => block.type === 'text' || block.type === 'json');
-        if (!eligible.length) continue;
-        entryIds.push(entry.id);
-        selectedEntries.push(entry);
-        if (eligible.length !== blocks.length) {
-            Object.defineProperty(selectedBlockIds, entry.id, {
-                value: eligible.map((block) => block.id),
-                enumerable: true,
-            });
-            partial = true;
-        }
-    }
-    return {
-        entryIds,
-        selectedBlockIds: partial ? selectedBlockIds : undefined,
-        selectedEntries: partial ? selectedEntries : undefined,
-    };
+    const processor = document.processing.processors.find((processor) => processor.scope === 'on_append');
+    return eligibleProcessingAppendRecords(
+        document.context.entries,
+        createContextTurnIndex(document),
+        acceptedEntryIds,
+        document.context.protected_entry_ids,
+        processor?.id === TEXT_EXTERNALIZATION_PROCESSOR_ID &&
+            processor.version === TEXT_EXTERNALIZATION_PROCESSOR_VERSION,
+    );
 }
 
 /** Stage configured on_append jobs in the same in-memory snapshot as the accepted append. */

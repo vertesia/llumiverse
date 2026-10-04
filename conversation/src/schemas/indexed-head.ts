@@ -13,6 +13,7 @@ import {
     CONVERSATION_EXPERIMENTAL_REVISION,
     CONVERSATION_FORMAT,
     CONVERSATION_SCHEMA_VERSION,
+    ContentHashSchema,
     ConversationRefSchema,
     IdentifierSchema,
     MetadataSchema,
@@ -24,9 +25,24 @@ import { ProjectedTurnHeaderSchema, RequestSourceProjectedTurnSchema } from './r
 /** Indexed storage is a distinct, partial materialization contract; it is never parsed as ConversationDocument. */
 export const INDEXED_CONVERSATION_ROOT_MAX_BYTES = 256 * 1024;
 export const INDEXED_CONVERSATION_ACTIVE_MAX_BYTES = 32 * 1024 * 1024;
+/** Context metadata is an independently addressed segmented record, not an index page. Its
+ * retrieval requirements remain subject to the existing active working-set/record byte ceiling. */
+export const IndexedConversationContextHeaderRefSchema = z.strictObject({
+    content_hash: ContentHashSchema,
+    size_bytes: z.number().int().positive().max(INDEXED_CONVERSATION_ACTIVE_MAX_BYTES),
+});
+
+/** Initial processing profile bounds the entire active dependency closure, not lifetime turns.
+ * These ceilings are checked before publishing an enabled snapshot or accepted append root. */
+export const INDEXED_PROCESSING_SELECTED_MAX_BLOCKS = 4096;
+export const INDEXED_PROCESSING_MAX_RECORD_READS = 8192;
+export const INDEXED_PROCESSING_MAX_PAGE_READS = 4096;
+export const INDEXED_PROCESSING_MAX_IO_BYTES = 64 * 1024 * 1024;
 export const INDEXED_CONVERSATION_RECORD_SEGMENT_MAX_BYTES = 1024 * 1024;
 export const INDEXED_CONVERSATION_INLINE_MAX_BYTES = 64 * 1024;
 export const INDEXED_CONVERSATION_PROFILE = 'llumiverse.conversation/indexed/2026-10-02.v1' as const;
+export const INDEXED_CONVERSATION_PROCESSING_PROFILE =
+    'llumiverse.conversation/indexed-processing/2026-10-04.v1' as const;
 export const INDEXED_CONVERSATION_DELETE_PROFILE = 'llumiverse.conversation/indexed-delete/2026-10-03.v1' as const;
 
 /** Every named family remains independently addressable without scanning lifetime history. */
@@ -42,6 +58,14 @@ export const IndexedConversationDirectoriesSchema = z.strictObject({
     tool_definitions: PagedRecordRefSchema.optional(),
     compactions: PagedRecordRefSchema.optional(),
     processing_records: PagedRecordRefSchema.optional(),
+    /** Only unresolved unsuperseded jobs; completion removes entries without erasing history. */
+    processing_pending: PagedRecordRefSchema.optional(),
+    /** Persistent identity of all unsuperseded required jobs, including completed obligations. */
+    processing_required: PagedRecordRefSchema.optional(),
+    /** Complete immutable append/queue operation to exact accepted job-set witness. */
+    processing_by_operation: PagedRecordRefSchema.optional(),
+    /** Readiness identities have point lookups; no lifetime receipt scan. */
+    processing_coverage: PagedRecordRefSchema.optional(),
     open_tool_calls: PagedRecordRefSchema.optional(),
     /** Complete call/result/terminal-receipt lookup for append validation. */
     tool_call_states: PagedRecordRefSchema.optional(),
@@ -115,6 +139,8 @@ export const IndexedConversationRootSchema = z.strictObject({
     delete_index_profile: z.literal(INDEXED_CONVERSATION_DELETE_PROFILE).optional(),
     /** Absent on older v1 roots, whose tool-result closure cannot be proven by point lookup. */
     tool_call_state_complete: z.literal(true).optional(),
+    /** Missing on older roots; enabled-policy transitions cannot infer outbox completeness. */
+    processing_index_profile: z.literal(INDEXED_CONVERSATION_PROCESSING_PROFILE).optional(),
     format: z.literal(CONVERSATION_FORMAT),
     schema_version: z.literal(CONVERSATION_SCHEMA_VERSION),
     experimental_revision: z.literal(CONVERSATION_EXPERIMENTAL_REVISION),
@@ -127,7 +153,7 @@ export const IndexedConversationRootSchema = z.strictObject({
     updated_at: TimestampSchema,
     lineage: ConversationLineageSchema.optional(),
     metadata: MetadataSchema.optional(),
-    context_header: PagedRecordRefSchema,
+    context_header: IndexedConversationContextHeaderRefSchema,
     processing_header: PagedRecordRefSchema,
     directories: IndexedConversationDirectoriesSchema,
     accepted_response: IndexedConversationAcceptedResponseSchema.optional(),
@@ -150,6 +176,10 @@ export const IndexedConversationProcessingHeaderSchema = ProcessingStateSchema.o
 }).extend({
     /** Validated migration witness; absent on older roots that cannot prove job drain by point lookup. */
     unresolved_job_count: NonnegativeSafeIntegerSchema.optional(),
+    job_count: NonnegativeSafeIntegerSchema.optional(),
+    required_unresolved_job_count: NonnegativeSafeIntegerSchema.optional(),
+    required_job_count: NonnegativeSafeIntegerSchema.optional(),
+    required_blocked_job_count: NonnegativeSafeIntegerSchema.optional(),
 });
 
 /** A bounded selected projection, never a complete ConversationDocument or permission to dispatch. */
@@ -192,3 +222,31 @@ export const IndexedConversationSelectedContextSchema = z.strictObject({
     source_tail_turn_id: IdentifierSchema.optional(),
 });
 export type IndexedConversationSelectedContext = z.infer<typeof IndexedConversationSelectedContextSchema>;
+
+/** Internal selected processing data only; never accepted by a native prepared-request compiler. */
+export const IndexedProcessingSelectedContextSchema = IndexedConversationSelectedContextSchema.omit({
+    completeness: true,
+}).extend({ completeness: z.literal('active_processing_dependencies_verified') });
+export type IndexedProcessingSelectedContext = z.infer<typeof IndexedProcessingSelectedContextSchema>;
+
+/** Indexed coverage commits a persistent obligation identity, never an invented empty materialized
+ * required_job_ids list or a lifetime scan. The host still binds measured native bytes/concrete target.
+ */
+export const IndexedProcessingReadinessCoverageSchema = z.strictObject({
+    version: z.literal(1),
+    profile: z.literal(INDEXED_CONVERSATION_PROCESSING_PROFILE),
+    context_fingerprint: ContentHashSchema,
+    policy_revision: NonnegativeSafeIntegerSchema,
+    target_fingerprint: ContentHashSchema,
+    measurement: z.strictObject({
+        input_tokens: NonnegativeSafeIntegerSchema,
+        tokenizer_id: IdentifierSchema,
+        fingerprint: ContentHashSchema,
+    }),
+    required_job_count: NonnegativeSafeIntegerSchema,
+    required_jobs_root: PagedRecordRefSchema.optional(),
+    status: z.enum(['ready', 'pending', 'blocked']),
+    evaluated_at_revision: NonnegativeSafeIntegerSchema,
+    recorded_at: TimestampSchema,
+});
+export type IndexedProcessingReadinessCoverage = z.infer<typeof IndexedProcessingReadinessCoverageSchema>;

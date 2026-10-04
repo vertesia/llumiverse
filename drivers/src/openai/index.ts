@@ -55,6 +55,7 @@ import {
     legacyCompletionFromCanonicalExecution,
     ModelType,
     markCanonicalAcceptedRecovery,
+    markCanonicalFailedExecution,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
@@ -124,6 +125,7 @@ import {
     compileOpenAIResponsesIndexedSelectedText,
     createOpenAIResponsesIndexedTextRequestReceipt,
     decodeOpenAIResponsesCanonicalResponse,
+    decodeOpenAIResponsesFailedCanonicalResponse,
     finalizeOpenAIResponsesPreparedRequest,
     OPENAI_RESPONSES_ADAPTER_VERSION,
     OPENAI_RESPONSES_PROTOCOL,
@@ -665,6 +667,23 @@ async function finalizeOpenAIResponsesStreamResponse(input: {
     };
 }
 
+async function failedOpenAIResponsesExecution(
+    response: OpenAI.Responses.Response,
+    prepared: Parameters<typeof decodeOpenAIResponsesCanonicalResponse>[0]['prepared'],
+): Promise<Error> {
+    const decoded = await decodeOpenAIResponsesFailedCanonicalResponse({ response, prepared });
+    return markCanonicalFailedExecution(openAIResponseFailure(response), {
+        prepared_request: {
+            source: prepared.receipt.source,
+            runtime: prepared.runtime,
+            request_receipt: prepared.receipt,
+            generation_id: prepared.generation_id,
+            response_turn_id: prepared.response_turn_id,
+        },
+        decoded_response: decoded,
+    });
+}
+
 /** Reusable Responses text protocol shared by OpenAI-compatible transports. */
 export class OpenAIResponsesProtocol {
     constructor(
@@ -917,30 +936,29 @@ export class OpenAIResponsesProtocol {
         signal?.throwIfAborted();
         await assertCommitted();
         signal?.throwIfAborted();
+        const selectedTurns = selectedCanonicalTurns(selectedWorkingSetSource(selection));
+        const decodedPreparation: Parameters<typeof decodeOpenAIResponsesCanonicalResponse>[0]['prepared'] = {
+            runtime: record.runtime,
+            receipt: record.request_receipt,
+            provider: driver.provider,
+            requested_model: record.request_receipt.target.model,
+            tool_definitions: selection.context.active_tool_definition_ids.map((id) => {
+                const definition = selection.tool_definitions[id];
+                if (!definition) throw new Error(`Indexed Responses active tool ${id} is unavailable`);
+                return definition;
+            }),
+            generation_id: record.generation_id,
+            response_turn_id: record.response_turn_id,
+            selected_turns: selectedTurns,
+        };
         const requestOptions = this.getRequestOptions(driver, options, signal);
         const response = requestOptions
             ? await driver.getResponsesService(options).responses.create(prepared.payload, requestOptions)
             : await driver.getResponsesService(options).responses.create(prepared.payload);
+        if (response.status === 'failed') throw await failedOpenAIResponsesExecution(response, decodedPreparation);
         assertOpenAIResponseSucceeded(response);
         if (response.output.length === 0) throw new Error('Indexed Responses completed without native output');
-        const selectedTurns = selectedCanonicalTurns(selectedWorkingSetSource(selection));
-        return decodeOpenAIResponsesCanonicalResponse({
-            response,
-            prepared: {
-                runtime: record.runtime,
-                receipt: record.request_receipt,
-                provider: driver.provider,
-                requested_model: record.request_receipt.target.model,
-                tool_definitions: selection.context.active_tool_definition_ids.map((id) => {
-                    const definition = selection.tool_definitions[id];
-                    if (!definition) throw new Error(`Indexed Responses active tool ${id} is unavailable`);
-                    return definition;
-                }),
-                generation_id: record.generation_id,
-                response_turn_id: record.response_turn_id,
-                selected_turns: selectedTurns,
-            },
-        });
+        return decodeOpenAIResponsesCanonicalResponse({ response, prepared: decodedPreparation });
     }
 
     private requestFingerprintPayload(
@@ -1403,6 +1421,8 @@ export class OpenAIResponsesProtocol {
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
                 ) {
+                    if (event.response.status === 'failed')
+                        throw await failedOpenAIResponsesExecution(event.response, prepared);
                     assertOpenAIResponseSucceeded(event.response);
                     finalResponse = event.response;
                 }
@@ -1645,6 +1665,7 @@ export class OpenAIResponsesProtocol {
             ? await driver.getResponsesService(options).responses.create(request, requestOptions)
             : await driver.getResponsesService(options).responses.create(request);
 
+        if (res.status === 'failed') throw await failedOpenAIResponsesExecution(res, prepared);
         assertOpenAIResponseSucceeded(res);
         const completionResults = extractCompletionResults(res.output, includeThoughts);
         const toolUse = collectTools(res.output);

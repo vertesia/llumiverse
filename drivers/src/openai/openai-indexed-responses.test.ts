@@ -15,7 +15,12 @@ import {
     type ResolveConversationAsset,
     stageIndexedConversationSnapshot,
 } from '@llumiverse/conversation';
-import type { CanonicalHostCapabilities, ExecutionOptions } from '@llumiverse/core';
+import {
+    assertCanonicalFailedExecutionMatchesPreparedRecord,
+    type CanonicalHostCapabilities,
+    canonicalFailedExecution,
+    type ExecutionOptions,
+} from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { createRequestReceipt, providerJsonValue } from '../conversation/canonical-runtime.js';
@@ -586,4 +591,83 @@ describe.each([
         expect(resolver).not.toHaveBeenCalled();
         expect(committed).not.toHaveBeenCalled();
     });
+});
+
+describe('committed indexed Responses received failure custody', () => {
+    it.each([false, true])(
+        'retains actual failed indexed generation without whole history (output=%s)',
+        async (output) => {
+            const f = await selectedText();
+            const native: OpenAI.Responses.Response = {
+                ...responseBody(),
+                status: 'failed',
+                error: { code: 'server_error', message: 'Actual indexed failure' },
+                output: output ? responseBody().output : [],
+                output_text: output ? 'Done' : '',
+            };
+            const bodies: unknown[] = [];
+            const driver = new OpenAIDriver({ apiKey: 'offline' });
+            driver.service = new OpenAI({
+                apiKey: 'offline',
+                baseURL: 'https://indexed.invalid/v1',
+                fetch: async (_url, init) => {
+                    bodies.push(JSON.parse(String(init?.body)));
+                    return Response.json(native);
+                },
+            });
+            const prepared = await driver.prepareIndexedTextRequest({
+                selection: f.selection,
+                runtime: f.runtime,
+                options: { model: 'gpt-5.4' },
+                stream: false,
+            });
+            const record = parseConversationPreparedRequestRecord({
+                source: f.selection.source,
+                runtime: f.runtime,
+                request_receipt: prepared.receipt,
+                generation_id: await deriveConversationId('generation', f.runtime.request_id, f.runtime.attempt_id),
+                response_turn_id: await deriveConversationId('turn', f.runtime.response_operation_id, 'response', '0'),
+            });
+            let committed = false;
+            const dispatch = () =>
+                driver.executeCommittedIndexedTextRequest({
+                    selection: f.selection,
+                    record,
+                    options: { model: 'gpt-5.4' },
+                    assert_committed: async () => {
+                        if (!committed) throw new Error('Actual indexed failure target not committed');
+                    },
+                });
+            await expect(dispatch()).rejects.toThrow('not committed');
+            expect(bodies).toHaveLength(0);
+            committed = true;
+            let error: unknown;
+            try {
+                await dispatch();
+            } catch (failure: unknown) {
+                error = failure;
+            }
+            expect(error).toBeInstanceOf(Error);
+            if (!(error instanceof Error)) throw new Error('Indexed terminal did not remain an error');
+            expect(error.message).toContain('Actual indexed failure');
+            const evidence = canonicalFailedExecution(error);
+            if (!evidence) throw new Error('Indexed received failure lost its actual execution evidence');
+            await assertCanonicalFailedExecutionMatchesPreparedRecord(evidence, record);
+            expect(evidence.prepared_request).toEqual(record);
+            expect('document' in evidence).toBe(false);
+            expect(evidence.decoded_response.payload_fingerprint).toBe(await fingerprintJson(native));
+            expect(evidence.decoded_response.generation).toMatchObject({
+                status: 'failed',
+                usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
+                metadata: { openai_responses_failure: native },
+            });
+            expect(evidence.decoded_response.turns).toHaveLength(output ? 1 : 0);
+            expect('accepted_output' in evidence).toBe(false);
+            expect(bodies).toHaveLength(1);
+            expect(JSON.stringify(bodies[0])).not.toContain('Cold unselected text');
+            expect(await fingerprintJson(providerJsonValue(bodies[0]))).toBe(
+                record.request_receipt.request_fingerprint,
+            );
+        },
+    );
 });
