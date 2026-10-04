@@ -1,15 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     appendConversationRecordsWithProcessing,
+    appendToolExecutionResult,
+    ConversationToolExecutionResultSchema,
     createConversationDocument,
     createTextExternalizationProcessor,
+    createToolResultTextExternalizationProcessor,
     fingerprintJson,
+    hashUtf8Content,
     MAX_PROCESSING_SUCCESSOR_BYTES,
     type ProcessingStore,
     parseConversationDocument,
     runProcessingJob,
     setProcessingPolicy,
     textExternalizationArchiveInputs,
+    toolResultExternalizationArchiveInputs,
     verifyProcessingSuccessor,
 } from '../src/index.js';
 import { buildProcessingPhaseDocument, resolveProcessingJobInput } from '../src/processing.js';
@@ -130,6 +135,224 @@ async function lineage() {
 }
 
 describe('pure processing successor lineage', () => {
+    it.each([false, true])(
+        'replays exact tool-result archive and completion with pre-existing reference=%s',
+        async (withExistingReference) => {
+            const initial = createConversationDocument({ id: 'tool-result-lineage', created_at: at });
+            const call = {
+                id: 'block:call',
+                type: 'tool_call' as const,
+                call_id: 'call:one',
+                tool_name: 'think',
+                executor: 'application' as const,
+                arguments: { type: 'json' as const, value: { thought: 'Keep exact text.' } },
+            };
+            initial.turns.push({
+                id: 'turn:call',
+                kind: 'agent',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: at },
+                provenance: { type: 'imported', source: 'test' },
+                model_visibility: 'include',
+                blocks: [call],
+            });
+            initial.context.entries.push({ id: 'entry:call', type: 'source_turn', turn_id: 'turn:call' });
+            initial.tool_definitions['definition:read'] = {
+                id: 'definition:read',
+                name: 'read_artifact',
+                version: '1',
+                input_schema: {
+                    type: 'object',
+                    properties: { path: { type: 'string' }, asset_id: { type: 'string' } },
+                    required: ['path', 'asset_id'],
+                    additionalProperties: false,
+                },
+            };
+            initial.context.active_tool_definition_ids = ['definition:read'];
+            const existingHash = await hashUtf8Content('Previously archived result text.');
+            if (withExistingReference) {
+                initial.assets['asset:existing'] = {
+                    id: 'asset:existing',
+                    kind: 'text',
+                    mime_type: 'text/plain',
+                    provenance: { type: 'received' },
+                    created_at: at,
+                    ...existingHash,
+                    storage: {
+                        type: 'external',
+                        resolver: 'vertesia.agent_artifact',
+                        locator: { storage_id: 'agent:one', artifact_path: 'archive/assets/existing.txt' },
+                    },
+                };
+            }
+            const policy = await setProcessingPolicy(initial, {
+                operation_id: 'policy:result',
+                expected_revision: 0,
+                recorded_at: at,
+                enabled: true,
+                processors: [
+                    {
+                        id: 'externalize-tool-result-text',
+                        version: '1',
+                        scope: 'on_append',
+                        config: {},
+                        required: true,
+                        failure_behavior: 'block',
+                    },
+                ],
+            });
+            const source = {
+                conversation: { conversation_id: initial.id, revision: policy.document.revision },
+                turn_id: 'turn:call',
+                block_id: call.id,
+                call_id: call.call_id,
+                call_fingerprint: await fingerprintJson(call),
+            };
+            const result = {
+                id: 'block:result',
+                type: 'tool_result' as const,
+                call_id: call.call_id,
+                status: 'success' as const,
+                content: [
+                    { id: 'block:text', type: 'text' as const, format: 'plain' as const, text: 'Exact tool text.' },
+                    ...(withExistingReference
+                        ? [
+                              {
+                                  id: 'block:existing',
+                                  type: 'external_reference' as const,
+                                  asset_id: 'asset:existing',
+                                  original_type: 'text' as const,
+                                  content_hash: existingHash.content_hash,
+                                  preview: 'Previously archived result text.',
+                                  description: 'Exact text archived before this processing job.',
+                                  retrieval: {
+                                      capability: 'read_artifact',
+                                      version: 1,
+                                      arguments: { asset_id: 'asset:existing', path: 'archive/assets/existing.txt' },
+                                      tool_definition_id: 'definition:read',
+                                  },
+                              },
+                          ]
+                        : []),
+                ],
+            };
+            const acceptedDocument = (
+                await appendToolExecutionResult(
+                    policy.document,
+                    ConversationToolExecutionResultSchema.parse({
+                        source,
+                        turn: {
+                            id: 'turn:result',
+                            kind: 'tool',
+                            authority: 'ordinary',
+                            status: 'completed',
+                            model_visibility: 'include',
+                            timestamps: { recorded_at: at },
+                            provenance: { type: 'received' },
+                            blocks: [result],
+                            execution_id: 'execution:one',
+                        },
+                        execution_receipt: {
+                            id: 'execution:one',
+                            call_id: call.call_id,
+                            executor: 'application',
+                            status: 'success',
+                            result_turn_id: 'turn:result',
+                            result_fingerprint: await fingerprintJson(result),
+                            recorded_at: at,
+                            call_source: source,
+                        },
+                    }),
+                    { operation_id: 'append:result', expected_revision: policy.document.revision, recorded_at: at },
+                )
+            ).document;
+            const job = Object.values(acceptedDocument.processing.jobs ?? {}).find(
+                (candidate) => candidate.processor_id === 'externalize-tool-result-text',
+            );
+            if (!job) throw new Error('Accepted tool-result job is absent');
+            const archive = await toolResultExternalizationArchiveInputs(acceptedDocument, job);
+            const archived = await appendConversationRecordsWithProcessing(
+                acceptedDocument,
+                {
+                    assets: [
+                        {
+                            id: 'asset:result',
+                            kind: 'text',
+                            mime_type: 'text/plain',
+                            provenance: { type: 'received' },
+                            created_at: at,
+                            ...archive.integrities[0],
+                            storage: {
+                                type: 'external',
+                                resolver: 'vertesia.agent_artifact',
+                                locator: { storage_id: 'agent:one', artifact_path: 'archive/assets/result.txt' },
+                            },
+                        },
+                    ],
+                },
+                {
+                    operation_id: `processing:archive:${job.id}`,
+                    expected_revision: acceptedDocument.revision,
+                    payload_fingerprint: archive.payload_fingerprint,
+                    recorded_at: at,
+                },
+            );
+            let current = archived.document;
+            const successors = [structuredClone(current)];
+            const store: ProcessingStore = {
+                load: async () => structuredClone(current),
+                async commit(revision, document) {
+                    if (revision !== current.revision) return false;
+                    current = parseConversationDocument(document);
+                    successors.push(structuredClone(current));
+                    return true;
+                },
+            };
+            const processor = createToolResultTextExternalizationProcessor(({ asset }) => ({
+                capability: 'read_artifact',
+                version: 1,
+                arguments: {
+                    asset_id: asset.id,
+                    path: asset.storage.type === 'external' ? asset.storage.locator.artifact_path : '',
+                },
+                tool_definition_id: 'definition:read',
+            }));
+            await runProcessingJob(store, { resolve: () => processor }, job.id, 'attempt:one', () => at);
+            const input = {
+                accepted_document: acceptedDocument,
+                anchor: {
+                    kind: 'accepted_append' as const,
+                    receipt: acceptedDocument.operation_receipts['append:result'],
+                },
+                successors,
+            };
+            expect((await verifyProcessingSuccessor(input)).source.revision).toBe(current.revision);
+            expect(acceptedDocument.turns.find((turn) => turn.id === 'turn:result')?.blocks).toEqual([result]);
+            const changed = structuredClone(input);
+            const changedCall = changed.accepted_document.turns.find((turn) => turn.id === 'turn:call')?.blocks[0];
+            if (changedCall?.type !== 'tool_call' || changedCall.arguments.type !== 'json')
+                throw new Error('Expected original executed call');
+            changedCall.arguments.value = { thought: 'Tampered after execution.' };
+            await expect(verifyProcessingSuccessor(changed)).rejects.toThrow();
+            const changedProposal = structuredClone(input);
+            const outputSnapshot = changedProposal.successors.find(
+                (snapshot) => snapshot.processing.outputs?.[job.id]?.kind === 'proposal',
+            );
+            const output = outputSnapshot?.processing.outputs?.[job.id];
+            if (!outputSnapshot || output?.kind !== 'proposal' || output.proposal.kind !== 'replace_with_compaction')
+                throw new Error('Expected the accepted derived proposal');
+            output.proposal.replacement_turns[0].id = 'turn:forged-derived-result';
+            const { output_fingerprint: _oldFingerprint, ...outputPayload } = output;
+            output.output_fingerprint = await fingerprintJson(outputPayload);
+            const outputReceipt = outputSnapshot.operation_receipts[`processing:output:${job.id}`];
+            if (!outputReceipt) throw new Error('Expected the accepted output operation receipt');
+            outputReceipt.payload_fingerprint = await fingerprintJson(output);
+            await expect(verifyProcessingSuccessor(changedProposal)).rejects.toThrow(
+                'deterministic selected archive replacement',
+            );
+        },
+    );
     it('replays archive, resolve, attempt, output, and application without registry/plugin calls', async () => {
         const { input, resolve, current } = await lineage();
         const calls = resolve.mock.calls.length;

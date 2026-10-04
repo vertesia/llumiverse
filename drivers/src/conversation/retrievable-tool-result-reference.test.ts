@@ -20,6 +20,7 @@ import {
 } from '../openai/openai-responses-conversation-adapter.js';
 import { compileClaudeMessagesConversation } from '../shared/claude-messages-conversation-adapter.js';
 import { compileGeminiConversation } from '../vertexai/models/gemini-conversation-adapter.js';
+import { prepareCanonicalContext } from './canonical-runtime.js';
 
 const AT = '2026-09-11T00:01:00.000Z';
 const ORIGINAL = `Exact result α\n${'long result '.repeat(1000)}`;
@@ -204,6 +205,50 @@ const compilers = {
 };
 
 describe('native projection of actual tool-result externalization', () => {
+    it('prepares a retained materialized tool result through its accepted replacement receipt', async () => {
+        const document = await externalizedToolResult();
+        const accepted = document.operation_receipts['append:result'];
+        if (!accepted) throw new Error('Accepted materialized tool result is absent');
+        const options = {
+            model: 'gpt-4o-mini',
+            conversation: document,
+            conversation_runtime: {
+                conversation_id: document.id,
+                request_id: 'request:after-tool-result',
+                attempt_id: 'attempt:after-tool-result',
+                input_operation_id: 'input:after-tool-result',
+                response_operation_id: 'response:after-tool-result',
+                recorded_at: AT,
+                purpose: 'interaction' as const,
+                materialized_input: {
+                    operation_id: accepted.id,
+                    result_revision: accepted.result_revision,
+                },
+            },
+        };
+        expect(
+            (
+                await prepareCanonicalContext({
+                    options,
+                    provider: 'openai',
+                    protocol: 'openai.responses',
+                    adapter_version: 'openai-responses@1',
+                })
+            ).document,
+        ).toEqual(document);
+        const changed = structuredClone(document);
+        const compaction = Object.values(changed.compactions)[0];
+        if (!compaction?.metadata) throw new Error('Accepted tool-result compaction metadata is absent');
+        compaction.metadata.payload_fingerprint = `sha256:${'0'.repeat(64)}`;
+        await expect(
+            prepareCanonicalContext({
+                options: { ...options, conversation: changed },
+                provider: 'openai',
+                protocol: 'openai.responses',
+                adapter_version: 'openai-responses@1',
+            }),
+        ).rejects.toThrow('accepted compaction receipt');
+    });
     it.each(Object.entries(compilers))(
         '%s keeps the exact call and result with a bounded retrieval cue',
         async (_name, compile) => {

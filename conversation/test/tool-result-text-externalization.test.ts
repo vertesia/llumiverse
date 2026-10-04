@@ -234,6 +234,12 @@ describe('completed tool-result text processing', () => {
             originalReceipts['execution:one'].result_fingerprint,
         );
         expect(Object.values(store.current.compactions)[0].source.block_ids).toEqual(['block:result']);
+        const compaction = Object.values(store.current.compactions)[0];
+        const applied = store.current.operation_receipts[compaction.operation_id];
+        expect(compaction.metadata).toMatchObject({
+            applied_revision: applied.result_revision,
+            payload_fingerprint: applied.payload_fingerprint,
+        });
         expect(store.current.turns[0].blocks.at(-1)).toEqual(callReplay());
         const resolution = store.current.processing.resolved_inputs?.[f.job.id];
         const output = store.current.processing.outputs?.[f.job.id];

@@ -15,9 +15,13 @@ import {
     buildTextExternalizationProposal,
     TEXT_EXTERNALIZATION_PROCESSOR_ID,
     TEXT_EXTERNALIZATION_PROCESSOR_VERSION,
-    textExternalizationArchiveInputs,
     textExternalizationAssetOperationId,
 } from './text-externalization-processor.js';
+import {
+    buildToolResultTextExternalizationProposal,
+    canonicalTextExternalizationArchiveInputs,
+    isToolResultTextProcessor,
+} from './tool-result-text-externalization.js';
 import type { ConversationDocument, OperationReceipt, ProcessingJob, ProcessingOutputReceipt } from './types.js';
 import { parseConversationDocument } from './validation.js';
 
@@ -64,8 +68,10 @@ function builtinJob(job: ProcessingJob | undefined): ProcessingJob {
     if (!job)
         throw new ProcessingSuccessorError('MISSING_EVIDENCE', 'Processing job is not retained at input acceptance');
     if (
-        job.processor_id !== TEXT_EXTERNALIZATION_PROCESSOR_ID ||
-        job.processor_version !== TEXT_EXTERNALIZATION_PROCESSOR_VERSION
+        (isToolResultTextProcessor(job) && job.scope !== 'on_append') ||
+        (!isToolResultTextProcessor(job) &&
+            (job.processor_id !== TEXT_EXTERNALIZATION_PROCESSOR_ID ||
+                job.processor_version !== TEXT_EXTERNALIZATION_PROCESSOR_VERSION))
     ) {
         throw new ProcessingSuccessorError(
             'UNSUPPORTED',
@@ -81,7 +87,7 @@ async function replayArchive(
     receipt: OperationReceipt,
     job: ProcessingJob,
 ): Promise<ConversationDocument> {
-    const archive = await textExternalizationArchiveInputs(previous, job);
+    const archive = await canonicalTextExternalizationArchiveInputs(previous, job);
     if (
         receipt.id !== textExternalizationAssetOperationId(job.id) ||
         receipt.payload_fingerprint !== archive.payload_fingerprint
@@ -139,22 +145,44 @@ async function assertOutput(
         if (output.usage !== undefined) reject('Pure text archive proposal cannot invent provider usage');
         if (output.proposal.kind !== 'replace_with_compaction')
             reject('Processing output is not a text archive replacement');
-        const retrievals = output.proposal.replacement_turns.flatMap((turn) =>
-            turn.blocks.map((block) => {
-                if (block.type !== 'external_reference')
-                    reject('Processing proposal contains a non-archive replacement');
-                return block.retrieval;
-            }),
-        );
-        const configuration = ProcessorConfigurationSchema.parse({
-            id: job.processor_id,
-            version: job.processor_version,
-            scope: job.scope,
-            config: job.configuration,
-            required: job.required,
-            failure_behavior: job.failure_behavior,
-        });
-        const replay = await buildTextExternalizationProposal(previous, job, resolution, configuration, retrievals);
+        const retainedAssetIds = output.proposal.retained_asset_ids;
+        const replay = isToolResultTextProcessor(job)
+            ? await buildToolResultTextExternalizationProposal(
+                  previous,
+                  job,
+                  resolution,
+                  output.proposal.replacement_turns.flatMap((turn) =>
+                      turn.blocks.flatMap((block) => {
+                          if (block.type !== 'tool_result')
+                              reject('Tool-result processing proposal changed its result block');
+                          return block.content.flatMap((item) =>
+                              item.type === 'external_reference' && retainedAssetIds.includes(item.asset_id)
+                                  ? [item.retrieval]
+                                  : [],
+                          );
+                      }),
+                  ),
+              )
+            : await buildTextExternalizationProposal(
+                  previous,
+                  job,
+                  resolution,
+                  ProcessorConfigurationSchema.parse({
+                      id: job.processor_id,
+                      version: job.processor_version,
+                      scope: job.scope,
+                      config: job.configuration,
+                      required: job.required,
+                      failure_behavior: job.failure_behavior,
+                  }),
+                  output.proposal.replacement_turns.flatMap((turn) =>
+                      turn.blocks.map((block) => {
+                          if (block.type !== 'external_reference')
+                              reject('Processing proposal contains a non-archive replacement');
+                          return block.retrieval;
+                      }),
+                  ),
+              );
         if (!equal(replay.proposal, output.proposal))
             reject('Processing proposal is not the deterministic selected archive replacement');
     } else if (output.kind === 'no_op') {

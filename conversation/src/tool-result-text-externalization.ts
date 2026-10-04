@@ -471,6 +471,11 @@ export async function applyToolResultTextExternalizationOutput(
                 retained_asset_ids: proposal.retained_asset_ids,
                 generation_ids: [],
                 created_at: recordedAt,
+                metadata: {
+                    applied_revision: receipt.result_revision,
+                    source_context_revision: document.context.revision,
+                    payload_fingerprint: receipt.payload_fingerprint,
+                },
             },
         },
         operation_receipts: { ...document.operation_receipts, [operationId]: receipt },
