@@ -414,6 +414,84 @@ async function externalizationPayloadFingerprint(
     });
 }
 
+/** Authenticate the original accepted arguments against a later, retained externalization operation. */
+export async function assertHistoricalToolArgumentExternalization(
+    document: ConversationDocument,
+    call: ToolCallBlock,
+    originalArguments: JsonObject,
+    acceptedRevision: number,
+    generationId: string,
+): Promise<void> {
+    const externalized = call.arguments;
+    if (externalized.type !== 'externalized_json' || externalized.hydration.length !== 1) {
+        throw new Error(`Accepted tool call ${call.call_id} has no exact externalization witness`);
+    }
+    const hydration = externalized.hydration[0];
+    const path = validatedPath(hydration.input_path);
+    const content = valueAtPath(originalArguments, path);
+    const asset = ownRecordValue(document.assets, hydration.asset_id);
+    if (
+        typeof content !== 'string' ||
+        !asset ||
+        asset.kind !== 'text' ||
+        asset.storage.type !== 'external' ||
+        (asset.provenance.type === 'generated' && asset.provenance.generation_id !== generationId) ||
+        (await fingerprintJson(originalArguments)) !== externalized.exact_arguments_hash ||
+        stableJson(executionBase(originalArguments, path)) !== stableJson(externalized.value)
+    ) {
+        throw new Error(`Accepted tool call ${call.call_id} changed its original arguments`);
+    }
+    const integrity = await hashUtf8Text(content);
+    if (
+        integrity.content_hash !== hydration.content_hash ||
+        asset.content_hash !== integrity.content_hash ||
+        asset.byte_length !== integrity.byte_length
+    ) {
+        throw new Error(`Accepted tool call ${call.call_id} changed its archived argument bytes`);
+    }
+    const replayArchives = (externalized.invalidated_replay_archives ?? []).map((reference) => {
+        const archived = ownRecordValue(document.assets, reference.asset_id);
+        if (archived?.content_hash !== reference.content_hash || archived.storage.type !== 'external') {
+            throw new Error(`Accepted tool call ${call.call_id} changed its replay archive`);
+        }
+        return { replay_block_id: reference.replay_block_id, asset: archived };
+    });
+    const expectedAssetIds = [asset.id, ...replayArchives.map((archive) => archive.asset.id)];
+    const candidates = Object.values(document.operation_receipts).filter(
+        (receipt) =>
+            receipt.conversation_id === document.id &&
+            receipt.base_revision >= acceptedRevision &&
+            receipt.accepted_asset_ids?.length === expectedAssetIds.length &&
+            receipt.accepted_asset_ids.every((id, index) => id === expectedAssetIds[index]),
+    );
+    if (candidates.length !== 1) throw new Error(`Accepted tool call ${call.call_id} lacks one exact archive receipt`);
+    const receipt = candidates[0];
+    const expectedFingerprint = await externalizationPayloadFingerprint(
+        {
+            operation_id: receipt.id,
+            expected_revision: receipt.base_revision,
+            recorded_at: receipt.recorded_at,
+            call_id: call.call_id,
+            input_path: path,
+            model_value: externalized.model_value,
+            exact_arguments_hash: externalized.exact_arguments_hash,
+            asset,
+            replay_archives: replayArchives,
+        },
+        path,
+        replayArchives,
+    );
+    if (
+        receipt.payload_fingerprint !== expectedFingerprint ||
+        receipt.result_revision !== receipt.base_revision + 1 ||
+        receipt.operation_kind !== undefined ||
+        receipt.accepted_turn_ids?.length ||
+        receipt.accepted_generation_ids?.length
+    ) {
+        throw new Error(`Accepted tool call ${call.call_id} changed its archive operation`);
+    }
+}
+
 export async function externalizeToolCallArguments(
     input: ConversationDocument,
     options: ExternalizeToolArgumentsOptions,

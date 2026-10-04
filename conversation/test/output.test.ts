@@ -4,6 +4,7 @@ import {
     ConversationOutputProjectionError,
     type ConversationOutputReceipt,
     createAcceptedOutputFragment,
+    matchesRetainedAcceptedOutputFragment,
     parseAcceptedOutputFragment,
     validateAcceptedOutputFragment,
 } from '../src/output.js';
@@ -312,6 +313,8 @@ describe('accepted conversation output projection', () => {
 
     it('rejects projecting an accepted response after a later operation changed the materialized document', async () => {
         const accepted = acceptedDocument();
+        const fragment = createAcceptedOutputFragment(accepted, 'response:1');
+        await expect(matchesRetainedAcceptedOutputFragment(accepted, fragment)).resolves.toBe(true);
         const prepared = await prepareToolArgumentExternalization(accepted, 'call:1', ['query']);
         const externalized = await externalizeToolCallArguments(accepted, {
             operation_id: 'externalize:1',
@@ -341,6 +344,129 @@ describe('accepted conversation output projection', () => {
         expect(() => createAcceptedOutputFragment(externalized.document, 'response:1')).toThrow(
             ConversationOutputProjectionError,
         );
+        await expect(matchesRetainedAcceptedOutputFragment(externalized.document, fragment)).resolves.toBe(true);
+
+        const reordered = structuredClone(externalized.document);
+        const visible = reordered.turns[0]?.blocks;
+        if (!visible) throw new Error('Fixture requires accepted output blocks');
+        const textIndex = visible.findIndex((block) => block.id === 'block:text');
+        const reasoningIndex = visible.findIndex((block) => block.id === 'block:reasoning');
+        if (textIndex < 0 || reasoningIndex < 0) throw new Error('Fixture requires two visible output blocks');
+        const textBlock = visible[textIndex];
+        const reasoningBlock = visible[reasoningIndex];
+        if (!textBlock || !reasoningBlock) throw new Error('Fixture requires two visible output blocks');
+        visible[textIndex] = reasoningBlock;
+        visible[reasoningIndex] = textBlock;
+        await expect(matchesRetainedAcceptedOutputFragment(reordered, fragment)).resolves.toBe(false);
+
+        const omittedAcceptedText = structuredClone(fragment);
+        omittedAcceptedText.turn.blocks = omittedAcceptedText.turn.blocks.filter((block) => block.id !== 'block:text');
+        omittedAcceptedText.completeness.omitted_block_ids.push('block:text');
+        omittedAcceptedText.completeness.semantic_content = 'partial';
+        await expect(matchesRetainedAcceptedOutputFragment(externalized.document, omittedAcceptedText)).resolves.toBe(
+            false,
+        );
+
+        const changedArguments = structuredClone(fragment);
+        const originalCall = changedArguments.turn.blocks.find((block) => block.type === 'tool_call');
+        if (
+            originalCall?.type !== 'tool_call' ||
+            originalCall.arguments.type !== 'json' ||
+            originalCall.arguments.value === null ||
+            typeof originalCall.arguments.value !== 'object' ||
+            Array.isArray(originalCall.arguments.value)
+        ) {
+            throw new Error('Fixture requires accepted JSON tool arguments');
+        }
+        originalCall.arguments.value.query = 'changed output';
+        await expect(matchesRetainedAcceptedOutputFragment(externalized.document, changedArguments)).resolves.toBe(
+            false,
+        );
+
+        const changedHash = structuredClone(externalized.document);
+        const changedCall = changedHash.turns[0]?.blocks.find((block) => block.type === 'tool_call');
+        if (changedCall?.type !== 'tool_call' || changedCall.arguments.type !== 'externalized_json') {
+            throw new Error('Fixture requires retained externalized arguments');
+        }
+        changedCall.arguments.exact_arguments_hash = `sha256:${'0'.repeat(64)}`;
+        await expect(matchesRetainedAcceptedOutputFragment(changedHash, fragment)).resolves.toBe(false);
+
+        const changedAsset = structuredClone(externalized.document);
+        changedAsset.assets['asset:tool-input'].byte_length = prepared.byte_length + 1;
+        await expect(matchesRetainedAcceptedOutputFragment(changedAsset, fragment)).resolves.toBe(false);
+
+        const changedCallIdentity = structuredClone(externalized.document);
+        const identityCall = changedCallIdentity.turns[0]?.blocks.find((block) => block.type === 'tool_call');
+        if (identityCall?.type !== 'tool_call') throw new Error('Fixture requires retained executed call');
+        identityCall.tool_name = 'other_tool';
+        await expect(matchesRetainedAcceptedOutputFragment(changedCallIdentity, fragment)).resolves.toBe(false);
+
+        const changedExecutor = structuredClone(externalized.document);
+        const executorCall = changedExecutor.turns[0]?.blocks.find((block) => block.type === 'tool_call');
+        if (executorCall?.type !== 'tool_call') throw new Error('Fixture requires retained executed call');
+        executorCall.executor = 'provider';
+        await expect(matchesRetainedAcceptedOutputFragment(changedExecutor, fragment)).resolves.toBe(false);
+
+        const changedReceipt = structuredClone(externalized.document);
+        changedReceipt.operation_receipts['externalize:1'].payload_fingerprint = `sha256:${'0'.repeat(64)}`;
+        await expect(matchesRetainedAcceptedOutputFragment(changedReceipt, fragment)).resolves.toBe(false);
+
+        const changedText = structuredClone(externalized.document);
+        const text = changedText.turns[0]?.blocks.find((block) => block.type === 'text');
+        if (text?.type !== 'text') throw new Error('Fixture requires retained accepted text');
+        text.text = 'changed output text';
+        await expect(matchesRetainedAcceptedOutputFragment(changedText, fragment)).resolves.toBe(false);
+
+        const changedGeneration = structuredClone(externalized.document);
+        changedGeneration.generations['generation:1'].requested_model = 'other-model';
+        await expect(matchesRetainedAcceptedOutputFragment(changedGeneration, fragment)).resolves.toBe(false);
+
+        const changedAcceptedReceipt = structuredClone(externalized.document);
+        changedAcceptedReceipt.operation_receipts['response:1'].recorded_at = '2026-09-30T00:01:00.000Z';
+        await expect(matchesRetainedAcceptedOutputFragment(changedAcceptedReceipt, fragment)).resolves.toBe(false);
+    });
+
+    it('accepts unchanged, already externalized generated tool arguments on a later head', async () => {
+        const accepted = acceptedDocument();
+        const prepared = await prepareToolArgumentExternalization(accepted, 'call:1', ['query']);
+        const asset: Asset = {
+            id: 'asset:accepted-tool-argument',
+            kind: 'text',
+            mime_type: 'text/plain',
+            storage: { type: 'external', resolver: 'test.artifact', locator: { key: 'accepted-argument' } },
+            provenance: { type: 'generated', generation_id: 'generation:1', source_turn_id: 'turn:agent:1' },
+            content_hash: prepared.content_hash,
+            byte_length: prepared.byte_length,
+            created_at: recordedAt,
+        };
+        accepted.assets[asset.id] = asset;
+        accepted.operation_receipts['response:1'].accepted_asset_ids = [
+            ...(accepted.operation_receipts['response:1'].accepted_asset_ids ?? []),
+            asset.id,
+        ];
+        const call = accepted.turns[0]?.blocks.find((block) => block.type === 'tool_call');
+        if (call?.type !== 'tool_call') throw new Error('Fixture requires accepted tool call');
+        call.arguments = {
+            type: 'externalized_json',
+            value: {},
+            model_value: { query: '[stored]' },
+            exact_arguments_hash: prepared.exact_arguments_hash,
+            hydration: [
+                { type: 'text_asset', input_path: ['query'], asset_id: asset.id, content_hash: prepared.content_hash },
+            ],
+        };
+        const fragment = createAcceptedOutputFragment(accepted, 'response:1');
+        const later = appendConversationRecords(
+            accepted,
+            { turns: [], generations: [], context_entries: [] },
+            {
+                expected_revision: accepted.revision,
+                operation_id: 'append:later',
+                payload_fingerprint: 'later',
+                recorded_at: recordedAt,
+            },
+        ).document;
+        await expect(matchesRetainedAcceptedOutputFragment(later, fragment)).resolves.toBe(true);
     });
 
     it('validates a standalone fragment without rewriting prototype-like asset keys', () => {

@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { canonicalJsonContentString } from './content-integrity.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { isGeneratedAgentTurn } from './guards.js';
 import { preflightJsonInput } from './json-preflight.js';
@@ -16,6 +17,7 @@ import {
     ConversationOutputTurnSchema,
 } from './schemas/output.js';
 import { IdentifierSchema } from './schemas/primitives.js';
+import { assertHistoricalToolArgumentExternalization } from './tool-arguments.js';
 import type { Asset, ConversationDocument, GeneratedAgentTurn } from './types.js';
 import { diagnosticsFromZodError, parseConversationDocument } from './validation.js';
 
@@ -176,6 +178,132 @@ function projectGeneration(generation: ReturnType<typeof resolveAcceptedRecords>
 function projectToolCall(block: Extract<GeneratedAgentTurn['blocks'][number], { type: 'tool_call' }>) {
     const { definition_id: _definitionId, native_id: _nativeId, ...projected } = block;
     return ConversationOutputToolCallBlockSchema.parse(projected);
+}
+
+/** Check an immutable accepted fragment against a later complete head without rewinding that head. */
+export async function matchesRetainedAcceptedOutputFragment(
+    documentInput: unknown,
+    fragmentInput: unknown,
+): Promise<boolean> {
+    let document: ConversationDocument;
+    let fragment: ConversationAcceptedOutputFragment;
+    try {
+        document = parseConversationDocument(documentInput);
+        fragment = parseAcceptedOutputFragment(fragmentInput);
+    } catch {
+        return false;
+    }
+    const same = (left: unknown, right: unknown) =>
+        canonicalJsonContentString(left) === canonicalJsonContentString(right);
+    const receipt = ownRecordValue(document.operation_receipts, fragment.receipt.id);
+    const generation = ownRecordValue(document.generations, fragment.generation.id);
+    const turn = document.turns.find((candidate) => candidate.id === fragment.turn.id);
+    if (!receipt || !generation || !turn || !isGeneratedAgentTurn(turn)) return false;
+    if (document.revision === fragment.source.revision) {
+        try {
+            return same(createAcceptedOutputFragment(document, receipt.id), fragment);
+        } catch {
+            return false;
+        }
+    }
+    if (
+        document.id !== fragment.source.conversation_id ||
+        document.revision < fragment.source.revision ||
+        receipt.result_revision !== fragment.source.revision ||
+        generation.record_source !== 'executed'
+    )
+        return false;
+    try {
+        if (
+            !same(projectReceipt(receipt), fragment.receipt) ||
+            !same(projectGeneration(generation), fragment.generation)
+        )
+            return false;
+    } catch {
+        return false;
+    }
+    const { blocks: _fragmentBlocks, ...fragmentTurn } = fragment.turn;
+    const { blocks: _currentBlocks, ...currentTurn } = {
+        id: turn.id,
+        kind: turn.kind,
+        authority: turn.authority,
+        status: turn.status,
+        timestamps: turn.timestamps,
+        model_visibility: turn.model_visibility,
+        provenance: turn.provenance,
+        generation_id: turn.generation_id,
+        blocks: turn.blocks,
+    };
+    if (!same(currentTurn, fragmentTurn)) return false;
+    const included = new Set(fragment.turn.blocks.map((block) => block.id));
+    const omitted = new Set(fragment.completeness.omitted_block_ids);
+    if (turn.blocks.some((block) => !included.has(block.id) && !omitted.has(block.id))) return false;
+    if (
+        !same(
+            turn.blocks.filter((block) => included.has(block.id)).map((block) => block.id),
+            fragment.turn.blocks.map((block) => block.id),
+        )
+    )
+        return false;
+    const archivedReplayIds = new Set(
+        turn.blocks.flatMap((block) =>
+            block.type === 'tool_call' && block.arguments.type === 'externalized_json'
+                ? (block.arguments.invalidated_replay_archives ?? []).map((archive) => archive.replay_block_id)
+                : [],
+        ),
+    );
+    for (const id of omitted) {
+        const current = turn.blocks.find((block) => block.id === id);
+        if (!current) {
+            if (!archivedReplayIds.has(id)) return false;
+            continue;
+        }
+        if (current.type === 'native_replay' || current.type === 'extension' || current.type === 'external_reference')
+            continue;
+        const assetId = referencedAssetId(current);
+        if (
+            assetId === undefined ||
+            ((receipt.accepted_asset_ids ?? []).includes(assetId) &&
+                safeGeneratedAsset(ownRecordValue(document.assets, assetId), generation.id))
+        )
+            return false;
+    }
+    for (const original of fragment.turn.blocks) {
+        const current = turn.blocks.find((block) => block.id === original.id);
+        if (!current || current.type !== original.type) return false;
+        if (current.type === 'tool_call' && original.type === 'tool_call') {
+            if (current.arguments.type === 'externalized_json') {
+                if (original.arguments.type === 'externalized_json') {
+                    if (!same(projectToolCall(current), original)) return false;
+                    continue;
+                }
+                if (
+                    original.arguments.type !== 'json' ||
+                    original.arguments.value === null ||
+                    typeof original.arguments.value !== 'object' ||
+                    Array.isArray(original.arguments.value)
+                )
+                    return false;
+                try {
+                    await assertHistoricalToolArgumentExternalization(
+                        document,
+                        current,
+                        original.arguments.value,
+                        fragment.source.revision,
+                        generation.id,
+                    );
+                } catch {
+                    return false;
+                }
+                if (!same(projectToolCall({ ...current, arguments: original.arguments }), original)) return false;
+            } else if (!same(projectToolCall(current), original)) return false;
+        } else if (!same(current, original)) return false;
+    }
+    for (const [id, acceptedAsset] of Object.entries(fragment.assets)) {
+        const current = safeGeneratedAsset(ownRecordValue(document.assets, id), generation.id);
+        if (!current || !same(current, acceptedAsset)) return false;
+    }
+    return true;
 }
 
 /**
