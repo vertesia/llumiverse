@@ -350,10 +350,15 @@ test('manual dispatch rejects malformed PR numbers', async () => {
     await assert.rejects(targets(fixture(), { inputs: { pr_number: '-1' } }, 'workflow_dispatch'), /Invalid PR/);
 });
 
-test('API transport paginates reviews and scopes approval and membership calls to the App token', async () => {
+test('API transport scopes approval and membership calls to dedicated App tokens', async () => {
     const calls = [];
     const api = githubApi(
-        { GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' },
+        {
+            GITHUB_REPOSITORY: 'vertesia/studio',
+            GH_TOKEN: 'read',
+            GH_REVIEW_TOKEN: 'app',
+            GH_MEMBERS_TOKEN: 'members',
+        },
         (_cmd, args, options) => {
             calls.push({ args, options });
             if (args.includes('--paginate')) return JSON.stringify([[approval], [{ ...approval, id: 2 }]]);
@@ -368,17 +373,27 @@ test('API transport paginates reviews and scopes approval and membership calls t
     assert.equal(calls[1].options.env.GH_TOKEN, 'app');
     assert.equal(JSON.parse(calls[1].options.input).commit_id, sha);
     assert.equal(await api.engineeringMember('engineer'), true);
-    assert.equal(calls[2].options.env.GH_TOKEN, 'app');
+    assert.equal(calls[2].options.env.GH_TOKEN, 'members');
     assert.match(calls[2].args[1], new RegExp(`/teams/${ENGINEERING_TEAM_SLUG}/memberships/engineer$`));
 });
 
 test('a missing engineering membership is an ineligible author, while other lookup failures surface', () => {
     const responses = [ghFailure('gh: Not Found (HTTP 404)'), ghFailure('gh: Forbidden (HTTP 403)')];
-    const api = githubApi({ GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' }, () => {
-        throw responses.shift();
-    });
+    const api = githubApi(
+        { GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_MEMBERS_TOKEN: 'members' },
+        () => {
+            throw responses.shift();
+        },
+    );
     assert.equal(api.engineeringMember('outsider'), false);
     assert.throws(() => api.engineeringMember('engineer'), /Command failed/);
+});
+
+test('a missing dedicated membership token fails closed without making a request', () => {
+    const api = githubApi({ GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' }, () => {
+        assert.fail('membership request must not fall back to another token');
+    });
+    assert.throws(() => api.engineeringMember('engineer'), /Missing GitHub token/);
 });
 
 function ghFailure(stderr) {
@@ -568,7 +583,12 @@ function flakyApi(failures) {
     const calls = [];
     const sleeps = [];
     const api = githubApi(
-        { GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' },
+        {
+            GITHUB_REPOSITORY: 'vertesia/studio',
+            GH_TOKEN: 'read',
+            GH_REVIEW_TOKEN: 'app',
+            GH_MEMBERS_TOKEN: 'members',
+        },
         (_cmd, args) => {
             calls.push(args);
             if (calls.length <= failures.length) throw failures[calls.length - 1];
@@ -640,6 +660,8 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.match(workflow, /ref: \$\{\{ github.workflow_sha \}\}/);
     assert.match(workflow, /types: \[completed\]/);
     assert.match(workflow, /permission-members: read/);
+    assert.match(workflow, /GH_MEMBERS_TOKEN:/);
+    assert.match(workflow, /continue-on-error: true/);
     assert.doesNotMatch(workflow, /schedule:|requested|in_progress/);
     assert.match(workflow, /synchronize/);
     assert.match(workflow, /converted_to_draft/);

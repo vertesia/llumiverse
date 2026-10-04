@@ -249,8 +249,8 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
     const repo = env.GITHUB_REPOSITORY;
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) throw new Error('Invalid GITHUB_REPOSITORY');
     const owner = repo.split('/')[0];
-    const request = (endpoint, { method = 'GET', body, review = false, pages = false } = {}) => {
-        const token = review ? env.GH_REVIEW_TOKEN : env.GH_TOKEN;
+    const request = (endpoint, { method = 'GET', body, membership = false, review = false, pages = false } = {}) => {
+        const token = membership ? env.GH_MEMBERS_TOKEN : review ? env.GH_REVIEW_TOKEN : env.GH_TOKEN;
         if (!token) throw new Error('Missing GitHub token');
         const args = ['api', endpoint, '--method', method];
         if (pages) args.push('--paginate', '--slurp');
@@ -293,7 +293,7 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
             try {
                 const membership = request(
                     `orgs/${owner}/teams/${ENGINEERING_TEAM_SLUG}/memberships/${encodeURIComponent(login)}`,
-                    { review: true },
+                    { membership: true },
                 );
                 return membership?.state === 'active';
             } catch (error) {
