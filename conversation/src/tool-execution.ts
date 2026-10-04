@@ -12,6 +12,7 @@ import {
     type ResolveToolArgumentTextAsset,
 } from './tool-arguments.js';
 import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
+import { assertToolRetrievalExcerptBinding } from './tool-retrieval-excerpt.js';
 import type {
     AppendConversationRecordsOptions,
     AppendConversationRecordsResult,
@@ -143,6 +144,14 @@ async function validatedToolExecutionRecords(
         throw new Error(`Tool execution result does not match application call ${result.source.call_id}`);
     }
     await assertToolResultReceiptFingerprint(resultBlock, receipt);
+    if (receipt.metadata?.retrieval_excerpt) {
+        const retained = document.execution_receipts[receipt.id];
+        if (retained) {
+            // Exact committed retries reuse immutable provenance; later context need not expose the asset again.
+            if ((await fingerprintJson(retained)) !== (await fingerprintJson(receipt)))
+                throw new Error('Retained retrieval execution receipt changed');
+        } else await assertToolRetrievalExcerptBinding(document, resultBlock, receipt);
+    }
     return { document, result };
 }
 

@@ -33,7 +33,9 @@ export function resolveActiveTextExternalReference(
     for (const entry of document.context.entries) {
         const resolved = resolveContextEntry(turns, entry);
         if (resolved.turn.model_visibility !== 'include') continue;
-        for (const candidate of resolved.blocks) {
+        for (const candidate of resolved.blocks.flatMap((block) =>
+            block.type === 'tool_result' ? block.content : [block],
+        )) {
             if (
                 candidate.type !== 'external_reference' ||
                 candidate.asset_id !== assetId ||

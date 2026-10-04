@@ -916,6 +916,9 @@ function compileTurn(
         const nested = result.content.flatMap((block): OpenAIChatCompletionsContentPart[] => {
             if (block.type === 'text') return [{ type: 'text', text: block.text }];
             if (block.type === 'json') return [{ type: 'text', text: JSON.stringify(block.value) }];
+            if (block.type === 'external_reference') {
+                return [{ type: 'text', text: retrievableTextReference(document, block) }];
+            }
             if (block.type === 'image') {
                 const asset = document.assets[block.asset_id];
                 if (asset === undefined)

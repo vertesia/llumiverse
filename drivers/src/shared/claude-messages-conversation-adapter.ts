@@ -888,7 +888,12 @@ function canonicalToolResultContentToClaude(
     block: NestedToolResultContentBlock,
     document: ConversationDocument,
 ): ClaudeToolResultContentBlock {
-    if (block.type !== 'text' && block.type !== 'image' && block.type !== 'document') {
+    if (
+        block.type !== 'text' &&
+        block.type !== 'external_reference' &&
+        block.type !== 'image' &&
+        block.type !== 'document'
+    ) {
         throw new TypeError(`Claude cannot project canonical ${block.type} inside a tool result`);
     }
     return canonicalBlockToClaude(block, document) as ClaudeToolResultContentBlock;

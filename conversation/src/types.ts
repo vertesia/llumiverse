@@ -537,3 +537,5 @@ export type JsonMinificationApplication = z.infer<
 export type JsonMinificationMeasuredProjection = z.infer<
     typeof import('./schemas/json-minification.js').JsonMinificationMeasuredProjectionSchema
 >;
+
+export type ToolRetrievalExcerpt = z.infer<typeof import('./schemas/execution.js').ToolRetrievalExcerptSchema>;

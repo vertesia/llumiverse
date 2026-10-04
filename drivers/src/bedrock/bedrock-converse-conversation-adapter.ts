@@ -1406,6 +1406,7 @@ function compileResultContent(
 ): ToolResultContentBlock {
     if (block.type === 'text') return { text: block.text };
     if (block.type === 'json') return { json: structuredClone(block.value) };
+    if (block.type === 'external_reference') return { text: retrievableTextReference(document, block) };
     if (block.type === 'image' || block.type === 'document' || block.type === 'video') {
         assertMediaCapability(block.type, target?.model);
         const native = assetToBedrockBlock(assetForBlock(document, block));

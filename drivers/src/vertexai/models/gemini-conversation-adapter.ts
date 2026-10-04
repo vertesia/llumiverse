@@ -1299,7 +1299,9 @@ function compileOrdinaryTurn(
         const result = turn.blocks[0];
         const call = findToolCall(document, result.call_id);
         const semanticContent = result.content.filter((block) => block.type !== 'native_replay');
-        const primary = semanticContent.filter((block) => block.type === 'json' || block.type === 'text');
+        const primary = semanticContent.filter(
+            (block) => block.type === 'json' || block.type === 'text' || block.type === 'external_reference',
+        );
         if (primary.length > 1) {
             throw new TypeError(`Gemini cannot project multiple text/JSON values for tool result ${result.id}`);
         }
@@ -1308,7 +1310,7 @@ function compileOrdinaryTurn(
             throw new TypeError(`Gemini cannot reorder tool result content for ${result.id}`);
         }
         const responseParts = semanticContent.flatMap((block): FunctionResponsePart[] => {
-            if (block.type === 'json' || block.type === 'text') return [];
+            if (block.type === 'json' || block.type === 'text' || block.type === 'external_reference') return [];
             if (block.type === 'extension' && block.model_projection === 'excluded') return [];
             if (
                 block.type === 'image' ||
@@ -1333,7 +1335,9 @@ function compileOrdinaryTurn(
                     : { output: primaryValue.value }
                 : primaryValue?.type === 'text'
                   ? { output: primaryValue.text }
-                  : undefined;
+                  : primaryValue?.type === 'external_reference'
+                    ? { output: retrievableTextReference(document, primaryValue) }
+                    : undefined;
         return {
             content: {
                 role: 'user',
@@ -1394,7 +1398,7 @@ function compiledBlockMappings(turn: ConversationTurn, nativeBase: string, partO
         } else {
             let responsePartIndex = 0;
             for (const block of result.content) {
-                if (block.type === 'json' || block.type === 'text') {
+                if (block.type === 'json' || block.type === 'text' || block.type === 'external_reference') {
                     mappings.push({
                         canonical_id: block.id,
                         native_id: `${nativeBase}/parts/0/functionResponse/response`,

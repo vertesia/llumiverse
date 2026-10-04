@@ -80,6 +80,8 @@ export {
 } from './text-externalization-processor.js';
 export * from './tool-arguments.js';
 export * from './tool-execution.js';
+export * from './tool-result-text-externalization.js';
+export * from './tool-retrieval-excerpt.js';
 export * from './transcript.js';
 export type * from './types.js';
 export * from './usage-accounting.js';

@@ -333,6 +333,51 @@ export const ToolCallSourceRefSchema = z
     })
     .meta({ id: 'ConversationToolCallSourceRef' });
 
+export const ToolRetrievalByteProjectionSchema = z
+    .strictObject({ kind: z.literal('json_byte_excerpt') })
+    .meta({ id: 'ConversationToolRetrievalByteProjection' });
+export const ToolRetrievalLineProjectionSchema = z
+    .strictObject({
+        kind: z.literal('rendered_line_excerpt'),
+        start_line: NonnegativeSafeIntegerSchema,
+        end_line: NonnegativeSafeIntegerSchema,
+        line_numbers: z.boolean(),
+    })
+    .meta({ id: 'ConversationToolRetrievalLineProjection' });
+export const ToolRetrievalProjectionSchema = z
+    .discriminatedUnion('kind', [ToolRetrievalByteProjectionSchema, ToolRetrievalLineProjectionSchema])
+    .meta({ id: 'ConversationToolRetrievalProjection' });
+
+/** Host-minted facts about one exact excerpt returned by a verified canonical asset read.
+ * Structural validity is not a read capability or proof of executor authentication.
+ */
+// Local bounded scalar leaves keep strict JSON Schema emission self-contained: applying a new
+// constraint to a named primitive would emit a $ref sibling without its required string type.
+const RetrievalIdentifierSchema = z.string().min(1).max(512);
+const RetrievalContentHashSchema = z.string().min(1).max(128);
+
+export const ToolRetrievalExcerptSchema = z
+    .strictObject({
+        version: z.literal(1),
+        source: ConversationRefSchema.extend({ conversation_id: RetrievalIdentifierSchema }),
+        asset_id: RetrievalIdentifierSchema,
+        accepted_asset_operation_id: RetrievalIdentifierSchema,
+        external_reference_block_id: RetrievalIdentifierSchema,
+        reference_fingerprint: RetrievalContentHashSchema,
+        content_hash: RetrievalContentHashSchema,
+        byte_start: NonnegativeSafeIntegerSchema,
+        byte_end_exclusive: NonnegativeSafeIntegerSchema,
+        tool_definition_id: RetrievalIdentifierSchema,
+        projection: ToolRetrievalProjectionSchema,
+        returned_block_id: RetrievalIdentifierSchema,
+        returned_block_fingerprint: RetrievalContentHashSchema,
+    })
+    .meta({ id: 'ConversationToolRetrievalExcerpt' });
+
+export const ToolExecutionMetadataSchema = z
+    .strictObject({ retrieval_excerpt: ToolRetrievalExcerptSchema })
+    .meta({ id: 'ConversationToolExecutionMetadata' });
+
 export const ExecutionReceiptSchema = z
     .strictObject({
         id: IdentifierSchema,
@@ -345,5 +390,6 @@ export const ExecutionReceiptSchema = z
         result_fingerprint: ContentHashSchema,
         recorded_at: TimestampSchema,
         call_source: ToolCallSourceRefSchema.optional(),
+        metadata: ToolExecutionMetadataSchema.optional(),
     })
     .meta({ id: 'ConversationExecutionReceipt' });

@@ -45,6 +45,15 @@ import {
     TEXT_EXTERNALIZATION_PROCESSOR_VERSION,
     type TextExternalizationRetrievalBinder,
 } from './text-externalization-processor.js';
+import {
+    applyToolResultTextExternalizationOutput,
+    createToolResultTextExternalizationProcessor,
+    eligibleToolResultTextEntries,
+    isToolResultTextProcessor,
+    TOOL_RESULT_TEXT_PROCESSOR_ID,
+    TOOL_RESULT_TEXT_PROCESSOR_VERSION,
+    toolResultTextSelection,
+} from './tool-result-text-externalization.js';
 import type {
     ContextChangeProposal,
     ContextEntry,
@@ -366,6 +375,7 @@ async function createJobs(
     processors: readonly ProcessorConfiguration[],
     targetFingerprint?: string,
     selectedEntries?: readonly ContextEntry[],
+    toolResultEntryIds?: readonly string[],
 ): Promise<ProcessingJob[]> {
     if (
         (document.processing.jobs ? Object.keys(document.processing.jobs).length : 0) + processors.length >
@@ -384,17 +394,25 @@ async function createJobs(
                 candidate.scope === processor.scope,
         );
         if (policyIndex < 0) throw new Error('Processing configuration is not in its accepted policy');
-        const selection =
-            index === 0
-                ? {
-                      kind: 'entries',
-                      entry_ids: [...entryIds],
-                      ...(selectedBlockIds === undefined
-                          ? {}
-                          : { selected_block_ids: structuredClone(selectedBlockIds) }),
-                      ...(selectedEntries === undefined ? {} : { selected_entries: structuredClone(selectedEntries) }),
-                  }
-                : { kind: 'predecessor_output', job_id: jobs[index - 1].id };
+        const toolResultStage =
+            processor.id === TOOL_RESULT_TEXT_PROCESSOR_ID && processor.version === TOOL_RESULT_TEXT_PROCESSOR_VERSION;
+        if (toolResultStage && processor.scope !== 'on_append')
+            throw new Error('Tool-result text externalization supports only accepted on-append results');
+        if (toolResultStage && index !== processors.length - 1)
+            throw new Error('Tool-result text externalization must be the final on-append stage');
+        if (toolResultStage && toolResultEntryIds?.length === 0) continue;
+        const selection = toolResultStage
+            ? { kind: 'entries', entry_ids: [...(toolResultEntryIds ?? entryIds)] }
+            : index === 0
+              ? {
+                    kind: 'entries',
+                    entry_ids: [...entryIds],
+                    ...(selectedBlockIds === undefined
+                        ? {}
+                        : { selected_block_ids: structuredClone(selectedBlockIds) }),
+                    ...(selectedEntries === undefined ? {} : { selected_entries: structuredClone(selectedEntries) }),
+                }
+              : { kind: 'predecessor_output', job_id: jobs[index - 1].id };
         jobs.push(
             ProcessingJobSchema.parse({
                 id,
@@ -474,6 +492,13 @@ export async function stageProcessingAppend(
         processors,
         undefined,
         selection.selectedEntries,
+        processors.some(
+            (processor) =>
+                processor.id === TOOL_RESULT_TEXT_PROCESSOR_ID &&
+                processor.version === TOOL_RESULT_TEXT_PROCESSOR_VERSION,
+        )
+            ? await eligibleToolResultTextEntries(accepted, acceptedEntryIds)
+            : undefined,
     );
     const existing = accepted.processing.jobs ?? {};
     for (const job of jobs) if (Object.hasOwn(existing, job.id)) throw new Error(`Processing job ${job.id} collides`);
@@ -831,6 +856,22 @@ export async function resolveProcessingJobInput(
             recorded_at: recordedAt,
         } satisfies ProcessingResolvedInput;
     }
+    if (isToolResultTextProcessor(job)) {
+        if (selectedBlockIds !== undefined)
+            throw new Error('Tool-result text processing cannot select partial executable blocks');
+        const selected = await toolResultTextSelection(document, entryIds);
+        return ProcessingResolvedInputSchema.parse({
+            job_id: job.id,
+            source_revision: document.revision,
+            context_revision: document.context.revision,
+            entry_ids: entryIds,
+            source_fingerprint: selected.source_fingerprint,
+            context_fingerprint: await processingContextFingerprint(document),
+            source_turn_ids: selected.records.map((item) => item.turn.id),
+            ...(targetFingerprint === undefined ? {} : { target_fingerprint: targetFingerprint }),
+            recorded_at: recordedAt,
+        });
+    }
     const plan = await planContextChange(
         document,
         ContextChangePlanInputSchema.parse({
@@ -982,6 +1023,11 @@ export async function buildProcessingCompletionDocument(
             throw new Error('Processing source context changed before applying its durable result');
         const completed = await applyJsonMinificationOutput(document, job, retainedResolution, output, recordedAt);
         return completed;
+    }
+    if (isToolResultTextProcessor(job) && output.kind === 'proposal') {
+        if ((await processingContextFingerprint(document)) !== retainedResolution.context_fingerprint)
+            throw new Error('Tool-result text context changed before applying its durable output');
+        return applyToolResultTextExternalizationOutput(document, job, retainedResolution, output, recordedAt);
     }
     if (output.kind === 'proposal') {
         const proposal = ContextChangeProposalSchema.parse(output.proposal);
@@ -1169,8 +1215,9 @@ export async function runProcessingJob(
             } else if (document.processing.attempts?.[jobId]) {
                 const priorAttempt = document.processing.attempts[jobId];
                 if (
-                    job.processor_id !== TEXT_EXTERNALIZATION_PROCESSOR_ID ||
-                    job.processor_version !== TEXT_EXTERNALIZATION_PROCESSOR_VERSION ||
+                    (!isToolResultTextProcessor(job) &&
+                        (job.processor_id !== TEXT_EXTERNALIZATION_PROCESSOR_ID ||
+                            job.processor_version !== TEXT_EXTERNALIZATION_PROCESSOR_VERSION)) ||
                     !textRecoveryBinder
                 ) {
                     return ProcessingRunResultSchema.parse({ status: 'in_progress', document });
@@ -1188,7 +1235,10 @@ export async function runProcessingJob(
                 }
                 recoveryAttemptRevision = document.revision;
                 signal?.throwIfAborted();
-                const reconstructed = await createTextExternalizationProcessor(textRecoveryBinder).run({
+                const reconstructed = await (isToolResultTextProcessor(job)
+                    ? createToolResultTextExternalizationProcessor(textRecoveryBinder)
+                    : createTextExternalizationProcessor(textRecoveryBinder)
+                ).run({
                     document: structuredClone(document),
                     job: structuredClone(job),
                     resolved_input: structuredClone(resolution),
