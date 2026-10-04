@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer';
 import type { ExecutionOptions } from '@llumiverse/common';
 import {
     type AgentContentBlock,
@@ -30,7 +29,6 @@ import {
     type ResolveConversationAsset,
     type ResolvedConversationRuntimeContext,
     ResolvedConversationRuntimeContextSchema,
-    readBoundedConversationAsset,
     type ToolDefinition,
     type ToolResultBlock,
     toolArgumentsForModel,
@@ -42,6 +40,7 @@ import {
     canonicalToolSelectionPolicy,
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
+import { hydrateCanonicalHostMedia } from '../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -1548,7 +1547,7 @@ export async function createOpenAIResponsesIndexedTextRequestReceipt(input: {
     );
 }
 
-/** Resolve selected, integrity-declared external images that Responses cannot represent natively. */
+/** Hydrate only selected external image/PDF assets into the exact native request, retaining canonical refs. */
 async function compileOpenAIResponsesContextWithHostAssets(
     document: ConversationDocument,
     target: { provider: string; model: string },
@@ -1556,65 +1555,21 @@ async function compileOpenAIResponsesContextWithHostAssets(
     signal: AbortSignal | undefined,
     hydrated: Map<string, { fingerprint: string; data: string }>,
 ): Promise<ReturnType<typeof compileOpenAIResponsesConversation>> {
-    const selected = selectedCanonicalTurns(document, {
-        allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
-        allow_interrupted_with_complete_tool_calls: true,
-    });
-    const imageAssetIds = new Set<string>();
-    for (const turn of selected) {
-        for (const block of turn.blocks) {
-            const content = block.type === 'tool_result' ? block.content : [block];
-            for (const item of content) {
-                if (item.type === 'image') imageAssetIds.add(item.asset_id);
-            }
-        }
-    }
-    const externalImageIds = [...imageAssetIds].filter((id) => {
-        const asset = document.assets[id];
-        if (!asset) throw new TypeError(`OpenAI Responses selected image asset ${id} is missing`);
-        return (
+    const nativeDocument = await hydrateCanonicalHostMedia({
+        document,
+        label: 'OpenAI Responses',
+        selection: {
+            allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
+            allow_interrupted_with_complete_tool_calls: true,
+        },
+        media_kinds: ['image', 'document'],
+        resolve_asset: resolveAsset,
+        signal,
+        hydrated,
+        native_external: (asset) =>
             asset.storage.type === 'external' &&
-            asset.storage.resolver !== 'url' &&
-            asset.storage.resolver !== 'openai_file'
-        );
+            (asset.storage.resolver === 'url' || asset.storage.resolver === 'openai_file'),
     });
-    if (externalImageIds.length === 0) return compileOpenAIResponsesConversation(document, target);
-    const nativeDocument = { ...document, assets: { ...document.assets } };
-    let aggregateBytes = 0;
-    for (const id of externalImageIds) {
-        const asset = document.assets[id];
-        if (!asset) throw new TypeError(`OpenAI Responses selected image asset ${id} is missing`);
-        if (asset.kind !== 'image' || !resolveAsset)
-            throw new TypeError(`OpenAI Responses external image asset ${id} has no host resolver`);
-        if (asset.mime_type !== 'image/png' && asset.mime_type !== 'image/jpeg')
-            throw new TypeError(`OpenAI Responses external image asset ${id} has unsupported MIME`);
-        if (asset.byte_length === undefined || asset.byte_length > 32 * 1024 * 1024 - aggregateBytes)
-            throw new RangeError('OpenAI Responses external images exceed the aggregate native projection budget');
-        const fingerprint = await fingerprintJson(asset);
-        signal?.throwIfAborted();
-        let data = hydrated.get(id)?.data;
-        if (data !== undefined && hydrated.get(id)?.fingerprint !== fingerprint)
-            throw new TypeError(`OpenAI Responses external image asset ${id} changed during native preparation`);
-        if (data === undefined) {
-            const bytes = await readBoundedConversationAsset(asset, resolveAsset, {
-                max_bytes: 32 * 1024 * 1024,
-                max_chunks: 65_536,
-                signal,
-                require_integrity: true,
-                label: 'OpenAI Responses external image',
-            });
-            signal?.throwIfAborted();
-            const png = Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-            const jpeg = bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-            if ((!png || asset.mime_type !== 'image/png') && (!jpeg || asset.mime_type !== 'image/jpeg'))
-                throw new TypeError(`OpenAI Responses external image asset ${id} has invalid media bytes`);
-            data = Buffer.from(bytes).toString('base64');
-            hydrated.set(id, { fingerprint, data });
-        }
-        aggregateBytes += asset.byte_length;
-        nativeDocument.assets[id] = { ...asset, storage: { type: 'inline_base64', data } };
-    }
-    signal?.throwIfAborted();
     return compileOpenAIResponsesConversation(nativeDocument, target);
 }
 

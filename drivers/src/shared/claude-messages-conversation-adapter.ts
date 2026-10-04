@@ -43,7 +43,7 @@ import {
     type CanonicalStructuredOutput,
     canonicalToolSelectionPolicy,
 } from '@llumiverse/core';
-import { hydrateCanonicalHostImages } from '../conversation/canonical-host-images.js';
+import { hydrateCanonicalHostMedia } from '../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -1194,8 +1194,9 @@ export async function prepareClaudeCanonicalState(input: {
     const hydrated = new Map<string, { fingerprint: string; data: string }>();
     const compileWithAssets = async (source: ConversationDocument) =>
         compileClaudeMessagesConversation(
-            await hydrateCanonicalHostImages({
+            await hydrateCanonicalHostMedia({
                 document: source,
+                media_kinds: ['image', 'document'],
                 label: 'Claude Messages',
                 selection: { allow_interrupted_with_complete_tool_calls: true },
                 resolve_asset: input.resolve_asset,
@@ -1283,8 +1284,9 @@ export async function prepareClaudeCanonicalContext(input: {
     const hydrated = new Map<string, { fingerprint: string; data: string }>();
     const compileWithAssets = async (source: ConversationDocument) =>
         compileClaudeMessagesConversation(
-            await hydrateCanonicalHostImages({
+            await hydrateCanonicalHostMedia({
                 document: source,
+                media_kinds: ['image', 'document'],
                 label: 'Claude Messages',
                 selection: { allow_interrupted_with_complete_tool_calls: true },
                 resolve_asset: input.resolve_asset,

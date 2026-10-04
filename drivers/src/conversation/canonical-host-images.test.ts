@@ -16,7 +16,7 @@ import {
     finalizeGeminiPreparedRequest,
     prepareGeminiCanonicalContext,
 } from '../vertexai/models/gemini-conversation-adapter.js';
-import { hydrateCanonicalHostImages } from './canonical-host-images.js';
+import { hydrateCanonicalHostImages, hydrateCanonicalSelectedMediaAssets } from './canonical-host-images.js';
 import { providerJsonValue } from './canonical-runtime.js';
 
 const at = '2026-10-04T00:00:00.000Z';
@@ -25,12 +25,21 @@ const png = Buffer.from(
     'base64',
 );
 
-async function source(nested = false) {
+type MediaKind = 'image' | 'document' | 'audio' | 'video';
+
+async function source(
+    nested = false,
+    media: { kind: MediaKind; mime_type: string; bytes: Buffer } = {
+        kind: 'image',
+        mime_type: 'image/png',
+        bytes: png,
+    },
+) {
     const initial = createConversationDocument({ id: 'conversation:host-image', created_at: at });
     const asset = {
         id: 'asset:received-image',
-        kind: 'image' as const,
-        mime_type: 'image/png',
+        kind: media.kind,
+        mime_type: media.mime_type,
         storage: {
             type: 'external' as const,
             resolver: 'vertesia.agent_artifact',
@@ -38,8 +47,16 @@ async function source(nested = false) {
         },
         provenance: { type: 'received' as const },
         created_at: at,
-        ...(await hashContentBytes(png)),
+        ...(await hashContentBytes(media.bytes)),
     };
+    const mediaBlock =
+        media.kind === 'image'
+            ? { id: 'block:nested-image', type: 'image' as const, asset_id: asset.id }
+            : media.kind === 'document'
+              ? { id: 'block:nested-image', type: 'document' as const, asset_id: asset.id }
+              : media.kind === 'audio'
+                ? { id: 'block:nested-image', type: 'audio' as const, asset_id: asset.id }
+                : { id: 'block:nested-image', type: 'video' as const, asset_id: asset.id };
     const user = createUserTurn({
         id: 'turn:user',
         authority: 'ordinary',
@@ -49,7 +66,7 @@ async function source(nested = false) {
         model_visibility: 'include',
         blocks: [
             createTextBlock({ id: 'block:text', text: 'Inspect this image.', format: 'plain' }),
-            ...(!nested ? [{ id: 'block:image', type: 'image' as const, asset_id: asset.id }] : []),
+            ...(!nested ? [mediaBlock] : []),
         ],
     });
     const call = {
@@ -84,7 +101,7 @@ async function source(nested = false) {
                 type: 'tool_result',
                 call_id: 'call:inspect',
                 status: 'success',
-                content: [{ id: 'block:nested-image', type: 'image', asset_id: asset.id }],
+                content: [mediaBlock],
             },
         ],
     });
@@ -101,7 +118,7 @@ async function source(nested = false) {
                               name: 'inspect',
                               version: 'v1',
                               input_schema: { type: 'object' },
-                              result_capabilities: ['image' as const],
+                              result_capabilities: [media.kind],
                           },
                       ],
                       active_tool_definition_ids: ['tool-definition:inspect:v1'],
@@ -177,6 +194,114 @@ describe('owned canonical host image projection', () => {
         ).rejects.toThrow('selected image asset asset:missing is missing');
         expect(resolver).not.toHaveBeenCalled();
     });
+
+    it('projects a selected nested PDF in the actual Gemini function response', async () => {
+        const bytes = Buffer.from('%PDF-1.7\n1 0 obj\n');
+        const mimeType = 'application/pdf';
+        const document = await source(true, { kind: 'document', mime_type: mimeType, bytes });
+        const original = structuredClone(document);
+        const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+            yield bytes;
+        });
+        const prepared = await prepareGeminiCanonicalContext({
+            options: options(document, 'gemini-2.5-pro'),
+            provider: 'google',
+            resolve_asset: resolver,
+        });
+        expect(resolver).toHaveBeenCalledOnce();
+        const encoded = JSON.stringify(prepared.native_conversation);
+        expect(encoded).toContain(`"mimeType":"${mimeType}"`);
+        expect(encoded.split(bytes.toString('base64'))).toHaveLength(2);
+        expect(encoded).toContain('functionResponse');
+        expect(document).toEqual(original);
+        expect(prepared.document.assets['asset:received-image']?.storage.type).toBe('external');
+    });
+
+    it.each([
+        ['audio', 'audio/wav', Buffer.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 65, 86, 69])],
+        ['video', 'video/mp4', Buffer.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109])],
+    ] as const)(
+        'projects selected ordinary %s input while rejecting it as a function response',
+        async (kind, mimeType, bytes) => {
+            const ordinary = await source(false, { kind, mime_type: mimeType, bytes });
+            const resolve = vi.fn<ResolveConversationAsset>(async function* () {
+                yield bytes;
+            });
+            const prepared = await prepareGeminiCanonicalContext({
+                options: options(ordinary, 'gemini-2.5-pro'),
+                provider: 'google',
+                resolve_asset: resolve,
+            });
+            const encoded = JSON.stringify(prepared.native_conversation);
+            expect(encoded).toContain(`"mimeType":"${mimeType}"`);
+            expect(encoded).toContain(bytes.toString('base64'));
+            expect(resolve).toHaveBeenCalledOnce();
+            const nested = await source(true, { kind, mime_type: mimeType, bytes });
+            resolve.mockClear();
+            await expect(
+                prepareGeminiCanonicalContext({
+                    options: options(nested, 'gemini-2.5-pro'),
+                    provider: 'google',
+                    resolve_asset: resolve,
+                }),
+            ).rejects.toThrow('cannot project audio or video in a function response');
+            expect(resolve).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each([
+        ['document', 'application/pdf', true],
+        ['audio', 'audio/wav', false],
+        ['video', 'video/mp4', false],
+    ] as const)(
+        'rejects mismatched selected %s bytes before Gemini native preparation',
+        async (kind, mimeType, nested) => {
+            const document = await source(nested, { kind, mime_type: mimeType, bytes: png });
+            const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+                yield png;
+            });
+            await expect(
+                prepareGeminiCanonicalContext({
+                    options: options(document, 'gemini-2.5-pro'),
+                    provider: 'google',
+                    resolve_asset: resolver,
+                }),
+            ).rejects.toThrow('invalid media bytes');
+            expect(resolver).toHaveBeenCalledOnce();
+        },
+    );
+
+    it.each([
+        ['image', 'image/gif', Buffer.from('GIF89a'), 0],
+        ['image', 'image/webp', Buffer.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]), 8],
+        ['document', 'application/pdf', Buffer.from('%PDF-1.7\n%%EOF\n'), 0],
+        ['audio', 'audio/wav', Buffer.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 65, 86, 69]), 8],
+        ['audio', 'audio/mpeg', Buffer.from([73, 68, 51, 4, 0, 0, 0, 0, 0, 0]), 0],
+        ['video', 'video/mp4', Buffer.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109]), 4],
+    ] as const)(
+        'rejects high-bit aliasing in %s %s signatures after integrity verification',
+        async (kind, mimeType, valid, changedAt) => {
+            const corrupted = Buffer.from(valid);
+            corrupted[changedAt] |= 0x80;
+            const document = await source(false, { kind, mime_type: mimeType, bytes: corrupted });
+            const resolver = vi.fn<ResolveConversationAsset>(async function* () {
+                yield corrupted;
+            });
+            await expect(
+                hydrateCanonicalSelectedMediaAssets({
+                    assets: document.assets,
+                    selected_ids: new Set(['asset:received-image']),
+                    media_kinds: [kind],
+                    label: 'Exact media signature',
+                    hydrated: new Map(),
+                    native_external: () => false,
+                    resolve_asset: resolver,
+                }),
+            ).rejects.toThrow('invalid media bytes');
+            expect(resolver).toHaveBeenCalledOnce();
+            expect(document.assets['asset:received-image']).toMatchObject(await hashContentBytes(corrupted));
+        },
+    );
 
     it('hydrates selected received images in Claude, Gemini and Bedrock without changing canonical refs', async () => {
         const document = await source();

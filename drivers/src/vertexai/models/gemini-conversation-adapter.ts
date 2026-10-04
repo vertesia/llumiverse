@@ -45,7 +45,7 @@ import {
     type JSONObject,
     type ToolUse,
 } from '@llumiverse/core';
-import { hydrateCanonicalHostImages } from '../../conversation/canonical-host-images.js';
+import { hydrateCanonicalHostMedia } from '../../conversation/canonical-host-images.js';
 import {
     acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
@@ -1297,6 +1297,9 @@ function compileOrdinaryTurn(
 ): { content?: Content; systemParts?: Part[] } {
     if (turn.kind === 'tool') {
         const result = turn.blocks[0];
+        if (result.content.some((block) => block.type === 'audio' || block.type === 'video')) {
+            throw new TypeError('Gemini cannot project audio or video in a function response');
+        }
         const call = findToolCall(document, result.call_id);
         const semanticContent = result.content.filter((block) => block.type !== 'native_replay');
         const primary = semanticContent.filter(
@@ -1381,6 +1384,17 @@ function compileOrdinaryTurn(
         throw new TypeError(`Gemini cannot project program authority ${turn.authority}`);
     }
     return { content: { role: turn.kind === 'agent' ? 'model' : 'user', parts } };
+}
+
+function assertGeminiFunctionResponseMedia(document: ConversationDocument): void {
+    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
+        if (
+            turn.kind === 'tool' &&
+            turn.blocks[0].content.some((block) => block.type === 'audio' || block.type === 'video')
+        ) {
+            throw new TypeError('Gemini cannot project audio or video in a function response');
+        }
+    }
 }
 
 function geminiReplayBlock(turn: ConversationTurn): NativeReplayBlock | undefined {
@@ -1638,10 +1652,12 @@ export async function prepareGeminiCanonicalState(input: {
 
     const target = { provider: input.provider, model: input.options.model };
     const hydrated = new Map<string, { fingerprint: string; data: string }>();
-    const compileWithAssets = async (source: ConversationDocument) =>
-        compileGeminiConversation(
-            await hydrateCanonicalHostImages({
+    const compileWithAssets = async (source: ConversationDocument) => {
+        assertGeminiFunctionResponseMedia(source);
+        return compileGeminiConversation(
+            await hydrateCanonicalHostMedia({
                 document: source,
+                media_kinds: ['image', 'document', 'audio', 'video'],
                 label: 'Gemini',
                 selection: { allow_interrupted_with_complete_tool_calls: true },
                 resolve_asset: input.resolve_asset,
@@ -1652,6 +1668,7 @@ export async function prepareGeminiCanonicalState(input: {
             }),
             target,
         );
+    };
     const priorCompiled = (await compileWithAssets(document)).conversation;
     const priorNativeContentCount = priorCompiled.contents.length;
     const cleanPrompt = providerJsonValue(input.prompt) as unknown as GenerateContentPrompt;
@@ -1752,10 +1769,12 @@ export async function prepareGeminiCanonicalContext(input: {
     });
     const target = { provider: input.provider, model: input.options.model };
     const hydrated = new Map<string, { fingerprint: string; data: string }>();
-    const compileWithAssets = async (source: ConversationDocument) =>
-        compileGeminiConversation(
-            await hydrateCanonicalHostImages({
+    const compileWithAssets = async (source: ConversationDocument) => {
+        assertGeminiFunctionResponseMedia(source);
+        return compileGeminiConversation(
+            await hydrateCanonicalHostMedia({
                 document: source,
+                media_kinds: ['image', 'document', 'audio', 'video'],
                 label: 'Gemini',
                 selection: { allow_interrupted_with_complete_tool_calls: true },
                 resolve_asset: input.resolve_asset,
@@ -1766,6 +1785,7 @@ export async function prepareGeminiCanonicalContext(input: {
             }),
             target,
         );
+    };
     const compiled = await compileWithAssets(prepared.request_document);
     const priorCompiled =
         prepared.request_document === prepared.document ? compiled : await compileWithAssets(prepared.document);

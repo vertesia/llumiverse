@@ -2106,140 +2106,153 @@ describe('OpenAI Responses canonical lifecycle', () => {
         expect(executePublish).toHaveBeenCalledOnce();
     });
 
-    it('hydrates a selected image nested in a tool result without changing its canonical asset', async () => {
-        const png = Buffer.from(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
-            'base64',
-        );
-        const at = '2026-09-12T06:00:00.000Z';
-        const initial = createConversationDocument({ id: 'conversation:nested-received-image', created_at: at });
-        const callBlock = {
-            id: 'block:nested-call',
-            type: 'tool_call' as const,
-            call_id: 'call:nested-image',
-            tool_name: 'lookup_weather',
-            executor: 'application' as const,
-            arguments: { type: 'json' as const, value: { city: 'Tokyo' } },
-        };
-        const withCall = appendConversationRecords(
-            initial,
-            {
-                turns: [
-                    {
-                        id: 'turn:nested-call',
-                        kind: 'agent' as const,
+    it.each(['image', 'document'] as const)(
+        'hydrates a selected %s nested in a tool result without changing its canonical asset',
+        async (kind) => {
+            const bytes =
+                kind === 'image'
+                    ? Buffer.from(
+                          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+                          'base64',
+                      )
+                    : Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n');
+            const mimeType = kind === 'image' ? 'image/png' : 'application/pdf';
+            const at = '2026-09-12T06:00:00.000Z';
+            const initial = createConversationDocument({ id: 'conversation:nested-received-image', created_at: at });
+            const callBlock = {
+                id: 'block:nested-call',
+                type: 'tool_call' as const,
+                call_id: 'call:nested-image',
+                tool_name: 'lookup_weather',
+                executor: 'application' as const,
+                arguments: { type: 'json' as const, value: { city: 'Tokyo' } },
+            };
+            const withCall = appendConversationRecords(
+                initial,
+                {
+                    turns: [
+                        {
+                            id: 'turn:nested-call',
+                            kind: 'agent' as const,
+                            authority: 'ordinary' as const,
+                            status: 'completed' as const,
+                            timestamps: { recorded_at: at },
+                            model_visibility: 'include' as const,
+                            blocks: [callBlock],
+                            provenance: { type: 'imported' as const, source: 'test' },
+                        },
+                    ],
+                    context_entries: [
+                        { id: 'context:nested-call', type: 'source_turn' as const, turn_id: 'turn:nested-call' },
+                    ],
+                },
+                {
+                    expected_revision: initial.revision,
+                    operation_id: 'operation:nested-call',
+                    payload_fingerprint: await fingerprintJson({ call: 'nested-image' }),
+                    recorded_at: at,
+                },
+            ).document;
+            const asset = {
+                id: 'asset:nested-received-image',
+                kind,
+                mime_type: mimeType,
+                byte_length: bytes.byteLength,
+                content_hash: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+                storage: {
+                    type: 'external' as const,
+                    resolver: 'vertesia.agent_artifact',
+                    locator: { storage_id: 'owner', artifact_path: 'archive/assets/nested' },
+                },
+                provenance: { type: 'received' as const, source_turn_id: 'turn:nested-result' },
+                created_at: at,
+            };
+            const resultBlock = {
+                id: 'block:nested-result',
+                type: 'tool_result' as const,
+                call_id: callBlock.call_id,
+                status: 'success' as const,
+                content: [
+                    kind === 'image'
+                        ? { id: 'block:nested-image', type: 'image' as const, asset_id: asset.id }
+                        : { id: 'block:nested-image', type: 'document' as const, asset_id: asset.id },
+                ],
+            };
+            const source = {
+                conversation: { conversation_id: withCall.id, revision: withCall.revision },
+                turn_id: 'turn:nested-call',
+                block_id: callBlock.id,
+                call_id: callBlock.call_id,
+                call_fingerprint: await fingerprintJson(callBlock),
+            };
+            const accepted = await appendToolExecutionResult(
+                withCall,
+                {
+                    source,
+                    turn: {
+                        id: 'turn:nested-result',
+                        kind: 'tool' as const,
                         authority: 'ordinary' as const,
                         status: 'completed' as const,
                         timestamps: { recorded_at: at },
                         model_visibility: 'include' as const,
-                        blocks: [callBlock],
-                        provenance: { type: 'imported' as const, source: 'test' },
+                        blocks: [resultBlock],
+                        execution_id: 'execution:nested-image',
+                        provenance: { type: 'received' as const },
                     },
-                ],
-                context_entries: [
-                    { id: 'context:nested-call', type: 'source_turn' as const, turn_id: 'turn:nested-call' },
-                ],
-            },
-            {
-                expected_revision: initial.revision,
-                operation_id: 'operation:nested-call',
-                payload_fingerprint: await fingerprintJson({ call: 'nested-image' }),
-                recorded_at: at,
-            },
-        ).document;
-        const asset = {
-            id: 'asset:nested-received-image',
-            kind: 'image' as const,
-            mime_type: 'image/png',
-            byte_length: png.byteLength,
-            content_hash: `sha256:${createHash('sha256').update(png).digest('hex')}`,
-            storage: {
-                type: 'external' as const,
-                resolver: 'vertesia.agent_artifact',
-                locator: { storage_id: 'owner', artifact_path: 'archive/assets/nested' },
-            },
-            provenance: { type: 'received' as const, source_turn_id: 'turn:nested-result' },
-            created_at: at,
-        };
-        const resultBlock = {
-            id: 'block:nested-result',
-            type: 'tool_result' as const,
-            call_id: callBlock.call_id,
-            status: 'success' as const,
-            content: [{ id: 'block:nested-image', type: 'image' as const, asset_id: asset.id }],
-        };
-        const source = {
-            conversation: { conversation_id: withCall.id, revision: withCall.revision },
-            turn_id: 'turn:nested-call',
-            block_id: callBlock.id,
-            call_id: callBlock.call_id,
-            call_fingerprint: await fingerprintJson(callBlock),
-        };
-        const accepted = await appendToolExecutionResult(
-            withCall,
-            {
-                source,
-                turn: {
-                    id: 'turn:nested-result',
-                    kind: 'tool' as const,
-                    authority: 'ordinary' as const,
-                    status: 'completed' as const,
-                    timestamps: { recorded_at: at },
-                    model_visibility: 'include' as const,
-                    blocks: [resultBlock],
-                    execution_id: 'execution:nested-image',
-                    provenance: { type: 'received' as const },
+                    assets: [asset],
+                    execution_receipt: {
+                        id: 'execution:nested-image',
+                        call_id: callBlock.call_id,
+                        executor: 'application' as const,
+                        status: 'success' as const,
+                        result_turn_id: 'turn:nested-result',
+                        result_fingerprint: await fingerprintJson(resultBlock),
+                        recorded_at: at,
+                        call_source: source,
+                    },
                 },
-                assets: [asset],
-                execution_receipt: {
-                    id: 'execution:nested-image',
-                    call_id: callBlock.call_id,
-                    executor: 'application' as const,
-                    status: 'success' as const,
-                    result_turn_id: 'turn:nested-result',
-                    result_fingerprint: await fingerprintJson(resultBlock),
+                {
+                    expected_revision: withCall.revision,
+                    operation_id: 'operation:nested-result',
                     recorded_at: at,
-                    call_source: source,
                 },
-            },
-            {
-                expected_revision: withCall.revision,
-                operation_id: 'operation:nested-result',
-                recorded_at: at,
-            },
-        );
-        const resolve = vi.fn(async function* () {
-            yield png;
-        });
-        const prepared = await prepareOpenAIResponsesCanonicalContext({
-            options: resolveCanonicalExecutionContextOptions({
-                ...runtimeOptions({
-                    flow: 'nested-received-image',
-                    operation: 'respond',
-                    attempt: 'first',
-                    recordedAt: at,
-                    conversation: accepted.document,
-                }),
-                conversation: accepted.document,
-                resolve_canonical_asset: resolve,
-            }),
-            provider: Providers.openai,
-        });
-        expect(resolve).toHaveBeenCalledOnce();
-        expect(prepared.native_conversation).toContainEqual(
-            expect.objectContaining({
-                type: 'function_call_output',
-                call_id: callBlock.call_id,
-                output: [
-                    expect.objectContaining({
-                        type: 'input_image',
-                        image_url: `data:image/png;base64,${png.toString('base64')}`,
+            );
+            const resolve = vi.fn(async function* () {
+                yield bytes;
+            });
+            const prepared = await prepareOpenAIResponsesCanonicalContext({
+                options: resolveCanonicalExecutionContextOptions({
+                    ...runtimeOptions({
+                        flow: 'nested-received-image',
+                        operation: 'respond',
+                        attempt: 'first',
+                        recordedAt: at,
+                        conversation: accepted.document,
                     }),
-                ],
-            }),
-        );
-        expect(prepared.document.assets[asset.id]).toEqual(asset);
-    });
+                    conversation: accepted.document,
+                    resolve_canonical_asset: resolve,
+                }),
+                provider: Providers.openai,
+            });
+            expect(resolve).toHaveBeenCalledOnce();
+            expect(prepared.native_conversation).toContainEqual(
+                expect.objectContaining({
+                    type: 'function_call_output',
+                    call_id: callBlock.call_id,
+                    output: [
+                        expect.objectContaining({
+                            type: kind === 'image' ? 'input_image' : 'input_file',
+                            ...(kind === 'image'
+                                ? { image_url: `data:${mimeType};base64,${bytes.toString('base64')}` }
+                                : { file_data: `data:${mimeType};base64,${bytes.toString('base64')}` }),
+                        }),
+                    ],
+                }),
+            );
+            expect(prepared.document.assets[asset.id]).toEqual(asset);
+        },
+    );
 
     it('hydrates an authenticated received image only in the native Responses body, retaining external source identity', async () => {
         const png = Buffer.from(
