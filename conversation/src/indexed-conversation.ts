@@ -126,6 +126,7 @@ import type {
     Asset,
     ConversationDocument,
     ConversationRecordBatch,
+    ConversationRef,
     ConversationTurn,
     ExecutionReceipt,
     OperationReceipt,
@@ -474,6 +475,7 @@ export async function stageIndexedConversationSnapshot(
         blocks: [],
         generations: [],
         generation_acceptances: [],
+        accepted_output_order: [],
         operation_receipts: [],
         execution_receipts: [],
         assets: [],
@@ -498,6 +500,33 @@ export async function stageIndexedConversationSnapshot(
     const idKinds = new Map<string, string>();
     const diagnostics = validateConversationSemantics(document, (id, kind) => idKinds.set(id, kind));
     if (diagnostics.length > 0) throw new Error('Indexed conversation migration source failed semantic validation');
+    const outputRevisions = new Set<number>();
+    const migrationTurns = new Map(document.turns.map((turn) => [turn.id, turn]));
+    for (const receipt of Object.values(document.operation_receipts)) {
+        if (
+            receipt.operation_kind !== undefined ||
+            receipt.accepted_generation_ids?.length !== 1 ||
+            receipt.accepted_turn_ids?.length !== 1
+        )
+            continue;
+        const generation = document.generations[receipt.accepted_generation_ids[0]];
+        const turn = migrationTurns.get(receipt.accepted_turn_ids[0]);
+        if (
+            !generation ||
+            turn?.kind !== 'agent' ||
+            turn.provenance.type !== 'generated' ||
+            !('generation_id' in turn) ||
+            turn.generation_id !== generation.id
+        )
+            throw new Error('Indexed accepted history import has another canonical response tuple');
+        if (outputRevisions.has(receipt.result_revision))
+            throw new Error('Indexed accepted history import has ambiguous response receipts');
+        outputRevisions.add(receipt.result_revision);
+        families.accepted_output_order.push({
+            key: indexedOrderedKey(receipt.result_revision),
+            value: { storage: 'marker', kind: 'accepted_output', id: receipt.id },
+        });
+    }
     for (const id of migrationHistoricalReferences(document)) {
         if (!idKinds.has(id)) idKinds.set(id, 'historical_reference');
     }
@@ -764,6 +793,7 @@ export async function stageIndexedConversationSnapshot(
         version: 1,
         validator_profile: INDEXED_CONVERSATION_PROFILE,
         delete_index_profile: INDEXED_CONVERSATION_DELETE_PROFILE,
+        accepted_output_index_complete: true,
         tool_call_state_complete: true,
         processing_index_profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
         format: document.format,
@@ -2261,6 +2291,19 @@ export async function stageIndexedRecordBatch(
     );
     if (prior !== undefined) {
         await acceptedIndexedBatch(root, batch, options, prior, store);
+        if (
+            root.accepted_output_index_complete === true &&
+            prior.accepted_turn_ids?.length === 1 &&
+            prior.accepted_generation_ids?.length === 1
+        ) {
+            const nomination = await getPagedRecord(
+                store,
+                root.directories.accepted_output_order,
+                indexedOrderedKey(prior.result_revision),
+            );
+            if (nomination?.storage !== 'marker' || nomination.kind !== 'accepted_output' || nomination.id !== prior.id)
+                throw new Error('Indexed accepted history retry lacks its original ordered nomination');
+        }
         return { root, receipt: prior, applied: false };
     }
     if (options.expected_revision !== root.source.revision)
@@ -3166,6 +3209,17 @@ export async function stageIndexedRecordBatch(
     for (const item of batch.execution_receipts ?? []) await write('execution_receipts', item.id, item);
     for (const item of batch.context_entries ?? []) await write('context_entries', item.id, item);
     await write('operation_receipts', receipt.id, receipt);
+    if (
+        root.accepted_output_index_complete === true &&
+        receipt.accepted_generation_ids?.length === 1 &&
+        receipt.accepted_turn_ids?.length === 1
+    )
+        await insertFreshIndexedRecords(store, directories, 'accepted_output_order', [
+            {
+                key: indexedOrderedKey(receipt.result_revision),
+                value: { storage: 'marker', kind: 'accepted_output', id: receipt.id },
+            },
+        ]);
     if (root.processing_index_profile === INDEXED_CONVERSATION_PROCESSING_PROFILE) {
         for (const job of acceptedJobs) {
             directories.processing_records = await putPagedRecord(
@@ -6506,6 +6560,191 @@ async function presentationRecord<Shape extends z.ZodType>(
         throw new Error('Indexed historical presentation dependency is missing');
     }
     return loadRecord(store, descriptor, schema);
+}
+
+/** Missing completeness is never interpreted as an empty accepted history. */
+export class IndexedAcceptedOutputHistoryUpgradeRequired extends Error {
+    constructor() {
+        super('Indexed accepted-output history requires an authenticated complete snapshot upgrade');
+        this.name = 'IndexedAcceptedOutputHistoryUpgradeRequired';
+    }
+}
+
+/** Body-free accepted history, ordered by source revision. Omitted nominations consume the page
+ * and advance its cursor; this never scans farther to fill a page after deletion/import filtering. */
+export async function loadIndexedAcceptedOutputHistoryPage(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    options: { snapshot_revision: number; after_revision?: number; limit: number },
+) {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const { snapshot_revision: snapshotRevision, after_revision: afterRevision, limit } = options;
+    if (
+        !Number.isSafeInteger(snapshotRevision) ||
+        snapshotRevision < 0 ||
+        snapshotRevision > root.source.revision ||
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > 100 ||
+        (afterRevision !== undefined &&
+            (!Number.isSafeInteger(afterRevision) || afterRevision < 0 || afterRevision > snapshotRevision))
+    )
+        throw new TypeError('Canonical accepted-output history cursor is invalid for the pinned snapshot');
+    if (root.accepted_output_index_complete !== true) throw new IndexedAcceptedOutputHistoryUpgradeRequired();
+    const store = indexedPresentationReadStore(storeInput);
+    const range = await readPagedRecordRange(store, root.directories.accepted_output_order, {
+        ...(afterRevision === undefined ? {} : { after: indexedOrderedKey(afterRevision) }),
+        limit: limit + 1,
+    });
+    for (const entry of range.entries) {
+        const revision = Number(entry.key);
+        if (
+            !Number.isSafeInteger(revision) ||
+            revision < 1 ||
+            revision > root.source.revision ||
+            entry.key !== indexedOrderedKey(revision) ||
+            entry.value.storage !== 'marker' ||
+            entry.value.kind !== 'accepted_output'
+        )
+            throw new Error('Indexed accepted history has another ordered nomination');
+    }
+    const ordered = range.entries.filter((entry) => Number(entry.key) <= snapshotRevision);
+    const page = ordered.slice(0, limit);
+    const references: {
+        source: ConversationRef;
+        receipt: z.infer<typeof ConversationOutputReceiptSchema>;
+    }[] = [];
+    const omissions: { operation_id: string; revision: number; reason: 'logically_deleted' | 'imported' }[] = [];
+    for (const entry of page) {
+        const revision = Number(entry.key);
+        if (
+            entry.key !== indexedOrderedKey(revision) ||
+            entry.value.storage !== 'marker' ||
+            entry.value.kind !== 'accepted_output'
+        )
+            throw new Error('Indexed accepted history has another ordered nomination');
+        const receipt = await presentationRecord(
+            store,
+            root,
+            'operation_receipts',
+            entry.value.id,
+            OperationReceiptSchema,
+        );
+        if (
+            receipt.id !== entry.value.id ||
+            receipt.conversation_id !== root.source.conversation_id ||
+            receipt.operation_kind !== undefined ||
+            receipt.result_revision !== revision ||
+            receipt.base_revision + 1 !== revision ||
+            receipt.accepted_turn_ids?.length !== 1 ||
+            receipt.accepted_generation_ids?.length !== 1
+        )
+            throw new Error('Indexed accepted history nomination differs from its original receipt');
+        const turnId = receipt.accepted_turn_ids[0];
+        const generationId = receipt.accepted_generation_ids[0];
+        const generationAcceptance = await getPagedRecord(store, root.directories.generation_acceptances, generationId);
+        const turnAcceptance = await getPagedRecord(store, root.directories.turn_acceptances, turnId);
+        if (
+            generationAcceptance?.storage !== 'marker' ||
+            generationAcceptance.kind !== 'generation_acceptance' ||
+            generationAcceptance.id !== receipt.id ||
+            turnAcceptance?.storage !== 'marker' ||
+            turnAcceptance.kind !== 'turn_acceptance' ||
+            turnAcceptance.id !== receipt.id
+        )
+            throw new Error('Indexed accepted history has another turn/generation acceptance');
+        const turnDescriptor = await getPagedRecord(store, root.directories.turns, turnId);
+        if (turnDescriptor?.storage === 'marker' && turnDescriptor.kind === 'deleted_turn') {
+            const tombstone = await presentationRecord(
+                store,
+                root,
+                'deleted_turns',
+                turnId,
+                IndexedConversationDeletedTurnSchema,
+            );
+            if (
+                root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE ||
+                turnDescriptor.id !== turnId ||
+                tombstone.deleted_turn.id !== turnId ||
+                tombstone.deleted_turn.accepted_operation_id !== receipt.id
+            )
+                throw new Error('Indexed accepted history lacks its exact tombstone');
+            const deletion = await presentationRecord(
+                store,
+                root,
+                'operation_receipts',
+                tombstone.deleted_turn.operation_id,
+                OperationReceiptSchema,
+            );
+            const detail = deletion.conversation_delete;
+            const ref = detail?.deleted_turns.find((item) => item.id === turnId);
+            if (
+                deletion.id !== tombstone.deleted_turn.operation_id ||
+                deletion.conversation_id !== root.source.conversation_id ||
+                deletion.operation_kind !== 'conversation_delete' ||
+                deletion.base_revision !== tombstone.deleted_turn.source_revision ||
+                deletion.result_revision !== deletion.base_revision + 1 ||
+                deletion.result_revision > root.source.revision ||
+                !ref ||
+                !sameIndexedRecord(ref, {
+                    id: turnId,
+                    fingerprint: tombstone.deleted_turn.fingerprint,
+                    block_ids: tombstone.deleted_turn.block_ids,
+                    accepted_operation_id: receipt.id,
+                }) ||
+                detail?.source_fingerprint !==
+                    (await fingerprintJson({
+                        domain: 'llumiverse.conversation.indexed-delete-source',
+                        version: 1,
+                        root: tombstone.predecessor_root,
+                        turn_ids: detail?.deleted_turns.map((item) => item.id),
+                    }))
+            )
+                throw new Error('Indexed accepted history tombstone differs from its original deletion');
+            omissions.push({ operation_id: receipt.id, revision, reason: 'logically_deleted' });
+            continue;
+        }
+        const turn = await presentationRecord(store, root, 'turns', turnId, IndexedConversationTurnHeaderSchema);
+        const generation = await presentationRecord(store, root, 'generations', generationId, GenerationSchema);
+        if (
+            turn.source !== 'ordinary' ||
+            turn.turn.id !== turnId ||
+            turn.turn.kind !== 'agent' ||
+            turn.turn.provenance.type !== 'generated' ||
+            !('generation_id' in turn.turn) ||
+            turn.turn.generation_id !== generationId ||
+            generation.id !== generationId
+        )
+            throw new Error('Indexed accepted history has another canonical response tuple');
+        if (generation.record_source === 'imported') {
+            omissions.push({ operation_id: receipt.id, revision, reason: 'imported' });
+            continue;
+        }
+        if (
+            generation.source.conversation_id !== receipt.conversation_id ||
+            generation.source.revision !== receipt.base_revision
+        )
+            throw new Error('Indexed accepted history generation has another original source');
+        references.push({
+            source: { conversation_id: receipt.conversation_id, revision },
+            receipt: ConversationOutputReceiptSchema.parse({
+                id: receipt.id,
+                conversation_id: receipt.conversation_id,
+                base_revision: receipt.base_revision,
+                result_revision: revision,
+                recorded_at: receipt.recorded_at,
+                accepted_turn_ids: receipt.accepted_turn_ids,
+                accepted_generation_ids: receipt.accepted_generation_ids,
+                ...(receipt.accepted_asset_ids === undefined ? {} : { accepted_asset_ids: receipt.accepted_asset_ids }),
+            }),
+        });
+    }
+    const last = page.at(-1);
+    return {
+        references,
+        omissions,
+        ...(ordered.length > limit && last ? { next_after_revision: Number(last.key) } : {}),
+    };
 }
 
 /** Exact accepted output, including generation usage and the original include-thoughts decision. */

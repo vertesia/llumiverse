@@ -55,6 +55,8 @@ export const IndexedConversationDirectoriesSchema = z.strictObject({
     blocks: PagedRecordRefSchema.optional(),
     generations: PagedRecordRefSchema.optional(),
     generation_acceptances: PagedRecordRefSchema.optional(),
+    /** Accepted revision -> operation identity; content stays in the original canonical record families. */
+    accepted_output_order: PagedRecordRefSchema.optional(),
     operation_receipts: PagedRecordRefSchema.optional(),
     execution_receipts: PagedRecordRefSchema.optional(),
     assets: PagedRecordRefSchema.optional(),
@@ -160,6 +162,8 @@ export const IndexedConversationRootSchema = z.strictObject({
     processing_header: PagedRecordRefSchema,
     directories: IndexedConversationDirectoriesSchema,
     accepted_response: IndexedConversationAcceptedResponseSchema.optional(),
+    /** Explicit completeness, including empty history. Older roots require authenticated snapshot upgrade. */
+    accepted_output_index_complete: z.literal(true).optional(),
 });
 
 export type IndexedConversationRoot = z.infer<typeof IndexedConversationRootSchema>;

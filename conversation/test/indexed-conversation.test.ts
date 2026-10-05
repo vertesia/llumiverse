@@ -7,10 +7,12 @@ import { fingerprintJson } from '../src/identity.js';
 import {
     assertIndexedFreshReceivedTextInput,
     assertIndexedFreshTextInput,
+    IndexedAcceptedOutputHistoryUpgradeRequired,
     type IndexedConversationRecordStore,
     IndexedPresentationCapacityError,
     IndexedPresentationNominationConflict,
     type IndexedRecordBatchCommand,
+    loadIndexedAcceptedOutputHistoryPage,
     loadIndexedAcceptedOutputPresentation,
     loadIndexedActiveContext,
     loadIndexedActiveToolDefinitions,
@@ -52,7 +54,15 @@ import { IndexedRecordBatchCommandSchema } from '../src/schemas/ingestion.js';
 import { validateToolExecutionResult } from '../src/tool-execution.js';
 import type { Asset, ConversationDocument } from '../src/types.js';
 import { parseConversationDocument } from '../src/validation.js';
-import { emptyDocument, RECORDED_AT, textBlock, toolCallBlock, toolResultTurn, userTurn } from './fixtures.js';
+import {
+    emptyDocument,
+    importedGeneration,
+    RECORDED_AT,
+    textBlock,
+    toolCallBlock,
+    toolResultTurn,
+    userTurn,
+} from './fixtures.js';
 
 function memoryStore() {
     const pages = new Map<string, Uint8Array>();
@@ -3596,6 +3606,132 @@ describe('bounded indexed historical presentation', () => {
         ).rejects.toThrow(IndexedPresentationNominationConflict);
     });
 
+    async function historyResponseCommand(
+        source: { conversation_id: string; revision: number },
+        index: number,
+        imported = false,
+    ) {
+        const template = (await toolMediaCommands(source)).agentCommand;
+        const command = IndexedRecordBatchCommandSchema.parse(
+            JSON.parse(JSON.stringify(template).replaceAll(':dependency', `:history:${index}`)),
+        );
+        const turn = command.batch.turns?.[0];
+        const generation = command.batch.generations?.[0];
+        if (turn?.kind !== 'agent' || !generation) throw new Error('Expected genuine generated history fixture');
+        turn.blocks = [textBlock(`block:history:${index}`, `Accepted response ${index}`)];
+        if (imported) command.batch.generations = [{ ...importedGeneration(generation.id), source }];
+        command.options.payload_fingerprint = await fingerprintJson(command.batch);
+        return command;
+    }
+
+    it('publishes ordered accepted history in fresh roots and seeks pinned pages without reading output blocks', async () => {
+        const memory = memoryStore();
+        let staged = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:history-order'),
+            undefined,
+            memory.store,
+        );
+        let lastCommand: IndexedRecordBatchCommand | undefined;
+        for (let index = 0; index < 150; index += 1) {
+            lastCommand = await historyResponseCommand(staged.root.source, index);
+            const next = await stageIndexedRecordBatch(staged.root, lastCommand, memory.store);
+            if (!next.locator) throw new Error('Expected fresh staged response root');
+            staged = { root: next.root, locator: next.locator };
+        }
+        if (!lastCommand) throw new Error('Expected retained last accepted command');
+        expect((await stageIndexedRecordBatch(staged.root, lastCommand, memory.store)).applied).toBe(false);
+        const { accepted_output_order: _order, ...missingOrder } = staged.root.directories;
+        await expect(
+            stageIndexedRecordBatch({ ...staged.root, directories: missingOrder }, lastCommand, memory.store),
+        ).rejects.toThrow('retry lacks its original ordered nomination');
+        memory.pageReads.length = 0;
+        memory.recordReads.length = 0;
+        const first = await loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+            snapshot_revision: 120,
+            limit: 100,
+        });
+        expect(first.references.map((reference) => reference.source.revision)).toEqual(
+            Array.from({ length: 100 }, (_, index) => index + 1),
+        );
+        expect(first.next_after_revision).toBe(100);
+        expect(first.omissions).toEqual([]);
+        expect(memory.recordReads.some((id) => id.startsWith('blocks:'))).toBe(false);
+        memory.pageReads.length = 0;
+        memory.recordReads.length = 0;
+        const second = await loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+            snapshot_revision: 120,
+            after_revision: 100,
+            limit: 100,
+        });
+        expect(second.references.map((reference) => reference.source.revision)).toEqual(
+            Array.from({ length: 20 }, (_, index) => index + 101),
+        );
+        expect(second.next_after_revision).toBeUndefined();
+        expect(memory.recordReads.length).toBeLessThan(100);
+        expect(memory.pageReads.length).toBeLessThan(512);
+        expect(
+            (
+                await loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+                    snapshot_revision: 120,
+                    after_revision: 120,
+                    limit: 10,
+                })
+            ).references,
+        ).toEqual([]);
+        await expect(
+            loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+                snapshot_revision: 120,
+                after_revision: 121,
+                limit: 10,
+            }),
+        ).rejects.toThrow('cursor is invalid');
+        const { accepted_output_index_complete: _complete, ...oldRoot } = staged.root;
+        memory.recordReads.length = 0;
+        memory.pageReads.length = 0;
+        await expect(
+            loadIndexedAcceptedOutputHistoryPage(memory.store, oldRoot, { snapshot_revision: 120, limit: 10 }),
+        ).rejects.toThrow(IndexedAcceptedOutputHistoryUpgradeRequired);
+        expect(memory.recordReads).toEqual([]);
+        expect(memory.pageReads).toEqual([]);
+    }, 30_000);
+
+    it('imports original history once and consumes imported omissions without scanning to fill', async () => {
+        let document = emptyDocument('conversation:history-import');
+        for (let index = 0; index < 3; index += 1) {
+            const command = await historyResponseCommand(
+                { conversation_id: document.id, revision: document.revision },
+                index,
+                index === 1,
+            );
+            document = appendConversationRecords(document, command.batch, command.options).document;
+        }
+        const memory = memoryStore();
+        const staged = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        const first = await loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+            snapshot_revision: 3,
+            limit: 1,
+        });
+        expect(first.references[0]?.source.revision).toBe(1);
+        expect(first.next_after_revision).toBe(1);
+        const omitted = await loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+            snapshot_revision: 3,
+            after_revision: 1,
+            limit: 1,
+        });
+        expect(omitted.references).toEqual([]);
+        expect(omitted.omissions).toEqual([
+            { operation_id: 'operation:history:1-agent', revision: 2, reason: 'imported' },
+        ]);
+        expect(omitted.next_after_revision).toBe(2);
+        const last = await loadIndexedAcceptedOutputHistoryPage(memory.store, staged.root, {
+            snapshot_revision: 3,
+            after_revision: 2,
+            limit: 1,
+        });
+        expect(last.references[0]?.source.revision).toBe(3);
+        expect(last.next_after_revision).toBeUndefined();
+    });
+
     it('projects an older accepted source from actual retained points without resurrecting a deleted turn', async () => {
         const memory = memoryStore();
         const source = emptyDocument('conversation:retained-stream-output');
@@ -3682,6 +3818,37 @@ describe('bounded indexed historical presentation', () => {
         await expect(
             loadIndexedRetainedAcceptedOutputPresentation(memory.store, deleted.root, nomination),
         ).rejects.toThrow('logically deleted');
+        const deletedHistory = await loadIndexedAcceptedOutputHistoryPage(memory.store, deleted.root, {
+            snapshot_revision: migrated.root.source.revision,
+            limit: 1,
+        });
+        expect(deletedHistory.references).toEqual([]);
+        expect(deletedHistory.omissions).toEqual([
+            { operation_id: receipt.id, revision: receipt.result_revision, reason: 'logically_deleted' },
+        ]);
+        expect(deletedHistory.next_after_revision).toBeUndefined();
+        const forgedTombstone = await putPagedRecord(
+            memory.store,
+            deleted.root.directories.turns,
+            agent.id,
+            { storage: 'marker', kind: 'deleted_turn', id: 'turn:foreign-tombstone' },
+            'replace',
+        );
+        await expect(
+            loadIndexedAcceptedOutputHistoryPage(
+                memory.store,
+                { ...deleted.root, directories: { ...deleted.root.directories, turns: forgedTombstone } },
+                { snapshot_revision: migrated.root.source.revision, limit: 1 },
+            ),
+        ).rejects.toThrow('exact tombstone');
+        expect(
+            (
+                await loadIndexedAcceptedOutputHistoryPage(memory.store, migrated.root, {
+                    snapshot_revision: migrated.root.source.revision,
+                    limit: 1,
+                })
+            ).references,
+        ).toEqual([{ source: selected.fragment.source, receipt: nomination }]);
         expect(await loadIndexedRetainedAcceptedOutputPresentation(memory.store, migrated.root, nomination)).toEqual(
             selected,
         );
