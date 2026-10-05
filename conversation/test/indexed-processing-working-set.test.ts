@@ -8,6 +8,7 @@ import {
     loadIndexedProcessingJobState,
     loadIndexedProcessingSelectedContext,
     loadIndexedReadySelectedContext,
+    loadIndexedSettledProcessingSelectedContext,
     stageIndexedConversationSnapshot,
     stageIndexedProcessingCoverage,
     stageIndexedProcessingNoOpCompletion,
@@ -22,7 +23,7 @@ import {
     indexedTextExternalizationOriginals,
     resolveIndexedProcessingTextInput,
 } from '../src/indexed-processing-working-set.js';
-import { PAGED_RECORD_INDEX_PAGE_MAX_BYTES } from '../src/paged-record-index.js';
+import { getPagedRecord, PAGED_RECORD_INDEX_PAGE_MAX_BYTES, putPagedRecord } from '../src/paged-record-index.js';
 import { buildProcessingPhaseDocument, resolveProcessingJobInput } from '../src/processing.js';
 import { ContextChangeRequestSchema } from '../src/schemas/context-change.js';
 import {
@@ -36,7 +37,8 @@ import {
     IndexedProcessingRetrievalSchema,
 } from '../src/schemas/indexed-processing.js';
 import { buildTextExternalizationProposal } from '../src/text-externalization-processor.js';
-import { emptyDocument, userTurn } from './fixtures.js';
+import type { ContentBlock, ConversationRecordBatch } from '../src/types.js';
+import { emptyDocument, generatedAgentTurn, userTurn } from './fixtures.js';
 import { indexedTextClaimFixture } from './indexed-processing-fixture.js';
 
 // Exhaustive CPU capacity fixtures include real immutable setup, dependency validation and retry;
@@ -160,6 +162,169 @@ describe('indexed selected text processing transitions', () => {
         },
         WORKING_SET_CAPACITY_TEST_TIMEOUT_MS,
     );
+
+    it('accepts a genuine generation mapped to completed replacement entities and rejects wrong retained kinds', async () => {
+        const { store, staged, workspace } = await indexedTextClaimFixture();
+        const output = await buildIndexedTextExternalizationOutput(workspace);
+        const persisted = await stageIndexedProcessingPhase(store, staged.root, staged.locator, {
+            phase: 'output',
+            value: output,
+        });
+        const completed = await stageIndexedTextProcessingCompletion(
+            store,
+            persisted.root,
+            persisted.locator,
+            workspace,
+        );
+        if (output.kind !== 'proposal' || output.proposal.kind !== 'replace_with_compaction')
+            throw new Error('Real indexed text completion did not produce replacement entities');
+        const replacement = output.proposal.replacement_turns[0];
+        const block = replacement?.blocks[0];
+        if (!replacement || !block) throw new Error('Real indexed text completion lost its replacement turn/block');
+        const selected = await loadIndexedProcessingSelectedContext(store, completed.root, completed.locator);
+        const identities = [
+            { id: output.proposal.compaction_id, kind: 'compaction' },
+            { id: completed.receipt.id, kind: 'operation receipt' },
+            ...output.proposal.replacement_turns.flatMap((turn) => [
+                { id: turn.id, kind: 'replacement turn' },
+                ...turn.blocks.map((item) => ({ id: item.id, kind: 'block' })),
+            ]),
+            ...completed.completion.inserted_entry_ids.map((id) => ({ id, kind: 'context entry' })),
+            ...selected.context.retrieval_requirements
+                .filter((item) => !workspace.selected.context.retrieval_requirements.some((old) => old.id === item.id))
+                .map((item) => ({ id: item.id, kind: 'retrieval requirement' })),
+        ];
+        for (const { id, kind } of identities)
+            expect(await getPagedRecord(store, completed.root.directories.identifiers, id)).toEqual({
+                storage: 'marker',
+                kind,
+                id,
+            });
+        const source = completed.root.source;
+        const target = { provider: 'test', protocol: 'test.generate', model: 'test-model', adapter_version: '1' };
+        const batch: ConversationRecordBatch = {
+            turns: [generatedAgentTurn('turn:after-processing', 'generation:after-processing')],
+            context_entries: [{ id: 'entry:after-processing', type: 'source_turn', turn_id: 'turn:after-processing' }],
+            generations: [
+                {
+                    id: 'generation:after-processing',
+                    record_source: 'executed',
+                    request_id: 'request:after-processing',
+                    attempt_id: 'attempt:after-processing',
+                    purpose: 'conversation',
+                    requested_model: target.model,
+                    provider: target.provider,
+                    protocol: target.protocol,
+                    adapter_version: target.adapter_version,
+                    status: 'completed',
+                    timestamps: { recorded_at: at },
+                    source,
+                    request_receipt: {
+                        id: 'receipt:after-processing',
+                        request_id: 'request:after-processing',
+                        attempt_id: 'attempt:after-processing',
+                        source,
+                        context_fingerprint: 'sha256:context',
+                        tool_set_fingerprint: 'sha256:tools',
+                        request_fingerprint: 'sha256:request',
+                        target,
+                        tool_definition_ids: [],
+                        asset_versions: [],
+                        item_mappings: [
+                            { canonical_id: replacement.id, native_id: 'native:replacement', kind: 'turn' },
+                            { canonical_id: block.id, native_id: 'native:replacement-block', kind: 'block' },
+                        ],
+                        recorded_at: at,
+                    },
+                },
+            ],
+        };
+        const command = {
+            conversation_id: source.conversation_id,
+            batch,
+            options: {
+                operation_id: 'operation:after-processing',
+                expected_revision: source.revision,
+                payload_fingerprint: await fingerprintJson(batch),
+                recorded_at: at,
+            },
+        };
+        // Model old malformed or otherwise corrupted indexes as independently hash-bound wrong
+        // kinds. The generation guard must still reject them rather than treating generic
+        // processing records (or a real different canonical kind) as valid native mappings.
+        for (const { id, kind } of [
+            { id: replacement.id, kind: 'processing context record' },
+            { id: block.id, kind: 'context entry' },
+        ]) {
+            const identifiers = await putPagedRecord(
+                store,
+                completed.root.directories.identifiers,
+                id,
+                { storage: 'marker', id, kind },
+                'replace',
+            );
+            await expect(
+                stageIndexedRecordBatch(
+                    { ...completed.root, directories: { ...completed.root.directories, identifiers } },
+                    command,
+                    store,
+                ),
+            ).rejects.toThrow('Indexed generation item mapping has another retained kind');
+        }
+        const accepted = await stageIndexedRecordBatch(completed.root, command, store);
+        expect(accepted.applied).toBe(true);
+        expect(accepted.receipt.accepted_generation_ids).toEqual(['generation:after-processing']);
+        expect(accepted.receipt.accepted_turn_ids).toEqual(['turn:after-processing']);
+        const retry = await stageIndexedRecordBatch(accepted.root, command, store);
+        expect(retry.applied).toBe(false);
+        expect(retry.receipt).toEqual(accepted.receipt);
+        expect((await loadIndexedPendingProcessingJobs(store, accepted.root)).unresolved_job_count).toBe(1);
+    });
+
+    it('dry-compiles only settled selected processing while exact native coverage remains a separate barrier', async () => {
+        const { store, staged, workspace } = await indexedTextClaimFixture();
+        await expect(loadIndexedSettledProcessingSelectedContext(store, staged.root, staged.locator)).rejects.toThrow(
+            'unresolved processing obligations',
+        );
+        const output = await buildIndexedTextExternalizationOutput(workspace);
+        const retained = await stageIndexedProcessingPhase(store, staged.root, staged.locator, {
+            phase: 'output',
+            value: output,
+        });
+        const completed = await stageIndexedTextProcessingCompletion(store, retained.root, retained.locator, workspace);
+        const projection = await loadIndexedSettledProcessingSelectedContext(store, completed.root, completed.locator);
+        expect(projection.completeness).toBe('selected_media_compaction_pending_admission');
+        expect(projection.source).toEqual(completed.root.source);
+        if (output.kind !== 'proposal' || output.proposal.kind !== 'replace_with_compaction')
+            throw new Error('Expected the genuine text externalization replacement');
+        expect((projection.replacement_turns ?? []).flatMap((item) => item.projection.selected_blocks)).toEqual(
+            output.proposal.replacement_turns.flatMap<ContentBlock>((turn) => turn.blocks),
+        );
+        const binding = {
+            target_fingerprint: `sha256:${'a'.repeat(64)}`,
+            measured_input_tokens: 100,
+            tokenizer_id: 'actual-native-count-fixture',
+            measurement_fingerprint: `sha256:${'b'.repeat(64)}`,
+        };
+        await expect(
+            loadIndexedReadySelectedContext(store, completed.root, completed.locator, binding),
+        ).rejects.toThrow('coverage');
+        const covered = await stageIndexedProcessingCoverage(store, completed.root, completed.locator, {
+            ...binding,
+            operation_id: 'coverage:dry-preparation',
+            expected_revision: completed.root.source.revision,
+            recorded_at: at,
+        });
+        expect(
+            (await loadIndexedReadySelectedContext(store, covered.root, covered.locator, binding)).coverage.status,
+        ).toBe('ready');
+        await expect(
+            loadIndexedReadySelectedContext(store, covered.root, covered.locator, {
+                ...binding,
+                target_fingerprint: `sha256:${'c'.repeat(64)}`,
+            }),
+        ).rejects.toThrow('coverage');
+    });
 
     it('keeps the existing context-record ceiling and rejects impossible headers before download', async () => {
         const { store, staged, reads } = await indexedTextClaimFixture();

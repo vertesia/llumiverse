@@ -31,6 +31,13 @@ export const AppendConversationRecordsOptionsSchema = z
     })
     .meta({ id: 'AppendConversationRecordsOptions' });
 
+/** A bounded canonical batch whose publication remains the host's exact-head CAS. */
+export const IndexedRecordBatchCommandSchema = z.strictObject({
+    conversation_id: IdentifierSchema,
+    batch: ConversationRecordBatchSchema,
+    options: AppendConversationRecordsOptionsSchema,
+});
+
 export const AppendConversationRecordsResultSchema = z
     .strictObject({
         document: ConversationDocumentSchema,

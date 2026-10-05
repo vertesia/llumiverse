@@ -250,3 +250,15 @@ export const IndexedProcessingReadinessCoverageSchema = z.strictObject({
     recorded_at: TimestampSchema,
 });
 export type IndexedProcessingReadinessCoverage = z.infer<typeof IndexedProcessingReadinessCoverageSchema>;
+
+/** Exact data command shared by indexed coverage transition and retained prepared evidence. */
+export const IndexedProcessingCoverageCommandSchema = z.strictObject({
+    operation_id: IdentifierSchema,
+    expected_revision: NonnegativeSafeIntegerSchema,
+    target_fingerprint: ContentHashSchema,
+    measured_input_tokens: NonnegativeSafeIntegerSchema,
+    tokenizer_id: IdentifierSchema,
+    measurement_fingerprint: ContentHashSchema,
+    recorded_at: TimestampSchema,
+});
+export type IndexedProcessingCoverageCommand = z.infer<typeof IndexedProcessingCoverageCommandSchema>;

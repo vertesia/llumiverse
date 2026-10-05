@@ -318,6 +318,8 @@ describe('indexed OpenAI Responses selected text', () => {
         const decoded = await dispatch();
         expect(bodies).toHaveLength(1);
         expect(bodies[0]).toMatchObject({ model: target.model, input: [{ role: 'user', content: 'Selected text' }] });
+        expect(providerJsonValue(bodies[0])).toEqual(prepared.native_request);
+        expect(await fingerprintJson(prepared.native_request)).toBe(prepared.receipt.request_fingerprint);
         expect(await fingerprintJson(providerJsonValue(bodies[0]))).toBe(prepared.receipt.request_fingerprint);
         expect(JSON.stringify(bodies[0])).not.toContain('Cold unselected text');
         expect(decoded.generation.request_receipt).toEqual(prepared.receipt);

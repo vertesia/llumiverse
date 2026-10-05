@@ -60,6 +60,8 @@ import {
     type IndexedConversationTurnHeader,
     IndexedConversationTurnHeaderSchema,
     IndexedConversationTurnLinkSchema,
+    type IndexedProcessingCoverageCommand,
+    IndexedProcessingCoverageCommandSchema,
     type IndexedProcessingReadinessCoverage,
     IndexedProcessingReadinessCoverageSchema,
     IndexedProcessingSelectedContextSchema,
@@ -73,13 +75,11 @@ import {
     IndexedProcessingClosureCommandSchema,
     IndexedProcessingClosureWitnessSchema,
 } from './schemas/indexed-processing-closure.js';
-import { AppendConversationRecordsOptionsSchema, ConversationRecordBatchSchema } from './schemas/ingestion.js';
-import {
-    ContentHashSchema,
-    IdentifierSchema,
-    NonnegativeSafeIntegerSchema,
-    TimestampSchema,
-} from './schemas/primitives.js';
+import { IndexedRecordBatchCommandSchema } from './schemas/ingestion.js';
+
+export { IndexedRecordBatchCommandSchema } from './schemas/ingestion.js';
+
+import { ContentHashSchema, IdentifierSchema } from './schemas/primitives.js';
 import {
     ProcessingAttemptReceiptSchema,
     ProcessingCompletionReceiptSchema,
@@ -146,12 +146,6 @@ export class IndexedRecordAppendValidationError extends Error {
     }
 }
 
-/** A bounded canonical batch whose publication remains the host's exact-head CAS. */
-export const IndexedRecordBatchCommandSchema = z.strictObject({
-    conversation_id: IdentifierSchema,
-    batch: ConversationRecordBatchSchema,
-    options: AppendConversationRecordsOptionsSchema,
-});
 export type IndexedRecordBatchCommand = z.infer<typeof IndexedRecordBatchCommandSchema>;
 
 export interface IndexedConversationRecordStore extends PagedRecordIndexStore {
@@ -2098,6 +2092,16 @@ async function acceptedIndexedBatch(
     if (!sameIndexedRecord(batch.context_entries ?? [], receipt.accepted_context_entries ?? [])) {
         throw new IndexedRecordAppendConflict('operation_conflict', 'Indexed append changes accepted context entries');
     }
+    const acceptedRequirements = receipt.accepted_retrieval_requirements ?? [];
+    if (
+        !sameIndexedRecord(idsOf(batch.retrieval_requirements), idsOf(acceptedRequirements)) ||
+        !sameIndexedRecord(batch.retrieval_requirements ?? [], acceptedRequirements)
+    ) {
+        throw new IndexedRecordAppendConflict(
+            'operation_conflict',
+            'Indexed append changes accepted retrieval requirements',
+        );
+    }
     for (const turn of batch.turns ?? []) {
         const retained = await loadIndexedAcceptedTurn(store, root, turn.id, receipt);
         if (
@@ -2156,9 +2160,6 @@ export async function stageIndexedRecordBatch(
     }
     const parsed = IndexedRecordBatchCommandSchema.parse(input);
     const { batch, options } = parsed;
-    if ((batch.retrieval_requirements?.length ?? 0) > 0) {
-        throw new IndexedRecordAppendValidationError('Indexed append does not yet accept new retrieval requirements');
-    }
     const root = IndexedConversationRootSchema.parse(rootInput);
     if (parsed.conversation_id !== root.source.conversation_id)
         throw new IndexedRecordAppendConflict('conversation_identity_conflict', 'Indexed append conversation differs');
@@ -2253,6 +2254,8 @@ export async function stageIndexedRecordBatch(
     for (const definition of batch.tool_definitions ?? []) await register(definition.id, 'tool definition', true);
     for (const receipt of batch.execution_receipts ?? []) await register(receipt.id, 'execution receipt');
     for (const entry of batch.context_entries ?? []) await register(entry.id, 'context entry');
+    for (const requirement of batch.retrieval_requirements ?? [])
+        await register(requirement.id, 'retrieval requirement');
     if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE) {
         for (const item of batch.generations ?? []) {
             if (item.record_source !== 'executed') continue;
@@ -2469,7 +2472,8 @@ export async function stageIndexedRecordBatch(
                     throw new Error('Indexed tool result call proof is unavailable');
                 }
                 for (const content of block.content) {
-                    if (content.type === 'text' || content.type === 'json') continue;
+                    if (content.type === 'text' || content.type === 'json' || content.type === 'external_reference')
+                        continue;
                     if (
                         content.type !== 'image' &&
                         content.type !== 'audio' &&
@@ -2715,10 +2719,67 @@ export async function stageIndexedRecordBatch(
         if (!(await definition(id))) {
             throw new Error('Indexed active tool selection has an unavailable definition');
         }
+    const references = (batch.turns ?? []).flatMap((turn) =>
+        turn.blocks.flatMap((block) =>
+            block.type === 'tool_result'
+                ? block.content.flatMap((content) =>
+                      content.type === 'external_reference' ? [{ turn, block, content }] : [],
+                  )
+                : [],
+        ),
+    );
+    const matchedReferences = new Set<string>();
+    for (const requirement of batch.retrieval_requirements ?? []) {
+        const retainedAsset = newAssets.get(requirement.asset_id);
+        const definitionId = requirement.retrieval.tool_definition_id;
+        const selectedDefinition = definitionId ? await definition(definitionId) : undefined;
+        const matching = references.filter(
+            ({ content }) =>
+                content.asset_id === requirement.asset_id &&
+                canonicalJsonContentString(content.retrieval) === canonicalJsonContentString(requirement.retrieval),
+        );
+        const candidate = matching[0];
+        const selectedBlocks = candidate && newSelections.get(candidate.turn.id);
+        if (
+            requirement.accepted_asset_operation_id !== options.operation_id ||
+            !retainedAsset ||
+            retainedAsset.kind !== 'text' ||
+            retainedAsset.storage.type !== 'external' ||
+            !retainedAsset.content_hash ||
+            retainedAsset.byte_length === undefined ||
+            context.retrieval_requirements.some(
+                (retained) =>
+                    retained.asset_id === requirement.asset_id &&
+                    canonicalJsonContentString(retained.retrieval) ===
+                        canonicalJsonContentString(requirement.retrieval),
+            ) ||
+            !selectedDefinition ||
+            !activeToolIds.includes(selectedDefinition.id) ||
+            selectedDefinition.name !== requirement.retrieval.capability ||
+            requirement.retrieval.version !== 1 ||
+            matching.length !== 1 ||
+            !candidate ||
+            candidate.turn.model_visibility !== 'include' ||
+            !newSelections.has(candidate.turn.id) ||
+            (selectedBlocks !== undefined && !selectedBlocks.has(candidate.block.id)) ||
+            candidate.content.original_type !== 'text' ||
+            candidate.content.content_hash !== retainedAsset.content_hash ||
+            matchedReferences.has(candidate.content.id)
+        ) {
+            throw new IndexedRecordAppendValidationError(
+                'Indexed retrieval requirement lacks exact selected definition, asset and source block',
+            );
+        }
+        matchedReferences.add(candidate.content.id);
+    }
+    if (matchedReferences.size !== references.length) {
+        throw new IndexedRecordAppendValidationError('Indexed accepted retrieval references and requirements differ');
+    }
     const nextContext = ConversationContextSchema.parse({
         ...context,
         revision: nextRevision,
         entries: [...context.entries, ...(batch.context_entries ?? [])],
+        retrieval_requirements: [...context.retrieval_requirements, ...(batch.retrieval_requirements ?? [])],
         active_tool_definition_ids: [...activeToolIds],
     });
     const activeBytes = canonicalJsonContentBytes(nextContext.entries).byteLength;
@@ -2743,6 +2804,9 @@ export async function stageIndexedRecordBatch(
         accepted_execution_receipt_ids: idsOf(batch.execution_receipts),
         accepted_context_entry_ids: idsOf(batch.context_entries),
         accepted_context_entries: [...(batch.context_entries ?? [])],
+        ...((batch.retrieval_requirements?.length ?? 0) > 0
+            ? { accepted_retrieval_requirements: [...(batch.retrieval_requirements ?? [])] }
+            : {}),
         accepted_tool_selection:
             batch.active_tool_definition_ids === undefined
                 ? { kind: 'unchanged' }
@@ -4144,15 +4208,22 @@ export async function stageIndexedTextProcessingCompletion(
     const mutation = await applyIndexedTextExternalizationOutput(currentWorkspace, output);
     const compaction = mutation.compaction;
     if (!compaction) throw new Error('Indexed text output lost its exact new compaction');
-    const newIds = [
-        compaction.id,
-        mutation.receipt.id,
-        ...compaction.replacement_turns.flatMap((turn) => [turn.id, ...turn.blocks.map((block) => block.id)]),
-        ...mutation.change.operations[0].inserted_entry_ids,
+    // Global identities carry the same semantic kinds as snapshot/append publication. A native
+    // request may bind these exact replacement turns/blocks after completion, so a generic
+    // processing marker would lose their immutable canonical entity identity.
+    const newIdentities = [
+        { id: compaction.id, kind: 'compaction' },
+        { id: mutation.receipt.id, kind: 'operation receipt' },
+        ...compaction.replacement_turns.flatMap((turn) => [
+            { id: turn.id, kind: 'replacement turn' },
+            ...turn.blocks.map((block) => ({ id: block.id, kind: 'block' })),
+        ]),
+        ...mutation.change.operations[0].inserted_entry_ids.map((id) => ({ id, kind: 'context entry' })),
         ...mutation.context.retrieval_requirements
             .filter((item) => !selected.context.retrieval_requirements.some((old) => old.id === item.id))
-            .map((item) => item.id),
+            .map((item) => ({ id: item.id, kind: 'retrieval requirement' })),
     ];
+    const newIds = newIdentities.map(({ id }) => id);
     if (new Set(newIds).size !== newIds.length)
         throw new Error('Indexed processing creates duplicate record identities');
     for (const id of newIds)
@@ -4224,10 +4295,10 @@ export async function stageIndexedTextProcessingCompletion(
             value: { storage: 'marker' as const, kind: 'context_order', id: entry.id },
         })),
     );
-    for (const id of newIds)
+    for (const { id, kind } of newIdentities)
         nominate('identifiers', id, {
             storage: 'marker',
-            kind: 'processing context record',
+            kind,
             id,
         });
     const completion = ProcessingCompletionReceiptSchema.parse({
@@ -4482,16 +4553,8 @@ export async function stageIndexedProcessingNoOpCompletion(
     };
 }
 
-export const IndexedProcessingCoverageCommandSchema = z.strictObject({
-    operation_id: IdentifierSchema,
-    expected_revision: NonnegativeSafeIntegerSchema,
-    target_fingerprint: ContentHashSchema,
-    measured_input_tokens: NonnegativeSafeIntegerSchema,
-    tokenizer_id: IdentifierSchema,
-    measurement_fingerprint: ContentHashSchema,
-    recorded_at: TimestampSchema,
-});
-export type IndexedProcessingCoverageCommand = z.infer<typeof IndexedProcessingCoverageCommandSchema>;
+export type { IndexedProcessingCoverageCommand } from './schemas/indexed-head.js';
+export { IndexedProcessingCoverageCommandSchema } from './schemas/indexed-head.js';
 export interface StagedIndexedProcessingCoverage extends StagedIndexedProcessingPhase {
     coverage: IndexedProcessingReadinessCoverage;
 }
@@ -4681,6 +4744,52 @@ export async function stageIndexedProcessingCoverage(
         coverage,
         applied: true,
     };
+}
+
+/** Dry native preparation after the independently drained outbox. This is only a selected
+ * projection: it carries no readiness, admission, or provider transport grant. The host must count
+ * the actual native request, publish exact target/measurement coverage and load the ready barrier
+ * before dispatch. No lifetime receipt or completed-job history is traversed.
+ */
+export async function loadIndexedSettledProcessingSelectedContext(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+) {
+    const input = { root: rootInput, locator: locatorInput };
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed dry preparation is not bounded JSON');
+    const { root, locator } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+        })
+        .parse(structuredClone(input));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed dry preparation requires complete processing indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const header = await loadRecord(
+        store,
+        {
+            storage: 'record',
+            kind: 'processing_header',
+            id: root.source.conversation_id,
+            ...root.processing_header,
+        },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    assertSupportedIndexedReadinessPolicy(header);
+    const counts = assertIndexedRequiredIdentity(root, header);
+    if (
+        counts.unresolved_job_count !== 0 ||
+        counts.required_blocked_job_count !== 0 ||
+        root.directories.processing_pending !== undefined
+    )
+        throw new Error('Indexed dry preparation still has unresolved processing obligations');
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    return IndexedConversationSelectedContextSchema.parse({
+        ...selected,
+        completeness: 'selected_media_compaction_pending_admission',
+    });
 }
 
 export interface IndexedReadySelectedContext {

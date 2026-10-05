@@ -10,7 +10,9 @@ import {
     type DecodedConversationResponse,
     decodedResponseBatchFromAcceptedRecord,
     deriveConversationId,
+    INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE,
     INDEXED_TEXT_PREPARED_VALIDATOR_PROFILE,
+    IndexedPreparedSourceSchema,
     parseConversationPreparedRequest,
     parseConversationPreparedRequestRecord,
     type RequestSourceViewReference,
@@ -126,6 +128,54 @@ describe('prepared canonical request evidence', () => {
         await expect(adoptConversationPreparedRequestRecord(prepared, indexed)).rejects.toThrow(
             'changed finalized prepared-request evidence',
         );
+    });
+
+    it('requires a distinct complete processed-input witness without upgrading ordinary indexed evidence', () => {
+        const locator = { content_hash: `sha256:${'a'.repeat(64)}`, size_bytes: 1024 };
+        const witness = {
+            version: 1 as const,
+            activation_operation_id: 'input-operation',
+            original_source: { conversation_id: 'conversation-1', revision: 1 },
+            original_root: locator,
+            accepted_input_revision: 2,
+            accepted_input_receipt_fingerprint: `sha256:${'b'.repeat(64)}`,
+            settled_source: { conversation_id: 'conversation-1', revision: 7 },
+            settled_root: locator,
+            coverage: {
+                operation_id: 'input-coverage',
+                expected_revision: 7,
+                target_fingerprint: `sha256:${'c'.repeat(64)}`,
+                measured_input_tokens: 100,
+                tokenizer_id: 'test-exact-tokenizer',
+                measurement_fingerprint: `sha256:${'d'.repeat(64)}`,
+                recorded_at: RECORDED_AT,
+            },
+        };
+        const indexed = {
+            version: 1 as const,
+            validator_profile: INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE,
+            root: locator,
+            context_revision: 7,
+            processing_input: witness,
+        };
+        expect(IndexedPreparedSourceSchema.parse(indexed)).toEqual(indexed);
+        const { processing_input: _witness, ...missing } = indexed;
+        expect(IndexedPreparedSourceSchema.safeParse(missing).success).toBe(false);
+        expect(
+            IndexedPreparedSourceSchema.safeParse({
+                ...indexed,
+                validator_profile: INDEXED_TEXT_PREPARED_VALIDATOR_PROFILE,
+            }).success,
+        ).toBe(false);
+        for (const changed of [
+            { ...witness, accepted_input_revision: 3 },
+            { ...witness, settled_source: { ...witness.settled_source, conversation_id: 'foreign' } },
+            { ...witness, settled_source: { ...witness.settled_source, revision: 2 } },
+            { ...witness, coverage: { ...witness.coverage, expected_revision: 8 } },
+        ])
+            expect(IndexedPreparedSourceSchema.safeParse({ ...indexed, processing_input: changed }).success).toBe(
+                false,
+            );
     });
 
     it.each([

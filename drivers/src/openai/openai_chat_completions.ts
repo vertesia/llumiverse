@@ -129,6 +129,7 @@ import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usag
 export type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 
 import { hydrateCanonicalSelectedImageAssets } from '../conversation/canonical-host-images.js';
+import { indexedPreparedReceiptMatches } from '../conversation/indexed-prepared-receipt.js';
 
 export { compileOpenAIChatIndexedSelectedText } from './openai-chat-conversation-adapter.js';
 
@@ -1414,6 +1415,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             source: selection.source,
             native_conversation: nativeConversation,
             payload,
+            // Exact already-bound request JSON, separately owned for host native counting.
+            native_request: structuredClone(binding.payload),
             receipt,
         };
     }
@@ -1477,11 +1480,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             },
             ownedHostCapabilities,
         );
-        if (
-            record.source.conversation_id !== selection.source.conversation_id ||
-            record.source.revision !== selection.source.revision ||
-            (await fingerprintJson(record.request_receipt)) !== (await fingerprintJson(prepared.receipt))
-        ) {
+        if (!(await indexedPreparedReceiptMatches(record, selection, prepared.receipt))) {
             throw new Error('Indexed native request differs from its durably prepared receipt');
         }
         signal?.throwIfAborted();

@@ -4,6 +4,7 @@ import {
     createTextBlock,
     createUserTurn,
     deriveConversationId,
+    fingerprintJson,
     hashContentBytes,
     type IndexedConversationRecordStore,
     loadIndexedSelectedTextContext,
@@ -173,6 +174,8 @@ describe('indexed OpenAI Chat selected text', () => {
         committed = true;
         const decoded = await dispatch();
         expect(nativeBodies).toHaveLength(1);
+        expect(nativeBodies[0]).toEqual(configured.native_request);
+        expect(await fingerprintJson(configured.native_request)).toBe(configured.receipt.request_fingerprint);
         expect(nativeBodies[0]).toMatchObject({ model: target.model, messages: [{ role: 'user', content: 'Hello' }] });
         expect(JSON.stringify(nativeBodies[0])).not.toContain('Not selected');
         expect(decoded.generation.request_receipt).toEqual(configured.receipt);

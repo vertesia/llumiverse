@@ -197,14 +197,13 @@ async function toolMediaCommands(source: { conversation_id: string; revision: nu
 }
 
 describe('indexed conversation snapshot', () => {
-    it('rejects unsupported retrieval requirements before indexed record publication', async () => {
+    it('rejects an unbound retrieval requirement before indexed record publication', async () => {
         const memory = memoryStore();
         const staged = await stageIndexedConversationSnapshot(
             emptyDocument('conversation:indexed-retrieval-rejection'),
             undefined,
             memory.store,
         );
-        const readsBefore = memory.recordReads.length;
         const recordsBefore = memory.records.size;
         await expect(
             stageIndexedRecordBatch(
@@ -235,10 +234,164 @@ describe('indexed conversation snapshot', () => {
                 },
                 memory.store,
             ),
-        ).rejects.toThrow('does not yet accept new retrieval requirements');
-        expect(memory.recordReads).toHaveLength(readsBefore);
+        ).rejects.toThrow('exact selected definition, asset and source block');
         expect(memory.records.size).toBe(recordsBefore);
     });
+    it('accepts an exact selected nested reference, preserves its receipt across later turns, and rejects altered retries', async () => {
+        const memory = memoryStore();
+        let verifiedAssets = 0;
+        memory.store.assertExternalAssetIntegrity = async () => {
+            verifiedAssets += 1;
+        };
+        const initial = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:indexed-retrieval-append'),
+            undefined,
+            memory.store,
+        );
+        const commands = await toolMediaCommands(initial.root.source);
+        const called = await stageIndexedRecordBatch(initial.root, commands.agentCommand, memory.store);
+        const bytes = new TextEncoder().encode('Accepted archive bytes');
+        const integrity = await hashContentBytes(bytes);
+        const asset = {
+            id: 'asset:retrieval-append',
+            kind: 'text' as const,
+            mime_type: 'text/plain',
+            storage: { type: 'external' as const, resolver: 'test.blob', locator: { key: 'accepted.txt' } },
+            provenance: { type: 'received' as const, source_turn_id: commands.result.id },
+            created_at: RECORDED_AT,
+            ...integrity,
+        };
+        const retrieval = {
+            capability: 'read',
+            version: 1 as const,
+            tool_definition_id: 'definition:dependency',
+            arguments: { path: 'accepted.txt' },
+        };
+        const reference = {
+            id: 'block:retrieval-append',
+            type: 'external_reference' as const,
+            original_type: 'text' as const,
+            asset_id: asset.id,
+            description: 'Accepted archive',
+            preview: 'Accepted archive preview',
+            content_hash: asset.content_hash,
+            retrieval,
+        };
+        const originalResult = commands.result.blocks[0];
+        if (originalResult?.type !== 'tool_result') throw new Error('Tool result fixture is absent');
+        const result = {
+            ...commands.result,
+            blocks: [{ ...originalResult, content: [reference] }],
+        };
+        const execution = {
+            ...commands.execution,
+            result_fingerprint: await fingerprintJson(result.blocks[0]),
+        };
+        const requirement = {
+            id: 'requirement:retrieval-append',
+            asset_id: asset.id,
+            retrieval,
+            accepted_asset_operation_id: commands.resultCommand.options.operation_id,
+        };
+        const batch: IndexedRecordBatchCommand['batch'] = {
+            turns: [result],
+            assets: [asset],
+            execution_receipts: [execution],
+            context_entries: commands.resultCommand.batch.context_entries,
+            retrieval_requirements: [requirement],
+        };
+        const command: IndexedRecordBatchCommand = {
+            ...commands.resultCommand,
+            batch,
+            options: {
+                ...commands.resultCommand.options,
+                payload_fingerprint: await fingerprintJson(batch),
+            },
+        };
+        const accepted = await stageIndexedRecordBatch(called.root, command, memory.store);
+        expect(accepted.receipt.accepted_retrieval_requirements).toEqual([requirement]);
+        expect(verifiedAssets).toBe(1);
+        if (!accepted.locator) throw new Error('Accepted root locator absent');
+        const selected = await loadIndexedSelectedMediaCompactionContext(memory.store, accepted.root, accepted.locator);
+        expect(resolveIndexedTextExternalReference(selected, asset.id, reference.id)).toMatchObject({
+            asset,
+            block: reference,
+            accepted_asset_operation_id: command.options.operation_id,
+        });
+        const laterTurn = userTurn('turn:retrieval-later', 'block:retrieval-later');
+        const laterBatch: IndexedRecordBatchCommand['batch'] = {
+            turns: [laterTurn],
+            context_entries: [{ id: 'entry:retrieval-later', type: 'source_turn', turn_id: laterTurn.id }],
+            active_tool_definition_ids: [],
+        };
+        const later = await stageIndexedRecordBatch(
+            accepted.root,
+            {
+                conversation_id: accepted.root.source.conversation_id,
+                batch: laterBatch,
+                options: {
+                    expected_revision: accepted.root.source.revision,
+                    operation_id: 'operation:retrieval-later',
+                    payload_fingerprint: await fingerprintJson(laterBatch),
+                    recorded_at: RECORDED_AT,
+                },
+            },
+            memory.store,
+        );
+        expect((await stageIndexedRecordBatch(later.root, command, memory.store)).applied).toBe(false);
+        expect(verifiedAssets).toBe(1);
+        for (const changed of [
+            { ...batch, retrieval_requirements: [] },
+            { ...batch, retrieval_requirements: [{ ...requirement, id: 'requirement:other' }] },
+            {
+                ...batch,
+                retrieval_requirements: [
+                    { ...requirement, retrieval: { ...retrieval, arguments: { path: 'forged.txt' } } },
+                ],
+            },
+        ]) {
+            await expect(
+                stageIndexedRecordBatch(later.root, { ...command, batch: changed }, memory.store),
+            ).rejects.toThrow('accepted retrieval requirements');
+        }
+        const missingSelectionBatch: IndexedRecordBatchCommand['batch'] = {
+            ...batch,
+            context_entries: [],
+            retrieval_requirements: [{ ...requirement, accepted_asset_operation_id: 'operation:unselected-reference' }],
+        };
+        const missingSelection = { ...command, batch: missingSelectionBatch };
+        missingSelection.options = {
+            ...command.options,
+            operation_id: 'operation:unselected-reference',
+            expected_revision: called.root.source.revision,
+            payload_fingerprint: await fingerprintJson(missingSelectionBatch),
+        };
+        await expect(stageIndexedRecordBatch(called.root, missingSelection, memory.store)).rejects.toThrow(
+            'exact selected definition, asset and source block',
+        );
+        const wrongContent = structuredClone(command);
+        const changedResult = wrongContent.batch.turns?.[0]?.blocks[0];
+        if (changedResult?.type !== 'tool_result') throw new Error('Tool result fixture is absent');
+        const changedReference = changedResult.content[0];
+        if (changedReference?.type !== 'external_reference') throw new Error('Reference fixture is absent');
+        changedReference.content_hash = `sha256:${'f'.repeat(64)}`;
+        const changedExecution = wrongContent.batch.execution_receipts?.[0];
+        if (!changedExecution) throw new Error('Execution fixture is absent');
+        changedExecution.result_fingerprint = await fingerprintJson(changedResult);
+        const changedRequirement = wrongContent.batch.retrieval_requirements?.[0];
+        if (!changedRequirement) throw new Error('Retrieval fixture is absent');
+        changedRequirement.accepted_asset_operation_id = 'operation:wrong-retrieval-content';
+        wrongContent.options = {
+            ...command.options,
+            operation_id: 'operation:wrong-retrieval-content',
+            expected_revision: called.root.source.revision,
+            payload_fingerprint: await fingerprintJson(wrongContent.batch),
+        };
+        await expect(stageIndexedRecordBatch(called.root, wrongContent, memory.store)).rejects.toThrow(
+            'exact selected definition, asset and source block',
+        );
+    });
+
     it('proves incoming replay dependencies without relying on call block order and rejects foreign identities', async () => {
         const source = emptyDocument('conversation:indexed-replay-dependencies');
         const memory = memoryStore();

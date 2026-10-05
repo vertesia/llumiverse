@@ -95,6 +95,7 @@ import {
     recoverCanonicalExecutionResponse,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import { indexedPreparedReceiptMatches } from '../conversation/indexed-prepared-receipt.js';
 import {
     normalizeDecodedStructuredOutputForSchema,
     rejectDecodedStructuredOutput,
@@ -862,7 +863,13 @@ export class OpenAIResponsesProtocol {
             native_payload: this.requestFingerprintPayload(driver, options, payload),
             mappings: compiled.mappings,
         });
-        return { status: 'awaiting_durable_prepared_record' as const, source: selection.source, payload, receipt };
+        return {
+            status: 'awaiting_durable_prepared_record' as const,
+            source: selection.source,
+            payload,
+            native_request: providerJsonValue(payload),
+            receipt,
+        };
     }
 
     /** Recompile and verify the exact committed request before the configured Responses transport. */
@@ -926,11 +933,7 @@ export class OpenAIResponsesProtocol {
             },
             ownedHostCapabilities,
         );
-        if (
-            record.source.conversation_id !== selection.source.conversation_id ||
-            record.source.revision !== selection.source.revision ||
-            (await fingerprintJson(record.request_receipt)) !== (await fingerprintJson(prepared.receipt))
-        ) {
+        if (!(await indexedPreparedReceiptMatches(record, selection, prepared.receipt))) {
             throw new TypeError('Indexed Responses native request differs from its durable prepared receipt');
         }
         signal?.throwIfAborted();
