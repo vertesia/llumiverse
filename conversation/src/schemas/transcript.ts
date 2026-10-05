@@ -17,6 +17,7 @@ import {
     CONVERSATION_SCHEMA_VERSION,
     ConversationRefSchema,
     IdentifierSchema,
+    JsonObjectSchema,
     JsonValueSchema,
     TurnStatusSchema,
     TurnTimestampsSchema,
@@ -155,6 +156,7 @@ export const ConversationTranscriptProgramBlockSchema = ConversationTranscriptRe
 });
 
 const transcriptTurnShape = {
+    metadata: JsonObjectSchema.optional(),
     id: IdentifierSchema,
     status: TurnStatusSchema,
     timestamps: TurnTimestampsSchema,
@@ -321,7 +323,7 @@ export const ConversationTranscriptCompletenessSchema = z
         gap_before: z.boolean(),
         gap_after: z.boolean(),
         semantic_content: z.enum(['complete', 'partial']),
-        metadata: z.literal('omitted'),
+        metadata: z.enum(['omitted', 'partial']),
         provenance: z.literal('omitted'),
         native_replay: z.literal('omitted'),
         omitted_turns: z.array(ConversationTranscriptTurnOmissionSchema).max(CONVERSATION_TRANSCRIPT_MAX_OMISSIONS),

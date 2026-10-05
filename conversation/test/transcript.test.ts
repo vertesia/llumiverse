@@ -781,3 +781,58 @@ describe('safe canonical transcript projection', () => {
         expect(canonicalJsonContentString(parsed)).toBe(before);
     });
 });
+
+describe('explicit host-selected transcript metadata', () => {
+    it('defaults to omission and copies only selected existing keys without mutating the source', () => {
+        const input = transcriptInput();
+        userTurn(input).metadata = {
+            editing_action: { operation_id: 'edit:one', text: 'actual accepted text' },
+            private_proof: { secret: 'hidden' },
+        };
+        const omitted = createConversationTranscriptFragment(input);
+        expect(omitted.turns.every((turn) => turn.metadata === undefined)).toBe(true);
+        expect(omitted.completeness.metadata).toBe('omitted');
+        const fragment = createConversationTranscriptFragment(input, {
+            select_turn_metadata_keys: (turn) => (turn.kind === 'user' ? ['editing_action', 'not-present'] : []),
+        });
+        const projected = fragment.turns.find((turn) => turn.id === userTurn(input).id);
+        if (!projected?.metadata) throw new Error('Expected explicitly selected actual metadata');
+        expect(projected.metadata).toEqual({
+            editing_action: { operation_id: 'edit:one', text: 'actual accepted text' },
+        });
+        expect(fragment.completeness.metadata).toBe('partial');
+        expect(JSON.stringify(fragment)).not.toContain('private_proof');
+        projected.metadata.editing_action = { text: 'changed local projection' };
+        expect(userTurn(input).metadata?.editing_action).toEqual({
+            operation_id: 'edit:one',
+            text: 'actual accepted text',
+        });
+        expect(parseConversationTranscriptFragment(fragment).completeness.metadata).toBe('partial');
+        expect(() =>
+            parseConversationTranscriptFragment({
+                ...fragment,
+                completeness: { ...fragment.completeness, metadata: 'omitted' },
+            }),
+        ).toThrow('metadata');
+    });
+    it.each(
+        [['__proto__'], ['constructor'], ['prototype'], [''], ['editing_action', 'editing_action']].map((keys) => ({
+            keys,
+        })),
+    )('rejects unsafe or ambiguous selector keys $keys', ({ keys }) => {
+        expect(() =>
+            createConversationTranscriptFragment(transcriptInput(), { select_turn_metadata_keys: () => keys }),
+        ).toThrow('metadata');
+    });
+    it('gives the selector only frozen canonical turn identity and cannot invent missing metadata', () => {
+        const fragment = createConversationTranscriptFragment(transcriptInput(), {
+            select_turn_metadata_keys: (turn) => {
+                expect(Object.keys(turn).sort()).toEqual(['id', 'kind']);
+                expect(Object.isFrozen(turn)).toBe(true);
+                return ['not-present'];
+            },
+        });
+        expect(fragment.completeness.metadata).toBe('omitted');
+        expect(fragment.turns.every((turn) => turn.metadata === undefined)).toBe(true);
+    });
+});

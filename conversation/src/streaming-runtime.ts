@@ -7,6 +7,7 @@ import type {
     NativeStreamPosition,
 } from './types.js';
 
+export { canonicalJsonContentString } from './json-content-runtime.js';
 export { preflightJsonInput } from './json-preflight.js';
 
 export interface ConversationStreamRuntimeValidators {

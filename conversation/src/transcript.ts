@@ -59,6 +59,8 @@ export type ConversationTranscriptGenerationOmission = z.infer<typeof Conversati
 
 export interface ConversationTranscriptProjectionOptions {
     json_input_limits?: Partial<JsonInputLimits>;
+    /** Host-owned allowlist only. Values are copied exclusively from the exact selected source turn. */
+    select_turn_metadata_keys?: (turn: Readonly<Pick<ConversationTurn, 'id' | 'kind'>>) => readonly string[];
 }
 
 export type ConversationTranscriptProjectionErrorCode =
@@ -590,6 +592,13 @@ function assertTranscriptFragmentSemantics(fragment: ConversationTranscriptFragm
             'Transcript fragment contains an unreferenced asset',
         );
     }
+    const projectedMetadata = fragment.turns.some((turn) => turn.metadata !== undefined);
+    if ((fragment.completeness.metadata === 'partial') !== projectedMetadata) {
+        throw new ConversationTranscriptProjectionError(
+            'invalid_fragment',
+            'Transcript metadata completeness differs from its projection',
+        );
+    }
     const semanticPartial =
         fragment.completeness.gap_before ||
         fragment.completeness.gap_after ||
@@ -666,7 +675,27 @@ export function createConversationTranscriptFragment(
             appendBounded(omittedTurns, { turn_id: turn.id, reason: 'internal_program' }, 'omitted turns');
             continue;
         }
-        turns.push(projectTurn(turn, assetsById, includedAssetIds, omittedBlocks, omittedAssets));
+        const projected = projectTurn(turn, assetsById, includedAssetIds, omittedBlocks, omittedAssets);
+        const metadataKeys = options.select_turn_metadata_keys?.(Object.freeze({ id: turn.id, kind: turn.kind })) ?? [];
+        if (
+            metadataKeys.length > 1_024 ||
+            new Set(metadataKeys).size !== metadataKeys.length ||
+            metadataKeys.some((key) => !key || key === '__proto__' || key === 'constructor' || key === 'prototype')
+        ) {
+            throw new ConversationTranscriptProjectionError(
+                'invalid_fragment',
+                'Transcript metadata selector is invalid',
+            );
+        }
+        const selectedMetadata = Object.fromEntries(
+            metadataKeys.flatMap((key) =>
+                turn.metadata !== undefined && Object.hasOwn(turn.metadata, key)
+                    ? [[key, structuredClone(turn.metadata[key])]]
+                    : [],
+            ),
+        );
+        if (Object.keys(selectedMetadata).length) projected.metadata = selectedMetadata;
+        turns.push(projected);
     }
 
     const referencedGenerationIds = [
@@ -739,7 +768,7 @@ export function createConversationTranscriptFragment(
             gap_before: parsed.window.gap_before,
             gap_after: parsed.window.gap_after,
             semantic_content: semanticPartial ? ('partial' as const) : ('complete' as const),
-            metadata: 'omitted' as const,
+            metadata: turns.some((turn) => turn.metadata !== undefined) ? ('partial' as const) : ('omitted' as const),
             provenance: 'omitted' as const,
             native_replay: 'omitted' as const,
             omitted_turns: omittedTurns,
