@@ -1,6 +1,7 @@
 import {
     type ConversationPreparedRequestRecord,
     fingerprintJson,
+    INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE,
     INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE,
     type IndexedConversationSelectedContext,
     indexedProcessingContextFingerprint,
@@ -21,9 +22,29 @@ export async function indexedPreparedReceiptMatches(
         record.source.revision !== selection.source.revision
     )
         return false;
-    if (record.indexed_source?.validator_profile !== INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE)
+    const indexed = record.indexed_source;
+    const witness =
+        indexed?.validator_profile === INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE
+            ? indexed.processing_input
+            : indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE
+              ? indexed.native_measurement
+              : undefined;
+    if (
+        indexed?.validator_profile !== INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE &&
+        indexed?.validator_profile !== INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE
+    )
         return (await fingerprintJson(record.request_receipt)) === (await fingerprintJson(compiled));
-    const witness = record.indexed_source.processing_input;
+    if (indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE) {
+        const accepted = indexed.native_measurement;
+        if (
+            !accepted ||
+            accepted.runtime_input_operation_id !== record.runtime.input_operation_id ||
+            accepted.accepted_operation_id !== record.runtime.materialized_input?.operation_id ||
+            accepted.accepted_source.revision !== record.runtime.materialized_input.result_revision ||
+            accepted.accepted_source.conversation_id !== record.source.conversation_id
+        )
+            return false;
+    }
     const measurement = record.request_receipt.measurement;
     if (
         !witness ||

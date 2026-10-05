@@ -1844,7 +1844,6 @@ export function validateConversationSemantics(
         }
     }
 
-    const processorKeys = new Set<string>();
     for (let index = 0; index < document.processing.processors.length; index += 1) {
         const processor = document.processing.processors[index];
         if (new TextEncoder().encode(JSON.stringify(processor.config)).byteLength > MAX_PROCESSOR_CONFIGURATION_BYTES)
@@ -1853,15 +1852,6 @@ export function validateConversationSemantics(
                 `/processing/processors/${index}/config`,
                 'Processor configuration exceeds durable bound',
             );
-        const key = `${processor.id}\u0000${processor.version}`;
-        if (processorKeys.has(key)) {
-            add(
-                'DUPLICATE_ID',
-                `/processing/processors/${index}`,
-                `Processor ${diagnosticValue(processor.id)}@${diagnosticValue(processor.version)} is duplicated`,
-            );
-        }
-        processorKeys.add(key);
     }
 
     const processing = document.processing;

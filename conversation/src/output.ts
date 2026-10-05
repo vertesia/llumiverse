@@ -18,7 +18,14 @@ import {
 } from './schemas/output.js';
 import { IdentifierSchema } from './schemas/primitives.js';
 import { assertHistoricalToolArgumentExternalization } from './tool-arguments.js';
-import type { Asset, ConversationDocument, ExecutedGeneration, GeneratedAgentTurn, OperationReceipt } from './types.js';
+import type {
+    Asset,
+    ConversationDocument,
+    ConversationRef,
+    ExecutedGeneration,
+    GeneratedAgentTurn,
+    OperationReceipt,
+} from './types.js';
 import { diagnosticsFromZodError, parseConversationDocument } from './validation.js';
 
 export type ConversationAcceptedOutputFragment = z.infer<typeof ConversationAcceptedOutputFragmentSchema>;
@@ -444,6 +451,41 @@ export function createAcceptedOutputFragment(documentInput: unknown, operationId
 
     const document = parseConversationDocument(documentInput);
     const { receipt, turn, generation } = resolveAcceptedRecords(document, operationId.data);
+    return createAcceptedOutputFragmentFromRecords({
+        source: { conversation_id: document.id, revision: document.revision },
+        receipt,
+        turn,
+        generation,
+        assets: document.assets,
+    });
+}
+
+/** Project only exact retained accepted records. An indexed host point-loads this bounded set;
+ * no full conversation document or unrelated historical content is needed. */
+export function createAcceptedOutputFragmentFromRecords(input: {
+    source: ConversationRef;
+    receipt: OperationReceipt;
+    turn: GeneratedAgentTurn;
+    generation: ExecutedGeneration;
+    assets: Readonly<Record<string, Asset>>;
+}): ConversationAcceptedOutputFragment {
+    const { source, receipt, turn, generation, assets } = input;
+    if (
+        receipt.conversation_id !== source.conversation_id ||
+        receipt.result_revision !== source.revision ||
+        receipt.accepted_turn_ids?.length !== 1 ||
+        receipt.accepted_turn_ids[0] !== turn.id ||
+        receipt.accepted_generation_ids?.length !== 1 ||
+        receipt.accepted_generation_ids[0] !== generation.id ||
+        turn.generation_id !== generation.id ||
+        generation.record_source !== 'executed' ||
+        generation.source.conversation_id !== source.conversation_id ||
+        generation.source.revision !== receipt.base_revision
+    )
+        throw new ConversationOutputProjectionError(
+            'receipt_mismatch',
+            'Selected output records differ from acceptance',
+        );
     const acceptedAssetIds = new Set(receipt.accepted_asset_ids ?? []);
     const assetEntries: [string, ConversationOutputAsset][] = [];
     const blocks: z.infer<typeof ConversationOutputTurnSchema>['blocks'] = [];
@@ -454,7 +496,7 @@ export function createAcceptedOutputFragment(documentInput: unknown, operationId
     for (const block of turn.blocks) {
         const assetId = referencedAssetId(block);
         if (assetId !== undefined) {
-            const asset = safeGeneratedAsset(ownRecordValue(document.assets, assetId), generation.id);
+            const asset = safeGeneratedAsset(ownRecordValue(assets, assetId), generation.id);
             if (!asset || !acceptedAssetIds.has(assetId)) {
                 omittedBlockIds.push(block.id);
                 semanticContentPartial = true;
@@ -479,10 +521,7 @@ export function createAcceptedOutputFragment(documentInput: unknown, operationId
                     const hydrationAssets: [string, ConversationOutputAsset][] = [];
                     let hydrationIsSafe = true;
                     for (const hydration of toolArgumentAssets(block)) {
-                        const asset = safeGeneratedAsset(
-                            ownRecordValue(document.assets, hydration.asset_id),
-                            generation.id,
-                        );
+                        const asset = safeGeneratedAsset(ownRecordValue(assets, hydration.asset_id), generation.id);
                         if (
                             !acceptedAssetIds.has(hydration.asset_id) ||
                             asset?.content_hash !== hydration.content_hash
@@ -529,7 +568,7 @@ export function createAcceptedOutputFragment(documentInput: unknown, operationId
         format: CONVERSATION_ACCEPTED_OUTPUT_FORMAT,
         schema_version: CONVERSATION_SCHEMA_VERSION,
         experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
-        source: { conversation_id: document.id, revision: receipt.result_revision },
+        source: { conversation_id: source.conversation_id, revision: receipt.result_revision },
         receipt: projectReceipt(receipt),
         turn: ConversationOutputTurnSchema.parse({ ...projectedTurn, blocks }),
         generation: projectGeneration(generation),

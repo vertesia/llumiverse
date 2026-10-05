@@ -6,6 +6,7 @@ import {
     externalizeToolCallArguments,
     fingerprintJson,
     hashUtf8Text,
+    hydrateSelectedToolCallArguments,
     hydrateToolCallArguments,
     type JsonObject,
     type NativeReplayBlock,
@@ -488,4 +489,59 @@ describe('canonical tool argument hydration', () => {
         ).rejects.toThrow(/unpaired surrogate/);
         expect(source).toEqual(before);
     });
+});
+
+it('hydrates an owned selected call without a synthetic document and rejects changed asset identity/bytes', async () => {
+    const { document, prepared, asset } = await externalizedDocument(toolDocument(), ['content'], {
+        name: 'file.txt',
+        content: '[selected exact input]',
+    });
+    const call = document.turns[0]?.blocks[0];
+    if (call?.type !== 'tool_call') throw new Error('Expected real externalized call');
+    const assets = { [asset.id]: asset };
+    await expect(
+        hydrateSelectedToolCallArguments(call, assets, async () => byteChunks(prepared.content)),
+    ).resolves.toEqual({ name: 'file.txt', content: 'exact content' });
+    await expect(hydrateSelectedToolCallArguments(call, assets, async () => byteChunks('changed'))).rejects.toThrow();
+    const wrong = { [asset.id]: { ...asset, id: 'foreign:asset' } };
+    await expect(
+        hydrateSelectedToolCallArguments(call, wrong, async () => byteChunks(prepared.content)),
+    ).rejects.toThrow('key differs');
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    const mutable = { [asset.id]: structuredClone(asset) };
+    const pending = hydrateSelectedToolCallArguments(call, mutable, async () => {
+        await gate;
+        return byteChunks(prepared.content);
+    });
+    mutable[asset.id].content_hash = 'changed-after-read-start';
+    release();
+    await expect(pending).resolves.toEqual({ name: 'file.txt', content: 'exact content' });
+});
+
+it('preserves an explicit selected argument budget above the default source bound', async () => {
+    const argumentLimit = 32 * 1024 * 1024 + 1;
+    const value = {
+        text: 'x'.repeat(argumentLimit - new TextEncoder().encode(JSON.stringify({ text: '' })).byteLength),
+    };
+    const call = {
+        id: 'large:selected:call',
+        type: 'tool_call' as const,
+        call_id: 'large:selected:call-id',
+        tool_name: 'write_artifact',
+        executor: 'application' as const,
+        arguments: { type: 'json' as const, value },
+    };
+    const resolver = vi.fn(async () => byteChunks('never resolved'));
+    const hydrated = await hydrateSelectedToolCallArguments(call, {}, resolver, { max_bytes: argumentLimit });
+    expect(hydrated.text).toBe(value.text);
+    await expect(
+        hydrateSelectedToolCallArguments(call, {}, resolver, { max_bytes: argumentLimit - 1 }),
+    ).rejects.toThrow('inline arguments exceed max_bytes');
+    await expect(hydrateSelectedToolCallArguments(call, {}, resolver)).rejects.toThrow(
+        'inline arguments exceed max_bytes',
+    );
+    expect(resolver).not.toHaveBeenCalled();
 });

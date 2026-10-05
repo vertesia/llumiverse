@@ -3,7 +3,7 @@ import { hashContentBytes, hashUtf8Content } from './content-integrity.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
 import { fingerprintJson } from './runtime.js';
-import { JsonPathSchema } from './schemas/content.js';
+import { AssetSchema, JsonPathSchema, ToolCallBlockSchema } from './schemas/content.js';
 import type {
     Asset,
     ConversationDocument,
@@ -19,6 +19,7 @@ import type {
 import { diagnosticsFromZodError, parseConversationDocument } from './validation.js';
 
 const DEFAULT_MAX_HYDRATED_TOOL_ARGUMENT_BYTES = 32 * 1024 * 1024;
+const MAX_SELECTED_TOOL_ARGUMENT_METADATA_OVERHEAD_BYTES = 1024 * 1024;
 const MAX_TOOL_ARGUMENT_HYDRATION_CHUNKS = 4_096;
 
 export interface PreparedToolArgumentExternalization {
@@ -699,9 +700,46 @@ export async function hydrateToolCallArguments(
     options: HydrateToolArgumentsOptions = {},
 ): Promise<JsonObject> {
     const document = parseConversationDocument(input);
+    const { call } = findToolCall(document, callId);
+    const ids =
+        call.arguments.type === 'externalized_json' ? call.arguments.hydration.map((entry) => entry.asset_id) : [];
+    const selectedAssets = Object.fromEntries(
+        ids.flatMap((id) => {
+            const asset = ownRecordValue(document.assets, id);
+            return asset === undefined ? [] : [[id, asset]];
+        }),
+    );
+    return hydrateSelectedToolCallArguments(call, selectedAssets, resolveAsset, options);
+}
+
+/** The exact call and its asset dependencies have already been selected from an authenticated source.
+ * This shared resolver owns only those records; it never synthesizes a conversation document. */
+export async function hydrateSelectedToolCallArguments(
+    callInput: ToolCallBlock,
+    assetsInput: Readonly<Record<string, Asset>>,
+    resolveAsset: ResolveToolArgumentTextAsset,
+    options: HydrateToolArgumentsOptions = {},
+): Promise<JsonObject> {
     const maxBytes = options.max_bytes ?? DEFAULT_MAX_HYDRATED_TOOL_ARGUMENT_BYTES;
     assertSafeByteLimit(maxBytes);
-    const { call } = findToolCall(document, callId);
+    // The configured limit applies to executable arguments. Own the selected call/assets before
+    // I/O with bounded descriptor overhead; a larger explicit argument budget must remain usable.
+    // The native host separately caps its complete selected source and operation I/O.
+    const argumentBound = Math.max(maxBytes, DEFAULT_MAX_HYDRATED_TOOL_ARGUMENT_BYTES);
+    const sourceBound =
+        argumentBound +
+        Math.min(MAX_SELECTED_TOOL_ARGUMENT_METADATA_OVERHEAD_BYTES, Number.MAX_SAFE_INTEGER - argumentBound);
+    if (!preflightJsonInput({ call: callInput, assets: assetsInput }, { max_bytes: sourceBound }).success)
+        throw new RangeError('Selected tool call and assets exceed max_bytes');
+    const call = ToolCallBlockSchema.parse(structuredClone(callInput));
+    const assets = Object.fromEntries(
+        Object.entries(assetsInput).map(([id, asset]) => {
+            const owned = AssetSchema.parse(structuredClone(asset));
+            if (id !== owned.id) throw new Error('Selected tool argument asset key differs from its identity');
+            return [id, owned];
+        }),
+    );
+    const callId = call.call_id;
     if (call.arguments.type === 'invalid') throw new Error(`Tool call ${callId} has invalid arguments`);
     if (call.arguments.type === 'json') {
         const inline = preflightJsonInput(call.arguments.value, { max_bytes: maxBytes });
@@ -730,7 +768,7 @@ export async function hydrateToolCallArguments(
     }
     let remainingBytes = maxBytes - inline.bytes;
     for (const reference of call.arguments.hydration) {
-        const asset = ownRecordValue(document.assets, reference.asset_id);
+        const asset = ownRecordValue(assets, reference.asset_id);
         if (asset === undefined) throw new Error(`Tool argument asset ${reference.asset_id} does not exist`);
         if (asset.kind !== 'text' || asset.mime_type !== 'text/plain') {
             throw new Error(`Tool argument asset ${asset.id} must be text/plain`);

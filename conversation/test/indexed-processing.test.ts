@@ -5,14 +5,19 @@ import {
     type IndexedConversationRecordStore,
     loadIndexedPendingProcessingJobs,
     loadIndexedProcessingAppendAcceptance,
+    loadIndexedProcessingQueuedJobAcceptance,
     loadIndexedProcessingSelectedContext,
     loadIndexedSelectedTextContext,
     stageIndexedConversationSnapshot,
+    stageIndexedProcessingCoverage,
     stageIndexedProcessingNoOpCompletion,
     stageIndexedProcessingPhase,
+    stageIndexedProcessingPolicy,
+    stageIndexedProcessingQueue,
     stageIndexedRecordBatch,
 } from '../src/indexed-conversation.js';
 import { resolveIndexedProcessingTextInput } from '../src/indexed-processing-working-set.js';
+import { getPagedRecord } from '../src/paged-record-index.js';
 import { setProcessingPolicy } from '../src/processing.js';
 import { appendConversationRecordsWithProcessing } from '../src/runtime.js';
 import { INDEXED_PROCESSING_SELECTED_MAX_BLOCKS } from '../src/schemas/indexed-head.js';
@@ -77,6 +82,434 @@ async function configured() {
 }
 
 describe('indexed processing append index', () => {
+    it('requires explicit supersession of every pending obligation for an enabled policy transition and exact retry', async () => {
+        const document = await configured();
+        const memory = storage();
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        if (!initial.locator) throw new Error('Pending policy fixture lacks its initial root');
+        const processors = [
+            document.processing.processors[0],
+            { ...document.processing.processors[0], required: false },
+        ];
+        const policy = await stageIndexedProcessingPolicy(
+            memory.store,
+            initial.root,
+            initial.locator,
+            {
+                operation_id: 'policy:two-obligations',
+                expected_revision: initial.root.source.revision,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors,
+            },
+            async () => undefined,
+        );
+        const turn = userTurn('turn:policy-obligations');
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:policy-obligations', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const appended = await stageIndexedRecordBatch(
+            policy.root,
+            {
+                conversation_id: document.id,
+                batch,
+                options: {
+                    operation_id: 'append:policy-obligations',
+                    expected_revision: policy.root.source.revision,
+                    payload_fingerprint: await fingerprintJson(batch),
+                    recorded_at: RECORDED_AT,
+                },
+            },
+            memory.store,
+        );
+        if (!appended.locator) throw new Error('Pending policy fixture lacks its accepted root');
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, appended.root);
+        expect(pending.jobs).toHaveLength(2);
+        expect(pending.required_unresolved_job_count).toBe(1);
+        const command = {
+            operation_id: 'policy:replacement',
+            expected_revision: appended.root.source.revision,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [document.processing.processors[0]],
+        };
+        await expect(
+            stageIndexedProcessingPolicy(memory.store, appended.root, appended.locator, command, async () => undefined),
+        ).rejects.toThrow('explicit supersession of every unresolved job');
+        await expect(
+            stageIndexedProcessingPolicy(
+                memory.store,
+                appended.root,
+                appended.locator,
+                { ...command, supersede_job_ids: [pending.jobs[0].job.id], supersession_reason: 'reconfigured' },
+                async () => undefined,
+            ),
+        ).rejects.toThrow('explicit supersession of every unresolved job');
+        expect(
+            (await loadIndexedPendingProcessingJobs(memory.store, appended.root)).jobs.map(({ job }) => job.id),
+        ).toEqual(pending.jobs.map(({ job }) => job.id));
+        const acceptedCommand = {
+            ...command,
+            supersede_job_ids: pending.jobs.map(({ job }) => job.id),
+            supersession_reason: 'reconfigured',
+        };
+        const changed = await stageIndexedProcessingPolicy(
+            memory.store,
+            appended.root,
+            appended.locator,
+            acceptedCommand,
+            async () => undefined,
+        );
+        expect((await loadIndexedPendingProcessingJobs(memory.store, changed.root)).unresolved_job_count).toBe(0);
+        expect(changed.receipt.processing_operation?.superseded_job_ids).toEqual(acceptedCommand.supersede_job_ids);
+        const retry = await stageIndexedProcessingPolicy(
+            memory.store,
+            changed.root,
+            changed.locator,
+            acceptedCommand,
+            async () => undefined,
+        );
+        expect(retry.applied).toBe(false);
+        expect(retry.receipt).toEqual(changed.receipt);
+        expect(retry.locator).toEqual(changed.locator);
+        await expect(
+            stageIndexedProcessingPolicy(
+                memory.store,
+                changed.root,
+                changed.locator,
+                { ...acceptedCommand, supersession_reason: 'different' },
+                async () => undefined,
+            ),
+        ).rejects.toThrow();
+    });
+    it(
+        'queues a new manual job after more than 256 actual completed indexed jobs without scanning cold job records',
+        async () => {
+            const document = await configured();
+            const memory = storage();
+            const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+            if (!initial.locator) throw new Error('Historical queue fixture lacks its initial root');
+            const manual = { ...document.processing.processors[0], scope: 'manual' as const };
+            const policy = await stageIndexedProcessingPolicy(
+                memory.store,
+                initial.root,
+                initial.locator,
+                {
+                    operation_id: 'operation:history-policy',
+                    expected_revision: initial.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    enabled: true,
+                    processors: [...document.processing.processors, manual],
+                },
+                async () => undefined,
+            );
+            let head = { root: policy.root, locator: policy.locator };
+            for (let index = 0; index < 257; index++) {
+                const turn = {
+                    ...userTurn(`turn:history:${index}`),
+                    blocks: [{ id: `block:history:${index}`, type: 'json' as const, value: { index } }],
+                };
+                const batch = {
+                    turns: [turn],
+                    context_entries:
+                        index === 0
+                            ? [
+                                  {
+                                      id: `entry:history:${index}`,
+                                      type: 'source_turn' as const,
+                                      turn_id: turn.id,
+                                  },
+                              ]
+                            : [],
+                };
+                const appended = await stageIndexedRecordBatch(
+                    head.root,
+                    {
+                        conversation_id: document.id,
+                        batch,
+                        options: {
+                            operation_id: `operation:history:${index}`,
+                            expected_revision: head.root.source.revision,
+                            payload_fingerprint: await fingerprintJson(batch),
+                            recorded_at: RECORDED_AT,
+                        },
+                    },
+                    memory.store,
+                );
+                if (!appended.locator) throw new Error('Historical append lacks its root');
+                const job = (await loadIndexedPendingProcessingJobs(memory.store, appended.root)).jobs[0]?.job;
+                if (!job) throw new Error('Historical append lacks its actual job');
+                const selected = await loadIndexedProcessingSelectedContext(
+                    memory.store,
+                    appended.root,
+                    appended.locator,
+                );
+                const resolution = await resolveIndexedProcessingTextInput(selected, job, RECORDED_AT);
+                const resolved = await stageIndexedProcessingPhase(memory.store, appended.root, appended.locator, {
+                    phase: 'resolve',
+                    value: resolution,
+                });
+                const payload = {
+                    kind: 'no_op' as const,
+                    job_id: job.id,
+                    reason: 'no_eligible_blocks',
+                    resolved_input_fingerprint: await fingerprintJson(resolution),
+                    recorded_at: RECORDED_AT,
+                };
+                const output = await stageIndexedProcessingPhase(memory.store, resolved.root, resolved.locator, {
+                    phase: 'output',
+                    value: { ...payload, output_fingerprint: await fingerprintJson(payload) },
+                });
+                const completed = await stageIndexedProcessingNoOpCompletion(
+                    memory.store,
+                    output.root,
+                    output.locator,
+                    job.id,
+                );
+                head = { root: completed.root, locator: completed.locator };
+            }
+            const settled = await loadIndexedPendingProcessingJobs(memory.store, head.root);
+            expect(settled.job_count).toBe(257);
+            expect(settled.unresolved_job_count).toBe(0);
+            const selected = await loadIndexedProcessingSelectedContext(memory.store, head.root, head.locator);
+            const command = {
+                operation_id: 'operation:history-manual',
+                expected_revision: head.root.source.revision,
+                expected_context_revision: selected.context.revision,
+                recorded_at: RECORDED_AT,
+                processor_id: 'externalize-text',
+                scope: 'manual' as const,
+                selected_entry_ids: ['entry:history:0'],
+            };
+            memory.reads.length = 0;
+            const queued = await stageIndexedProcessingQueue(memory.store, head.root, head.locator, command);
+            expect(queued.applied).toBe(true);
+            const pending = await loadIndexedPendingProcessingJobs(memory.store, queued.root);
+            expect(pending.job_count).toBe(258);
+            expect(pending.unresolved_job_count).toBe(1);
+            expect(memory.reads.filter((read) => read.startsWith('processing_records:')).length).toBeLessThanOrEqual(8);
+            expect(
+                (await stageIndexedProcessingQueue(memory.store, queued.root, queued.locator, command)).applied,
+            ).toBe(false);
+        },
+        WORKING_SET_CAPACITY_TEST_TIMEOUT_MS,
+    );
+
+    it('binds a selected on-budget job, its retry and measured target coverage to one accepted indexed policy', async () => {
+        const document = await configured();
+        const memory = storage();
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        if (!initial.locator) throw new Error('Indexed policy fixture lacks a root');
+        const policyCommand = {
+            operation_id: 'operation:selected-policy',
+            expected_revision: initial.root.source.revision,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [
+                ...document.processing.processors,
+                {
+                    id: 'semantic-summary',
+                    version: '1',
+                    scope: 'on_budget' as const,
+                    config: {},
+                    required: true,
+                    failure_behavior: 'block' as const,
+                },
+            ],
+            budget: { max_input_tokens: 1, output_reserve_tokens: 0, measurement_policy: 'exact_only' as const },
+        };
+        const supported: string[] = [];
+        const assertSupported = async (configuration: { id: string }) => {
+            supported.push(configuration.id);
+        };
+        const policy = await stageIndexedProcessingPolicy(
+            memory.store,
+            initial.root,
+            initial.locator,
+            policyCommand,
+            assertSupported,
+        );
+        if (!policy.locator) throw new Error('Indexed policy was not staged');
+        expect(supported).toEqual(['externalize-text', 'semantic-summary']);
+        expect(
+            (
+                await stageIndexedProcessingPolicy(
+                    memory.store,
+                    policy.root,
+                    policy.locator,
+                    policyCommand,
+                    assertSupported,
+                )
+            ).applied,
+        ).toBe(false);
+        expect(supported).toHaveLength(2);
+        const turn = userTurn('turn:budget', 'block:budget');
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:budget', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const appended = await stageIndexedRecordBatch(
+            policy.root,
+            {
+                conversation_id: document.id,
+                batch,
+                options: {
+                    operation_id: 'operation:budget-source',
+                    expected_revision: policy.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        if (!appended.locator) throw new Error('Indexed budget source was not accepted');
+        const selected = await loadIndexedProcessingSelectedContext(memory.store, appended.root, appended.locator);
+        const target = `sha256:${'a'.repeat(64)}`;
+        const queueCommand = {
+            operation_id: 'operation:budget-queue',
+            expected_revision: appended.root.source.revision,
+            expected_context_revision: selected.context.revision,
+            recorded_at: RECORDED_AT,
+            processor_id: 'semantic-summary',
+            scope: 'on_budget' as const,
+            selected_entry_ids: ['entry:budget'],
+            target_fingerprint: target,
+        };
+        const queued = await stageIndexedProcessingQueue(memory.store, appended.root, appended.locator, queueCommand);
+        if (!queued.locator) throw new Error('Indexed budget job was not accepted');
+        expect(queued.job).toMatchObject({ scope: 'on_budget', target_fingerprint: target, required: true });
+        expect((await loadIndexedPendingProcessingJobs(memory.store, queued.root)).unresolved_job_count).toBe(2);
+        expect(
+            (await stageIndexedProcessingQueue(memory.store, queued.root, queued.locator, queueCommand)).job,
+        ).toEqual(queued.job);
+        await expect(
+            stageIndexedProcessingQueue(memory.store, queued.root, queued.locator, {
+                ...queueCommand,
+                target_fingerprint: `sha256:${'b'.repeat(64)}`,
+            }),
+        ).rejects.toThrow('retry conflicts');
+        const coverageCommand = {
+            operation_id: 'operation:budget-coverage',
+            expected_revision: queued.root.source.revision,
+            target_fingerprint: target,
+            measured_input_tokens: 2,
+            tokenizer_id: 'tokenizer:exact',
+            measurement_fingerprint: `sha256:${'c'.repeat(64)}`,
+            recorded_at: RECORDED_AT,
+        };
+        const coverage = await stageIndexedProcessingCoverage(
+            memory.store,
+            queued.root,
+            queued.locator,
+            coverageCommand,
+        );
+        expect(coverage.coverage.status).toBe('pending');
+        const foreignTarget = await stageIndexedProcessingCoverage(memory.store, queued.root, queued.locator, {
+            ...coverageCommand,
+            operation_id: 'operation:foreign-target',
+            target_fingerprint: `sha256:${'d'.repeat(64)}`,
+        });
+        expect(foreignTarget.coverage.status).toBe('blocked');
+    });
+
+    it('derives a manual text job from one accepted current turn and replays its exact source', async () => {
+        const document = await configured();
+        const memory = storage();
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        if (!initial.locator) throw new Error('Indexed manual policy fixture lacks a root');
+        const policy = await stageIndexedProcessingPolicy(
+            memory.store,
+            initial.root,
+            initial.locator,
+            {
+                operation_id: 'operation:manual-policy',
+                expected_revision: initial.root.source.revision,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors: [
+                    {
+                        id: 'externalize-text',
+                        version: '1',
+                        scope: 'manual',
+                        config: {},
+                        required: true,
+                        failure_behavior: 'block',
+                    },
+                ],
+            },
+            async () => {},
+        );
+        if (!policy.locator) throw new Error('Indexed manual policy lacks an accepted locator');
+        const turn = userTurn('turn:manual', 'block:manual');
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:manual', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const appended = await stageIndexedRecordBatch(
+            policy.root,
+            {
+                conversation_id: document.id,
+                batch,
+                options: {
+                    operation_id: 'operation:manual-source',
+                    expected_revision: policy.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        if (!appended.locator) throw new Error('Indexed manual source lacks an accepted locator');
+        expect(
+            (await loadIndexedProcessingAppendAcceptance(memory.store, appended.root, 'operation:manual-source')).jobs,
+        ).toHaveLength(0);
+        const selected = await loadIndexedProcessingSelectedContext(memory.store, appended.root, appended.locator);
+        const command = {
+            operation_id: 'operation:manual-queue',
+            expected_revision: appended.root.source.revision,
+            expected_context_revision: selected.context.revision,
+            recorded_at: RECORDED_AT,
+            processor_id: 'externalize-text',
+            scope: 'manual' as const,
+            selected_entry_ids: ['entry:manual'],
+        };
+        const queued = await stageIndexedProcessingQueue(memory.store, appended.root, appended.locator, command);
+        if (!queued.locator) throw new Error('Indexed manual queue lacks an accepted locator');
+        expect(queued.job.scope).toBe('manual');
+        expect(
+            (await loadIndexedProcessingQueuedJobAcceptance(memory.store, queued.root, queued.job.id)).command,
+        ).toEqual(command);
+        const current = await loadIndexedProcessingSelectedContext(memory.store, queued.root, queued.locator);
+        const resolution = await resolveIndexedProcessingTextInput(current, queued.job, RECORDED_AT);
+        expect(resolution.entry_ids).toEqual(['entry:manual']);
+        expect((await stageIndexedProcessingQueue(memory.store, queued.root, queued.locator, command)).job).toEqual(
+            queued.job,
+        );
+        await expect(
+            stageIndexedProcessingQueue(memory.store, queued.root, queued.locator, {
+                ...command,
+                selected_entry_ids: ['entry:other'],
+            }),
+        ).rejects.toThrow('retry conflicts');
+        const retainedCommand = await getPagedRecord(
+            memory.store,
+            queued.root.directories.processing_records,
+            JSON.stringify(['selected_queue_commands', command.operation_id]),
+        );
+        if (retainedCommand?.storage !== 'record') throw new Error('Retained queue command is absent');
+        memory.records.set(
+            retainedCommand.content_hash,
+            canonicalJsonContentBytes({
+                ...command,
+                selected_entry_ids: ['entry:forged'],
+            }),
+        );
+        await expect(
+            loadIndexedProcessingQueuedJobAcceptance(memory.store, queued.root, queued.job.id),
+        ).rejects.toThrow();
+    });
+
     it('rejects unsupported mixed trigger policy before indexed activation rather than queueing an irrecoverable policy-index job', async () => {
         const mixed = (
             await setProcessingPolicy(emptyDocument('conversation:mixed-policy'), {
@@ -107,7 +540,7 @@ describe('indexed processing append index', () => {
         ).document;
         const { store } = storage();
         await expect(stageIndexedConversationSnapshot(mixed, undefined, store)).rejects.toThrow(
-            'only registered on-append ordinary text',
+            'one registered on-append text or whole-exchange processor',
         );
     });
 

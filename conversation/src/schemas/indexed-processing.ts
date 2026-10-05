@@ -5,7 +5,13 @@ import { ProcessorConfigurationSchema } from './document.js';
 import { OperationReceiptSchema } from './execution.js';
 import { IndexedProcessingSelectedContextSchema } from './indexed-head.js';
 import { TimestampSchema } from './primitives.js';
-import { ProcessingAttemptReceiptSchema, ProcessingJobSchema, ProcessingResolvedInputSchema } from './processing.js';
+import {
+    ProcessingAttemptReceiptSchema,
+    ProcessingCompletionReceiptSchema,
+    ProcessingJobSchema,
+    ProcessingOutputReceiptSchema,
+    ProcessingResolvedInputSchema,
+} from './processing.js';
 
 /** The indexed text profile admits only bounded transfer/binding metadata. These are enforced
  * in the shared contract, before archive acceptance or worker output construction. */
@@ -38,6 +44,19 @@ export const IndexedProcessingArchivesSchema = z
         }
     });
 
+/** A point-addressed prior stage, not a current-head or caller-supplied selection grant.
+ * The indexed host reads every member from the same immutable accepted job cohort. */
+export const IndexedProcessingPredecessorEvidenceSchema = z.strictObject({
+    job: ProcessingJobSchema,
+    resolution: ProcessingResolvedInputSchema,
+    output: ProcessingOutputReceiptSchema,
+    resolution_receipt: OperationReceiptSchema,
+    attempt: ProcessingAttemptReceiptSchema.optional(),
+    completion: ProcessingCompletionReceiptSchema,
+    receipt: OperationReceiptSchema,
+});
+export type IndexedProcessingPredecessorEvidence = z.infer<typeof IndexedProcessingPredecessorEvidenceSchema>;
+
 /** Integrity-bound private processing input. Every turn is explicitly projected, never a full history. */
 export const IndexedProcessingClaimWorkspaceSchema = z.strictObject({
     version: z.literal(1),
@@ -46,6 +65,7 @@ export const IndexedProcessingClaimWorkspaceSchema = z.strictObject({
     configuration: ProcessorConfigurationSchema,
     resolution: ProcessingResolvedInputSchema,
     attempt: ProcessingAttemptReceiptSchema,
+    predecessor: IndexedProcessingPredecessorEvidenceSchema.optional(),
     snapshot_at: TimestampSchema,
     archives: IndexedProcessingArchivesSchema,
 });

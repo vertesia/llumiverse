@@ -39,7 +39,7 @@ export function selectedTextWorkingSet(
     const texts: TextExternalizationSourceBlock[] = [];
     for (const entry of entries) {
         const turn = document.turns.get(entry.turn_id);
-        if (!turn || entry.type !== 'source_turn') throw new Error('Text externalization source entry is unavailable');
+        if (!turn) throw new Error('Text externalization source entry is unavailable');
         const activeIds = entry.block_ids === undefined ? undefined : new Set(entry.block_ids);
         const blocks = turn.active_blocks.filter((block) => activeIds === undefined || activeIds.has(block.id));
         const selectedIds = resolution.selected_block_ids?.[entry.id];

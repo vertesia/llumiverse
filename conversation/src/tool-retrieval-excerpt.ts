@@ -1,9 +1,14 @@
 import { z } from 'zod';
 import { hashContentBytes } from './content-integrity.js';
-import { resolveActiveTextExternalReference } from './external-reference-retrieval.js';
+import {
+    resolveActiveTextExternalReference,
+    resolveIndexedTextExternalReference,
+} from './external-reference-retrieval.js';
 import { fingerprintJson } from './identity.js';
+import { preflightJsonInput } from './json-preflight.js';
 import { ToolResultBlockSchema } from './schemas/content.js';
-import { ExecutionReceiptSchema } from './schemas/execution.js';
+import { ExecutionReceiptSchema, ToolCallSourceRefSchema, ToolRetrievalExcerptSchema } from './schemas/execution.js';
+import { IndexedConversationSelectedContextSchema } from './schemas/indexed-head.js';
 import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
 import type {
     ConversationDocument,
@@ -291,4 +296,136 @@ export async function verifyToolRetrievalExcerptBytes(
         (await fingerprintJson(claim.projection)) !== (await fingerprintJson(expected.projection))
     )
         throw new TypeError('Retrieval receipt differs from authenticated asset range bytes');
+}
+
+const IndexedReadArguments = z.strictObject({
+    path: z.string().min(1).max(1024),
+    asset_id: z.string().min(1).max(512),
+    start_byte: z.number().int().nonnegative().safe().optional(),
+    byte_count: z.number().int().min(1).max(5000).optional(),
+    start_line: z.number().int().positive().safe().optional(),
+    end_line: z.number().int().positive().safe().optional(),
+    line_numbers: z.boolean().optional(),
+});
+
+/** A nominated indexed read conflicts with its accepted selected call, reader, or asset. */
+export class IndexedToolRetrievalConflict extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexedToolRetrievalConflict';
+    }
+}
+
+/** A bounded indexed read uses the same accepted excerpt contract as a materialized read.
+ * Only the exact active selected call and its accepted retrieval requirement can nominate bytes;
+ * the host must verify the immutable owned archive generation before calling this pure builder.
+ */
+export async function renderIndexedToolRetrievalResult(
+    selectedInput: unknown,
+    sourceInput: unknown,
+    assetId: string,
+    bytes: Uint8Array,
+): Promise<{ text: string; excerpt: ToolRetrievalExcerpt; path: string }> {
+    if (!preflightJsonInput({ selected: selectedInput, source: sourceInput }, { max_bytes: 32 * 1024 * 1024 }).success)
+        throw new TypeError('Indexed retrieval source is not bounded selected JSON');
+    const selected = IndexedConversationSelectedContextSchema.parse(structuredClone(selectedInput));
+    const source = ToolCallSourceRefSchema.parse(structuredClone(sourceInput));
+    if (
+        selected.completeness !== 'selected_media_compaction_pending_admission' ||
+        source.conversation.conversation_id !== selected.source.conversation_id ||
+        source.conversation.revision > selected.source.revision
+    )
+        throw new IndexedToolRetrievalConflict('Indexed retrieval lacks its exact selected conversation source');
+    const calls = selected.turns.flatMap((turn) =>
+        turn.selected_blocks.filter((block) => block.id === source.block_id).map((block) => ({ turn, block })),
+    );
+    const found = calls[0];
+    const call = found?.block;
+    if (
+        calls.length !== 1 ||
+        found.turn.header.id !== source.turn_id ||
+        call?.type !== 'tool_call' ||
+        call.executor !== 'application' ||
+        call.call_id !== source.call_id ||
+        call.arguments.type !== 'json' ||
+        (await fingerprintJson(call)) !== source.call_fingerprint
+    )
+        throw new IndexedToolRetrievalConflict('Indexed retrieval call is not its exact accepted application source');
+    const parsedArgs = IndexedReadArguments.safeParse(call.arguments.value);
+    if (!parsedArgs.success)
+        throw new IndexedToolRetrievalConflict('Indexed retrieval call has no supported bounded byte arguments');
+    const args = parsedArgs.data;
+    if (args.start_line !== undefined || args.end_line !== undefined || args.line_numbers === true)
+        throw new IndexedToolRetrievalConflict('Indexed exchange archive requires exact bounded byte paging');
+    const referenceBlocks = [...selected.turns, ...(selected.replacement_turns ?? []).map((item) => item.projection)]
+        .flatMap((turn) => turn.selected_blocks)
+        .filter((block) => block.type === 'external_reference' && block.asset_id === assetId);
+    if (referenceBlocks.length !== 1)
+        throw new IndexedToolRetrievalConflict('Indexed retrieval has no one selected external reference');
+    const referenceBlock = referenceBlocks[0];
+    const reference = resolveIndexedTextExternalReference(selected, assetId, referenceBlock.id);
+    const locator = reference.asset.storage.type === 'external' ? reference.asset.storage.locator : undefined;
+    const integrity = await hashContentBytes(bytes);
+    if (
+        call.tool_name !== 'read_artifact' ||
+        call.definition_id !== reference.tool_definition.id ||
+        args.asset_id !== assetId ||
+        args.path !== locator?.artifact_path ||
+        reference.block.retrieval.capability !== 'read_artifact' ||
+        reference.block.retrieval.arguments.asset_id !== assetId ||
+        reference.block.retrieval.arguments.path !== args.path ||
+        reference.asset.content_hash !== integrity.content_hash ||
+        reference.asset.byte_length !== integrity.byte_length
+    )
+        throw new IndexedToolRetrievalConflict('Indexed retrieval differs from its accepted selected asset and reader');
+    const start = args.start_byte ?? 0;
+    if (start > bytes.byteLength)
+        throw new IndexedToolRetrievalConflict('Indexed retrieval byte start exceeds its owned archive');
+    let end = Math.min(bytes.byteLength, start + (args.byte_count ?? 5000));
+    let content = '';
+    while (end > start) {
+        try {
+            content = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(start, end));
+            break;
+        } catch {
+            end -= 1;
+        }
+    }
+    if (end === start && start < bytes.byteLength)
+        throw new IndexedToolRetrievalConflict('Indexed retrieval start_byte is not a UTF-8 boundary');
+    const text = JSON.stringify({
+        asset_id: assetId,
+        path: args.path,
+        content_hash: reference.asset.content_hash,
+        content,
+        byte_start: start,
+        byte_end_exclusive: end,
+        total_bytes: bytes.byteLength,
+        ...(end < bytes.byteLength ? { next_byte_offset: end } : {}),
+    });
+    const returnedBlock = {
+        id: `${source.block_id}:result:text`,
+        type: 'text' as const,
+        format: 'plain' as const,
+        text,
+    };
+    return {
+        text,
+        path: args.path,
+        excerpt: ToolRetrievalExcerptSchema.parse({
+            version: 1,
+            source: source.conversation,
+            asset_id: assetId,
+            accepted_asset_operation_id: reference.accepted_asset_operation_id,
+            external_reference_block_id: reference.block.id,
+            reference_fingerprint: await fingerprintJson(reference.block),
+            content_hash: reference.asset.content_hash,
+            byte_start: start,
+            byte_end_exclusive: end,
+            tool_definition_id: reference.tool_definition.id,
+            projection: { kind: 'json_byte_excerpt' },
+            returned_block_id: returnedBlock.id,
+            returned_block_fingerprint: await fingerprintJson(returnedBlock),
+        }),
+    };
 }

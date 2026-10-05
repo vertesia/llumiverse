@@ -5,19 +5,28 @@ import {
     hashContentBytes,
     inlineAssetContentIntegrity,
 } from './content-integrity.js';
+import { planContextChangeWorkingSet } from './context-change-working-set.js';
 import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
-import { fingerprintJson } from './identity.js';
+import { deriveConversationId, fingerprintJson } from './identity.js';
+import { INDEXED_EXCHANGE_PROCESSOR_ID, INDEXED_EXCHANGE_PROCESSOR_VERSION } from './indexed-exchange-constants.js';
+import { applyIndexedExchangeOutput } from './indexed-exchange-processing.js';
 import { createIndexedProcessingScratchStore } from './indexed-processing-scratch-store.js';
 import {
+    activeIndexedContextWorkingSet,
     applyIndexedTextExternalizationOutput,
+    indexedPredecessorEntrySelection,
     indexedProcessingContextFingerprint,
     resolveIndexedProcessingTextInput,
 } from './indexed-processing-working-set.js';
 import { DEFAULT_JSON_INPUT_LIMITS, preflightJsonInput } from './json-preflight.js';
+import { createAcceptedOutputFragmentFromRecords } from './output.js';
 import {
     buildPagedRecordIndex,
     getPagedRecord,
+    getPagedRecords,
     insertPagedRecords,
+    PAGED_RECORD_INDEX_MAX_BATCH_BYTES,
+    PAGED_RECORD_INDEX_MAX_BATCH_KEYS,
     type PagedRecordIndexStore,
     type PagedRecordRef,
     PagedRecordRefSchema,
@@ -28,15 +37,29 @@ import {
     scanPagedRecords,
 } from './paged-record-index.js';
 import { eligibleProcessingAppendRecords } from './processing-append-selection.js';
-import { constructProcessingJobs } from './processing-job-construction.js';
+import { constructProcessingJobs, MAX_PROCESSING_STAGES_PER_OPERATION } from './processing-job-construction.js';
 import { countUnresolvedProcessingJobs } from './processing-job-status.js';
 import { createProcessingTransitionReceipt } from './processing-transition-receipt.js';
+import { renderContentBlockText } from './rendering.js';
+import { MAX_PROCESSOR_CONFIGURATION_BYTES } from './runtime-constants.js';
 import { ConversationDeleteChangeSchema } from './schemas/change.js';
-import { AssetSchema, ContentBlockSchema, ConversationTurnSchema, ToolDefinitionSchema } from './schemas/content.js';
+import {
+    AssetSchema,
+    ContentBlockSchema,
+    ConversationTurnSchema,
+    GeneratedAgentTurnSchema,
+    ToolDefinitionSchema,
+} from './schemas/content.js';
+import { ContextChangePlanInputSchema } from './schemas/context-change.js';
 import { ContextEntrySchema } from './schemas/context-foundation.js';
 import { ConversationDeleteOperationSchema } from './schemas/conversation-delete-operation.js';
 import { ConversationContextSchema } from './schemas/document.js';
-import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from './schemas/execution.js';
+import {
+    ExecutionReceiptSchema,
+    GenerationSchema,
+    OperationReceiptSchema,
+    ToolCallSourceRefSchema,
+} from './schemas/execution.js';
 import {
     INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
     INDEXED_CONVERSATION_DELETE_PROFILE,
@@ -62,6 +85,10 @@ import {
     IndexedConversationTurnLinkSchema,
     type IndexedProcessingCoverageCommand,
     IndexedProcessingCoverageCommandSchema,
+    type IndexedProcessingPolicyCommand,
+    IndexedProcessingPolicyCommandSchema,
+    type IndexedProcessingQueueCommand,
+    IndexedProcessingQueueCommandSchema,
     type IndexedProcessingReadinessCoverage,
     IndexedProcessingReadinessCoverageSchema,
     IndexedProcessingSelectedContextSchema,
@@ -70,16 +97,18 @@ import {
     IndexedProcessingArchiveAssetSchema,
     type IndexedProcessingClaimWorkspace,
     IndexedProcessingClaimWorkspaceSchema,
+    IndexedProcessingPredecessorEvidenceSchema,
 } from './schemas/indexed-processing.js';
 import {
     IndexedProcessingClosureCommandSchema,
     IndexedProcessingClosureWitnessSchema,
 } from './schemas/indexed-processing-closure.js';
 import { IndexedRecordBatchCommandSchema } from './schemas/ingestion.js';
+import { ConversationOutputReceiptSchema } from './schemas/output.js';
 
 export { IndexedRecordBatchCommandSchema } from './schemas/ingestion.js';
 
-import { ContentHashSchema, IdentifierSchema } from './schemas/primitives.js';
+import { ContentHashSchema, IdentifierSchema, NonnegativeSafeIntegerSchema } from './schemas/primitives.js';
 import {
     ProcessingAttemptReceiptSchema,
     ProcessingCompletionReceiptSchema,
@@ -98,8 +127,12 @@ import type {
     ConversationDocument,
     ConversationRecordBatch,
     ConversationTurn,
+    ExecutionReceipt,
     OperationReceipt,
+    PendingApplicationToolCall,
     ProcessingJob,
+    ProcessorConfiguration,
+    ToolResultBlock,
 } from './types.js';
 import { parseConversationDocument } from './validation.js';
 
@@ -155,6 +188,12 @@ export interface IndexedConversationRecordStore extends PagedRecordIndexStore {
     writeRecord(value: Extract<PagedRecordValue, { storage: 'record' }>, bytes: Uint8Array): Promise<void>;
     /** Host custody check for incoming external bytes, before immutable record staging or head publication. */
     assertExternalAssetIntegrity?(asset: Asset): Promise<void>;
+    /** Service-owned selected-read verification; a caller receipt alone never proves bytes. */
+    assertRetrievalExcerptIntegrity?(
+        source: IndexedConversationRoot,
+        result: ToolResultBlock,
+        receipt: ExecutionReceipt,
+    ): Promise<void>;
 }
 
 export interface StagedIndexedConversationRoot {
@@ -757,6 +796,39 @@ export async function stageIndexedConversationSnapshot(
     return { root, locator };
 }
 
+/** Batch fresh index nominations without retaining one obsolete immutable page per inserted key.
+ * Partition only the owned commands; never traverse the lifetime index. Every grouped insertion
+ * preserves exact collision checks and durable page readback under the caller's operation budget. */
+async function insertFreshIndexedRecords(
+    store: IndexedConversationRecordStore,
+    directories: IndexedConversationRoot['directories'],
+    family: keyof IndexedConversationRoot['directories'],
+    commands: readonly { key: string; value: PagedRecordValue }[],
+): Promise<void> {
+    // An absent optional directory must stay omitted when this append has no nominations.
+    // Assigning undefined would make the authenticated root non-JSON.
+    if (commands.length === 0) return;
+    let locator = directories[family];
+    let group: { key: string; value: PagedRecordValue }[] = [];
+    let bytes = 0;
+    const flush = async () => {
+        if (group.length === 0) return;
+        locator = await insertPagedRecords(store, locator, group);
+        group = [];
+        bytes = 0;
+    };
+    for (const command of commands) {
+        const commandBytes = canonicalJsonContentBytes(command).byteLength + 1;
+        // Reserve the bounded root/envelope JSON overhead inside the existing 8MiB command cap.
+        if (group.length >= 4096 || bytes + commandBytes > PAGED_RECORD_INDEX_MAX_BATCH_BYTES - 1024) await flush();
+        group.push(command);
+        bytes += commandBytes;
+    }
+    await flush();
+    if (locator === undefined) throw new Error('Nonempty indexed insertion has no retained directory');
+    directories[family] = locator;
+}
+
 /** Maintain the complete reverse-delete witness for every record family this indexed append accepts. */
 async function appendDeleteIndex(
     store: IndexedConversationRecordStore,
@@ -824,29 +896,30 @@ async function appendDeleteIndex(
         await markTurn(receipt.result_turn_id);
         await markTurn(receipt.call_source?.turn_id);
     }
+    const freshBlockers: { key: string; value: PagedRecordValue }[] = [];
     for (const id of blockers) {
         if (await getPagedRecord(store, directories.deletion_blockers, id)) continue;
-        directories.deletion_blockers = await putPagedRecord(store, directories.deletion_blockers, id, {
-            storage: 'marker',
-            kind: 'delete_blocker',
-            id,
-        });
+        freshBlockers.push({ key: id, value: { storage: 'marker', kind: 'delete_blocker', id } });
     }
+    await insertFreshIndexedRecords(store, directories, 'deletion_blockers', freshBlockers);
     const turns = batch.turns ?? [];
-    for (const turn of turns) {
-        directories.turn_acceptances = await putPagedRecord(store, directories.turn_acceptances, turn.id, {
-            storage: 'marker',
-            kind: 'turn_acceptance',
-            id: operationId,
-        });
-        for (const block of turn.blocks) {
-            directories.block_owners = await putPagedRecord(store, directories.block_owners, block.id, {
-                storage: 'marker',
-                kind: 'block_owner',
-                id: turn.id,
-            });
-        }
-    }
+    await insertFreshIndexedRecords(
+        store,
+        directories,
+        'turn_acceptances',
+        turns.map((turn) => ({ key: turn.id, value: { storage: 'marker', kind: 'turn_acceptance', id: operationId } })),
+    );
+    await insertFreshIndexedRecords(
+        store,
+        directories,
+        'block_owners',
+        turns.flatMap((turn) =>
+            turn.blocks.map((block) => ({
+                key: block.id,
+                value: { storage: 'marker', kind: 'block_owner', id: turn.id },
+            })),
+        ),
+    );
     if (turns.length === 0) {
         return { live_turn_count: root.live_turn_count, active_tail_turn_id: root.active_tail_turn_id };
     }
@@ -868,6 +941,7 @@ async function appendDeleteIndex(
             'replace',
         );
     }
+    const links: { key: string; value: PagedRecordValue }[] = [];
     for (const [index, turn] of turns.entries()) {
         const previousTurnId = index === 0 ? previousTail : turns[index - 1].id;
         const link = IndexedConversationTurnLinkSchema.parse({
@@ -876,13 +950,9 @@ async function appendDeleteIndex(
             ...(previousTurnId === null ? {} : { previous_turn_id: previousTurnId }),
             ...(index === turns.length - 1 ? {} : { next_turn_id: turns[index + 1].id }),
         });
-        directories.turn_links = await putPagedRecord(
-            store,
-            directories.turn_links,
-            turn.id,
-            await stageRecord(store, 'turn_links', turn.id, link),
-        );
+        links.push({ key: turn.id, value: await stageRecord(store, 'turn_links', turn.id, link) });
     }
+    await insertFreshIndexedRecords(store, directories, 'turn_links', links);
     return {
         live_turn_count: root.live_turn_count + turns.length,
         active_tail_turn_id: turns.at(-1)?.id ?? previousTail,
@@ -1002,6 +1072,7 @@ async function loadIndexedSelectedContext(
     includeDependencies = false,
     includeMediaCompaction = false,
     purpose: 'preparation' | 'processing' = 'preparation',
+    allowPendingCalls = false,
 ) {
     if (
         !Number.isSafeInteger(maxSelectedBytes) ||
@@ -1355,12 +1426,28 @@ async function loadIndexedSelectedContext(
                             operationId,
                             OperationReceiptSchema,
                         );
+                        const acceptedRequirement =
+                            acceptance.accepted_retrieval_requirements?.filter(
+                                (item) =>
+                                    item.id === requirement[0]?.id &&
+                                    item.asset_id === asset.id &&
+                                    canonicalJsonContentString(item.retrieval) ===
+                                        canonicalJsonContentString(content.retrieval),
+                            ).length === 1;
+                        // A compaction introduces a retrieval requirement after the original asset
+                        // publication. Its accepted compaction and retained-asset witness, rather
+                        // than the earlier asset receipt, proves that new requirement's selection.
+                        const retainedCompactionRequirement =
+                            compactionId !== undefined &&
+                            compactionWitnesses.get(compactionId)?.compaction.retained_asset_ids.includes(asset.id) ===
+                                true;
                         if (
                             acceptance.id !== operationId ||
                             acceptance.conversation_id !== root.source.conversation_id ||
                             acceptance.operation_kind !== undefined ||
                             acceptance.result_revision > root.source.revision ||
-                            acceptance.accepted_asset_ids?.filter((id) => id === asset.id).length !== 1
+                            acceptance.accepted_asset_ids?.filter((id) => id === asset.id).length !== 1 ||
+                            (!acceptedRequirement && !retainedCompactionRequirement)
                         )
                             throw new Error('Indexed external reference lacks its accepted asset publication');
                         assets.set(asset.id, asset);
@@ -1423,9 +1510,24 @@ async function loadIndexedSelectedContext(
                 ) {
                     throw new Error('Indexed selected call differs from its accepted generation and exact call index');
                 }
+                if (call.block.definition_id !== undefined) {
+                    let definition = toolDefinitions.get(call.block.definition_id);
+                    if (!definition) {
+                        definition = await readDependency(
+                            'tool_definitions',
+                            call.block.definition_id,
+                            ToolDefinitionSchema,
+                        );
+                        toolDefinitions.set(definition.id, definition);
+                    }
+                    if (definition.id !== call.block.definition_id || definition.name !== call.block.tool_name) {
+                        throw new Error('Indexed selected call differs from its pinned tool definition');
+                    }
+                }
                 if (!result) {
-                    // Preparation of a dependent request cannot silently omit a completed result or
-                    // execute an unresolved application call on behalf of the caller.
+                    // Append admission may contain an accepted call before the tool executes. It
+                    // still requires an exact pending call index. Provider coverage/ready readers remain strict.
+                    if (allowPendingCalls && !callState.result_block_id && !callState.terminal_receipt_id) continue;
                     throw new Error('Indexed selected call requires its exact selected terminal result');
                 }
                 if (callState.result_block_id !== result.block.id || !callState.terminal_receipt_id) {
@@ -1476,22 +1578,9 @@ async function loadIndexedSelectedContext(
                     ) {
                         throw new Error('Indexed selected result lacks its accepted operation/receipt witness');
                     }
+                    operationWitnesses.set(operation.id, operation);
                     await assertToolResultReceiptFingerprint(result.block, receipt);
                     executionWitnesses.set(receipt.id, receipt);
-                }
-                if (call.block.definition_id !== undefined) {
-                    let definition = toolDefinitions.get(call.block.definition_id);
-                    if (!definition) {
-                        definition = await readDependency(
-                            'tool_definitions',
-                            call.block.definition_id,
-                            ToolDefinitionSchema,
-                        );
-                        toolDefinitions.set(definition.id, definition);
-                    }
-                    if (definition.id !== call.block.definition_id || definition.name !== call.block.tool_name) {
-                        throw new Error('Indexed selected call differs from its pinned tool definition');
-                    }
                 }
             }
         }
@@ -2196,8 +2285,18 @@ export async function stageIndexedRecordBatch(
     );
     if (processing.enabled && root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
         throw new Error('Indexed enabled append requires a complete processing outbox index');
-    if (processing.enabled) assertSupportedIndexedReadinessPolicy(processing);
+    if (processing.enabled) await assertIndexedCurrentPolicy(store, root, processing);
+    const wholeExchange = processing.enabled && processing.processors[0]?.id === INDEXED_EXCHANGE_PROCESSOR_ID;
+    const assetOnly = batch.assets !== undefined && Object.keys(batch).every((key) => key === 'assets');
+    const processingArchive = processing.enabled && assetOnly && options.operation_id.startsWith('processing:archive:');
+    const archiveJobId = processingArchive ? options.operation_id.slice('processing:archive:'.length) : undefined;
     const newTurns = new Map((batch.turns ?? []).map((turn) => [turn.id, turn]));
+    const acceptedExchangePairs: {
+        call_turn_id: string;
+        call_block_id: string;
+        result_turn_id: string;
+        result_block_id: string;
+    }[] = [];
     const newGenerations = new Map((batch.generations ?? []).map((generation) => [generation.id, generation]));
     const newAssets = new Map((batch.assets ?? []).map((asset) => [asset.id, asset]));
     const newDefinitions = new Map((batch.tool_definitions ?? []).map((definition) => [definition.id, definition]));
@@ -2214,28 +2313,26 @@ export async function stageIndexedRecordBatch(
         if (records.size !== count) throw new Error('Indexed append has duplicate records in one family');
     }
     const globalIds = new Map<string, string>();
-    const register = async (id: string, kind: string, allowRetainedDefinition = false) => {
+    const retainedDefinitionIds = new Set<string>();
+    const register = (id: string, kind: string, allowRetainedDefinition = false) => {
         if (globalIds.has(id)) throw new Error(`Indexed append duplicates ${id}`);
         globalIds.set(id, kind);
-        const retained = await getPagedRecord(store, root.directories.identifiers, id);
-        if (retained !== undefined && !(allowRetainedDefinition && retained.kind === 'tool definition')) {
-            throw new IndexedRecordAppendConflict('record_conflict', `Indexed append identity ${id} already exists`);
-        }
+        if (allowRetainedDefinition) retainedDefinitionIds.add(id);
     };
-    await register(options.operation_id, 'operation receipt');
+    register(options.operation_id, 'operation receipt');
     for (const turn of batch.turns ?? []) {
-        await register(turn.id, 'turn');
+        register(turn.id, 'turn');
         for (const block of turn.blocks) {
-            await register(block.id, 'block');
-            if (block.type === 'tool_call') await register(block.call_id, 'tool call');
+            register(block.id, 'block');
+            if (block.type === 'tool_call') register(block.call_id, 'tool call');
             if (block.type === 'tool_result') {
-                for (const nested of block.content) await register(nested.id, 'block');
+                for (const nested of block.content) register(nested.id, 'block');
             }
         }
     }
     for (const generation of batch.generations ?? []) {
-        await register(generation.id, 'generation');
-        if (generation.request_receipt) await register(generation.request_receipt.id, 'request receipt');
+        register(generation.id, 'generation');
+        if (generation.request_receipt) register(generation.request_receipt.id, 'request receipt');
     }
     const verifiedExternalAssetIds = new Set<string>();
     const verifyExternalAsset = async (asset: Asset): Promise<void> => {
@@ -2246,28 +2343,54 @@ export async function stageIndexedRecordBatch(
         verifiedExternalAssetIds.add(asset.id);
     };
     for (const asset of batch.assets ?? []) {
-        await register(asset.id, 'asset');
+        register(asset.id, 'asset');
+    }
+    for (const definition of batch.tool_definitions ?? []) register(definition.id, 'tool definition', true);
+    for (const receipt of batch.execution_receipts ?? []) register(receipt.id, 'execution receipt');
+    for (const entry of batch.context_entries ?? []) register(entry.id, 'context entry');
+    for (const requirement of batch.retrieval_requirements ?? []) register(requirement.id, 'retrieval requirement');
+    const readIdentities = async (ids: readonly string[]) => {
+        const retained = new Map<string, PagedRecordValue>();
+        const encoder = new TextEncoder();
+        let offset = 0;
+        while (offset < ids.length) {
+            const first = offset;
+            // Reserve the small immutable root/envelope overhead, and partition by actual JSON
+            // bytes as well as key count. Long already-retained references keep their prior capacity.
+            let bytes = 1024;
+            while (offset < ids.length && offset - first < PAGED_RECORD_INDEX_MAX_BATCH_KEYS) {
+                const next = encoder.encode(JSON.stringify(ids[offset])).byteLength + 1;
+                if (offset > first && bytes + next > PAGED_RECORD_INDEX_MAX_BATCH_BYTES) break;
+                bytes += next;
+                offset++;
+            }
+            const values = await getPagedRecords(store, root.directories.identifiers, ids.slice(first, offset));
+            for (const [id, value] of values) retained.set(id, value);
+        }
+        return retained;
+    };
+    const retainedIdentities = await readIdentities([...globalIds.keys()]);
+    for (const [id, retained] of retainedIdentities) {
+        if (!(retainedDefinitionIds.has(id) && retained.kind === 'tool definition'))
+            throw new IndexedRecordAppendConflict('record_conflict', `Indexed append identity ${id} already exists`);
+    }
+    for (const asset of batch.assets ?? []) {
         // Even an unattached new asset is durable adoption, not previously accepted provenance.
         // Exact operation retries returned above without requiring another byte grant/read.
         if (asset.storage.type === 'external') await verifyExternalAsset(asset);
     }
-    for (const definition of batch.tool_definitions ?? []) await register(definition.id, 'tool definition', true);
-    for (const receipt of batch.execution_receipts ?? []) await register(receipt.id, 'execution receipt');
-    for (const entry of batch.context_entries ?? []) await register(entry.id, 'context entry');
-    for (const requirement of batch.retrieval_requirements ?? [])
-        await register(requirement.id, 'retrieval requirement');
     if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE) {
+        const historicalIds = new Set<string>();
         for (const item of batch.generations ?? []) {
             if (item.record_source !== 'executed') continue;
             for (const id of [
                 ...item.request_receipt.item_mappings.map((mapping) => mapping.canonical_id),
                 ...item.request_receipt.asset_versions.map((binding) => binding.asset_id),
-            ]) {
-                if (!globalIds.has(id) && !(await getPagedRecord(store, root.directories.identifiers, id))) {
-                    globalIds.set(id, 'historical_reference');
-                }
-            }
+            ])
+                if (!globalIds.has(id)) historicalIds.add(id);
         }
+        const retained = await readIdentities([...historicalIds]);
+        for (const id of historicalIds) if (!retained.has(id)) globalIds.set(id, 'historical_reference');
     }
     const definition = async (id: string) =>
         newDefinitions.get(id) ?? indexedRecordById(store, root, 'tool_definitions', id, ToolDefinitionSchema);
@@ -2331,7 +2454,10 @@ export async function stageIndexedRecordBatch(
         if (existing) callStates.set(id, existing);
         return existing;
     };
+    // Tool ingress owns each inserted turn through its execution receipt. The outer batch
+    // operation hashes those turns and therefore cannot also supply their provenance ID.
     for (const [index, turn] of (batch.turns ?? []).entries()) {
+        const execution = turn.execution_id === undefined ? undefined : newExecution.get(turn.execution_id);
         if (
             turn.provenance.type === 'derived' ||
             turn.provenance.type === 'imported' ||
@@ -2339,11 +2465,22 @@ export async function stageIndexedRecordBatch(
             (turn.kind === 'agent' && turn.provenance.type !== 'generated' && turn.provenance.type !== 'received') ||
             (turn.kind === 'tool' &&
                 turn.provenance.type !== 'received' &&
-                !(turn.provenance.type === 'inserted' && turn.provenance.operation_id === options.operation_id)) ||
+                !(
+                    turn.provenance.type === 'inserted' &&
+                    (turn.provenance.operation_id === options.operation_id ||
+                        (turn.provenance.operation_id === turn.execution_id &&
+                            execution?.executor === 'application' &&
+                            execution.result_turn_id === turn.id &&
+                            execution.call_source !== undefined &&
+                            turn.blocks.length === 1 &&
+                            turn.blocks[0]?.type === 'tool_result' &&
+                            turn.blocks[0].call_id === execution.call_id &&
+                            turn.blocks[0].status === execution.status))
+                )) ||
             (turn.kind === 'program' &&
                 (turn.provenance.type !== 'inserted' || turn.provenance.operation_id !== options.operation_id))
         )
-            throw new Error('Indexed append does not support this turn provenance');
+            throw new IndexedRecordAppendValidationError('Indexed append does not support this turn provenance');
         if (turn.parent_turn_id && !(await turnExists(turn.parent_turn_id))) {
             throw new Error('Indexed append parent turn is unavailable');
         }
@@ -2458,6 +2595,26 @@ export async function stageIndexedRecordBatch(
                 );
             }
             if (block.type === 'tool_result') {
+                const readReceipt = (batch.execution_receipts ?? []).find(
+                    (receipt) => receipt.call_id === block.call_id && receipt.result_turn_id === turn.id,
+                );
+                const selectedReadResult =
+                    wholeExchange &&
+                    block.content.length === 1 &&
+                    block.content[0]?.type === 'text' &&
+                    readReceipt?.metadata?.retrieval_excerpt !== undefined;
+                const hasExternalReference = block.content.some((content) => content.type === 'external_reference');
+                if (
+                    wholeExchange &&
+                    !selectedReadResult &&
+                    hasExternalReference &&
+                    !(
+                        block.content.length === 1 &&
+                        block.content[0]?.type === 'external_reference' &&
+                        block.content[0].original_type === 'text'
+                    )
+                )
+                    throw new Error('Indexed whole-exchange result requires one exact original archive reference');
                 const call = await readCall(block.call_id);
                 if (!call || call.result_block_id) throw new Error('Indexed tool result has no open retained call');
                 const callBlock =
@@ -2470,6 +2627,20 @@ export async function stageIndexedRecordBatch(
                         call.call_fingerprint
                 ) {
                     throw new Error('Indexed tool result call proof is unavailable');
+                }
+                if (selectedReadResult && callBlock.tool_name !== 'read_artifact')
+                    throw new Error('Indexed inline retrieval result is not the selected read tool');
+                if (
+                    block.content.length === 1 &&
+                    block.content[0]?.type === 'external_reference' &&
+                    block.content[0].original_type === 'text'
+                ) {
+                    acceptedExchangePairs.push({
+                        call_turn_id: call.turn_id,
+                        call_block_id: call.block_id,
+                        result_turn_id: turn.id,
+                        result_block_id: block.id,
+                    });
                 }
                 for (const content of block.content) {
                     if (content.type === 'text' || content.type === 'json' || content.type === 'external_reference')
@@ -2538,7 +2709,54 @@ export async function stageIndexedRecordBatch(
     }
     for (const item of batch.assets ?? []) {
         if (item.provenance.type === 'derived') {
-            throw new Error('Indexed append cannot validate derived-asset provenance yet');
+            const source = await indexedRecordById(store, root, 'assets', item.provenance.source_asset_id, AssetSchema);
+            const job = archiveJobId ? await ownedIndexedProcessingJob(store, root, archiveJobId) : undefined;
+            const selected = job?.selection.kind === 'entries' ? job.selection : undefined;
+            const acceptedSource = job
+                ? await indexedRecordById(
+                      store,
+                      root,
+                      'operation_receipts',
+                      job.source_operation_id,
+                      OperationReceiptSchema,
+                  )
+                : undefined;
+            const resultEntryId = selected?.entry_ids[1];
+            const resultEntry = selected?.selected_entries?.[1];
+            const resultBlockId = resultEntryId ? selected?.selected_block_ids?.[resultEntryId]?.[0] : undefined;
+            const resultBlock = resultBlockId
+                ? await indexedRecordById(store, root, 'blocks', resultBlockId, ContentBlockSchema)
+                : undefined;
+            const reference = resultBlock?.type === 'tool_result' ? resultBlock.content[0] : undefined;
+            if (
+                !processingArchive ||
+                job?.processor_id !== INDEXED_EXCHANGE_PROCESSOR_ID ||
+                job.processor_version !== INDEXED_EXCHANGE_PROCESSOR_VERSION ||
+                !selected ||
+                selected.entry_ids.length !== 2 ||
+                resultBlock?.type !== 'tool_result' ||
+                resultBlock.content.length !== 1 ||
+                reference?.type !== 'external_reference' ||
+                !source ||
+                reference.asset_id !== source.id ||
+                source.provenance.type !== 'received' ||
+                resultEntry?.type !== 'source_turn' ||
+                source.provenance.source_turn_id !== resultEntry.turn_id ||
+                !acceptedSource?.accepted_asset_ids?.includes(source.id) ||
+                source.kind !== 'text' ||
+                source.storage.type !== 'external' ||
+                !source.content_hash ||
+                source.byte_length === undefined ||
+                reference.content_hash !== source.content_hash ||
+                item.kind !== source.kind ||
+                item.mime_type !== source.mime_type ||
+                item.content_hash !== source.content_hash ||
+                item.byte_length !== source.byte_length ||
+                item.provenance.transform_id !== 'conversation.archive_rehome' ||
+                item.provenance.transform_version !== '1'
+            ) {
+                throw new Error('Indexed derived archive lacks its exact selected original and immutable bytes');
+            }
         }
         if (item.provenance.type === 'generated' && !(await generation(item.provenance.generation_id))) {
             throw new Error('Indexed generated asset has no generation');
@@ -2664,11 +2882,11 @@ export async function stageIndexedRecordBatch(
                 );
             }
             if (item.metadata?.retrieval_excerpt) {
-                // No first-publication byte custody reader is supplied by the ordinary run append route.
-                // Retained exact retries return above before staging, preserving committed provenance.
-                throw new IndexedRecordAppendValidationError(
-                    'Indexed retrieval receipt requires authenticated asset byte verification',
-                );
+                if (!store.assertRetrievalExcerptIntegrity)
+                    throw new IndexedRecordAppendValidationError(
+                        'Indexed retrieval receipt requires authenticated asset byte verification',
+                    );
+                await store.assertRetrievalExcerptIntegrity(root, resultBlock, item);
             }
             await assertToolResultReceiptFingerprint(resultBlock, item);
         }
@@ -2820,8 +3038,6 @@ export async function stageIndexedRecordBatch(
         processing.enabled,
     );
     // Match materialized append: archive publication feeds an existing job and must not recursively enqueue.
-    const assetOnly = batch.assets !== undefined && Object.keys(batch).every((key) => key === 'assets');
-    const processingArchive = processing.enabled && assetOnly && options.operation_id.startsWith('processing:archive:');
     if (processingArchive) {
         for (const asset of batch.assets ?? []) IndexedProcessingArchiveAssetSchema.parse(asset);
     }
@@ -2829,6 +3045,54 @@ export async function stageIndexedRecordBatch(
         processing.enabled && !assetOnly
             ? processing.processors.flatMap((processor, index) => (processor.scope === 'on_append' ? [index] : []))
             : [];
+    const exchangeProcessor = processing.processors.find(
+        (processor) =>
+            processor.id === INDEXED_EXCHANGE_PROCESSOR_ID && processor.version === INDEXED_EXCHANGE_PROCESSOR_VERSION,
+    );
+    const exchangeSelections: {
+        entry_ids: string[];
+        selected_block_ids: Record<string, string[]>;
+        selected_entries: z.infer<typeof ContextEntrySchema>[];
+    }[] = [];
+    if (processing.enabled && exchangeProcessor && acceptedExchangePairs.length > 0) {
+        if (acceptedExchangePairs.length > MAX_PROCESSING_STAGES_PER_OPERATION)
+            throw new Error('Indexed exchange append exceeds its bounded completed results');
+        for (const pair of acceptedExchangePairs) {
+            const callEntries = nextContext.entries.filter(
+                (entry) =>
+                    entry.type === 'source_turn' &&
+                    entry.turn_id === pair.call_turn_id &&
+                    (entry.block_ids === undefined || entry.block_ids.includes(pair.call_block_id)),
+            );
+            const resultEntries = nextContext.entries.filter(
+                (entry) =>
+                    entry.type === 'source_turn' &&
+                    entry.turn_id === pair.result_turn_id &&
+                    (entry.block_ids === undefined || entry.block_ids.includes(pair.result_block_id)),
+            );
+            const callEntry = callEntries[0];
+            const resultEntry = resultEntries[0];
+            if (
+                !callEntry ||
+                !resultEntry ||
+                callEntries.length !== 1 ||
+                resultEntries.length !== 1 ||
+                nextContext.protected_entry_ids.includes(callEntry.id) ||
+                nextContext.protected_entry_ids.includes(resultEntry.id) ||
+                nextContext.entries.indexOf(callEntry) >= nextContext.entries.indexOf(resultEntry) ||
+                !(receipt.accepted_context_entry_ids ?? []).includes(resultEntry.id)
+            )
+                throw new Error('Indexed exchange append lacks one active ordered unprotected executed call/result');
+            exchangeSelections.push({
+                entry_ids: [callEntry.id, resultEntry.id],
+                selected_entries: [callEntry, resultEntry],
+                selected_block_ids: {
+                    [callEntry.id]: [pair.call_block_id],
+                    [resultEntry.id]: [pair.result_block_id],
+                },
+            });
+        }
+    }
     const acceptedJobs = await constructProcessingJobs({
         conversation_id: root.source.conversation_id,
         revision: nextRevision,
@@ -2837,6 +3101,7 @@ export async function stageIndexedRecordBatch(
         processors: processing.processors,
         processor_indices: processorIndices,
         entry_ids: selection.entryIds,
+        ...(exchangeSelections.length === 0 ? {} : { exchange_selections: exchangeSelections }),
         ...(selection.selectedBlockIds === undefined ? {} : { selected_block_ids: selection.selectedBlockIds }),
         ...(selection.selectedEntries === undefined ? {} : { selected_entries: selection.selectedEntries }),
     });
@@ -2845,19 +3110,30 @@ export async function stageIndexedRecordBatch(
             throw new Error('Indexed append processing job identity conflicts');
     }
     const directories = { ...root.directories };
+    const fresh = new Map<keyof typeof directories, { key: string; value: PagedRecordValue }[]>();
+    const nominate = (family: keyof typeof directories, key: string, value: PagedRecordValue) => {
+        const commands = fresh.get(family) ?? [];
+        commands.push({ key, value });
+        fresh.set(family, commands);
+    };
+    const flushFamily = async (family: keyof typeof directories) => {
+        const commands = fresh.get(family);
+        if (!commands) return;
+        await insertFreshIndexedRecords(store, directories, family, commands);
+        fresh.delete(family);
+    };
     const write = async (
         family: keyof typeof directories,
         id: string,
         value: unknown,
         mode: 'insert' | 'replace' = 'insert',
     ) => {
-        directories[family] = await putPagedRecord(
-            store,
-            directories[family],
-            id,
-            await stageRecord(store, family, id, value),
-            mode,
-        );
+        const record = await stageRecord(store, family, id, value);
+        if (mode === 'insert') nominate(family, id, record);
+        else {
+            await flushFamily(family);
+            directories[family] = await putPagedRecord(store, directories[family], id, record, mode);
+        }
     };
     for (const turn of batch.turns ?? []) {
         const { blocks, ...header } = turn;
@@ -2876,21 +3152,13 @@ export async function stageIndexedRecordBatch(
     }
     for (const item of batch.generations ?? []) {
         await write('generations', item.id, item);
-        directories.generation_acceptances = await putPagedRecord(store, directories.generation_acceptances, item.id, {
+        nominate('generation_acceptances', item.id, {
             storage: 'marker',
             kind: 'generation_acceptance',
             id: options.operation_id,
         });
     }
-    if (processingArchive && (batch.assets?.length ?? 0) > 0) {
-        const commands: { key: string; value: PagedRecordValue }[] = [];
-        for (const item of batch.assets ?? []) {
-            commands.push({ key: item.id, value: await stageRecord(store, 'assets', item.id, item) });
-        }
-        directories.assets = await insertPagedRecords(store, directories.assets, commands);
-    } else {
-        for (const item of batch.assets ?? []) await write('assets', item.id, item);
-    }
+    for (const item of batch.assets ?? []) await write('assets', item.id, item);
     for (const item of batch.tool_definitions ?? []) {
         const retained = await indexedRecordById(store, root, 'tool_definitions', item.id, ToolDefinitionSchema);
         if (!retained) await write('tool_definitions', item.id, item);
@@ -2958,38 +3226,33 @@ export async function stageIndexedRecordBatch(
             });
         }
     }
-    if (processingArchive && globalIds.size > 0) {
-        directories.identifiers = await insertPagedRecords(
-            store,
-            directories.identifiers,
-            [...globalIds].map(([id, kind]) => ({ key: id, value: { storage: 'marker', kind, id } })),
-        );
-    } else {
-        for (const [id, kind] of globalIds) {
-            if (kind === 'tool definition' && (await getPagedRecord(store, root.directories.identifiers, id))) continue;
-            directories.identifiers = await putPagedRecord(store, directories.identifiers, id, {
-                storage: 'marker',
-                kind,
-                id,
-            });
-        }
+    // All fresh record/marker families are nominated once; existing call-state replacements
+    // retain their point-checked sequential semantics above.
+    for (const family of [...fresh.keys()]) await flushFamily(family);
+    const identifiers: { key: string; value: PagedRecordValue }[] = [];
+    for (const [id, kind] of globalIds) {
+        if (kind === 'tool definition' && (await getPagedRecord(store, root.directories.identifiers, id))) continue;
+        identifiers.push({ key: id, value: { storage: 'marker', kind, id } });
     }
-    for (const [index, turn] of (batch.turns ?? []).entries()) {
-        directories.turn_order = await putPagedRecord(
-            store,
-            directories.turn_order,
-            indexedOrderedKey(root.turn_count + index),
-            { storage: 'marker', kind: 'turn_order', id: turn.id },
-        );
-    }
-    for (const [index, entry] of (batch.context_entries ?? []).entries()) {
-        directories.active_context_order = await putPagedRecord(
-            store,
-            directories.active_context_order,
-            indexedOrderedKey(context.entries.length + index),
-            { storage: 'marker', kind: 'context_order', id: entry.id },
-        );
-    }
+    await insertFreshIndexedRecords(store, directories, 'identifiers', identifiers);
+    await insertFreshIndexedRecords(
+        store,
+        directories,
+        'turn_order',
+        (batch.turns ?? []).map((turn, index) => ({
+            key: indexedOrderedKey(root.turn_count + index),
+            value: { storage: 'marker', kind: 'turn_order', id: turn.id },
+        })),
+    );
+    await insertFreshIndexedRecords(
+        store,
+        directories,
+        'active_context_order',
+        (batch.context_entries ?? []).map((entry, index) => ({
+            key: indexedOrderedKey(context.entries.length + index),
+            value: { storage: 'marker', kind: 'context_order', id: entry.id },
+        })),
+    );
     const deleteIndex = await appendDeleteIndex(store, root, directories, options.operation_id, batch);
     const { entries: _entries, ...contextFields } = nextContext;
     const contextHeader = await stageRecord(
@@ -3468,6 +3731,7 @@ function boundedIndexedProcessingReader(
     const write = store.write;
     const writeRecord = store.writeRecord;
     const assertIntegrity = store.assertExternalAssetIntegrity;
+    const assertRetrieval = store.assertRetrievalExcerptIntegrity;
     // The cache belongs to this single operation. Integrity-addressed keys may share immutable
     // bytes, while fresh copies prevent either the underlying store or a caller mutating cache data.
     const pages = new Map<string, Promise<Uint8Array>>();
@@ -3491,6 +3755,12 @@ function boundedIndexedProcessingReader(
         ...(assertIntegrity === undefined
             ? {}
             : { assertExternalAssetIntegrity: (asset) => assertIntegrity.call(store, asset) }),
+        ...(assertRetrieval === undefined
+            ? {}
+            : {
+                  assertRetrievalExcerptIntegrity: (source, result, receipt) =>
+                      assertRetrieval.call(store, source, result, receipt),
+              }),
         write(bytes, ref) {
             return write.call(store, bytes, ref);
         },
@@ -3516,10 +3786,17 @@ async function assertIndexedProcessingAcceptanceWorkingSet(
     locator: PagedRecordRef,
 ): Promise<void> {
     const profile = { recordReads: 0, pageReads: 0, bytes: 0 };
-    const selected = await loadIndexedProcessingSelectedContext(
-        boundedIndexedProcessingReader(store, profile),
-        root,
-        locator,
+    const selected = IndexedProcessingSelectedContextSchema.parse(
+        await loadIndexedSelectedContext(
+            boundedIndexedProcessingReader(store, profile),
+            root,
+            locator,
+            INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+            true,
+            true,
+            'processing',
+            true,
+        ),
     );
     const textCount = selected.turns.reduce(
         (count, turn) =>
@@ -3590,6 +3867,31 @@ async function ownedIndexedProcessingJob(
         job.selection_fingerprint !== (await fingerprintJson(job.selection))
     )
         throw new Error('Indexed processing job differs from its accepted operation/configuration/selection');
+    if (acceptance.processing_operation?.phase === 'queue') {
+        const command = await indexedProcessingRecord(
+            store,
+            root,
+            'selected_queue_commands',
+            acceptance.id,
+            IndexedProcessingQueueCommandSchema,
+        );
+        if (
+            !command ||
+            command.operation_id !== acceptance.id ||
+            command.expected_revision !== acceptance.base_revision ||
+            command.processor_id !== job.processor_id ||
+            command.scope !== job.scope ||
+            command.target_fingerprint !== job.target_fingerprint ||
+            acceptance.processing_operation.job_id !== job.id ||
+            acceptance.payload_fingerprint !== (await fingerprintJson(command)) ||
+            job.selection.kind !== 'entries' ||
+            canonicalJsonContentString(command.selected_entry_ids) !==
+                canonicalJsonContentString(job.selection.entry_ids) ||
+            canonicalJsonContentString(command.selected_block_ids ?? null) !==
+                canonicalJsonContentString(job.selection.selected_block_ids ?? null)
+        )
+            throw new Error('Indexed selected job lost its exact accepted queue command');
+    }
     return job;
 }
 
@@ -3688,6 +3990,49 @@ export async function loadIndexedProcessingJobState(
         ...(completion === undefined ? {} : { completion }),
         ...(supersession === undefined ? {} : { supersession }),
     };
+}
+
+/** Point-addressed completed predecessor from the same immutable accepted append cohort.
+ * Neither an active entry with the same text nor an unrelated completed job can stand in. */
+export async function loadIndexedProcessingPredecessorEvidence(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    jobIdInput: string,
+) {
+    const nomination = { root: rootInput, job_id: jobIdInput };
+    if (!preflightJsonInput(nomination).success)
+        throw new TypeError('Indexed predecessor nomination is not bounded JSON');
+    const { root, job_id: jobId } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            job_id: IdentifierSchema,
+        })
+        .parse(structuredClone(nomination));
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, jobId);
+    if (job.selection.kind !== 'predecessor_output' || job.stage_index < 1) return undefined;
+    const prior = await loadIndexedProcessingJobState(store, root, job.selection.job_id);
+    if (!prior.resolution || !prior.resolution_receipt || !prior.output || !prior.completion || prior.supersession)
+        throw new Error('Indexed stage predecessor has not durably completed');
+    const receiptId = prior.completion.context_change_operation_id ?? `processing:complete:${prior.job.id}`;
+    const receipt = await indexedRecordById(store, root, 'operation_receipts', receiptId, OperationReceiptSchema);
+    if (
+        !receipt ||
+        receipt.result_revision > root.source.revision ||
+        receipt.conversation_id !== root.source.conversation_id
+    )
+        throw new Error('Indexed stage predecessor lost its accepted completion receipt');
+    const evidence = IndexedProcessingPredecessorEvidenceSchema.parse({
+        job: prior.job,
+        resolution: prior.resolution,
+        output: prior.output,
+        resolution_receipt: prior.resolution_receipt,
+        ...(prior.attempt === undefined ? {} : { attempt: prior.attempt }),
+        completion: prior.completion,
+        receipt,
+    });
+    await indexedPredecessorEntrySelection(job, evidence);
+    return evidence;
 }
 
 /** Exact asset append witness, point-loaded independently of the claim workspace or active preview. */
@@ -3901,6 +4246,16 @@ export async function loadIndexedProcessingSelectedContext(
     root: IndexedConversationRoot,
     locator: PagedRecordRef,
 ) {
+    // Archive-only input can precede tool execution. Exact accepted call/index proof remains required.
+    return loadIndexedProcessingContext(store, root, locator, true);
+}
+
+async function loadIndexedProcessingContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+    allowPendingCalls: boolean,
+) {
     return IndexedProcessingSelectedContextSchema.parse(
         await loadIndexedSelectedContext(
             boundedIndexedProcessingReader(store),
@@ -3910,8 +4265,122 @@ export async function loadIndexedProcessingSelectedContext(
             true,
             true,
             'processing',
+            allowPendingCalls,
         ),
     );
+}
+
+/** Add only immutable completed sibling transitions from this job's accepted append cohort.
+ * Historical replacement entries may no longer be active, but their point-addressed records and
+ * completion/compaction receipts remain retained. No lifetime compaction scan is permitted.
+ */
+export async function loadIndexedProcessingSelectedContextForJob(
+    storeInput: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+    jobId: string,
+) {
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, jobId);
+    const relation = await indexedRecordById(
+        store,
+        root,
+        'processing_by_operation',
+        job.source_operation_id,
+        IndexedProcessingOperationJobsSchema,
+    );
+    if (relation?.job_ids.filter((id) => id === jobId).length !== 1 || relation.job_ids.length > 16)
+        throw new Error('Indexed exchange lacks its bounded accepted sibling-job set');
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const compactionWitnesses = { ...selected.compaction_witnesses };
+    const lineageEntryWitnesses: Record<string, z.infer<typeof ContextEntrySchema>> = {};
+    const siblingCompactionIds: string[] = [];
+    let remainderCount = 0;
+    for (const siblingId of relation.job_ids) {
+        if (siblingId === jobId) continue;
+        const sibling = await ownedIndexedProcessingJob(store, root, siblingId);
+        if (
+            sibling.source_operation_id !== job.source_operation_id ||
+            sibling.processor_id !== 'externalize-whole-exchange' ||
+            sibling.processor_version !== '1'
+        )
+            throw new Error('Indexed exchange sibling differs from its accepted whole-exchange cohort');
+        const completion = await indexedProcessingRecord(
+            store,
+            root,
+            'completions',
+            siblingId,
+            ProcessingCompletionReceiptSchema,
+        );
+        if (!completion) continue;
+        const output = await indexedProcessingRecord(store, root, 'outputs', siblingId, ProcessingOutputReceiptSchema);
+        const compactionId = await deriveConversationId('indexed-exchange-compaction', siblingId);
+        const receipt = completion.context_change_operation_id
+            ? await indexedRecordById(
+                  store,
+                  root,
+                  'operation_receipts',
+                  completion.context_change_operation_id,
+                  OperationReceiptSchema,
+              )
+            : undefined;
+        const compaction = await indexedRecordById(
+            store,
+            root,
+            'compactions',
+            compactionId,
+            IndexedConversationCompactionHeaderSchema,
+        );
+        const outputPayload =
+            output?.kind === 'proposal' ? (({ output_fingerprint: _hash, ...value }) => value)(output) : undefined;
+        if (
+            completion.status !== 'applied' ||
+            !output ||
+            output.kind !== 'proposal' ||
+            output.proposal.kind !== 'replace_with_compaction' ||
+            output.proposal.compaction_id !== compactionId ||
+            completion.output_fingerprint !== output.output_fingerprint ||
+            !outputPayload ||
+            (await fingerprintJson(outputPayload)) !== output.output_fingerprint ||
+            !receipt ||
+            receipt.id !== `processing:apply:${siblingId}` ||
+            receipt.conversation_id !== root.source.conversation_id ||
+            receipt.operation_kind !== 'context_change' ||
+            receipt.context_change?.kind !== 'replace_with_compaction' ||
+            receipt.context_change.removed_entry_ids.length !== 2 ||
+            receipt.result_revision !== completion.result_revision ||
+            receipt.result_revision > root.source.revision ||
+            !compaction ||
+            compaction.id !== compactionId ||
+            compaction.operation_id !== receipt.id ||
+            compaction.source.source_fingerprint !== receipt.context_change.source_fingerprint ||
+            compaction.metadata?.applied_revision !== receipt.result_revision ||
+            compaction.metadata?.payload_fingerprint !== receipt.payload_fingerprint
+        )
+            throw new Error('Indexed exchange sibling lacks its exact accepted completion lineage');
+        compactionWitnesses[compactionId] = { compaction, acceptance: receipt };
+        siblingCompactionIds.push(compactionId);
+        for (const entryId of receipt.context_change.remainder_entry_ids ?? []) {
+            remainderCount++;
+            if (remainderCount > 32)
+                throw new RangeError('Indexed exchange accepted remainder lineage exceeds its bounded cohort');
+            if (!receipt.context_change.inserted_entry_ids.includes(entryId))
+                throw new Error('Indexed exchange remainder is absent from its accepted insertion');
+            const entry = await indexedRecordById(store, root, 'context_entries', entryId, ContextEntrySchema);
+            if (!entry || entry.id !== entryId || entry.type !== 'source_turn')
+                throw new Error('Indexed exchange accepted remainder entry is unavailable');
+            lineageEntryWitnesses[entryId] = entry;
+        }
+    }
+    const augmented = IndexedProcessingSelectedContextSchema.parse({
+        ...selected,
+        compaction_witnesses: compactionWitnesses,
+        lineage_entry_witnesses: lineageEntryWitnesses,
+        sibling_compaction_ids: siblingCompactionIds,
+    });
+    if (canonicalJsonContentBytes(augmented).byteLength > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES)
+        throw new RangeError('Indexed exchange selected lineage exceeds its bounded working set');
+    return augmented;
 }
 
 const IndexedProcessingPhaseCommandSchema = z.discriminatedUnion('phase', [
@@ -4021,8 +4490,17 @@ export async function stageIndexedProcessingPhase(
         throw new Error('Indexed processing phase differs from its exact accepted policy stage');
     let recordedAt: string;
     if (command.phase === 'resolve') {
-        const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
-        const resolution = await resolveIndexedProcessingTextInput(selected, job, command.value.recorded_at);
+        const selected =
+            job.processor_id === INDEXED_EXCHANGE_PROCESSOR_ID
+                ? await loadIndexedProcessingSelectedContextForJob(store, root, locator, job.id)
+                : await loadIndexedProcessingSelectedContext(store, root, locator);
+        const predecessor = await loadIndexedProcessingPredecessorEvidence(store, root, job.id);
+        const resolution = await resolveIndexedProcessingTextInput(
+            selected,
+            job,
+            command.value.recorded_at,
+            predecessor,
+        );
         if (!sameIndexedRecord(resolution, command.value))
             throw new Error('Indexed resolution is not derived from the exact selected source');
         recordedAt = command.value.recorded_at;
@@ -4037,8 +4515,12 @@ export async function stageIndexedProcessingPhase(
         if (!resolution || (await fingerprintJson(resolution)) !== command.value.resolved_input_fingerprint)
             throw new Error('Indexed processing phase lost its exact durable resolution');
         if (command.phase === 'attempt') {
-            const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
-            const current = await resolveIndexedProcessingTextInput(selected, job, resolution.recorded_at);
+            const selected =
+                job.processor_id === INDEXED_EXCHANGE_PROCESSOR_ID
+                    ? await loadIndexedProcessingSelectedContextForJob(store, root, locator, job.id)
+                    : await loadIndexedProcessingSelectedContext(store, root, locator);
+            const predecessor = await loadIndexedProcessingPredecessorEvidence(store, root, job.id);
+            const current = await resolveIndexedProcessingTextInput(selected, job, resolution.recorded_at, predecessor);
             if (current.context_fingerprint !== resolution.context_fingerprint)
                 throw new Error('Indexed attempt lost its active dependency context');
             recordedAt = command.value.started_at;
@@ -4122,6 +4604,7 @@ export async function stageIndexedTextProcessingCompletion(
     rootInput: IndexedConversationRoot,
     locatorInput: PagedRecordRef,
     workspaceInput: IndexedProcessingClaimWorkspace,
+    originalArchiveBytes: ReadonlyMap<string, Uint8Array> = new Map(),
 ): Promise<StagedIndexedProcessingCompletion> {
     const envelope = { root: rootInput, locator: locatorInput, workspace: workspaceInput };
     if (!preflightJsonInput(envelope, { max_bytes: 32 * 1024 * 1024 }).success)
@@ -4187,7 +4670,10 @@ export async function stageIndexedTextProcessingCompletion(
     }
     if (await indexedProcessingRecord(store, root, 'supersessions', job.id, ProcessingSupersessionReceiptSchema))
         throw new Error('Indexed completion job has been superseded');
-    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const selected =
+        job.processor_id === 'externalize-whole-exchange'
+            ? await loadIndexedProcessingSelectedContextForJob(store, root, locator, job.id)
+            : await loadIndexedProcessingSelectedContext(store, root, locator);
     const currentWorkspace = { ...workspace, selected };
     // Replay validates unchanged active-context identity against retained resolution, plus full
     // deterministic output equality. Merely having a job/output marker never proves the delta.
@@ -4205,12 +4691,16 @@ export async function stageIndexedTextProcessingCompletion(
     );
     if (!archiveReceipt || !sameIndexedRecord(archiveReceipt, workspace.archives.acceptance))
         throw new Error('Indexed completion archive receipt differs from its actual retained acceptance');
-    const mutation = await applyIndexedTextExternalizationOutput(currentWorkspace, output);
+    if (job.processor_id !== INDEXED_EXCHANGE_PROCESSOR_ID && originalArchiveBytes.size !== 0)
+        throw new Error('Indexed text completion has unexpected external archive bytes');
+    const mutation =
+        job.processor_id === INDEXED_EXCHANGE_PROCESSOR_ID &&
+        job.processor_version === INDEXED_EXCHANGE_PROCESSOR_VERSION
+            ? await applyIndexedExchangeOutput(currentWorkspace, output, originalArchiveBytes)
+            : await applyIndexedTextExternalizationOutput(currentWorkspace, output);
     const compaction = mutation.compaction;
     if (!compaction) throw new Error('Indexed text output lost its exact new compaction');
-    // Global identities carry the same semantic kinds as snapshot/append publication. A native
-    // request may bind these exact replacement turns/blocks after completion, so a generic
-    // processing marker would lose their immutable canonical entity identity.
+    // Replacement entities must retain their semantic identity kinds for later selected preparation.
     const newIdentities = [
         { id: compaction.id, kind: 'compaction' },
         { id: mutation.receipt.id, kind: 'operation receipt' },
@@ -4415,10 +4905,8 @@ export async function stageIndexedProcessingNoOpCompletion(
     if (
         job.processor_id !== 'externalize-text' ||
         job.processor_version !== '1' ||
-        job.scope !== 'on_append' ||
-        job.stage_index !== 0 ||
-        job.selection.kind !== 'entries' ||
-        job.selection.entry_ids.length !== 0 ||
+        (job.scope !== 'on_append' && job.scope !== 'manual' && job.scope !== 'on_budget') ||
+        (job.stage_index === 0 ? job.selection.kind !== 'entries' : job.selection.kind !== 'predecessor_output') ||
         !resolution ||
         resolution.entry_ids.length !== 0 ||
         resolution.source_turn_ids.length !== 0 ||
@@ -4429,6 +4917,16 @@ export async function stageIndexedProcessingNoOpCompletion(
         attempt
     )
         throw new Error('Indexed no-op completion requires its exact empty text selection and unattempted output');
+    const predecessor = await loadIndexedProcessingPredecessorEvidence(store, root, job.id);
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const expectedResolution = await resolveIndexedProcessingTextInput(
+        { ...selected, source: { ...selected.source, revision: resolution.source_revision } },
+        job,
+        resolution.recorded_at,
+        predecessor,
+    );
+    if (!sameIndexedRecord(expectedResolution, resolution))
+        throw new Error('Indexed no-op completion differs from its exact accepted ordered resolution');
     const { output_fingerprint: outputFingerprint, ...payload } = output;
     if (
         (await fingerprintJson(payload)) !== outputFingerprint ||
@@ -4559,6 +5057,586 @@ export interface StagedIndexedProcessingCoverage extends StagedIndexedProcessing
     coverage: IndexedProcessingReadinessCoverage;
 }
 
+/** Queue one exact selected current-context job. The host supplies an independently verified
+ * model target and owns the physical head CAS; the pure transition retains the selected plan,
+ * policy and job set in the same immutable revision as its accepted queue receipt.
+ */
+export async function stageIndexedProcessingQueue(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    commandInput: IndexedProcessingQueueCommand,
+): Promise<StagedIndexedProcessingPhase & { job: ProcessingJob }> {
+    const envelope = { root: rootInput, locator: locatorInput, command: commandInput };
+    if (!preflightJsonInput(envelope, { max_bytes: INDEXED_CONVERSATION_ACTIVE_MAX_BYTES }).success)
+        throw new TypeError('Indexed processing queue is not bounded JSON');
+    const { root, locator, command } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            command: IndexedProcessingQueueCommandSchema,
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed processing queue requires complete durable outbox indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const fingerprint = await fingerprintJson(command);
+    const prior = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        command.operation_id,
+        OperationReceiptSchema,
+    );
+    if (prior) {
+        const retainedCommand = await indexedProcessingRecord(
+            store,
+            root,
+            'selected_queue_commands',
+            command.operation_id,
+            IndexedProcessingQueueCommandSchema,
+        );
+        const association = await indexedRecordById(
+            store,
+            root,
+            'processing_by_operation',
+            command.operation_id,
+            IndexedProcessingOperationJobsSchema,
+        );
+        if (
+            prior.operation_kind !== 'processing' ||
+            prior.processing_operation?.phase !== 'queue' ||
+            prior.conversation_id !== root.source.conversation_id ||
+            prior.result_revision !== command.expected_revision + 1 ||
+            prior.payload_fingerprint !== fingerprint ||
+            prior.base_revision !== command.expected_revision ||
+            prior.recorded_at !== command.recorded_at ||
+            prior.result_revision > root.source.revision ||
+            association?.receipt_fingerprint !== (await fingerprintJson(prior)) ||
+            association.job_ids.length !== 1 ||
+            prior.processing_operation.job_id !== association.job_ids[0] ||
+            !retainedCommand ||
+            canonicalJsonContentString(retainedCommand) !== canonicalJsonContentString(command)
+        )
+            throw new Error('Indexed processing queue retry conflicts with its accepted job set');
+        const job = await ownedIndexedProcessingJob(store, root, association.job_ids[0]);
+        return { root, locator, receipt: prior, job, applied: false };
+    }
+    if (root.source.revision !== command.expected_revision)
+        throw new Error('Indexed processing queue source revision conflict');
+    if (Date.parse(command.recorded_at) < Date.parse(root.updated_at))
+        throw new Error('Indexed processing queue timestamp predates current source');
+    if (command.scope === 'on_budget' && !command.target_fingerprint)
+        throw new Error('Indexed on-budget queue requires exact measured target identity');
+    const header = await loadRecord(
+        store,
+        {
+            storage: 'record',
+            kind: 'processing_header',
+            id: root.source.conversation_id,
+            ...root.processing_header,
+        },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    await assertIndexedCurrentPolicy(store, root, header);
+    const counts = assertIndexedRequiredIdentity(root, header);
+    if (!header.enabled || counts.unresolved_job_count >= 256)
+        throw new Error('Indexed processing queue has no enabled bounded policy capacity');
+    const processorIndex = header.processors.findIndex(
+        (processor) => processor.id === command.processor_id && processor.scope === command.scope,
+    );
+    const processor = header.processors[processorIndex];
+    if (!processor) throw new Error('Indexed processing queue processor is absent from the accepted policy');
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    if (selected.context.revision !== command.expected_context_revision)
+        throw new Error('Indexed processing queue context revision conflict');
+    const entries = new Map(selected.context.entries.map((entry) => [entry.id, entry]));
+    const nominatedEntries = command.selected_entry_ids.map((id) => entries.get(id));
+    if (nominatedEntries.some((entry) => !entry))
+        throw new Error('Indexed processing queue selects an unavailable current entry');
+    const selectedEntries = nominatedEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+    const plan = await planContextChangeWorkingSet(
+        activeIndexedContextWorkingSet(selected),
+        ContextChangePlanInputSchema.parse({
+            expected_revision: root.source.revision,
+            expected_context_revision: command.expected_context_revision,
+            entry_ids: command.selected_entry_ids,
+            ...(command.selected_block_ids === undefined
+                ? {}
+                : {
+                      selected_block_ids: command.selected_block_ids,
+                      selected_entries: selectedEntries,
+                  }),
+        }),
+    );
+    const jobs = await constructProcessingJobs({
+        conversation_id: root.source.conversation_id,
+        revision: root.source.revision + 1,
+        source_operation_id: command.operation_id,
+        policy_revision: header.policy_revision,
+        processors: header.processors,
+        processor_indices: [processorIndex],
+        entry_ids: plan.entry_ids,
+        ...(plan.selected_block_ids === undefined ? {} : { selected_block_ids: plan.selected_block_ids }),
+        ...(plan.selected_entries === undefined ? {} : { selected_entries: plan.selected_entries }),
+        ...(command.target_fingerprint === undefined ? {} : { target_fingerprint: command.target_fingerprint }),
+    });
+    const job = jobs[0];
+    if (jobs.length !== 1 || !job)
+        throw new Error('Indexed processing queue requires one exact registered selected job');
+    if (
+        (await getPagedRecord(store, root.directories.identifiers, command.operation_id)) ||
+        (await getPagedRecord(store, root.directories.identifiers, job.id))
+    )
+        throw new Error('Indexed processing queue identity is already accepted');
+    const receipt = createProcessingTransitionReceipt({
+        source: root.source,
+        operation_id: command.operation_id,
+        payload_fingerprint: fingerprint,
+        recorded_at: command.recorded_at,
+        processing_operation: { phase: 'queue', policy_revision: header.policy_revision, job_id: job.id },
+    });
+    const directories = { ...root.directories };
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('jobs', job.id),
+        await stageRecord(store, 'processing_records', job.id, job),
+    );
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('selected_queue_commands', receipt.id),
+        await stageRecord(store, 'processing_records', receipt.id, command),
+    );
+    directories.processing_pending = await putPagedRecord(store, directories.processing_pending, job.id, {
+        storage: 'marker',
+        kind: 'processing_pending',
+        id: job.id,
+    });
+    if (job.required)
+        directories.processing_required = await putPagedRecord(store, directories.processing_required, job.id, {
+            storage: 'marker',
+            kind: 'processing_required',
+            id: job.id,
+        });
+    directories.processing_by_operation = await putPagedRecord(
+        store,
+        directories.processing_by_operation,
+        receipt.id,
+        await stageRecord(
+            store,
+            'processing_by_operation',
+            receipt.id,
+            IndexedProcessingOperationJobsSchema.parse({
+                version: 1,
+                operation_id: receipt.id,
+                receipt_fingerprint: await fingerprintJson(receipt),
+                job_ids: [job.id],
+            }),
+        ),
+    );
+    directories.operation_receipts = await putPagedRecord(
+        store,
+        directories.operation_receipts,
+        receipt.id,
+        await stageRecord(store, 'operation_receipts', receipt.id, receipt),
+    );
+    directories.identifiers = await insertPagedRecords(store, directories.identifiers, [
+        { key: receipt.id, value: { storage: 'marker', kind: 'operation receipt', id: receipt.id } },
+        { key: job.id, value: { storage: 'marker', kind: 'processing_job', id: job.id } },
+    ]);
+    const { coverage: _coverage, ...processing } = header;
+    const nextHeader = await stageRecord(
+        store,
+        'processing_header',
+        root.source.conversation_id,
+        IndexedConversationProcessingHeaderSchema.parse({
+            ...processing,
+            job_count: counts.job_count + 1,
+            unresolved_job_count: counts.unresolved_job_count + 1,
+            required_job_count: counts.required_job_count + (job.required ? 1 : 0),
+            required_unresolved_job_count: counts.required_unresolved_job_count + (job.required ? 1 : 0),
+        }),
+    );
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        source: { ...root.source, revision: receipt.result_revision },
+        updated_at: command.recorded_at,
+        directories,
+        processing_header: { content_hash: nextHeader.content_hash, size_bytes: nextHeader.size_bytes },
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed processing queue root exceeds its manifest bound');
+    return {
+        root: nextRoot,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        receipt,
+        job,
+        applied: true,
+    };
+}
+
+/** Read-only status after a scheduled control ACK. The service still proves the actual task,
+ * owner and current physical head; this point reader proves the accepted control operation.
+ */
+export async function loadIndexedProcessingControlAcceptance(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    sourceInput: { conversation_id: string; revision: number },
+    operationIdInput: string,
+    phaseInput: 'policy' | 'queue',
+    payloadFingerprintInput: string,
+) {
+    const envelope = {
+        root: rootInput,
+        source: sourceInput,
+        operation_id: operationIdInput,
+        phase: phaseInput,
+        payload_fingerprint: payloadFingerprintInput,
+    };
+    if (!preflightJsonInput(envelope).success) throw new TypeError('Indexed control observation is not bounded JSON');
+    const {
+        root,
+        source,
+        operation_id: operationId,
+        phase,
+        payload_fingerprint: payloadFingerprint,
+    } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            source: z.strictObject({ conversation_id: IdentifierSchema, revision: NonnegativeSafeIntegerSchema }),
+            operation_id: IdentifierSchema,
+            phase: z.enum(['policy', 'queue']),
+            payload_fingerprint: ContentHashSchema,
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed control observation requires complete durable outbox indexes');
+    if (root.source.conversation_id !== source.conversation_id || root.source.revision < source.revision + 1)
+        throw new Error('Indexed control changed its accepted source');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const receipt = await indexedRecordById(store, root, 'operation_receipts', operationId, OperationReceiptSchema);
+    if (
+        !receipt ||
+        receipt.id !== operationId ||
+        receipt.conversation_id !== source.conversation_id ||
+        receipt.base_revision !== source.revision ||
+        receipt.result_revision !== source.revision + 1 ||
+        receipt.operation_kind !== 'processing' ||
+        receipt.processing_operation?.phase !== phase ||
+        receipt.payload_fingerprint !== payloadFingerprint
+    )
+        throw new Error('Indexed control lacks its exact accepted scheduled operation');
+    if (phase === 'queue') {
+        const command = await indexedProcessingRecord(
+            store,
+            root,
+            'selected_queue_commands',
+            operationId,
+            IndexedProcessingQueueCommandSchema,
+        );
+        const relation = await indexedRecordById(
+            store,
+            root,
+            'processing_by_operation',
+            operationId,
+            IndexedProcessingOperationJobsSchema,
+        );
+        if (
+            !command ||
+            command.operation_id !== operationId ||
+            receipt.payload_fingerprint !== (await fingerprintJson(command)) ||
+            relation?.operation_id !== operationId ||
+            relation.receipt_fingerprint !== (await fingerprintJson(receipt)) ||
+            relation.job_ids.length !== 1 ||
+            relation.job_ids[0] !== receipt.processing_operation?.job_id
+        )
+            throw new Error('Indexed control lost its exact queued job association');
+        await ownedIndexedProcessingJob(store, root, relation.job_ids[0]);
+    } else if (receipt.processing_operation?.job_id !== undefined) {
+        throw new Error('Indexed policy control unexpectedly nominated a processing job');
+    }
+    const pending = await loadIndexedPendingProcessingJobs(store, root, { limit: 16 });
+    return {
+        receipt,
+        source: root.source,
+        remaining_processing:
+            pending.required_blocked_job_count > 0
+                ? ('blocked' as const)
+                : pending.unresolved_job_count > 0
+                  ? ('pending' as const)
+                  : ('none' as const),
+    };
+}
+
+/** Point-addressed scheduled manual/budget job origin. A current pending marker alone cannot
+ * authorize processing; the original queue command, receipt and one-job relation all agree. */
+export async function loadIndexedProcessingQueuedJobAcceptance(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    jobIdInput: string,
+) {
+    const envelope = { root: rootInput, job_id: jobIdInput };
+    if (!preflightJsonInput(envelope).success) throw new TypeError('Indexed queue origin is not bounded JSON');
+    const { root, job_id: jobId } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            job_id: IdentifierSchema,
+        })
+        .parse(structuredClone(envelope));
+    const store = boundedIndexedProcessingReader(storeInput);
+    const job = await ownedIndexedProcessingJob(store, root, jobId);
+    if (job.scope !== 'manual' && job.scope !== 'on_budget')
+        throw new Error('Indexed selected job is not a manual or measured-budget queue');
+    const command = await indexedProcessingRecord(
+        store,
+        root,
+        'selected_queue_commands',
+        job.source_operation_id,
+        IndexedProcessingQueueCommandSchema,
+    );
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        job.source_operation_id,
+        OperationReceiptSchema,
+    );
+    if (
+        !command ||
+        !receipt ||
+        receipt.operation_kind !== 'processing' ||
+        receipt.processing_operation?.phase !== 'queue' ||
+        receipt.processing_operation.job_id !== job.id ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.result_revision !== job.enqueue_revision ||
+        receipt.payload_fingerprint !== (await fingerprintJson(command))
+    )
+        throw new Error('Indexed selected job has no exact accepted queue origin');
+    return { job, command, receipt };
+}
+
+export type { IndexedProcessingQueueCommand } from './schemas/indexed-head.js';
+export { IndexedProcessingQueueCommandSchema } from './schemas/indexed-head.js';
+
+/** The owning host resolves each selected-capable processor before policy publication. The
+ * callback is a private service capability, never a serialized part of the policy command.
+ */
+export async function stageIndexedProcessingPolicy(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    commandInput: IndexedProcessingPolicyCommand,
+    assertSelectedProcessorSupported: (configuration: ProcessorConfiguration) => Promise<void>,
+): Promise<StagedIndexedProcessingPhase> {
+    const envelope = { root: rootInput, locator: locatorInput, command: commandInput };
+    if (!preflightJsonInput(envelope, { max_bytes: INDEXED_CONVERSATION_ACTIVE_MAX_BYTES }).success)
+        throw new TypeError('Indexed processing policy is not bounded JSON');
+    const { root, locator, command } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            command: IndexedProcessingPolicyCommandSchema,
+        })
+        .parse(structuredClone(envelope));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new Error('Indexed processing policy requires complete durable outbox indexes');
+    const store = boundedIndexedProcessingReader(storeInput);
+    const fingerprint = await fingerprintJson(command);
+    const prior = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        command.operation_id,
+        OperationReceiptSchema,
+    );
+    if (prior) {
+        if (
+            prior.operation_kind !== 'processing' ||
+            prior.processing_operation?.phase !== 'policy' ||
+            prior.conversation_id !== root.source.conversation_id ||
+            prior.result_revision !== command.expected_revision + 1 ||
+            prior.payload_fingerprint !== fingerprint ||
+            prior.base_revision !== command.expected_revision ||
+            prior.recorded_at !== command.recorded_at ||
+            prior.result_revision > root.source.revision ||
+            canonicalJsonContentString(prior.processing_operation.superseded_job_ids ?? []) !==
+                canonicalJsonContentString(command.supersede_job_ids ?? [])
+        )
+            throw new Error('Indexed processing policy retry conflicts with its accepted transition');
+        return { root, locator, receipt: prior, applied: false };
+    }
+    if (root.source.revision !== command.expected_revision)
+        throw new Error('Indexed processing policy source revision conflict');
+    if (Date.parse(command.recorded_at) < Date.parse(root.updated_at))
+        throw new Error('Indexed processing policy timestamp predates current source');
+    if (command.processors.length > MAX_PROCESSING_STAGES_PER_OPERATION)
+        throw new RangeError('Indexed processing policy exceeds its ordered stage bound');
+    for (const configuration of command.processors) {
+        if (canonicalJsonContentBytes(configuration.config).byteLength > MAX_PROCESSOR_CONFIGURATION_BYTES)
+            throw new RangeError(`Indexed processor ${configuration.id} configuration exceeds durable bound`);
+        if (command.enabled) await assertSelectedProcessorSupported(configuration);
+    }
+    const header = await loadRecord(
+        store,
+        {
+            storage: 'record',
+            kind: 'processing_header',
+            id: root.source.conversation_id,
+            ...root.processing_header,
+        },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    if (header.budget !== undefined && command.budget === undefined)
+        throw new Error('Indexed policy must retain its accepted existing budget');
+    const counts = assertIndexedRequiredIdentity(root, header);
+    const supersede = new Set(command.supersede_job_ids ?? []);
+    if (supersede.size !== (command.supersede_job_ids?.length ?? 0))
+        throw new Error('Indexed policy supersession repeats a job');
+    if (supersede.size && !command.supersession_reason)
+        throw new Error('Indexed policy supersession requires an exact reason');
+    if (supersede.size !== counts.unresolved_job_count)
+        throw new Error('Indexed policy transition requires explicit supersession of every unresolved job');
+    let unresolved = counts.unresolved_job_count;
+    let requiredUnresolved = counts.required_unresolved_job_count;
+    let requiredCount = counts.required_job_count;
+    let requiredBlocked = counts.required_blocked_job_count;
+    const directories = { ...root.directories };
+    for (const jobId of supersede) {
+        const job = await ownedIndexedProcessingJob(store, root, jobId);
+        if (await indexedProcessingRecord(store, root, 'supersessions', jobId, ProcessingSupersessionReceiptSchema))
+            throw new Error('Indexed policy cannot supersede an already settled job');
+        const completion = await indexedProcessingRecord(
+            store,
+            root,
+            'completions',
+            jobId,
+            ProcessingCompletionReceiptSchema,
+        );
+        if (completion && completion.status !== 'blocked')
+            throw new Error('Indexed policy cannot supersede a successfully completed job');
+        const attempt = await indexedProcessingRecord(store, root, 'attempts', jobId, ProcessingAttemptReceiptSchema);
+        const output = await indexedProcessingRecord(store, root, 'outputs', jobId, ProcessingOutputReceiptSchema);
+        if (attempt && !output) throw new Error('Indexed policy cannot supersede an unresolved external attempt');
+        const pending = await removePagedRecord(store, directories.processing_pending, jobId);
+        if (
+            !pending.applied ||
+            pending.removed?.storage !== 'marker' ||
+            pending.removed.kind !== 'processing_pending' ||
+            pending.removed.id !== jobId
+        )
+            throw new Error('Indexed policy supersession loses its exact pending job marker');
+        if (pending.root === undefined) delete directories.processing_pending;
+        else directories.processing_pending = pending.root;
+        unresolved -= 1;
+        if (job.required) {
+            requiredUnresolved -= 1;
+            if (completion?.status === 'blocked') requiredBlocked -= 1;
+            const required = await removePagedRecord(store, directories.processing_required, jobId);
+            if (
+                !required.applied ||
+                required.removed?.storage !== 'marker' ||
+                required.removed.kind !== 'processing_required' ||
+                required.removed.id !== jobId
+            )
+                throw new Error('Indexed policy supersession loses its exact required job marker');
+            if (required.root === undefined) delete directories.processing_required;
+            else directories.processing_required = required.root;
+            requiredCount -= 1;
+        }
+        const supersession = ProcessingSupersessionReceiptSchema.parse({
+            job_id: jobId,
+            policy_operation_id: command.operation_id,
+            reason: command.supersession_reason,
+            recorded_at: command.recorded_at,
+        });
+        directories.processing_records = await putPagedRecord(
+            store,
+            directories.processing_records,
+            tupleKey('supersessions', jobId),
+            await stageRecord(store, 'processing_records', jobId, supersession),
+        );
+    }
+    if (unresolved < 0 || requiredUnresolved < 0 || requiredCount < 0 || requiredBlocked < 0)
+        throw new Error('Indexed policy supersession exceeds durable processing counts');
+    if (unresolved !== 0 || directories.processing_pending !== undefined)
+        throw new Error('Indexed policy transition requires explicit pending-job supersession');
+    const receipt = createProcessingTransitionReceipt({
+        source: root.source,
+        operation_id: command.operation_id,
+        payload_fingerprint: fingerprint,
+        recorded_at: command.recorded_at,
+        processing_operation: {
+            phase: 'policy',
+            policy_revision: header.policy_revision,
+            superseded_job_ids: [...supersede],
+        },
+    });
+    if (await getPagedRecord(store, directories.identifiers, receipt.id))
+        throw new Error('Indexed policy operation identity is already accepted');
+    directories.operation_receipts = await putPagedRecord(
+        store,
+        directories.operation_receipts,
+        receipt.id,
+        await stageRecord(store, 'operation_receipts', receipt.id, receipt),
+    );
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('selected_policy_commands', receipt.id),
+        await stageRecord(store, 'processing_records', receipt.id, command),
+    );
+    directories.identifiers = await putPagedRecord(store, directories.identifiers, receipt.id, {
+        storage: 'marker',
+        kind: 'operation receipt',
+        id: receipt.id,
+    });
+    const {
+        budget: _budget,
+        coverage: _coverage,
+        selected_policy_operation_id: _selectedPolicy,
+        ...processing
+    } = header;
+    const nextHeader = await stageRecord(
+        store,
+        'processing_header',
+        root.source.conversation_id,
+        IndexedConversationProcessingHeaderSchema.parse({
+            ...processing,
+            enabled: command.enabled,
+            policy_revision: header.policy_revision + 1,
+            processors: command.processors,
+            ...(command.enabled ? { selected_policy_operation_id: receipt.id } : {}),
+            ...(command.budget === undefined ? {} : { budget: command.budget }),
+            unresolved_job_count: unresolved,
+            required_unresolved_job_count: requiredUnresolved,
+            required_job_count: requiredCount,
+            required_blocked_job_count: requiredBlocked,
+        }),
+    );
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        directories,
+        source: { ...root.source, revision: receipt.result_revision },
+        updated_at: command.recorded_at,
+        processing_header: { content_hash: nextHeader.content_hash, size_bytes: nextHeader.size_bytes },
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed policy root exceeds its manifest bound');
+    return {
+        root: nextRoot,
+        locator: { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes },
+        receipt,
+        applied: true,
+    };
+}
+
+export type { IndexedProcessingPolicyCommand } from './schemas/indexed-head.js';
+export { IndexedProcessingPolicyCommandSchema } from './schemas/indexed-head.js';
+
 async function indexedReadinessIdentity(coverage: IndexedProcessingReadinessCoverage): Promise<string> {
     return fingerprintJson({
         profile: coverage.profile,
@@ -4579,13 +5657,54 @@ function assertSupportedIndexedReadinessPolicy(
         header.processors.length !== 1 ||
         header.processors.some(
             (processor) =>
-                processor.id !== 'externalize-text' ||
-                processor.version !== '1' ||
+                !(
+                    (processor.id === 'externalize-text' || processor.id === INDEXED_EXCHANGE_PROCESSOR_ID) &&
+                    processor.version === '1'
+                ) ||
                 processor.scope !== 'on_append' ||
                 Object.keys(processor.config).length !== 0,
         )
     )
-        throw new Error('Indexed readiness currently supports only registered on-append ordinary text');
+        throw new Error('Indexed readiness requires one registered on-append text or whole-exchange processor');
+}
+
+/** Migration without a private policy command keeps its narrow finite profile. A selected-policy
+ * transition is accepted only with its point-addressed command and exact current policy receipt.
+ */
+export async function assertIndexedCurrentPolicy(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
+): Promise<void> {
+    const operationId = header.selected_policy_operation_id;
+    if (!operationId) return assertSupportedIndexedReadinessPolicy(header);
+    const command = await indexedProcessingRecord(
+        store,
+        root,
+        'selected_policy_commands',
+        operationId,
+        IndexedProcessingPolicyCommandSchema,
+    );
+    const receipt = await indexedRecordById(store, root, 'operation_receipts', operationId, OperationReceiptSchema);
+    if (
+        !header.enabled ||
+        !command ||
+        !receipt ||
+        !command.enabled ||
+        command.operation_id !== receipt.id ||
+        receipt.operation_kind !== 'processing' ||
+        receipt.processing_operation?.phase !== 'policy' ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.base_revision !== command.expected_revision ||
+        receipt.result_revision !== command.expected_revision + 1 ||
+        receipt.result_revision > root.source.revision ||
+        receipt.recorded_at !== command.recorded_at ||
+        receipt.processing_operation.policy_revision + 1 !== header.policy_revision ||
+        receipt.payload_fingerprint !== (await fingerprintJson(command)) ||
+        canonicalJsonContentString(command.processors) !== canonicalJsonContentString(header.processors) ||
+        canonicalJsonContentString(command.budget ?? null) !== canonicalJsonContentString(header.budget ?? null)
+    )
+        throw new Error('Indexed selected processor policy lost its accepted registered command');
 }
 
 function assertIndexedRequiredIdentity(
@@ -4596,6 +5715,41 @@ function assertIndexedRequiredIdentity(
     if ((root.directories.processing_required === undefined) !== (counts.required_job_count === 0))
         throw new Error('Indexed required-job identity root differs from its complete count');
     return counts;
+}
+
+/** Only the complete bounded pending index can keep an over-budget target in `pending`.
+ * A remembered policy name or an unrelated target job does not cover current model bytes.
+ */
+async function hasExactPendingBudgetJob(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    counts: ReturnType<typeof assertIndexedProcessingCounts>,
+    targetFingerprint: string,
+): Promise<boolean> {
+    const page = await readPagedRecordRange(store, root.directories.processing_pending, { limit: 256 });
+    if (page.has_more || page.entries.length !== counts.unresolved_job_count)
+        throw new Error('Indexed budget pending index differs from its complete bounded count');
+    let matching = false;
+    for (const entry of page.entries) {
+        if (
+            entry.value.storage !== 'marker' ||
+            entry.value.kind !== 'processing_pending' ||
+            entry.value.id !== entry.key
+        )
+            throw new Error('Indexed budget pending page contains a foreign job identity');
+        const job = await ownedIndexedProcessingJob(store, root, entry.key);
+        if (job.required && job.scope === 'on_budget' && job.target_fingerprint === targetFingerprint) {
+            const completion = await indexedProcessingRecord(
+                store,
+                root,
+                'completions',
+                job.id,
+                ProcessingCompletionReceiptSchema,
+            );
+            if (!completion) matching = true;
+        }
+    }
+    return matching;
 }
 
 /** Actual native measurement is supplied by the authenticated host compiler/count capability.
@@ -4657,9 +5811,12 @@ export async function stageIndexedProcessingCoverage(
         { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
         IndexedConversationProcessingHeaderSchema,
     );
-    assertSupportedIndexedReadinessPolicy(header);
+    await assertIndexedCurrentPolicy(store, root, header);
     const counts = assertIndexedRequiredIdentity(root, header);
-    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const selected = await loadIndexedProcessingContext(store, root, locator, false);
+    const overBudget = header.budget !== undefined && command.measured_input_tokens > header.budget.max_input_tokens;
+    const pendingBudget =
+        overBudget && (await hasExactPendingBudgetJob(store, root, counts, command.target_fingerprint));
     const coverage = IndexedProcessingReadinessCoverageSchema.parse({
         version: 1,
         profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
@@ -4676,10 +5833,9 @@ export async function stageIndexedProcessingCoverage(
             ? {}
             : { required_jobs_root: root.directories.processing_required }),
         status:
-            counts.required_blocked_job_count > 0 ||
-            (header.budget !== undefined && command.measured_input_tokens > header.budget.max_input_tokens)
+            counts.required_blocked_job_count > 0 || (overBudget && !pendingBudget)
                 ? 'blocked'
-                : counts.unresolved_job_count > 0
+                : counts.unresolved_job_count > 0 || overBudget
                   ? 'pending'
                   : 'ready',
         evaluated_at_revision: root.source.revision + 1,
@@ -4746,15 +5902,15 @@ export async function stageIndexedProcessingCoverage(
     };
 }
 
-/** Dry native preparation after the independently drained outbox. This is only a selected
- * projection: it carries no readiness, admission, or provider transport grant. The host must count
- * the actual native request, publish exact target/measurement coverage and load the ready barrier
- * before dispatch. No lifetime receipt or completed-job history is traversed.
+/** Common drained-processing fence for native preparation and a pending selected retrieval call.
+ * Neither projection grants admission or byte access; callers must separately prove their exact
+ * native request or selected call, owner and current physical head.
  */
-export async function loadIndexedSettledProcessingSelectedContext(
+async function loadIndexedSettledSelectedContext(
     storeInput: IndexedConversationRecordStore,
     rootInput: IndexedConversationRoot,
     locatorInput: PagedRecordRef,
+    allowPendingCalls: boolean,
 ) {
     const input = { root: rootInput, locator: locatorInput };
     if (!preflightJsonInput(input).success) throw new TypeError('Indexed dry preparation is not bounded JSON');
@@ -4777,7 +5933,7 @@ export async function loadIndexedSettledProcessingSelectedContext(
         },
         IndexedConversationProcessingHeaderSchema,
     );
-    assertSupportedIndexedReadinessPolicy(header);
+    await assertIndexedCurrentPolicy(store, root, header);
     const counts = assertIndexedRequiredIdentity(root, header);
     if (
         counts.unresolved_job_count !== 0 ||
@@ -4785,11 +5941,52 @@ export async function loadIndexedSettledProcessingSelectedContext(
         root.directories.processing_pending !== undefined
     )
         throw new Error('Indexed dry preparation still has unresolved processing obligations');
-    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    if (allowPendingCalls) {
+        // A retrieval call is accepted before its result exists. This view retains the same
+        // drained-processing fence but verifies its pending call index instead of inventing a result.
+        const selected = await loadIndexedSelectedContext(
+            store,
+            root,
+            locator,
+            INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
+            true,
+            true,
+            'processing',
+            true,
+        );
+        return IndexedConversationSelectedContextSchema.parse({
+            ...selected,
+            completeness: 'selected_media_compaction_pending_admission',
+        });
+    }
+    const selected = await loadIndexedProcessingContext(store, root, locator, false);
     return IndexedConversationSelectedContextSchema.parse({
         ...selected,
         completeness: 'selected_media_compaction_pending_admission',
     });
+}
+
+/** Dry native preparation after the independently drained outbox. The host still counts the
+ * native request and publishes exact target/measurement coverage before dispatch.
+ */
+export async function loadIndexedSettledProcessingSelectedContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+) {
+    return loadIndexedSettledSelectedContext(store, root, locator, false);
+}
+
+/** A drained processing projection for an accepted read call whose terminal result is still pending.
+ * It grants no execution or bytes: the caller must bind the exact selected call, active reader,
+ * copied archive integrity and current owner/head before returning a bounded excerpt.
+ */
+export async function loadIndexedSettledRetrievalSelectedContext(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+) {
+    return loadIndexedSettledSelectedContext(store, root, locator, true);
 }
 
 export interface IndexedReadySelectedContext {
@@ -4833,7 +6030,7 @@ export async function loadIndexedReadySelectedContext(
         { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
         IndexedConversationProcessingHeaderSchema,
     );
-    assertSupportedIndexedReadinessPolicy(header);
+    await assertIndexedCurrentPolicy(store, root, header);
     const counts = assertIndexedRequiredIdentity(root, header);
     if (
         counts.unresolved_job_count !== 0 ||
@@ -4841,7 +6038,7 @@ export async function loadIndexedReadySelectedContext(
         root.directories.processing_pending !== undefined
     )
         throw new Error('Indexed readiness still has unresolved processing obligations');
-    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const selected = await loadIndexedProcessingContext(store, root, locator, false);
     const draft = IndexedProcessingReadinessCoverageSchema.parse({
         version: 1,
         profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
@@ -5044,4 +6241,523 @@ export async function recoverIndexedProcessingClosureRoot(
     if (!recovered.applied || (await fingerprintJson(recovered.witness)) !== (await fingerprintJson(witness)))
         throw new Error('Indexed closure reconstruction differs from its retained witness');
     return { root: recovered.root, locator: recovered.locator, witness };
+}
+
+/** A selected-call nomination conflict; transport and durable storage errors retain their own type. */
+export class IndexedToolCallSelectionConflict extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexedToolCallSelectionConflict';
+    }
+}
+
+/** Active definition metadata comes from the same immutable context header. No turn/history scan. */
+export async function loadIndexedActiveToolDefinitions(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+) {
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'context_header', id: root.source.conversation_id, ...root.context_header },
+        IndexedConversationContextHeaderSchema,
+    );
+    if (header.active_tool_definition_ids.length > 4096)
+        throw new RangeError('Indexed active tool definitions exceed the selected dependency bound');
+    const definitions: z.infer<typeof ToolDefinitionSchema>[] = [];
+    for (const id of header.active_tool_definition_ids) {
+        const definition = await indexedRecordById(store, root, 'tool_definitions', id, ToolDefinitionSchema);
+        if (!definition || definition.id !== id)
+            throw new IndexedToolCallSelectionConflict('Indexed active definition lost its exact identity');
+        definitions.push(definition);
+    }
+    return definitions;
+}
+
+/** Select one exact accepted generated application call and only its hydration dependencies. */
+export async function loadIndexedToolCallSelection(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    sourceInput: z.infer<typeof ToolCallSourceRefSchema>,
+) {
+    if (!preflightJsonInput(sourceInput, { max_bytes: 16 * 1024 }).success)
+        throw new RangeError('Indexed tool source exceeds the nomination bound');
+    const source = ToolCallSourceRefSchema.parse(structuredClone(sourceInput));
+    if (
+        source.conversation.conversation_id !== root.source.conversation_id ||
+        source.conversation.revision !== root.source.revision ||
+        root.tool_call_state_complete !== true
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed tool call requires its exact complete accepted source');
+    const state = await indexedRecordById(store, root, 'tool_call_states', source.call_id, IndexedCallStateSchema);
+    if (
+        !state ||
+        state.turn_id !== source.turn_id ||
+        state.block_id !== source.block_id ||
+        state.call_id !== source.call_id ||
+        state.call_fingerprint !== source.call_fingerprint
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed tool call differs from its exact accepted call index');
+    const turn = await loadIndexedProjectedTurn(store, root, source.turn_id, [source.block_id]);
+    const call = turn.selected_blocks[0];
+    if (
+        call?.type !== 'tool_call' ||
+        call.executor !== 'application' ||
+        call.call_id !== source.call_id ||
+        call.id !== source.block_id ||
+        (await hashContentBytes(canonicalJsonContentBytes(call))).content_hash !== source.call_fingerprint ||
+        turn.header.id !== source.turn_id ||
+        turn.header.kind !== 'agent' ||
+        turn.header.provenance.type !== 'generated' ||
+        !('generation_id' in turn.header) ||
+        turn.header.generation_id === undefined
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed selected call changed its accepted generated content');
+    const generation = await indexedRecordById(store, root, 'generations', turn.header.generation_id, GenerationSchema);
+    const accepted = await getPagedRecord(store, root.directories.generation_acceptances, turn.header.generation_id);
+    if (!generation || accepted?.storage !== 'marker' || accepted.kind !== 'generation_acceptance')
+        throw new IndexedToolCallSelectionConflict('Indexed tool call has no exact accepted generation');
+    const receipt = await indexedRecordById(store, root, 'operation_receipts', accepted.id, OperationReceiptSchema);
+    if (
+        !receipt ||
+        generation.id !== turn.header.generation_id ||
+        generation.record_source !== 'executed' ||
+        receipt.id !== accepted.id ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        !receipt.accepted_generation_ids?.includes(generation.id) ||
+        !receipt.accepted_turn_ids?.includes(source.turn_id) ||
+        receipt.base_revision !== generation.source.revision ||
+        receipt.result_revision > root.source.revision ||
+        receipt.result_revision !== receipt.base_revision + 1 ||
+        generation.source.conversation_id !== root.source.conversation_id ||
+        generation.request_receipt.source.conversation_id !== root.source.conversation_id ||
+        generation.request_receipt.source.revision !== generation.source.revision ||
+        generation.request_receipt.request_id !== generation.request_id
+    )
+        throw new IndexedToolCallSelectionConflict(
+            'Indexed tool call differs from its accepted response/request chain',
+        );
+    const context = await loadRecord(
+        store,
+        { storage: 'record', kind: 'context_header', id: root.source.conversation_id, ...root.context_header },
+        IndexedConversationContextHeaderSchema,
+    );
+    const definition =
+        call.definition_id === undefined || !context.active_tool_definition_ids.includes(call.definition_id)
+            ? undefined
+            : await indexedRecordById(store, root, 'tool_definitions', call.definition_id, ToolDefinitionSchema);
+    if (
+        call.definition_id !== undefined &&
+        (!definition || definition.id !== call.definition_id || definition.name !== call.tool_name)
+    )
+        throw new IndexedToolCallSelectionConflict(
+            'Indexed call definition is absent from its accepted active catalog',
+        );
+    const assets: Record<string, Asset> = {};
+    if (call.arguments.type === 'externalized_json') {
+        if (call.arguments.hydration.length > 4096)
+            throw new RangeError('Indexed tool hydration exceeds the dependency bound');
+        for (const reference of call.arguments.hydration) {
+            if (Object.hasOwn(assets, reference.asset_id)) continue;
+            const asset = await indexedRecordById(store, root, 'assets', reference.asset_id, AssetSchema);
+            if (!asset || asset.id !== reference.asset_id || asset.content_hash !== reference.content_hash)
+                throw new IndexedToolCallSelectionConflict('Indexed tool hydration lost its exact accepted asset');
+            Object.defineProperty(assets, asset.id, { value: asset, enumerable: true });
+        }
+    }
+    const selected = { source, call, assets, ...(definition === undefined ? {} : { definition }) };
+    if (!preflightJsonInput(selected, { max_bytes: INDEXED_CONVERSATION_ACTIVE_MAX_BYTES }).success)
+        throw new RangeError('Indexed tool call selection exceeds its working-set bound');
+    return selected;
+}
+
+/** Point-check the current duplicate-result fence without scanning turns or receipt history. */
+export async function loadIndexedToolCallTerminalResult(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    source: z.infer<typeof ToolCallSourceRefSchema>,
+) {
+    if (
+        root.source.conversation_id !== source.conversation.conversation_id ||
+        root.source.revision < source.conversation.revision ||
+        root.tool_call_state_complete !== true
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed current call fence differs from its accepted source');
+    const state = await indexedRecordById(store, root, 'tool_call_states', source.call_id, IndexedCallStateSchema);
+    if (
+        !state ||
+        state.call_id !== source.call_id ||
+        state.turn_id !== source.turn_id ||
+        state.block_id !== source.block_id ||
+        state.call_fingerprint !== source.call_fingerprint
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed current call fence changed its original call binding');
+    if (state.result_block_id === undefined && state.terminal_receipt_id === undefined) return false;
+    if (state.result_block_id === undefined || state.terminal_receipt_id === undefined)
+        throw new IndexedToolCallSelectionConflict('Indexed current call has an incomplete terminal result fence');
+    const result = await indexedRecordById(store, root, 'blocks', state.result_block_id, ContentBlockSchema);
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'execution_receipts',
+        state.terminal_receipt_id,
+        ExecutionReceiptSchema,
+    );
+    if (
+        result?.type !== 'tool_result' ||
+        result.id !== state.result_block_id ||
+        result.call_id !== source.call_id ||
+        !receipt ||
+        receipt.id !== state.terminal_receipt_id ||
+        receipt.call_id !== source.call_id ||
+        receipt.executor !== 'application' ||
+        receipt.status !== result.status ||
+        !receipt.call_source ||
+        canonicalJsonContentString(receipt.call_source) !== canonicalJsonContentString(source)
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed terminal result lost its exact execution/source witness');
+    if (!receipt.result_turn_id)
+        throw new IndexedToolCallSelectionConflict('Indexed terminal receipt lacks its exact result turn');
+    const resultTurn = await loadIndexedProjectedTurn(store, root, receipt.result_turn_id, [result.id]);
+    const accepted = await getPagedRecord(store, root.directories.turn_acceptances, receipt.result_turn_id);
+    const operation =
+        accepted?.storage === 'marker' && accepted.kind === 'turn_acceptance'
+            ? await indexedRecordById(store, root, 'operation_receipts', accepted.id, OperationReceiptSchema)
+            : undefined;
+    if (
+        resultTurn.header.kind !== 'tool' ||
+        resultTurn.header.execution_id !== receipt.id ||
+        !operation?.accepted_turn_ids?.includes(receipt.result_turn_id) ||
+        !operation.accepted_execution_receipt_ids?.includes(receipt.id) ||
+        operation.conversation_id !== root.source.conversation_id ||
+        operation.result_revision > root.source.revision
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed terminal result lacks its accepted operation/turn witness');
+    await assertToolResultReceiptFingerprint(result, receipt);
+    return true;
+}
+
+/** Historical presentation is selected by accepted IDs, never by rehydrating a full document. */
+const INDEXED_PRESENTATION_MAX_RECORD_BYTES = 32 * 1024 * 1024;
+const INDEXED_TOPIC_MAX_TURNS = 4096;
+const INDEXED_TOPIC_MAX_TEXT_BYTES = 16 * 1024 * 1024;
+
+/** A caller nominated a different historical receipt, turn or head. Storage failures do not use this type. */
+export class IndexedPresentationNominationConflict extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexedPresentationNominationConflict';
+    }
+}
+
+/** The exact source exceeds the explicit selected-read or topic profile; nothing is truncated. */
+export class IndexedPresentationCapacityError extends RangeError {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexedPresentationCapacityError';
+    }
+}
+
+function indexedPresentationReadStore(underlying: IndexedConversationRecordStore): IndexedConversationRecordStore {
+    let bytes = 0;
+    let pages = 0;
+    let records = 0;
+    const charge = (size: number, kind: 'page' | 'record') => {
+        if (!Number.isSafeInteger(size) || size < 1)
+            throw new Error('Indexed historical presentation has an invalid immutable descriptor');
+        if (size > INDEXED_PRESENTATION_MAX_RECORD_BYTES - bytes)
+            throw new IndexedPresentationCapacityError(
+                'Indexed historical presentation exceeds its bounded selected-record profile',
+            );
+        if (kind === 'page' ? ++pages > 4096 : ++records > 8192)
+            throw new IndexedPresentationCapacityError(
+                'Indexed historical presentation exceeds its bounded selected-read profile',
+            );
+        bytes += size;
+    };
+    return {
+        async read(ref) {
+            charge(ref.size_bytes, 'page');
+            return underlying.read(ref);
+        },
+        async readRecord(ref) {
+            charge(ref.size_bytes, 'record');
+            return underlying.readRecord(ref);
+        },
+        async write() {
+            throw new Error('Indexed historical presentation is read-only');
+        },
+        async writeRecord() {
+            throw new Error('Indexed historical presentation is read-only');
+        },
+    };
+}
+
+async function presentationRecord<Shape extends z.ZodType>(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    family: keyof IndexedConversationRoot['directories'],
+    id: string,
+    schema: Shape,
+    nominated = false,
+): Promise<z.infer<Shape>> {
+    const descriptor = await getPagedRecord(store, root.directories[family], id);
+    if (descriptor?.storage !== 'record') {
+        if (nominated) throw new IndexedPresentationNominationConflict('Indexed historical receipt was not accepted');
+        throw new Error('Indexed historical presentation dependency is missing');
+    }
+    return loadRecord(store, descriptor, schema);
+}
+
+/** Exact accepted output, including generation usage and the original include-thoughts decision. */
+async function loadIndexedAcceptedOutputRecords(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    receiptInput: unknown,
+    retained = false,
+) {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const nominated = ConversationOutputReceiptSchema.parse(receiptInput);
+    if (
+        nominated.conversation_id !== root.source.conversation_id ||
+        (retained
+            ? nominated.result_revision > root.source.revision
+            : nominated.result_revision !== root.source.revision)
+    )
+        throw new IndexedPresentationNominationConflict(
+            'Indexed accepted output nomination differs from its historical root',
+        );
+    const boundedStore = indexedPresentationReadStore(store);
+    const receipt = await presentationRecord(
+        boundedStore,
+        root,
+        'operation_receipts',
+        nominated.id,
+        OperationReceiptSchema,
+        true,
+    );
+    if (receipt.accepted_turn_ids?.length !== 1 || receipt.accepted_generation_ids?.length !== 1)
+        throw new Error('Indexed accepted output has no exact generation and turn');
+    const generationId = receipt.accepted_generation_ids[0];
+    const accepted = await getPagedRecord(boundedStore, root.directories.generation_acceptances, generationId);
+    if (accepted?.storage !== 'marker' || accepted.kind !== 'generation_acceptance' || accepted.id !== receipt.id)
+        throw new Error('Indexed accepted output generation has no matching acceptance index');
+    const generation = await presentationRecord(boundedStore, root, 'generations', generationId, GenerationSchema);
+    if (generation.record_source !== 'executed') throw new Error('Indexed accepted output generation was not executed');
+    // Retained projection must use the live turn index. Historical tombstone recovery would
+    // resurrect output deliberately removed from the selected current root.
+    const turnDescriptor = await getPagedRecord(boundedStore, root.directories.turns, receipt.accepted_turn_ids[0]);
+    if (turnDescriptor?.storage === 'marker' && turnDescriptor.kind === 'deleted_turn')
+        throw new IndexedPresentationNominationConflict('Indexed accepted output turn was logically deleted');
+    if (retained) {
+        const turnAcceptance = await getPagedRecord(
+            boundedStore,
+            root.directories.turn_acceptances,
+            receipt.accepted_turn_ids[0],
+        );
+        if (
+            turnAcceptance?.storage !== 'marker' ||
+            turnAcceptance.kind !== 'turn_acceptance' ||
+            turnAcceptance.id !== receipt.id
+        )
+            throw new Error('Indexed retained output turn has no matching acceptance index');
+    }
+    const projection = await loadIndexedProjectedTurn(boundedStore, root, receipt.accepted_turn_ids[0]);
+    if (projection.completeness !== 'full_turn') throw new Error('Indexed accepted output turn is incomplete');
+    const turn = GeneratedAgentTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
+    const assetIds = receipt.accepted_asset_ids ?? [];
+    if (assetIds.length > 512)
+        throw new IndexedPresentationCapacityError('Indexed accepted output has too many selected assets');
+    const assets: Record<string, Asset> = {};
+    for (const id of assetIds) assets[id] = await presentationRecord(boundedStore, root, 'assets', id, AssetSchema);
+    const fragment = createAcceptedOutputFragmentFromRecords({
+        source: retained
+            ? { conversation_id: receipt.conversation_id, revision: receipt.result_revision }
+            : root.source,
+        receipt,
+        turn,
+        generation,
+        assets,
+    });
+    if ((await fingerprintJson(fragment.receipt)) !== (await fingerprintJson(nominated)))
+        throw new IndexedPresentationNominationConflict(
+            'Indexed accepted output receipt differs from its retained acceptance',
+        );
+    return {
+        fragment,
+        turn,
+        root,
+        boundedStore,
+        include_reasoning: generation.model_options?.include_thoughts === true,
+    };
+}
+
+/** Public presentation continues to omit private canonical call identity fields. */
+export async function loadIndexedAcceptedOutputPresentation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    receipt: unknown,
+) {
+    const output = await loadIndexedAcceptedOutputRecords(store, root, receipt);
+    return { fragment: output.fragment, include_reasoning: output.include_reasoning };
+}
+
+/** Bounded retained output anchored to the actual selected physical root. The fragment keeps
+ * its original accepted source; deleted turns are rejected through the current live index.
+ * Hosts separately authenticate that original revision and revalidate current custody. */
+export async function loadIndexedRetainedAcceptedOutputPresentation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    receipt: unknown,
+) {
+    const output = await loadIndexedAcceptedOutputRecords(store, root, receipt, true);
+    return { fragment: output.fragment, include_reasoning: output.include_reasoning };
+}
+
+/** Private execution continuation fingerprints the complete accepted canonical call, including
+ * definition/native identifiers which the public output fragment deliberately omits. */
+export async function loadIndexedAcceptedOutputContinuation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    receipt: unknown,
+) {
+    const output = await loadIndexedAcceptedOutputRecords(store, root, receipt);
+    const pending: PendingApplicationToolCall[] = [];
+    if (output.turn.status === 'completed' && output.fragment.generation.status === 'completed') {
+        for (const block of output.turn.blocks) {
+            if (block.type !== 'tool_call' || block.executor !== 'application') continue;
+            if (block.arguments.type === 'invalid')
+                throw new Error('Indexed accepted application call has invalid arguments');
+            if (pending.length >= 256)
+                throw new IndexedPresentationCapacityError(
+                    'Indexed accepted continuation exceeds its pending-call profile',
+                );
+            const source = {
+                conversation: output.fragment.source,
+                turn_id: output.turn.id,
+                block_id: block.id,
+                call_id: block.call_id,
+                call_fingerprint: await fingerprintJson(block),
+            };
+            const state = await indexedRecordById(
+                output.boundedStore,
+                output.root,
+                'tool_call_states',
+                block.call_id,
+                IndexedCallStateSchema,
+            );
+            if (
+                !state ||
+                state.turn_id !== source.turn_id ||
+                state.block_id !== source.block_id ||
+                state.call_id !== source.call_id ||
+                state.call_fingerprint !== source.call_fingerprint
+            )
+                throw new Error('Indexed accepted continuation differs from its durable canonical call state');
+            pending.push({
+                source,
+                call: {
+                    call_id: block.call_id,
+                    tool_name: block.tool_name,
+                    ...(block.definition_id === undefined ? {} : { definition_id: block.definition_id }),
+                    executor: 'application',
+                },
+            });
+        }
+    }
+    return { fragment: output.fragment, pending_tool_calls: pending };
+}
+
+/** One exact ordinary terminal program turn, bound to its accepted append receipt. */
+export async function loadIndexedTerminalProgramPresentation(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    receiptInput: unknown,
+    turnId: string,
+) {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const nominated = OperationReceiptSchema.parse(receiptInput);
+    if (nominated.conversation_id !== root.source.conversation_id || nominated.result_revision !== root.source.revision)
+        throw new IndexedPresentationNominationConflict(
+            'Indexed terminal output nomination differs from its historical root',
+        );
+    const boundedStore = indexedPresentationReadStore(store);
+    const receipt = await presentationRecord(
+        boundedStore,
+        root,
+        'operation_receipts',
+        nominated.id,
+        OperationReceiptSchema,
+        true,
+    );
+    if (
+        (await fingerprintJson(receipt)) !== (await fingerprintJson(nominated)) ||
+        receipt.accepted_turn_ids?.length !== 1 ||
+        receipt.accepted_turn_ids[0] !== turnId
+    )
+        throw new IndexedPresentationNominationConflict(
+            'Indexed terminal output differs from its nominated turn and receipt',
+        );
+    const projection = await loadIndexedProjectedTurn(boundedStore, root, turnId);
+    const turn = ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
+    if (
+        projection.completeness !== 'full_turn' ||
+        (receipt.accepted_generation_ids?.length ?? 0) !== 0 ||
+        turn.kind !== 'program' ||
+        turn.authority !== 'ordinary' ||
+        turn.model_visibility !== 'exclude' ||
+        turn.presentation !== 'transcript' ||
+        turn.provenance.type !== 'inserted' ||
+        turn.provenance.operation_id !== receipt.id ||
+        turn.blocks.length !== 1 ||
+        (turn.blocks[0]?.type !== 'text' && turn.blocks[0]?.type !== 'json')
+    )
+        throw new Error('Indexed terminal output differs from its accepted server-created program turn');
+    return { receipt, turn };
+}
+
+/** Exact historical topic text. The 4096-turn/16MiB profile fails closed instead of silently
+ * truncating or using the display transcript, which can omit external references. */
+export async function renderIndexedConversationTopicText(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+): Promise<string> {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const count = root.live_turn_count;
+    const tail = root.active_tail_turn_id;
+    if (count === undefined || tail === undefined || (count === 0) !== (tail === null))
+        throw new Error('Indexed topic source lacks its complete live-turn profile');
+    if (count > INDEXED_TOPIC_MAX_TURNS)
+        throw new IndexedPresentationCapacityError('Indexed topic source exceeds its bounded live-turn profile');
+    const boundedStore = indexedPresentationReadStore(store);
+    const reversed: string[] = [];
+    let id: string | undefined = tail ?? undefined;
+    let nextId: string | undefined;
+    let lastOrdinal = Number.MAX_SAFE_INTEGER;
+    while (id !== undefined) {
+        if (reversed.length >= count) throw new Error('Indexed topic live-turn chain exceeds its retained count');
+        const link = await presentationRecord(boundedStore, root, 'turn_links', id, IndexedConversationTurnLinkSchema);
+        if (link.id !== id || link.next_turn_id !== nextId || link.ordinal >= lastOrdinal)
+            throw new Error('Indexed topic live-turn order differs from its retained links');
+        reversed.push(id);
+        nextId = id;
+        lastOrdinal = link.ordinal;
+        id = link.previous_turn_id;
+    }
+    if (reversed.length !== count) throw new Error('Indexed topic source lacks retained live turns');
+    const lines: string[] = [];
+    let textBytes = 0;
+    for (const turnId of reversed.reverse()) {
+        const projection = await loadIndexedProjectedTurn(boundedStore, root, turnId);
+        if (projection.completeness !== 'full_turn') throw new Error('Indexed topic source turn is incomplete');
+        const turn = ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
+        const content = turn.blocks.map(renderContentBlockText).filter(Boolean).join(' ');
+        if (!content) continue;
+        const role = turn.kind === 'agent' ? 'ASSISTANT' : turn.kind.toUpperCase();
+        const line = `[${role}]: ${content}`;
+        textBytes += new TextEncoder().encode(line).byteLength + (lines.length ? 2 : 0);
+        if (textBytes > INDEXED_TOPIC_MAX_TEXT_BYTES)
+            throw new IndexedPresentationCapacityError('Indexed topic text exceeds its 16MiB exact-render profile');
+        lines.push(line);
+    }
+    return lines.join('\n\n');
 }

@@ -4,6 +4,7 @@ import { applyContextChange, contextChangeSelectedRanges, planContextChange } fr
 import { createContextTurnIndex } from './context-entry-resolution.js';
 import { resolveContextSelection } from './context-selection.js';
 import { fingerprintJson } from './identity.js';
+import { INDEXED_EXCHANGE_PROCESSOR_ID, INDEXED_EXCHANGE_PROCESSOR_VERSION } from './indexed-exchange-constants.js';
 import { applyJsonMinificationOutput } from './json-minification-application.js';
 import {
     captureJsonMinificationHostCapability,
@@ -364,11 +365,16 @@ async function createJobs(
     sourceOperationId: string,
     entryIds: string[],
     selectedBlockIds: Record<string, string[]> | undefined,
-    processors: readonly ProcessorConfiguration[],
+    processorIndices: readonly number[],
     targetFingerprint?: string,
     selectedEntries?: readonly ContextEntry[],
     toolResultEntryIds?: readonly string[],
 ): Promise<ProcessingJob[]> {
+    const processors = processorIndices.map((index) => {
+        const configuration = document.processing.processors[index];
+        if (!configuration) throw new Error('Processing configuration is not in its accepted policy');
+        return configuration;
+    });
     if (
         (document.processing.jobs ? Object.keys(document.processing.jobs).length : 0) + processors.length >
         MAX_PROCESSING_JOBS
@@ -382,16 +388,7 @@ async function createJobs(
         source_operation_id: sourceOperationId,
         policy_revision: document.processing.policy_revision,
         processors: document.processing.processors,
-        processor_indices: processors.map((processor) => {
-            const policyIndex = document.processing.processors.findIndex(
-                (candidate) =>
-                    candidate.id === processor.id &&
-                    candidate.version === processor.version &&
-                    candidate.scope === processor.scope,
-            );
-            if (policyIndex < 0) throw new Error('Processing configuration is not in its accepted policy');
-            return policyIndex;
-        }),
+        processor_indices: [...processorIndices],
         entry_ids: entryIds,
         ...(selectedBlockIds === undefined ? {} : { selected_block_ids: selectedBlockIds }),
         ...(selectedEntries === undefined ? {} : { selected_entries: [...selectedEntries] }),
@@ -420,14 +417,41 @@ export async function stageProcessingAppend(
 ): Promise<ConversationDocument> {
     const accepted = parseConversationDocument(acceptedInput);
     if (!accepted.processing.enabled) return accepted;
-    const processors = accepted.processing.processors.filter((processor) => processor.scope === 'on_append');
+    const processorIndices = accepted.processing.processors.flatMap((processor, index) =>
+        processor.scope === 'on_append' ? [index] : [],
+    );
+    const processors = processorIndices.map((index) => accepted.processing.processors[index]);
+    const exchange = processors.find((processor) => processor.id === INDEXED_EXCHANGE_PROCESSOR_ID);
+    if (exchange) {
+        if (
+            processors.length !== 1 ||
+            exchange.version !== INDEXED_EXCHANGE_PROCESSOR_VERSION ||
+            Object.keys(exchange.config).length !== 0
+        )
+            throw new Error('Materialized append has no registered whole-exchange processor');
+        const acceptedIds = new Set(acceptedEntryIds);
+        const turns = new Map(accepted.turns.map((turn) => [turn.id, turn]));
+        const completedExchange = accepted.context.entries.some((entry) => {
+            if (entry.type !== 'source_turn' || !acceptedIds.has(entry.id)) return false;
+            const turn = turns.get(entry.turn_id);
+            return turn?.blocks.some(
+                (block) =>
+                    (entry.block_ids === undefined || entry.block_ids.includes(block.id)) &&
+                    block.type === 'tool_result',
+            );
+        });
+        if (completedExchange) throw new Error('Materialized append cannot process an accepted whole exchange');
+        // No selected whole exchange exists yet. This accepted append creates no job and retains
+        // ordinary policy readiness evaluation; an indexed descendant can process a later result.
+        return accepted;
+    }
     const selection = eligibleAppendSelection(accepted, acceptedEntryIds);
     const jobs = await createJobs(
         accepted,
         sourceOperationId,
         selection.entryIds,
         selection.selectedBlockIds,
-        processors,
+        processorIndices,
         undefined,
         selection.selectedEntries,
         processors.some(
@@ -510,10 +534,10 @@ export async function queueProcessingForExisting(
     const selection = await resolveContextSelection(source, selectionRequest);
     if (selection.kind === 'rejected') throw new Error('Processing selection was rejected');
     if (!source.processing.enabled) throw new Error('Processing policy is disabled');
-    const processor = source.processing.processors.find(
+    const processorIndex = source.processing.processors.findIndex(
         (item) => item.id === command.processor_id && item.scope === command.scope,
     );
-    if (!processor) throw new Error('Configured processor is unavailable for this scope');
+    if (processorIndex < 0) throw new Error('Configured processor is unavailable for this scope');
     const receipt = processingReceipt(source, command.operation_id, fingerprint, command.recorded_at, 'queue');
     const staged = { ...source, revision: receipt.result_revision };
     const jobs = await createJobs(
@@ -521,7 +545,7 @@ export async function queueProcessingForExisting(
         command.operation_id,
         selection.kind === 'selected' ? selection.plan.entry_ids : [],
         selection.kind === 'selected' ? selection.plan.selected_block_ids : undefined,
-        [processor],
+        [processorIndex],
         command.target_fingerprint,
         selection.kind === 'selected' ? selection.plan.selected_entries : undefined,
     );

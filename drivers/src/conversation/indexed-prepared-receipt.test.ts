@@ -5,6 +5,7 @@ import {
     createUserTurn,
     deriveConversationId,
     fingerprintJson,
+    INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE,
     INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE,
     type IndexedConversationRecordStore,
     indexedProcessingContextFingerprint,
@@ -170,6 +171,56 @@ describe('indexed measured native receipt integrity', () => {
             if (block?.type !== 'text') throw new Error('Expected selected text');
             block.text = 'foreign selected bytes';
             expect(await indexedPreparedReceiptMatches(record, changedSelection, receipt)).toBe(false);
+        },
+    );
+});
+
+describe('generic measured native prepared profile', () => {
+    it.each(['chat', 'responses'] as const)(
+        'binds %s count to the accepted input without borrowing an epoch',
+        async (protocol) => {
+            const { record: ordinary, selection, receipt } = await fixture(protocol);
+            const epoch = ordinary.indexed_source?.processing_input;
+            if (!epoch) throw new Error('Expected independent measured receipt fixture');
+            const record = parseConversationPreparedRequestRecord({
+                ...ordinary,
+                indexed_source: {
+                    version: 1,
+                    validator_profile: INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE,
+                    root: selection.root,
+                    context_revision: selection.context.revision,
+                    native_measurement: {
+                        version: 1,
+                        accepted_source: { conversation_id: selection.source.conversation_id, revision: 1 },
+                        accepted_root: selection.root,
+                        accepted_operation_id: ordinary.runtime.materialized_input?.operation_id,
+                        runtime_input_operation_id: ordinary.runtime.input_operation_id,
+                        accepted_receipt_fingerprint: epoch.accepted_input_receipt_fingerprint,
+                        settled_source: epoch.settled_source,
+                        settled_root: epoch.settled_root,
+                        coverage: epoch.coverage,
+                    },
+                },
+            });
+            expect(await indexedPreparedReceiptMatches(record, selection, receipt)).toBe(true);
+            for (const mutation of ['operation', 'accepted_revision', 'coverage', 'count', 'native'] as const) {
+                const changed = structuredClone(record);
+                const witness = changed.indexed_source?.native_measurement;
+                const measurement = changed.request_receipt.measurement;
+                if (!witness || !measurement) throw new Error('Expected measured native witness');
+                if (mutation === 'operation') witness.accepted_operation_id = 'operation:unrelated';
+                if (mutation === 'accepted_revision') witness.accepted_source.revision++;
+                if (mutation === 'coverage') witness.coverage.expected_revision++;
+                if (mutation === 'count') measurement.input_tokens++;
+                if (mutation === 'native') changed.request_receipt.request_fingerprint = 'sha256:another-native-body';
+                expect(await indexedPreparedReceiptMatches(changed, selection, receipt), mutation).toBe(false);
+            }
+            expect(() =>
+                parseConversationPreparedRequestRecord({
+                    ...record,
+                    indexed_source: { ...record.indexed_source, processing_input: epoch },
+                }),
+            ).toThrow();
         },
     );
 });

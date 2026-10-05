@@ -1,4 +1,9 @@
-import { canonicalJsonContentString, hashUtf8Content } from './content-integrity.js';
+import {
+    canonicalJsonContentBytes,
+    canonicalJsonContentString,
+    hashContentBytes,
+    hashUtf8Content,
+} from './content-integrity.js';
 import {
     type ContextChangeWorkingSet,
     partitionSelection,
@@ -30,6 +35,8 @@ export interface ContextMutationEvidence {
     compactions: Readonly<Record<string, Pick<CompactionRecord, 'id'>>>;
     tool_definitions: Record<string, ToolDefinition>;
     operation_receipts: Record<string, OperationReceipt>;
+    /** Exact selected external originals, independently read and owned by the host before mutation. */
+    original_archive_bytes?: ReadonlyMap<string, Uint8Array>;
 }
 
 export async function contextMutationRemainderEntries(
@@ -60,6 +67,15 @@ export async function applyContextMutationWorkingSet(
     request: ContextChangeRequest,
     payloadFingerprint: string,
 ): Promise<ContextMutationResult> {
+    const originalArchives = new Map<string, Uint8Array>();
+    let archiveBytes = 0;
+    for (const [id, bytes] of evidence.original_archive_bytes ?? []) {
+        if (!(bytes instanceof Uint8Array)) throw new TypeError('Retrievable source archive is not bytes');
+        archiveBytes += bytes.byteLength;
+        if (archiveBytes > 32 * 1024 * 1024 || originalArchives.size >= 4096)
+            throw new RangeError('Retrievable source archives exceed the bounded evidence profile');
+        originalArchives.set(id, Uint8Array.from(bytes));
+    }
     const partitionInput = ContextChangePlanInputSchema.parse({
         expected_revision: request.expected_revision,
         expected_context_revision: request.expected_context_revision,
@@ -135,6 +151,9 @@ export async function applyContextMutationWorkingSet(
                 ? evidence.operation_receipts[proposal.accepted_asset_operation_id]
                 : undefined;
             const sources = ranges.flatMap((range) => range.blocks);
+            const explicitlySelectedBlockIds = request.entry_ids.flatMap(
+                (id) => request.selected_block_ids?.[id] ?? [],
+            );
             const references = proposal.replacement_turns.reduce<ContentBlock[]>((blocks, replacement) => {
                 blocks.push(...replacement.blocks);
                 return blocks;
@@ -153,6 +172,43 @@ export async function applyContextMutationWorkingSet(
             ) {
                 throw new Error('Retrievable compaction requires exact ordered accepted text assets');
             }
+            const selectedExchange = sources.some((source) => source.type !== 'text');
+            if (selectedExchange) {
+                const call = sources.find((source) => source.type === 'tool_call');
+                const result = sources.find((source) => source.type === 'tool_result');
+                if (
+                    !request.selected_block_ids ||
+                    explicitlySelectedBlockIds.length !== sources.length ||
+                    explicitlySelectedBlockIds.some((id, index) => id !== sources[index]?.id) ||
+                    sources.length !== 2 ||
+                    sources[0]?.type !== 'tool_call' ||
+                    sources[1]?.type !== 'tool_result' ||
+                    call?.type !== 'tool_call' ||
+                    call.executor !== 'application' ||
+                    result?.type !== 'tool_result' ||
+                    result.call_id !== call.call_id ||
+                    result.status === 'unknown' ||
+                    result.content.length !== 1 ||
+                    result.content[0]?.type !== 'external_reference' ||
+                    result.content[0].original_type !== 'text' ||
+                    originalArchives.size !== 1
+                ) {
+                    throw new Error(
+                        'Retrievable exchange must select one whole completed call and exact archived result',
+                    );
+                }
+                if (
+                    frame.context.entries.length > 100_000 ||
+                    archiveBytes +
+                        canonicalJsonContentBytes(frame.context.entries).byteLength +
+                        canonicalJsonContentBytes(request).byteLength >
+                        32 * 1024 * 1024
+                ) {
+                    throw new RangeError('Retrievable exchange exceeds its aggregate selected-byte or entry bound');
+                }
+            } else if (originalArchives.size !== 0) {
+                throw new Error('Retrievable text edit has unexpected external archive evidence');
+            }
             for (let index = 0; index < sources.length; index += 1) {
                 const original = sources[index];
                 const reference = references[index];
@@ -162,7 +218,6 @@ export async function applyContextMutationWorkingSet(
                         ? evidence.tool_definitions[reference.retrieval.tool_definition_id ?? '']
                         : undefined;
                 if (
-                    original?.type !== 'text' ||
                     reference?.type !== 'external_reference' ||
                     reference.original_type !== 'text' ||
                     reference.preview === undefined ||
@@ -181,7 +236,82 @@ export async function applyContextMutationWorkingSet(
                 ) {
                     throw new Error('Retrievable compaction requires exact text asset and active read tool per block');
                 }
-                const integrity = await hashUtf8Content(original.text);
+                let integrity: { content_hash: string; byte_length: number };
+                if (original?.type === 'text') {
+                    integrity = await hashUtf8Content(original.text);
+                } else if (original?.type === 'tool_call') {
+                    const sourceTurn = [...frame.turns.values()].find((turn) =>
+                        turn.active_blocks.some((block) => block.id === original.id),
+                    );
+                    if (
+                        !selectedExchange ||
+                        asset.provenance.type !== 'received' ||
+                        asset.provenance.source_turn_id !== sourceTurn?.header.id
+                    ) {
+                        throw new Error('Retrievable call archive lacks its exact selected source turn');
+                    }
+                    integrity = await hashContentBytes(canonicalJsonContentBytes(original));
+                } else if (original?.type === 'tool_result') {
+                    const nested = original.content[0];
+                    const originalAsset =
+                        nested?.type === 'external_reference' ? frame.assets[nested.asset_id] : undefined;
+                    const originalRequirement = frame.context.retrieval_requirements.filter(
+                        (item) =>
+                            item.asset_id === originalAsset?.id &&
+                            nested?.type === 'external_reference' &&
+                            canonicalJsonContentString(item.retrieval) === canonicalJsonContentString(nested.retrieval),
+                    );
+                    const acceptedOriginalRequirement =
+                        originalRequirement.length === 1 ? originalRequirement[0] : undefined;
+                    const originalPublication = acceptedOriginalRequirement?.accepted_asset_operation_id
+                        ? evidence.operation_receipts[acceptedOriginalRequirement.accepted_asset_operation_id]
+                        : undefined;
+                    const originalDefinition =
+                        nested?.type === 'external_reference'
+                            ? evidence.tool_definitions[nested.retrieval.tool_definition_id ?? '']
+                            : undefined;
+                    const bytes = originalAsset ? originalArchives.get(originalAsset.id) : undefined;
+                    if (
+                        !selectedExchange ||
+                        nested?.type !== 'external_reference' ||
+                        originalAsset?.kind !== 'text' ||
+                        originalAsset.storage.type !== 'external' ||
+                        originalAsset.content_hash !== nested.content_hash ||
+                        originalAsset.byte_length === undefined ||
+                        !originalPublication ||
+                        originalPublication.id !== originalRequirement[0]?.accepted_asset_operation_id ||
+                        originalPublication.conversation_id !== frame.source.conversation_id ||
+                        originalPublication.result_revision > frame.source.revision ||
+                        originalPublication.operation_kind !== undefined ||
+                        originalPublication.accepted_asset_ids?.filter((id) => id === originalAsset.id).length !== 1 ||
+                        originalPublication.accepted_retrieval_requirements?.filter(
+                            (item) =>
+                                item.id === originalRequirement[0]?.id &&
+                                item.asset_id === originalAsset.id &&
+                                canonicalJsonContentString(item.retrieval) ===
+                                    canonicalJsonContentString(nested.retrieval),
+                        ).length !== 1 ||
+                        originalDefinition?.name !== nested.retrieval.capability ||
+                        !frame.context.active_tool_definition_ids.includes(originalDefinition.id) ||
+                        nested.retrieval.version !== 1 ||
+                        !bytes ||
+                        asset.provenance.type !== 'derived' ||
+                        asset.provenance.source_asset_id !== originalAsset.id ||
+                        asset.provenance.transform_id !== 'conversation.archive_rehome' ||
+                        asset.provenance.transform_version !== '1'
+                    ) {
+                        throw new Error('Retrievable result archive lacks its exact original and publication');
+                    }
+                    integrity = await hashContentBytes(bytes);
+                    if (
+                        integrity.content_hash !== originalAsset.content_hash ||
+                        integrity.byte_length !== originalAsset.byte_length
+                    ) {
+                        throw new Error('Retrievable source archive bytes differ from their accepted original');
+                    }
+                } else {
+                    throw new Error('Retrievable compaction selects unsupported source content');
+                }
                 if (integrity.content_hash !== asset.content_hash || integrity.byte_length !== asset.byte_length) {
                     throw new Error('Retrievable compaction asset differs from the exact selected original');
                 }

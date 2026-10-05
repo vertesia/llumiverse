@@ -8,30 +8,49 @@ import {
     assertIndexedFreshReceivedTextInput,
     assertIndexedFreshTextInput,
     type IndexedConversationRecordStore,
+    IndexedPresentationCapacityError,
+    IndexedPresentationNominationConflict,
     type IndexedRecordBatchCommand,
+    loadIndexedAcceptedOutputPresentation,
     loadIndexedActiveContext,
+    loadIndexedActiveToolDefinitions,
+    loadIndexedPendingProcessingJobs,
+    loadIndexedProcessingJobState,
+    loadIndexedProcessingSelectedContext,
     loadIndexedProjectedTurn,
+    loadIndexedRetainedAcceptedOutputPresentation,
     loadIndexedSelectedDependencyContext,
     loadIndexedSelectedMediaCompactionContext,
     loadIndexedSelectedTextContext,
+    loadIndexedSettledProcessingSelectedContext,
+    loadIndexedTerminalProgramPresentation,
+    loadIndexedToolCallSelection,
+    loadIndexedToolCallTerminalResult,
+    renderIndexedConversationTopicText,
     stageIndexedConversationDelete,
     stageIndexedConversationSnapshot,
+    stageIndexedProcessingPhase,
     stageIndexedProgramAppend,
     stageIndexedRecordBatch,
+    stageIndexedTextProcessingCompletion,
 } from '../src/indexed-conversation.js';
+import { buildIndexedExchangeOutput } from '../src/indexed-exchange-processing.js';
+import { resolveIndexedProcessingTextInput } from '../src/indexed-processing-working-set.js';
 import { preflightJsonInput } from '../src/json-preflight.js';
-import { getPagedRecord } from '../src/paged-record-index.js';
+import { getPagedRecord, putPagedRecord } from '../src/paged-record-index.js';
 import {
     assertProcessingReady,
     ProcessingKnownFailure,
     runProcessingJob,
     setProcessingPolicy,
 } from '../src/processing.js';
+import { renderConversationText } from '../src/rendering.js';
 import { appendConversationRecords, appendConversationRecordsWithProcessing } from '../src/runtime.js';
-import { ProgramTurnSchema } from '../src/schemas/content.js';
+import { ProgramTurnSchema, ToolTurnSchema } from '../src/schemas/content.js';
 import { GenerationSchema } from '../src/schemas/execution.js';
+import { IndexedRecordBatchCommandSchema } from '../src/schemas/ingestion.js';
 import { validateToolExecutionResult } from '../src/tool-execution.js';
-import type { ConversationDocument } from '../src/types.js';
+import type { Asset, ConversationDocument } from '../src/types.js';
 import { parseConversationDocument } from '../src/validation.js';
 import { emptyDocument, RECORDED_AT, textBlock, toolCallBlock, toolResultTurn, userTurn } from './fixtures.js';
 
@@ -61,7 +80,7 @@ function memoryStore() {
             records.set(`${value.kind}:${value.content_hash}`, Uint8Array.from(bytes));
         },
     };
-    return { store, recordReads, pageReads, records };
+    return { store, recordReads, pageReads, records, pages };
 }
 
 async function toolMediaCommands(source: { conversation_id: string; revision: number }) {
@@ -1817,6 +1836,198 @@ describe('indexed conversation snapshot', () => {
         ).rejects.toThrow();
     });
 
+    it('omits empty fresh directories and preserves retained refs on assets-only appends', async () => {
+        const source = emptyDocument('conversation:empty-index-groups');
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(source, undefined, memory.store);
+        const asset: Asset = {
+            id: 'asset:empty-index-groups',
+            kind: 'image',
+            mime_type: 'image/png',
+            storage: { type: 'inline_base64', data: 'AQID' },
+            provenance: { type: 'received' },
+            created_at: RECORDED_AT,
+        };
+        const batch = { assets: [asset] };
+        const accepted = await stageIndexedRecordBatch(
+            initial.root,
+            {
+                conversation_id: source.id,
+                batch,
+                options: {
+                    operation_id: 'operation:empty-index-groups',
+                    expected_revision: 0,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        for (const family of [
+            'turn_order',
+            'active_context_order',
+            'deletion_blockers',
+            'turn_acceptances',
+            'block_owners',
+            'turn_links',
+        ] as const) {
+            expect(Object.hasOwn(initial.root.directories, family)).toBe(false);
+            expect(Object.hasOwn(accepted.root.directories, family)).toBe(false);
+        }
+        expect(preflightJsonInput(accepted.root).success).toBe(true);
+        const turnBatch = { turns: [userTurn('turn:empty-index-groups', 'block:empty-index-groups')] };
+        const withTurn = await stageIndexedRecordBatch(
+            accepted.root,
+            {
+                conversation_id: source.id,
+                batch: turnBatch,
+                options: {
+                    operation_id: 'operation:empty-index-groups:turn',
+                    expected_revision: 1,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(turnBatch),
+                },
+            },
+            memory.store,
+        );
+        const laterBatch = { assets: [{ ...asset, id: 'asset:empty-index-groups:later' }] };
+        const later = await stageIndexedRecordBatch(
+            withTurn.root,
+            {
+                conversation_id: source.id,
+                batch: laterBatch,
+                options: {
+                    operation_id: 'operation:empty-index-groups:later',
+                    expected_revision: 2,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(laterBatch),
+                },
+            },
+            memory.store,
+        );
+        for (const family of ['turn_order', 'turn_acceptances', 'block_owners', 'turn_links'] as const) {
+            expect(withTurn.root.directories[family]).toBeDefined();
+            expect(later.root.directories[family]).toEqual(withTurn.root.directories[family]);
+        }
+        expect(preflightJsonInput(later.root).success).toBe(true);
+    });
+
+    it('shares retained identity ancestors during a fresh 1,000-turn append and rechecks corrupted storage', async () => {
+        const memory = memoryStore();
+        const source = emptyDocument('conversation:bulk-identities');
+        source.turns = Array.from({ length: 1024 }, (_, index) => userTurn(`cold:${index}`, `cold-block:${index}`));
+        const initial = await stageIndexedConversationSnapshot(source, undefined, memory.store);
+        const identities = initial.root.directories.identifiers;
+        if (!identities) throw new Error('Expected real existing identity index');
+        const batch = {
+            turns: Array.from({ length: 1000 }, (_, index) => userTurn(`new:${index}`, `new-block:${index}`)),
+        };
+        const command = {
+            conversation_id: source.id,
+            batch,
+            options: {
+                operation_id: 'operation:bulk-identities',
+                expected_revision: source.revision,
+                recorded_at: RECORDED_AT,
+                payload_fingerprint: await fingerprintJson(batch),
+            },
+        };
+        memory.pageReads.length = 0;
+        const accepted = await stageIndexedRecordBatch(initial.root, command, memory.store);
+        expect(accepted.root.turn_count).toBe(2024);
+        // One bulk lookup + the existing immutable batch-insert/readback path; no per-ID ancestor decode.
+        expect(memory.pageReads.filter((hash) => hash === identities.content_hash).length).toBeLessThanOrEqual(4);
+        expect(await getPagedRecord(memory.store, accepted.root.directories.identifiers, 'new:999')).toEqual({
+            storage: 'marker',
+            kind: 'turn',
+            id: 'new:999',
+        });
+        const original = memory.pages.get(identities.content_hash);
+        if (!original) throw new Error('Expected retained identity bytes');
+        memory.pages.set(identities.content_hash, Uint8Array.from([...original.slice(0, -1), 0]));
+        await expect(stageIndexedRecordBatch(initial.root, command, memory.store)).rejects.toThrow('hash differs');
+        expect(initial.root.turn_count).toBe(1024);
+    });
+
+    it('groups a genuine 1,000-turn fresh append while retaining collision and original historical witnesses', async () => {
+        const source = emptyDocument('conversation:grouped-native-append');
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(source, undefined, memory.store);
+        const batch = {
+            turns: Array.from({ length: 1000 }, (_, index) =>
+                userTurn(`turn:grouped:${index}`, `block:grouped:${index}`),
+            ),
+        };
+        const options = {
+            operation_id: 'operation:grouped',
+            expected_revision: 0,
+            recorded_at: RECORDED_AT,
+            payload_fingerprint: await fingerprintJson(batch),
+        };
+        const pagesBefore = memory.pages.size;
+        const accepted = await stageIndexedRecordBatch(
+            initial.root,
+            { conversation_id: source.id, batch, options },
+            memory.store,
+        );
+        expect(accepted.root.turn_count).toBe(1000);
+        expect(Object.hasOwn(accepted.root.directories, 'deletion_blockers')).toBe(false);
+        expect(Object.hasOwn(accepted.root.directories, 'active_context_order')).toBe(false);
+        expect(preflightJsonInput(accepted.root).success).toBe(true);
+        expect(memory.pages.size - pagesBefore).toBeLessThan(256);
+        expect(
+            (await loadIndexedProjectedTurn(memory.store, accepted.root, 'turn:grouped:999')).selected_blocks,
+        ).toEqual(batch.turns[999].blocks);
+        expect(initial.root.turn_count).toBe(0);
+        const retry = await stageIndexedRecordBatch(
+            accepted.root,
+            { conversation_id: source.id, batch, options },
+            memory.store,
+        );
+        expect(retry.applied).toBe(false);
+        expect(retry.root).toEqual(accepted.root);
+        const collided = { turns: [userTurn('turn:grouped:0', 'block:foreign')] };
+        await expect(
+            stageIndexedRecordBatch(
+                accepted.root,
+                {
+                    conversation_id: source.id,
+                    batch: collided,
+                    options: {
+                        ...options,
+                        operation_id: 'operation:collision',
+                        expected_revision: 1,
+                        payload_fingerprint: await fingerprintJson(collided),
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow('already exists');
+        const duplicate = {
+            turns: [userTurn('turn:duplicate', 'block:duplicate'), userTurn('turn:duplicate', 'block:other')],
+        };
+        await expect(
+            stageIndexedRecordBatch(
+                accepted.root,
+                {
+                    conversation_id: source.id,
+                    batch: duplicate,
+                    options: {
+                        ...options,
+                        operation_id: 'operation:duplicate',
+                        expected_revision: 1,
+                        payload_fingerprint: await fingerprintJson(duplicate),
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow();
+        expect((await loadIndexedProjectedTurn(memory.store, accepted.root, 'turn:grouped:0')).selected_blocks).toEqual(
+            batch.turns[0].blocks,
+        );
+        expect(accepted.root.turn_count).toBe(1000);
+    });
+
     it('rejects duplicate identities, missing media and dangling tool results before publishing an indexed root', async () => {
         const source = emptyDocument('conversation:indexed-negative');
         const memory = memoryStore();
@@ -2330,6 +2541,8 @@ describe('indexed conversation snapshot', () => {
         const staged = await stageIndexedProgramAppend(initial.root, command, memory.store);
         expect(staged.applied).toBe(true);
         expect(staged.root.source.revision).toBe(1);
+        expect(Object.hasOwn(staged.root.directories, 'deletion_blockers')).toBe(false);
+        expect(preflightJsonInput(staged.root).success).toBe(true);
         expect(staged.receipt).toEqual(expected.document.operation_receipts[command.operation_id]);
         expect((await loadIndexedActiveContext(memory.store, staged.root)).entries).toEqual(
             expected.document.context.entries,
@@ -2404,5 +2617,1159 @@ describe('indexed conversation snapshot', () => {
             await expect(stageIndexedProgramAppend(initial.root, command, memory.store)).rejects.toThrow();
             expect(memory.records.size).toBe(writes);
         }
+    });
+});
+
+describe('indexed scheduled whole-exchange processing', () => {
+    it('keeps two completed calls and results as two bounded accepted jobs in one native append', async () => {
+        const memory = memoryStore();
+        memory.store.assertExternalAssetIntegrity = async () => undefined;
+        const source = (
+            await setProcessingPolicy(emptyDocument('conversation:indexed-two-exchanges'), {
+                operation_id: 'operation:two-policy',
+                expected_revision: 0,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors: [
+                    {
+                        id: 'externalize-whole-exchange',
+                        version: '1',
+                        scope: 'on_append',
+                        config: {},
+                        required: true,
+                        failure_behavior: 'block',
+                    },
+                ],
+            })
+        ).document;
+        const initial = await stageIndexedConversationSnapshot(source, undefined, memory.store);
+        const first = await toolMediaCommands(initial.root.source);
+        const secondRaw: unknown = JSON.parse(JSON.stringify(first).replaceAll('dependency', 'second'));
+        if (
+            !secondRaw ||
+            typeof secondRaw !== 'object' ||
+            !('agentCommand' in secondRaw) ||
+            !('resultCommand' in secondRaw)
+        ) {
+            throw new Error('Second accepted exchange fixture is invalid');
+        }
+        const secondAgent = IndexedRecordBatchCommandSchema.parse(secondRaw.agentCommand);
+        const secondCall = secondAgent.batch.turns?.[0]?.blocks[0];
+        if (secondCall?.type !== 'tool_call') throw new Error('Second accepted call fixture is missing');
+        const secondCallFingerprint = await fingerprintJson(secondCall);
+        const secondResultRaw = IndexedRecordBatchCommandSchema.parse(secondRaw.resultCommand);
+        const secondResult: IndexedRecordBatchCommand = {
+            ...secondResultRaw,
+            batch: {
+                ...secondResultRaw.batch,
+                execution_receipts: secondResultRaw.batch.execution_receipts?.map((receipt) => ({
+                    ...receipt,
+                    ...(receipt.call_source
+                        ? {
+                              call_source: {
+                                  ...receipt.call_source,
+                                  call_fingerprint: secondCallFingerprint,
+                              },
+                          }
+                        : {}),
+                })),
+            },
+        };
+        const reader = {
+            id: 'definition:two-originals',
+            name: 'read_artifact',
+            version: '1',
+            input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        };
+        const agentBatch: IndexedRecordBatchCommand['batch'] = {
+            turns: [...(first.agentCommand.batch.turns ?? []), ...(secondAgent.batch.turns ?? [])],
+            generations: [...(first.agentCommand.batch.generations ?? []), ...(secondAgent.batch.generations ?? [])],
+            tool_definitions: [
+                ...(first.agentCommand.batch.tool_definitions ?? []),
+                ...(secondAgent.batch.tool_definitions ?? []),
+                reader,
+            ],
+            active_tool_definition_ids: [first.call.definition_id, 'definition:second', reader.id],
+            context_entries: [
+                ...(first.agentCommand.batch.context_entries ?? []),
+                ...(secondAgent.batch.context_entries ?? []),
+            ],
+        };
+        const called = await stageIndexedRecordBatch(
+            initial.root,
+            {
+                conversation_id: initial.root.source.conversation_id,
+                batch: agentBatch,
+                options: {
+                    operation_id: 'operation:two-calls',
+                    expected_revision: initial.root.source.revision,
+                    payload_fingerprint: await fingerprintJson(agentBatch),
+                    recorded_at: RECORDED_AT,
+                },
+            },
+            memory.store,
+        );
+        const original = [first.resultCommand, secondResult];
+        const results = await Promise.all(
+            original.map(async (command, index) => {
+                const turn = command.batch.turns?.[0];
+                const block = turn?.blocks[0];
+                const execution = command.batch.execution_receipts?.[0];
+                if (!turn || block?.type !== 'tool_result' || !execution)
+                    throw new Error('Fixture result is incomplete');
+                const path = `canonical-tool-results/v1/two/${index}/result.json`;
+                const integrity = await hashContentBytes(new TextEncoder().encode(`accepted original ${index}`));
+                const asset: Asset = {
+                    id: `asset:two-original-${index}`,
+                    kind: 'text',
+                    mime_type: 'application/json',
+                    storage: {
+                        type: 'external',
+                        resolver: 'vertesia.agent_artifact',
+                        locator: { storage_id: 'agent:root', artifact_path: path },
+                    },
+                    provenance: { type: 'received', source_turn_id: turn.id },
+                    created_at: RECORDED_AT,
+                    ...integrity,
+                };
+                const retrieval = {
+                    capability: 'read_artifact',
+                    version: 1 as const,
+                    tool_definition_id: reader.id,
+                    arguments: { path },
+                };
+                const resultBlock = {
+                    ...block,
+                    content: [
+                        {
+                            id: `block:two-reference-${index}`,
+                            type: 'external_reference' as const,
+                            original_type: 'text' as const,
+                            asset_id: asset.id,
+                            description: `Accepted original ${index}`,
+                            preview: `Original ${index}`,
+                            content_hash: integrity.content_hash,
+                            retrieval,
+                        },
+                    ],
+                };
+                return {
+                    turn: ToolTurnSchema.parse({ ...turn, blocks: [resultBlock] }),
+                    asset,
+                    execution: { ...execution, result_fingerprint: await fingerprintJson(resultBlock) },
+                    entry: command.batch.context_entries?.[0],
+                    requirement: {
+                        id: `requirement:two-original-${index}`,
+                        asset_id: asset.id,
+                        retrieval,
+                        accepted_asset_operation_id: 'operation:two-results',
+                    },
+                };
+            }),
+        );
+        const resultBatch: IndexedRecordBatchCommand['batch'] = {
+            turns: results.map((result) => result.turn),
+            assets: results.map((result) => result.asset),
+            execution_receipts: results.map((result) => result.execution),
+            context_entries: results.flatMap((result) => (result.entry === undefined ? [] : [result.entry])),
+            retrieval_requirements: results.map((result) => result.requirement),
+        };
+        const appended = await stageIndexedRecordBatch(
+            called.root,
+            {
+                conversation_id: called.root.source.conversation_id,
+                batch: resultBatch,
+                options: {
+                    operation_id: 'operation:two-results',
+                    expected_revision: called.root.source.revision,
+                    payload_fingerprint: await fingerprintJson(resultBatch),
+                    recorded_at: RECORDED_AT,
+                },
+            },
+            memory.store,
+        );
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, appended.root);
+        expect(pending.unresolved_job_count).toBe(2);
+        expect(pending.jobs.map((item) => item.job.selection)).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    kind: 'entries',
+                    entry_ids: ['entry:dependency-agent', 'entry:dependency-result'],
+                }),
+                expect.objectContaining({ kind: 'entries', entry_ids: ['entry:second-agent', 'entry:second-result'] }),
+            ]),
+        );
+        expect(new Set(pending.jobs.map((item) => item.job.id)).size).toBe(2);
+    });
+
+    it('carries an idle exchange policy through ordinary materialized input while refusing a selected result', async () => {
+        const policy = await setProcessingPolicy(emptyDocument('conversation:materialized-exchange-source'), {
+            operation_id: 'operation:exchange-policy',
+            expected_revision: 0,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [
+                {
+                    id: 'externalize-whole-exchange',
+                    version: '1',
+                    scope: 'on_append',
+                    config: {},
+                    required: true,
+                    failure_behavior: 'block',
+                },
+            ],
+        });
+        const input = userTurn('turn:exchange-input');
+        const inputBatch = {
+            turns: [input],
+            context_entries: [{ id: 'entry:exchange-input', type: 'source_turn' as const, turn_id: input.id }],
+        };
+        const inputOptions = {
+            operation_id: 'operation:exchange-input',
+            expected_revision: policy.document.revision,
+            payload_fingerprint: await fingerprintJson(inputBatch),
+            recorded_at: RECORDED_AT,
+        };
+        const accepted = await appendConversationRecordsWithProcessing(policy.document, inputBatch, inputOptions);
+        expect(accepted.applied).toBe(true);
+        expect(accepted.acceptance.processing).toEqual({ status: 'pending', job_ids: [] });
+        expect(Object.values(accepted.document.processing.jobs ?? {})).toEqual([]);
+        const retry = await appendConversationRecordsWithProcessing(accepted.document, inputBatch, inputOptions);
+        expect(retry.applied).toBe(false);
+        expect(retry.acceptance).toEqual(accepted.acceptance);
+
+        const commands = await toolMediaCommands({
+            conversation_id: accepted.document.id,
+            revision: accepted.document.revision,
+        });
+        const originalReader = {
+            id: 'definition:materialized-original',
+            name: 'read_artifact',
+            version: '1',
+            input_schema: {
+                type: 'object',
+                properties: { path: { type: 'string' } },
+                required: ['path'],
+                additionalProperties: false,
+            },
+        };
+        const callBatch: IndexedRecordBatchCommand['batch'] = {
+            ...commands.agentCommand.batch,
+            tool_definitions: [...(commands.agentCommand.batch.tool_definitions ?? []), originalReader],
+            active_tool_definition_ids: [commands.call.definition_id, originalReader.id],
+        };
+        const called = await appendConversationRecordsWithProcessing(accepted.document, callBatch, {
+            ...commands.agentCommand.options,
+            payload_fingerprint: await fingerprintJson(callBatch),
+        });
+        expect(called.acceptance.processing.job_ids).toEqual([]);
+        await expect(
+            appendConversationRecordsWithProcessing(called.document, commands.resultCommand.batch, {
+                ...commands.resultCommand.options,
+                expected_revision: called.document.revision,
+                payload_fingerprint: await fingerprintJson(commands.resultCommand.batch),
+            }),
+        ).rejects.toThrow('Materialized append cannot process an accepted whole exchange');
+        const originalBytes = new TextEncoder().encode('{"accepted":"original"}');
+        const integrity = await hashContentBytes(originalBytes);
+        const originalAsset: Asset = {
+            id: 'asset:materialized-original',
+            kind: 'text',
+            mime_type: 'application/json',
+            storage: {
+                type: 'external',
+                resolver: 'vertesia.agent_artifact',
+                locator: { storage_id: 'agent:root', artifact_path: 'canonical-tool-results/v1/tool/result.json' },
+            },
+            provenance: { type: 'received', source_turn_id: commands.result.id },
+            created_at: RECORDED_AT,
+            ...integrity,
+        };
+        const retrieval = {
+            capability: 'read_artifact',
+            version: 1 as const,
+            tool_definition_id: originalReader.id,
+            arguments: { path: 'canonical-tool-results/v1/tool/result.json' },
+        };
+        const originalBlock = commands.result.blocks[0];
+        if (originalBlock?.type !== 'tool_result') throw new Error('Fixture has no accepted result block');
+        const result = {
+            ...commands.result,
+            blocks: [
+                {
+                    ...originalBlock,
+                    content: [
+                        {
+                            id: 'block:materialized-original',
+                            type: 'external_reference' as const,
+                            original_type: 'text' as const,
+                            asset_id: originalAsset.id,
+                            description: 'Original accepted tool result',
+                            preview: 'Original accepted tool result preview',
+                            content_hash: integrity.content_hash,
+                            retrieval,
+                        },
+                    ],
+                },
+            ],
+        };
+        const resultBatch: IndexedRecordBatchCommand['batch'] = {
+            turns: [result],
+            assets: [originalAsset],
+            execution_receipts: [
+                { ...commands.execution, result_fingerprint: await fingerprintJson(result.blocks[0]) },
+            ],
+            context_entries: commands.resultCommand.batch.context_entries,
+            retrieval_requirements: [
+                {
+                    id: 'requirement:materialized-original',
+                    asset_id: originalAsset.id,
+                    retrieval,
+                    accepted_asset_operation_id: commands.resultCommand.options.operation_id,
+                },
+            ],
+        };
+        await expect(
+            appendConversationRecordsWithProcessing(called.document, resultBatch, {
+                ...commands.resultCommand.options,
+                expected_revision: called.document.revision,
+                payload_fingerprint: await fingerprintJson(resultBatch),
+            }),
+        ).rejects.toThrow('Materialized append cannot process an accepted whole exchange');
+        // The public processing append above is the only supported acceptance path for this
+        // enabled policy. It rejects the eligible result before a receipt or processing job exists.
+    });
+
+    it('enqueues the exact accepted call and result, then settles one registered copied archive through the existing phase chain', async () => {
+        const memory = memoryStore();
+        memory.store.assertExternalAssetIntegrity = async () => undefined;
+        const configuration = {
+            id: 'externalize-whole-exchange',
+            version: '1',
+            scope: 'on_append' as const,
+            config: {},
+            required: true,
+            failure_behavior: 'block' as const,
+        };
+        const source = (
+            await setProcessingPolicy(emptyDocument('conversation:indexed-exchange-processing'), {
+                operation_id: 'operation:policy',
+                expected_revision: 0,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors: [configuration],
+            })
+        ).document;
+        const initial = await stageIndexedConversationSnapshot(source, undefined, memory.store);
+        const commands = await toolMediaCommands(initial.root.source);
+        const originalReader = {
+            id: 'definition:original-archive',
+            name: 'read_artifact',
+            version: '1',
+            input_schema: {
+                type: 'object',
+                properties: { path: { type: 'string' } },
+                required: ['path'],
+                additionalProperties: false,
+            },
+        };
+        const runReader = {
+            id: 'definition:run-archive',
+            name: 'read_run_artifact',
+            version: '1',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    indexed_namespace_id: { type: 'string' },
+                    asset_id: { type: 'string' },
+                },
+                required: ['indexed_namespace_id', 'asset_id'],
+                additionalProperties: false,
+            },
+        };
+        const agentBatch: IndexedRecordBatchCommand['batch'] = {
+            ...commands.agentCommand.batch,
+            tool_definitions: [...(commands.agentCommand.batch.tool_definitions ?? []), originalReader, runReader],
+            active_tool_definition_ids: [commands.call.definition_id, originalReader.id, runReader.id],
+        };
+        const agentCommand = {
+            ...commands.agentCommand,
+            batch: agentBatch,
+            options: { ...commands.agentCommand.options, payload_fingerprint: await fingerprintJson(agentBatch) },
+        };
+        const called = await stageIndexedRecordBatch(initial.root, agentCommand, memory.store);
+        if (!called.locator) throw new Error('Accepted call has no root');
+        expect((await loadIndexedPendingProcessingJobs(memory.store, called.root)).unresolved_job_count).toBe(0);
+        expect((await loadIndexedProcessingSelectedContext(memory.store, called.root, called.locator)).source).toEqual(
+            called.root.source,
+        );
+        const ordinary = await stageIndexedRecordBatch(
+            called.root,
+            {
+                ...commands.resultCommand,
+                options: {
+                    ...commands.resultCommand.options,
+                    expected_revision: called.root.source.revision,
+                    payload_fingerprint: await fingerprintJson(commands.resultCommand.batch),
+                },
+            },
+            memory.store,
+        );
+        expect(ordinary.applied).toBe(true);
+        expect((await loadIndexedPendingProcessingJobs(memory.store, ordinary.root)).unresolved_job_count).toBe(0);
+        const originalBytes = new TextEncoder().encode('Exact accepted external tool output');
+        const originalIntegrity = await hashContentBytes(originalBytes);
+        const originalAsset: Asset = {
+            id: 'asset:original-archive',
+            kind: 'text',
+            mime_type: 'application/json',
+            storage: {
+                type: 'external',
+                resolver: 'vertesia.agent_artifact',
+                locator: {
+                    storage_id: 'agent:root',
+                    artifact_path: 'canonical-tool-results/v1/tool/call/result.json',
+                },
+            },
+            provenance: { type: 'received', source_turn_id: commands.result.id },
+            created_at: RECORDED_AT,
+            ...originalIntegrity,
+        };
+        const originalRetrieval = {
+            capability: 'read_artifact',
+            version: 1 as const,
+            tool_definition_id: originalReader.id,
+            arguments: { path: 'canonical-tool-results/v1/tool/call/result.json' },
+        };
+        const existingResult = commands.result.blocks[0];
+        if (existingResult?.type !== 'tool_result') throw new Error('Fixture result missing');
+        const result = {
+            ...commands.result,
+            blocks: [
+                {
+                    ...existingResult,
+                    content: [
+                        {
+                            id: 'block:original-reference',
+                            type: 'external_reference' as const,
+                            original_type: 'text' as const,
+                            asset_id: originalAsset.id,
+                            description: 'Exact original archive',
+                            preview: 'Original archive preview',
+                            content_hash: originalIntegrity.content_hash,
+                            retrieval: originalRetrieval,
+                        },
+                    ],
+                },
+            ],
+        };
+        const execution = { ...commands.execution, result_fingerprint: await fingerprintJson(result.blocks[0]) };
+        const requirement = {
+            id: 'requirement:original-archive',
+            asset_id: originalAsset.id,
+            retrieval: originalRetrieval,
+            accepted_asset_operation_id: commands.resultCommand.options.operation_id,
+        };
+        const resultBatch: IndexedRecordBatchCommand['batch'] = {
+            turns: [result],
+            assets: [originalAsset],
+            execution_receipts: [execution],
+            context_entries: commands.resultCommand.batch.context_entries,
+            retrieval_requirements: [requirement],
+        };
+        const siblingBlock = textBlock('block:unarchived-sibling', 'Unarchived content');
+        const mixedResult = {
+            ...result,
+            blocks: [
+                {
+                    ...result.blocks[0],
+                    content: [...result.blocks[0].content, siblingBlock],
+                },
+            ],
+        };
+        const mixedBatch: IndexedRecordBatchCommand['batch'] = {
+            ...resultBatch,
+            turns: [mixedResult],
+            execution_receipts: [{ ...execution, result_fingerprint: await fingerprintJson(mixedResult.blocks[0]) }],
+        };
+        await expect(
+            stageIndexedRecordBatch(
+                called.root,
+                {
+                    conversation_id: called.root.source.conversation_id,
+                    batch: mixedBatch,
+                    options: {
+                        operation_id: 'operation:mixed-original',
+                        expected_revision: called.root.source.revision,
+                        payload_fingerprint: await fingerprintJson(mixedBatch),
+                        recorded_at: RECORDED_AT,
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow('Indexed whole-exchange result requires one exact original archive reference');
+        const appended = await stageIndexedRecordBatch(
+            called.root,
+            {
+                ...commands.resultCommand,
+                batch: resultBatch,
+                options: { ...commands.resultCommand.options, payload_fingerprint: await fingerprintJson(resultBatch) },
+            },
+            memory.store,
+        );
+        if (!appended.locator) throw new Error('Accepted result has no root');
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, appended.root);
+        expect(pending.unresolved_job_count).toBe(1);
+        const job = pending.jobs[0]?.job;
+        if (job?.selection.kind !== 'entries') throw new Error('Actual exchange job was not accepted');
+        expect(job.selection.entry_ids).toEqual(['entry:dependency-agent', 'entry:dependency-result']);
+        expect(job.selection.selected_block_ids).toEqual({
+            'entry:dependency-agent': [commands.call.id],
+            'entry:dependency-result': [result.blocks[0].id],
+        });
+        const callIntegrity = await hashContentBytes(canonicalJsonContentBytes(commands.call));
+        const copiedAssets: Asset[] = [
+            {
+                id: 'asset:copied-call',
+                kind: 'text',
+                mime_type: 'application/json',
+                storage: {
+                    type: 'external',
+                    resolver: 'vertesia.run_text_archive',
+                    locator: {
+                        indexed_namespace_id: 'namespace:owned',
+                        artifact_path: `archive/${callIntegrity.content_hash}`,
+                    },
+                },
+                provenance: { type: 'received', source_turn_id: commands.agent.id },
+                created_at: RECORDED_AT,
+                ...callIntegrity,
+            },
+            {
+                id: 'asset:copied-result',
+                kind: 'text',
+                mime_type: 'application/json',
+                storage: {
+                    type: 'external',
+                    resolver: 'vertesia.run_text_archive',
+                    locator: {
+                        indexed_namespace_id: 'namespace:owned',
+                        artifact_path: `archive/${originalIntegrity.content_hash}`,
+                    },
+                },
+                provenance: {
+                    type: 'derived',
+                    source_asset_id: originalAsset.id,
+                    transform_id: 'conversation.archive_rehome',
+                    transform_version: '1',
+                },
+                created_at: RECORDED_AT,
+                ...originalIntegrity,
+            },
+        ];
+        const derivedCopy = copiedAssets[1];
+        const callCopy = copiedAssets[0];
+        if (!derivedCopy || !callCopy) throw new Error('Copied exchange fixture lacks both assets');
+        const wrongSourceOperation = 'operation:wrong-source-archive';
+        const wrongSourceBatch: IndexedRecordBatchCommand['batch'] = {
+            ...resultBatch,
+            assets: [{ ...originalAsset, provenance: { type: 'received', source_turn_id: commands.agent.id } }],
+            retrieval_requirements: [{ ...requirement, accepted_asset_operation_id: wrongSourceOperation }],
+        };
+        const wrongSource = await stageIndexedRecordBatch(
+            called.root,
+            {
+                conversation_id: called.root.source.conversation_id,
+                batch: wrongSourceBatch,
+                options: {
+                    operation_id: wrongSourceOperation,
+                    expected_revision: called.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(wrongSourceBatch),
+                },
+            },
+            memory.store,
+        );
+        const wrongJob = (await loadIndexedPendingProcessingJobs(memory.store, wrongSource.root)).jobs[0]?.job;
+        if (!wrongJob) throw new Error('Wrong-source fixture did not accept a processing job');
+        await expect(
+            stageIndexedRecordBatch(
+                wrongSource.root,
+                {
+                    conversation_id: wrongSource.root.source.conversation_id,
+                    batch: { assets: copiedAssets },
+                    options: {
+                        operation_id: `processing:archive:${wrongJob.id}`,
+                        expected_revision: wrongSource.root.source.revision,
+                        recorded_at: RECORDED_AT,
+                        payload_fingerprint: await fingerprintJson(copiedAssets),
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow('Indexed derived archive lacks its exact selected original and immutable bytes');
+        for (const altered of [
+            {
+                ...derivedCopy,
+                provenance: {
+                    type: 'derived' as const,
+                    source_asset_id: 'asset:foreign-original',
+                    transform_id: 'conversation.archive_rehome',
+                    transform_version: '1',
+                },
+            },
+            { ...derivedCopy, content_hash: `sha256:${'f'.repeat(64)}` },
+            {
+                ...derivedCopy,
+                provenance: {
+                    type: 'derived' as const,
+                    source_asset_id: originalAsset.id,
+                    transform_id: 'conversation.other_transform',
+                    transform_version: '1',
+                },
+            },
+        ]) {
+            const invalidAssets: Asset[] = [callCopy, altered];
+            await expect(
+                stageIndexedRecordBatch(
+                    appended.root,
+                    {
+                        conversation_id: appended.root.source.conversation_id,
+                        batch: { assets: invalidAssets },
+                        options: {
+                            expected_revision: appended.root.source.revision,
+                            operation_id: `processing:archive:${job.id}`,
+                            recorded_at: RECORDED_AT,
+                            payload_fingerprint: await fingerprintJson(invalidAssets),
+                        },
+                    },
+                    memory.store,
+                ),
+            ).rejects.toThrow('Indexed derived archive lacks its exact selected original and immutable bytes');
+        }
+        const copied = await stageIndexedRecordBatch(
+            appended.root,
+            {
+                conversation_id: appended.root.source.conversation_id,
+                batch: { assets: copiedAssets },
+                options: {
+                    expected_revision: appended.root.source.revision,
+                    operation_id: `processing:archive:${job.id}`,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(copiedAssets),
+                },
+            },
+            memory.store,
+        );
+        if (!copied.locator) throw new Error('Copied archive has no root');
+        let staged = { root: copied.root, locator: copied.locator };
+        const resolution = await resolveIndexedProcessingTextInput(
+            await loadIndexedProcessingSelectedContext(memory.store, staged.root, staged.locator),
+            job,
+            RECORDED_AT,
+        );
+        staged = await stageIndexedProcessingPhase(memory.store, staged.root, staged.locator, {
+            phase: 'resolve',
+            value: resolution,
+        });
+        const attempt = {
+            job_id: job.id,
+            resolved_input_fingerprint: await fingerprintJson(resolution),
+            attempt_token: 'attempt:exchange',
+            started_at: RECORDED_AT,
+        };
+        staged = await stageIndexedProcessingPhase(memory.store, staged.root, staged.locator, {
+            phase: 'attempt',
+            value: attempt,
+        });
+        const selected = await loadIndexedProcessingSelectedContext(memory.store, staged.root, staged.locator);
+        const retrievals = copiedAssets.map((asset) => ({
+            capability: 'read_run_artifact',
+            version: 1 as const,
+            tool_definition_id: runReader.id,
+            arguments: { indexed_namespace_id: 'namespace:owned', asset_id: asset.id },
+        }));
+        const workspace = {
+            version: 1 as const,
+            selected,
+            job,
+            configuration,
+            resolution,
+            attempt,
+            snapshot_at: RECORDED_AT,
+            archives: { assets: copiedAssets, acceptance: copied.receipt, retrievals },
+        };
+        const output = await buildIndexedExchangeOutput(workspace);
+        const firstCopiedAsset = copiedAssets[0];
+        if (!firstCopiedAsset) throw new Error('Accepted call copy is missing');
+        await expect(
+            buildIndexedExchangeOutput({
+                ...workspace,
+                archives: {
+                    ...workspace.archives,
+                    acceptance: { ...copied.receipt, accepted_asset_ids: [firstCopiedAsset.id] },
+                },
+            }),
+        ).rejects.toThrow('exact accepted job/archive binding');
+        const originalPublication = selected.operation_witnesses?.[requirement.accepted_asset_operation_id];
+        if (!originalPublication) throw new Error('Accepted original publication is missing from selected proof');
+        await expect(
+            buildIndexedExchangeOutput({
+                ...workspace,
+                selected: {
+                    ...selected,
+                    operation_witnesses: {
+                        ...selected.operation_witnesses,
+                        [requirement.accepted_asset_operation_id]: {
+                            ...originalPublication,
+                            accepted_retrieval_requirements: [],
+                        },
+                    },
+                },
+            }),
+        ).rejects.toThrow('one completed call and its exact archived result');
+        await expect(
+            buildIndexedExchangeOutput({
+                ...workspace,
+                selected: {
+                    ...selected,
+                    context: {
+                        ...selected.context,
+                        active_tool_definition_ids: selected.context.active_tool_definition_ids.filter(
+                            (id) => id !== runReader.id,
+                        ),
+                    },
+                },
+            }),
+        ).rejects.toThrow('exact resolved selection');
+        staged = await stageIndexedProcessingPhase(memory.store, staged.root, staged.locator, {
+            phase: 'output',
+            value: output,
+        });
+        const retained = await loadIndexedProcessingJobState(memory.store, staged.root, job.id);
+        expect(retained.output).toEqual(output);
+        const beforeRejectedCompletion = memory.records.size;
+        await expect(
+            stageIndexedTextProcessingCompletion(
+                memory.store,
+                staged.root,
+                staged.locator,
+                workspace,
+                new Map([[originalAsset.id, new TextEncoder().encode('changed original')]]),
+            ),
+        ).rejects.toThrow('source archive bytes differ');
+        expect(memory.records.size).toBe(beforeRejectedCompletion);
+        const completed = await stageIndexedTextProcessingCompletion(
+            memory.store,
+            staged.root,
+            staged.locator,
+            workspace,
+            new Map([[originalAsset.id, originalBytes]]),
+        );
+        expect(completed.completion.status).toBe('applied');
+        expect((await loadIndexedPendingProcessingJobs(memory.store, completed.root)).unresolved_job_count).toBe(0);
+        const active = await loadIndexedProcessingSelectedContext(memory.store, completed.root, completed.locator);
+        expect(active.context.retrieval_requirements).toHaveLength(3);
+        expect(active.replacement_turns?.flatMap((turn) => turn.projection.selected_blocks)).toHaveLength(2);
+        const retry = await stageIndexedTextProcessingCompletion(
+            memory.store,
+            completed.root,
+            completed.locator,
+            workspace,
+            new Map(),
+        );
+        expect(retry).toMatchObject({ applied: false, receipt: completed.receipt });
+    });
+});
+
+describe('processing-only pending call selection', () => {
+    it('resolves a real accepted text job around an unresolved call without selecting the call for compaction', async () => {
+        const memory = memoryStore();
+        const policy = await setProcessingPolicy(emptyDocument('conversation:pending-text-job'), {
+            operation_id: 'operation:text-policy',
+            expected_revision: 0,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [
+                {
+                    id: 'externalize-text',
+                    version: '1',
+                    scope: 'on_append',
+                    config: {},
+                    required: true,
+                    failure_behavior: 'block',
+                },
+            ],
+        });
+        const initial = await stageIndexedConversationSnapshot(policy.document, undefined, memory.store);
+        const commands = await toolMediaCommands(initial.root.source);
+        const agent = {
+            ...commands.agent,
+            blocks: [textBlock('block:pending-text', 'Archive this original text.'), commands.call],
+        };
+        const batch = { ...commands.agentCommand.batch, turns: [agent] };
+        const called = await stageIndexedRecordBatch(
+            initial.root,
+            {
+                ...commands.agentCommand,
+                batch,
+                options: { ...commands.agentCommand.options, payload_fingerprint: await fingerprintJson(batch) },
+            },
+            memory.store,
+        );
+        if (!called.locator) throw new Error('Accepted pending text call root missing');
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, called.root);
+        expect(pending.unresolved_job_count).toBe(1);
+        const job = pending.jobs[0]?.job;
+        if (!job) throw new Error('Real text append job missing');
+        const selected = await loadIndexedProcessingSelectedContext(memory.store, called.root, called.locator);
+        const resolution = await resolveIndexedProcessingTextInput(selected, job, RECORDED_AT);
+        expect(resolution.selected_block_ids).toEqual({ 'entry:dependency-agent': ['block:pending-text'] });
+        expect(selected.execution_witnesses).toEqual({});
+        await expect(
+            loadIndexedSettledProcessingSelectedContext(memory.store, called.root, called.locator),
+        ).rejects.toThrow('unresolved processing obligations');
+    });
+
+    it('retains exact accepted pending calls for archival input without granting provider preparation or inventing results', async () => {
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:pending-processing'),
+            undefined,
+            memory.store,
+        );
+        const commands = await toolMediaCommands(initial.root.source);
+        const called = await stageIndexedRecordBatch(initial.root, commands.agentCommand, memory.store);
+        if (!called.locator) throw new Error('Accepted pending call root missing');
+        const selected = await loadIndexedProcessingSelectedContext(memory.store, called.root, called.locator);
+        expect(selected.completeness).toBe('active_processing_dependencies_verified');
+        expect(selected.turns[0]?.selected_blocks).toEqual([commands.call]);
+        expect(selected.execution_witnesses).toEqual({});
+        await expect(loadIndexedSelectedDependencyContext(memory.store, called.root, called.locator)).rejects.toThrow(
+            'exact selected terminal result',
+        );
+        // Enable a real registered policy after accepting the call: enabling does not retroactively enqueue work.
+        const accepted = appendConversationRecords(
+            emptyDocument('conversation:pending-processing'),
+            commands.agentCommand.batch,
+            commands.agentCommand.options,
+        );
+        const policy = await setProcessingPolicy(accepted.document, {
+            operation_id: 'operation:enable-after-call',
+            expected_revision: accepted.document.revision,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [
+                {
+                    id: 'externalize-text',
+                    version: '1',
+                    scope: 'on_append',
+                    config: {},
+                    required: true,
+                    failure_behavior: 'block',
+                },
+            ],
+        });
+        const strict = await stageIndexedConversationSnapshot(policy.document, undefined, memory.store);
+        expect((await loadIndexedPendingProcessingJobs(memory.store, strict.root)).unresolved_job_count).toBe(0);
+        await expect(
+            loadIndexedSettledProcessingSelectedContext(memory.store, strict.root, strict.locator),
+        ).rejects.toThrow('exact selected terminal result');
+        const descriptor = await getPagedRecord(
+            memory.store,
+            called.root.directories.tool_call_states,
+            commands.call.call_id,
+        );
+        if (descriptor?.storage !== 'record') throw new Error('Actual accepted call state missing');
+        const original = JSON.parse(new TextDecoder().decode(await memory.store.readRecord(descriptor)));
+        for (const mutation of [
+            { call_fingerprint: `sha256:${'0'.repeat(64)}` },
+            { terminal_receipt_id: 'receipt:invented' },
+            { result_block_id: 'block:invented' },
+        ]) {
+            const bytes = new TextEncoder().encode(JSON.stringify({ ...original, ...mutation }));
+            const integrity = await hashContentBytes(bytes);
+            const value = { ...descriptor, content_hash: integrity.content_hash, size_bytes: bytes.byteLength };
+            await memory.store.writeRecord(value, bytes);
+            const index = await putPagedRecord(
+                memory.store,
+                called.root.directories.tool_call_states,
+                commands.call.call_id,
+                value,
+                'replace',
+            );
+            const corrupted = { ...called.root, directories: { ...called.root.directories, tool_call_states: index } };
+            await expect(
+                loadIndexedProcessingSelectedContext(memory.store, corrupted, called.locator),
+            ).rejects.toThrow();
+        }
+        const completed = await stageIndexedRecordBatch(called.root, commands.resultCommand, memory.store);
+        if (!completed.locator) throw new Error('Accepted terminal result root missing');
+        const retainedResult = await loadIndexedProcessingSelectedContext(
+            memory.store,
+            completed.root,
+            completed.locator,
+        );
+        expect(retainedResult.execution_witnesses).toHaveProperty(commands.execution.id, commands.execution);
+        expect(
+            (await loadIndexedSelectedDependencyContext(memory.store, completed.root, completed.locator)).source,
+        ).toEqual(completed.root.source);
+    });
+});
+
+describe('bounded indexed historical presentation', () => {
+    it('binds one selected terminal program block to its actual accepted append receipt', async () => {
+        const source = emptyDocument('conversation:indexed-terminal-presentation');
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(source, undefined, memory.store);
+        const turn = ProgramTurnSchema.parse({
+            id: 'turn:indexed-terminal',
+            kind: 'program',
+            authority: 'ordinary',
+            status: 'completed',
+            timestamps: { recorded_at: RECORDED_AT },
+            provenance: { type: 'inserted', operation_id: 'operation:indexed-terminal' },
+            model_visibility: 'exclude',
+            presentation: 'transcript',
+            blocks: [{ id: 'block:indexed-terminal', type: 'json', value: { done: true } }],
+        });
+        const entry = { id: 'entry:indexed-terminal', type: 'source_turn' as const, turn_id: turn.id };
+        const staged = await stageIndexedProgramAppend(
+            initial.root,
+            {
+                conversation_id: source.id,
+                expected_revision: source.revision,
+                operation_id: 'operation:indexed-terminal',
+                recorded_at: RECORDED_AT,
+                turn,
+                entry,
+                payload_fingerprint: await fingerprintJson({ turns: [turn], context_entries: [entry] }),
+            },
+            memory.store,
+        );
+
+        const selected = await loadIndexedTerminalProgramPresentation(
+            memory.store,
+            staged.root,
+            staged.receipt,
+            turn.id,
+        );
+        expect(selected).toEqual({ receipt: staged.receipt, turn });
+        await expect(
+            loadIndexedTerminalProgramPresentation(memory.store, staged.root, staged.receipt, 'turn:foreign'),
+        ).rejects.toThrow(IndexedPresentationNominationConflict);
+    });
+
+    it('selects exact accepted generation/turn records and rejects a changed receipt', async () => {
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:indexed-presentation'),
+            undefined,
+            memory.store,
+        );
+        const commands = await toolMediaCommands(initial.root.source);
+        const accepted = await stageIndexedRecordBatch(initial.root, commands.agentCommand, memory.store);
+        const receipt = accepted.receipt;
+        const nomination = {
+            id: receipt.id,
+            conversation_id: receipt.conversation_id,
+            base_revision: receipt.base_revision,
+            result_revision: receipt.result_revision,
+            recorded_at: receipt.recorded_at,
+            accepted_turn_ids: receipt.accepted_turn_ids,
+            accepted_generation_ids: receipt.accepted_generation_ids,
+            ...(receipt.accepted_asset_ids === undefined ? {} : { accepted_asset_ids: receipt.accepted_asset_ids }),
+        };
+        memory.recordReads.length = 0;
+        const selected = await loadIndexedAcceptedOutputPresentation(memory.store, accepted.root, nomination);
+        expect(selected.fragment.receipt).toEqual(nomination);
+        expect(selected.fragment.turn.blocks).toMatchObject([{ type: 'tool_call', call_id: commands.call.call_id }]);
+        expect(selected.fragment.generation.record_source).toBe('executed');
+        expect(selected.include_reasoning).toBe(false);
+        expect(memory.recordReads).toContain('generations:generation:dependency');
+        expect(memory.recordReads.length).toBeLessThan(32);
+        await expect(
+            loadIndexedAcceptedOutputPresentation(memory.store, accepted.root, {
+                ...nomination,
+                recorded_at: '2026-10-01T00:00:00.000Z',
+            }),
+        ).rejects.toThrow(IndexedPresentationNominationConflict);
+    });
+
+    it('projects an older accepted source from actual retained points without resurrecting a deleted turn', async () => {
+        const memory = memoryStore();
+        const source = emptyDocument('conversation:retained-stream-output');
+        const commands = await toolMediaCommands({ conversation_id: source.id, revision: source.revision });
+        const batch = structuredClone(commands.agentCommand.batch);
+        const agent = batch.turns?.[0];
+        if (agent?.kind !== 'agent') throw new Error('Expected genuine generated output fixture');
+        agent.blocks = [textBlock('block:retained-answer', 'Actual accepted answer')];
+        const accepted = appendConversationRecords(source, batch, commands.agentCommand.options);
+        const later = appendConversationRecords(
+            accepted.document,
+            { turns: [userTurn('turn:later', 'block:later')] },
+            {
+                expected_revision: accepted.document.revision,
+                operation_id: 'operation:later',
+                recorded_at: RECORDED_AT,
+                payload_fingerprint: 'sha256:later',
+            },
+        );
+        // One-time import is anchored at N=2. There is deliberately no indexed physical root for M=1.
+        const migrated = await stageIndexedConversationSnapshot(later.document, undefined, memory.store);
+        const receipt = accepted.document.operation_receipts[accepted.change.operation_id];
+        if (!receipt) throw new Error('Expected genuine accepted operation');
+        const nomination = {
+            id: receipt.id,
+            conversation_id: receipt.conversation_id,
+            base_revision: receipt.base_revision,
+            result_revision: receipt.result_revision,
+            recorded_at: receipt.recorded_at,
+            accepted_turn_ids: receipt.accepted_turn_ids,
+            accepted_generation_ids: receipt.accepted_generation_ids,
+            ...(receipt.accepted_asset_ids === undefined ? {} : { accepted_asset_ids: receipt.accepted_asset_ids }),
+        };
+        memory.recordReads.length = 0;
+        const selected = await loadIndexedRetainedAcceptedOutputPresentation(memory.store, migrated.root, nomination);
+        expect(selected.fragment.source).toEqual({ conversation_id: source.id, revision: 1 });
+        expect(selected.fragment.receipt).toEqual(nomination);
+        expect(selected.fragment.turn.blocks).toEqual(agent.blocks);
+        expect(memory.recordReads.length).toBeLessThan(32);
+        await expect(loadIndexedAcceptedOutputPresentation(memory.store, migrated.root, nomination)).rejects.toThrow(
+            IndexedPresentationNominationConflict,
+        );
+        await expect(
+            loadIndexedRetainedAcceptedOutputPresentation(memory.store, migrated.root, {
+                ...nomination,
+                conversation_id: 'conversation:foreign',
+            }),
+        ).rejects.toThrow(IndexedPresentationNominationConflict);
+        const selectedEntry = later.document.context.entries.find((entry) => entry.turn_id === agent.id);
+        if (!selectedEntry) throw new Error('Expected active accepted answer entry');
+        const exclusionSelection = {
+            expected_revision: later.document.revision,
+            expected_context_revision: later.document.context.revision,
+            entry_ids: [selectedEntry.id],
+        };
+        const exclusionPlan = await planContextChange(later.document, exclusionSelection);
+        const excluded = await applyContextChange(later.document, {
+            ...exclusionSelection,
+            operation_id: 'operation:exclude-old-answer',
+            expected_source_fingerprint: exclusionPlan.source_fingerprint,
+            recorded_at: RECORDED_AT,
+            proposal: { kind: 'exclude' },
+        });
+        const exclusionRoot = await stageIndexedConversationSnapshot(excluded.document, undefined, memory.store);
+        expect(exclusionRoot.root.source.revision).toBe(migrated.root.source.revision + 1);
+        expect(await loadIndexedActiveContext(memory.store, exclusionRoot.root)).toMatchObject({
+            entries: expect.not.arrayContaining([expect.objectContaining({ turn_id: agent.id })]),
+        });
+        expect(
+            await loadIndexedRetainedAcceptedOutputPresentation(memory.store, exclusionRoot.root, nomination),
+        ).toEqual(selected);
+        const deleted = await stageIndexedConversationDelete(
+            exclusionRoot.root,
+            {
+                operation_id: 'operation:delete-old-answer',
+                source: exclusionRoot.root.source,
+                expected_source_root: exclusionRoot.locator,
+                recorded_at: RECORDED_AT,
+                dependency_policy: 'reject',
+                turn_ids: [agent.id],
+            },
+            memory.store,
+        );
+        await expect(
+            loadIndexedRetainedAcceptedOutputPresentation(memory.store, deleted.root, nomination),
+        ).rejects.toThrow('logically deleted');
+        expect(await loadIndexedRetainedAcceptedOutputPresentation(memory.store, migrated.root, nomination)).toEqual(
+            selected,
+        );
+    });
+
+    it('renders exact historical live turns, including nested tool content, and rejects an unbounded profile', async () => {
+        const memory = memoryStore();
+        const original = emptyDocument('conversation:indexed-topic');
+        const first = appendConversationRecords(
+            original,
+            { turns: [userTurn('turn:topic-user', 'block:topic-user')] },
+            {
+                expected_revision: original.revision,
+                operation_id: 'operation:topic-user',
+                payload_fingerprint: 'sha256:topic-user',
+                recorded_at: RECORDED_AT,
+            },
+        );
+        const staged = await stageIndexedConversationSnapshot(first.document, undefined, memory.store);
+        expect(await renderIndexedConversationTopicText(memory.store, staged.root)).toBe(
+            renderConversationText(first.document),
+        );
+        await expect(
+            renderIndexedConversationTopicText(memory.store, {
+                ...staged.root,
+                live_turn_count: 4097,
+            }),
+        ).rejects.toThrow(IndexedPresentationCapacityError);
+    });
+});
+
+describe('bounded indexed application call selection', () => {
+    it('loads the exact accepted call/catalog and independently fences a later terminal result by point reads', async () => {
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:selected-call'),
+            undefined,
+            memory.store,
+        );
+        const commands = await toolMediaCommands(initial.root.source);
+        const accepted = await stageIndexedRecordBatch(initial.root, commands.agentCommand, memory.store);
+        const source = commands.execution.call_source;
+        memory.recordReads.length = 0;
+        const selected = await loadIndexedToolCallSelection(memory.store, accepted.root, source);
+        expect(selected.source).toEqual(source);
+        expect(selected.call).toEqual(commands.call);
+        expect(selected.definition).toMatchObject({ id: commands.call.definition_id, name: commands.call.tool_name });
+        expect(selected.assets).toEqual({});
+        expect(memory.recordReads.length).toBeLessThan(16);
+        expect(await loadIndexedToolCallTerminalResult(memory.store, accepted.root, source)).toBe(false);
+        const terminal = await stageIndexedRecordBatch(accepted.root, commands.resultCommand, memory.store);
+        expect(await loadIndexedToolCallTerminalResult(memory.store, terminal.root, source)).toBe(true);
+        expect((await loadIndexedActiveToolDefinitions(memory.store, terminal.root)).map((entry) => entry.id)).toEqual([
+            commands.call.definition_id,
+        ]);
+        await expect(loadIndexedToolCallSelection(memory.store, terminal.root, source)).rejects.toThrow(
+            'exact complete accepted source',
+        );
+        for (const forged of [
+            { ...source, call_fingerprint: `sha256:${'0'.repeat(64)}` },
+            { ...source, turn_id: 'foreign:turn' },
+            { ...source, conversation: { ...source.conversation, conversation_id: 'foreign:conversation' } },
+        ]) {
+            await expect(loadIndexedToolCallSelection(memory.store, accepted.root, forged)).rejects.toThrow();
+            await expect(loadIndexedToolCallTerminalResult(memory.store, terminal.root, forged)).rejects.toThrow();
+        }
+        await expect(
+            loadIndexedToolCallSelection(
+                memory.store,
+                {
+                    ...accepted.root,
+                    directories: {
+                        ...accepted.root.directories,
+                        generation_acceptances: initial.root.directories.generation_acceptances,
+                    },
+                },
+                source,
+            ),
+        ).rejects.toThrow('exact accepted generation');
+        await expect(
+            loadIndexedToolCallSelection(
+                memory.store,
+                {
+                    ...accepted.root,
+                    context_header: initial.root.context_header,
+                },
+                source,
+            ),
+        ).rejects.toThrow('active catalog');
     });
 });

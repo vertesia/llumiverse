@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { deriveConversationId, fingerprintJson } from './identity.js';
+import { INDEXED_EXCHANGE_PROCESSOR_ID, INDEXED_EXCHANGE_PROCESSOR_VERSION } from './indexed-exchange-constants.js';
 import { preflightJsonInput } from './json-preflight.js';
 import { ContextEntrySchema } from './schemas/context-foundation.js';
 import { ProcessorConfigurationSchema } from './schemas/document.js';
@@ -25,6 +26,16 @@ const JobConstructionSchema = z.strictObject({
     selected_entries: z.array(ContextEntrySchema).optional(),
     target_fingerprint: ContentHashSchema.optional(),
     tool_result_entry_ids: z.array(IdentifierSchema).optional(),
+    exchange_selections: z
+        .array(
+            z.strictObject({
+                entry_ids: z.array(IdentifierSchema).length(2),
+                selected_block_ids: z.record(IdentifierSchema, z.array(IdentifierSchema).length(1)),
+                selected_entries: z.array(ContextEntrySchema).length(2),
+            }),
+        )
+        .max(MAX_PROCESSING_STAGES_PER_OPERATION)
+        .optional(),
 });
 export type ProcessingJobConstruction = z.infer<typeof JobConstructionSchema>;
 
@@ -53,19 +64,34 @@ export async function constructProcessingJobs(input: ProcessingJobConstruction):
         if (toolResultStage && index !== owned.processor_indices.length - 1)
             throw new Error('Tool-result text externalization must be the final on-append stage');
         if (toolResultStage && owned.tool_result_entry_ids?.length === 0) continue;
+        const exchangeStage =
+            processor.id === INDEXED_EXCHANGE_PROCESSOR_ID && processor.version === INDEXED_EXCHANGE_PROCESSOR_VERSION;
+        if (
+            exchangeStage &&
+            (processor.scope !== 'on_append' ||
+                index !== 0 ||
+                owned.processor_indices.length !== 1 ||
+                Object.keys(processor.config).length !== 0)
+        )
+            throw new Error('Whole-exchange processing requires one registered on-append stage');
+        if (exchangeStage && !owned.exchange_selections?.length) continue;
         const predecessor = jobs.at(-1);
         if (index > 0 && !toolResultStage && !predecessor)
             throw new Error('Processing stage has no accepted predecessor');
-        const selection = toolResultStage
-            ? { kind: 'entries', entry_ids: [...(owned.tool_result_entry_ids ?? owned.entry_ids)] }
-            : index === 0
-              ? {
-                    kind: 'entries',
-                    entry_ids: [...owned.entry_ids],
-                    ...(owned.selected_block_ids === undefined ? {} : { selected_block_ids: owned.selected_block_ids }),
-                    ...(owned.selected_entries === undefined ? {} : { selected_entries: owned.selected_entries }),
-                }
-              : { kind: 'predecessor_output', job_id: predecessor?.id };
+        const selection = exchangeStage
+            ? { kind: 'entries', ...owned.exchange_selections?.[0] }
+            : toolResultStage
+              ? { kind: 'entries', entry_ids: [...(owned.tool_result_entry_ids ?? owned.entry_ids)] }
+              : index === 0
+                ? {
+                      kind: 'entries',
+                      entry_ids: [...owned.entry_ids],
+                      ...(owned.selected_block_ids === undefined
+                          ? {}
+                          : { selected_block_ids: owned.selected_block_ids }),
+                      ...(owned.selected_entries === undefined ? {} : { selected_entries: owned.selected_entries }),
+                  }
+                : { kind: 'predecessor_output', job_id: predecessor?.id };
         jobs.push(
             ProcessingJobSchema.parse({
                 id,
@@ -86,6 +112,26 @@ export async function constructProcessingJobs(input: ProcessingJobConstruction):
                 ...(owned.target_fingerprint === undefined ? {} : { target_fingerprint: owned.target_fingerprint }),
             }),
         );
+        if (exchangeStage) {
+            for (const [exchangeIndex, exchangeSelection] of (owned.exchange_selections ?? []).entries()) {
+                if (exchangeIndex === 0) continue;
+                const nextSelection = { kind: 'entries', ...exchangeSelection };
+                jobs.push(
+                    ProcessingJobSchema.parse({
+                        ...jobs[jobs.length - 1],
+                        id: await deriveConversationId(
+                            'processing_job',
+                            owned.conversation_id,
+                            owned.source_operation_id,
+                            String(index),
+                            String(exchangeIndex),
+                        ),
+                        selection: nextSelection,
+                        selection_fingerprint: await fingerprintJson(nextSelection),
+                    }),
+                );
+            }
+        }
     }
     return jobs;
 }

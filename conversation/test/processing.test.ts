@@ -854,6 +854,91 @@ describe('durable processing jobs', () => {
         expect(store.current.processing.completions?.[jobs[1].id]?.status).toBe('no_op');
     });
 
+    it('publishes and round-trips the same repeated externalize-text policy accepted by indexed processing', async () => {
+        const configuration = { ...processor('externalize-text'), version: '1' };
+        const policy = await enabled([configuration, { ...configuration }]);
+        const source = parseConversationDocument(JSON.parse(JSON.stringify(policy)));
+        expect(source.processing.processors).toEqual([configuration, configuration]);
+        const accepted = await appendConversationRecordsWithProcessing(source, batch, appendOptions);
+        const roundTrip = parseConversationDocument(JSON.parse(JSON.stringify(accepted.document)));
+        const jobs = Object.values(roundTrip.processing.jobs ?? {});
+        expect(
+            jobs.map((job) => [job.processor_id, job.processor_version, job.processor_index, job.stage_index]),
+        ).toEqual([
+            ['externalize-text', '1', 0, 0],
+            ['externalize-text', '1', 1, 1],
+        ]);
+        expect(jobs[1].selection).toEqual({ kind: 'predecessor_output', job_id: jobs[0].id });
+        expect(jobs[0].configuration_fingerprint).toBe(jobs[1].configuration_fingerprint);
+    });
+
+    it('round-trips repeated ordered processor configurations and resolves their distinct stages', async () => {
+        const accepted = await appendConversationRecordsWithProcessing(
+            parseConversationDocument(
+                JSON.parse(JSON.stringify(await enabled([processor('summarize'), processor('summarize')]))),
+            ),
+            batch,
+            appendOptions,
+        );
+        const jobs = Object.values(accepted.document.processing.jobs ?? {});
+        expect(jobs.map((job) => job.processor_index)).toEqual([0, 1]);
+        expect(jobs.map((job) => job.processor_id)).toEqual(['summarize', 'summarize']);
+        expect(jobs[0].id).not.toBe(jobs[1].id);
+        const store = new MemoryStore(parseConversationDocument(JSON.parse(JSON.stringify(accepted.document))));
+        const observed: string[][] = [];
+        const registry = {
+            resolve: () => ({
+                run: async ({
+                    resolved_input,
+                    job,
+                }: {
+                    resolved_input: NonNullable<ConversationDocument['processing']['resolved_inputs']>[string];
+                    job: NonNullable<ConversationDocument['processing']['jobs']>[string];
+                }) => {
+                    observed.push(resolved_input.entry_ids);
+                    if (job.stage_index === 1) return { kind: 'no_op' as const, reason: 'inspected' };
+                    return {
+                        kind: 'proposal' as const,
+                        proposal: {
+                            kind: 'replace_with_compaction' as const,
+                            compaction_id: 'summary:1',
+                            strategy: { id: 'summarize', version: 'v1', configuration_fingerprint: 'sha256:config' },
+                            replacement_turns: [
+                                {
+                                    ...turn,
+                                    id: 'summary-turn',
+                                    kind: 'agent' as const,
+                                    provenance: {
+                                        type: 'derived' as const,
+                                        derivation_id: 'summary:1',
+                                        source_turn_ids: resolved_input.source_turn_ids,
+                                        source_hash: resolved_input.source_fingerprint,
+                                    },
+                                    blocks: [createTextBlock({ id: 'summary-block', text: 'short', format: 'plain' })],
+                                },
+                            ],
+                            fidelity: 'semantic' as const,
+                            retained_asset_ids: [],
+                            generation_ids: [],
+                            placement: { mode: 'first_selected' as const, causal_order: 'contiguous' as const },
+                        },
+                    };
+                },
+            }),
+        };
+        await runProcessingJob(store, registry, jobs[0].id, 'attempt:summary', () => at);
+        await runProcessingJob(store, registry, jobs[1].id, 'attempt:inspect', () => at);
+        store.current = parseConversationDocument(JSON.parse(JSON.stringify(store.current)));
+        const receiptCount = Object.keys(store.current.operation_receipts).length;
+        await runProcessingJob(store, registry, jobs[1].id, 'attempt:inspect-retry', () => at);
+        expect(Object.keys(store.current.operation_receipts)).toHaveLength(receiptCount);
+        expect(observed).toHaveLength(2);
+        expect(observed[0]).toEqual(['received-entry']);
+        expect(observed[1]).toEqual(store.current.processing.completions?.[jobs[0].id]?.inserted_entry_ids);
+        expect(observed[1]).toHaveLength(1);
+        expect(store.current.processing.completions?.[jobs[1].id]?.status).toBe('no_op');
+    });
+
     it('classifies an orphan started attempt as unknown rather than reinvoking an external processor', async () => {
         const accepted = await appendConversationRecordsWithProcessing(await enabled(), batch, appendOptions);
         const job = firstJob(accepted.document);

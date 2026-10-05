@@ -227,6 +227,61 @@ export const PAGED_RECORD_INDEX_MAX_BATCH_KEYS = 16_384;
 export const PAGED_RECORD_INDEX_MAX_BATCH_BYTES = 8 * 1024 * 1024;
 const PagedRecordInsertBatchSchema = z.array(LeafEntrySchema).min(1).max(PAGED_RECORD_INDEX_MAX_BATCH_KEYS);
 
+/** Own a finite nomination before I/O and traverse each selected immutable partition once.
+ * Unrelated leaves are never read. Page/edge integrity uses the identical point-reader checks;
+ * no page or proof survives this invocation, and recursion retains only one path's decoded pages. */
+export async function getPagedRecords(
+    store: PagedRecordIndexStore,
+    rootInput: PagedRecordRef | undefined,
+    keysInput: readonly string[],
+): Promise<Map<string, PagedRecordValue>> {
+    const nomination = { ...(rootInput === undefined ? {} : { root: rootInput }), keys: keysInput };
+    if (!preflightJsonInput(nomination, { max_bytes: PAGED_RECORD_INDEX_MAX_BATCH_BYTES }).success)
+        throw new TypeError('Paged record lookup batch is not bounded owned JSON');
+    const { root, keys } = z
+        .strictObject({
+            root: PagedRecordRefSchema.optional(),
+            keys: z.array(LeafEntrySchema.shape.key).max(PAGED_RECORD_INDEX_MAX_BATCH_KEYS),
+        })
+        .parse(structuredClone(nomination));
+    keys.sort(compare);
+    assertOrdered(keys);
+    const result = new Map<string, PagedRecordValue>();
+    if (root === undefined || keys.length === 0) return result;
+    const visited = new Set<string>();
+    const visit = async (
+        ref: PagedRecordRef,
+        start: number,
+        end: number,
+        parentLevel?: number,
+        declaredMaxKey?: string,
+    ): Promise<void> => {
+        if (visited.has(ref.content_hash)) throw new Error('Paged record lookup repeats an immutable partition');
+        visited.add(ref.content_hash);
+        const page = await readPage(store, ref);
+        if (parentLevel !== undefined && declaredMaxKey !== undefined)
+            assertChildPage(page, parentLevel, declaredMaxKey);
+        if (page.kind === 'leaf') {
+            let offset = start;
+            for (const entry of page.entries) {
+                while (offset < end && compare(keys[offset], entry.key) < 0) offset++;
+                if (offset < end && keys[offset] === entry.key) result.set(keys[offset++], entry.value);
+            }
+            return;
+        }
+        let offset = start;
+        for (let index = 0; index < page.children.length && offset < end; index++) {
+            const child = page.children[index];
+            const first = offset;
+            while (offset < end && (index === page.children.length - 1 || compare(keys[offset], child.max_key) <= 0))
+                offset++;
+            if (offset > first) await visit(child.page, first, offset, page.level, child.max_key);
+        }
+    };
+    await visit(root, 0, keys.length);
+    return result;
+}
+
 async function writePageGroups(store: PagedRecordIndexStore, page: PagedRecordIndexPage): Promise<WrittenPage[]> {
     const groups: WrittenPage[] = [];
     if (page.kind === 'leaf') {

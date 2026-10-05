@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalJsonContentBytes } from '../src/content-integrity.js';
+import { canonicalJsonContentBytes, hashContentBytes } from '../src/content-integrity.js';
 import {
     buildPagedRecordIndex,
     getPagedRecord,
+    getPagedRecords,
     insertPagedRecords,
     PAGED_RECORD_INDEX_MAX_BATCH_BYTES,
     PAGED_RECORD_INDEX_MAX_BATCH_KEYS,
+    PagedRecordIndexPageSchema,
     type PagedRecordIndexStore,
     type PagedRecordRef,
+    type PagedRecordValue,
     putPagedRecord,
     readPagedRecordRange,
     scanPagedRecords,
@@ -41,6 +44,78 @@ async function entries(store: PagedRecordIndexStore, root: PagedRecordRef | unde
 }
 
 describe('bounded grouped immutable index insertion', () => {
+    it('owns a bounded lookup nomination and reads each selected partition once per invocation', async () => {
+        const current = memory();
+        const root = await buildPagedRecordIndex(
+            current.store,
+            Array.from({ length: 1024 }, (_, index) => ({ key: key(index), value: marker(key(index)) })),
+        );
+        if (!root) throw new Error('Missing real root');
+        const nominated = [key(3), key(17), key(501), key(999), 'absent'];
+        const expected = new Map<string, PagedRecordValue>();
+        for (const id of nominated) {
+            const value = await getPagedRecord(current.store, root, id);
+            if (value) expected.set(id, value);
+        }
+        current.reads.length = 0;
+        const owned = { ...root };
+        const pending = getPagedRecords(current.store, owned, nominated);
+        owned.content_hash = `sha256:${'f'.repeat(64)}`;
+        nominated[0] = 'late';
+        expect(await pending).toEqual(expected);
+        expect(new Set(current.reads.map((ref) => ref.content_hash)).size).toBe(current.reads.length);
+        expect(current.reads.length).toBeLessThan(8);
+        const firstReads = current.reads.length;
+        current.reads.length = 0;
+        expect(await getPagedRecords(current.store, root, [...expected.keys(), 'absent'])).toEqual(expected);
+        expect(current.reads.length).toBe(firstReads);
+        const bytes = current.pages.get(root.content_hash);
+        if (!bytes) throw new Error('Missing retained root bytes');
+        current.pages.set(root.content_hash, Uint8Array.from([...bytes.slice(0, -1), 0]));
+        await expect(getPagedRecords(current.store, root, [key(3)])).rejects.toThrow('hash differs');
+    });
+
+    it('rejects duplicate/oversized/accessor nominations before reads and verifies child partition edges', async () => {
+        const current = memory();
+        const root = await buildPagedRecordIndex(
+            current.store,
+            Array.from({ length: 128 }, (_, index) => ({ key: key(index), value: marker(key(index)) })),
+        );
+        if (!root) throw new Error('Missing real root');
+        current.reads.length = 0;
+        await expect(getPagedRecords(current.store, root, ['same', 'same'])).rejects.toThrow('strictly ordered');
+        await expect(
+            getPagedRecords(
+                current.store,
+                root,
+                Array.from({ length: PAGED_RECORD_INDEX_MAX_BATCH_KEYS + 1 }, (_, index) => key(index)),
+            ),
+        ).rejects.toThrow();
+        let getters = 0;
+        const keys = ['owned'];
+        Object.defineProperty(keys, 0, {
+            enumerable: true,
+            get() {
+                getters++;
+                return 'owned';
+            },
+        });
+        await expect(getPagedRecords(current.store, root, keys)).rejects.toThrow('bounded owned JSON');
+        expect(getters).toBe(0);
+        expect(current.reads).toEqual([]);
+        const bytes = current.pages.get(root.content_hash);
+        if (!bytes) throw new Error('Missing retained root bytes');
+        const decoded: unknown = JSON.parse(new TextDecoder().decode(bytes));
+        const page = PagedRecordIndexPageSchema.parse(decoded);
+        if (page.kind !== 'branch') throw new Error('Expected real branch');
+        page.children[0].max_key = '000062';
+        const wrong = canonicalJsonContentBytes(page);
+        const integrity = await hashContentBytes(wrong);
+        const altered = { content_hash: integrity.content_hash, size_bytes: integrity.byte_length };
+        current.pages.set(altered.content_hash, wrong);
+        await expect(getPagedRecords(current.store, altered, [key(3)])).rejects.toThrow('child level or partition');
+    });
+
     it('matches sequential inserts across splits and keeps the original root unchanged', async () => {
         const current = memory();
         const initial = await buildPagedRecordIndex(
@@ -143,6 +218,18 @@ describe('bounded grouped immutable index insertion', () => {
                 key: `new:${key(index)}`,
                 value: marker(`new:${key(index)}`),
             }));
+            expect(
+                (
+                    await getPagedRecords(
+                        current.store,
+                        root,
+                        commands.map((command) => command.key),
+                    )
+                ).size,
+            ).toBe(0);
+            expect(new Set(current.reads.map((ref) => ref.content_hash)).size).toBe(current.reads.length);
+            expect(current.reads.length).toBeLessThan(8);
+            current.reads.length = 0;
             const updated = await insertPagedRecords(current.store, root, commands);
             const externalReads = new Set(current.reads.map((ref) => ref.content_hash));
             profiles.push(externalReads.size);

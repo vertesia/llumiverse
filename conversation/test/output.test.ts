@@ -6,6 +6,7 @@ import {
     type ConversationOutputReceipt,
     createAcceptedIndexedTextOutputFragment,
     createAcceptedOutputFragment,
+    createAcceptedOutputFragmentFromRecords,
     matchesRetainedAcceptedOutputFragment,
     parseAcceptedOutputFragment,
     validateAcceptedOutputFragment,
@@ -147,6 +148,37 @@ function acceptedDocument(options: { assetId?: string; receivedMedia?: boolean }
 }
 
 describe('accepted conversation output projection', () => {
+    it('projects the exact point-loaded records with the same usage, media and omissions as a document', () => {
+        const document = acceptedDocument();
+        const receipt = document.operation_receipts['response:1'];
+        const turn = document.turns.find((item) => item.id === receipt?.accepted_turn_ids?.[0]);
+        const generation = document.generations[receipt?.accepted_generation_ids?.[0] ?? ''];
+        if (!receipt || !turn || !isGeneratedAgentTurn(turn) || generation?.record_source !== 'executed')
+            throw new Error('Expected an accepted output fixture');
+        const selectedAssets: Record<string, Asset> = {};
+        for (const id of receipt.accepted_asset_ids ?? []) {
+            const asset = document.assets[id];
+            if (!asset) throw new Error('Accepted output fixture lost its selected asset');
+            selectedAssets[id] = asset;
+        }
+        const selected = {
+            source: { conversation_id: document.id, revision: document.revision },
+            receipt,
+            turn,
+            generation,
+            assets: selectedAssets,
+        };
+        expect(createAcceptedOutputFragmentFromRecords(selected)).toEqual(
+            createAcceptedOutputFragment(document, receipt.id),
+        );
+        expect(() =>
+            createAcceptedOutputFragmentFromRecords({
+                ...selected,
+                source: { conversation_id: 'foreign:conversation', revision: document.revision },
+            }),
+        ).toThrow('Selected output records differ from acceptance');
+    });
+
     it('projects the same text-only accepted output from bounded records without a full document', () => {
         const original = acceptedDocument();
         const generated = original.turns[0];

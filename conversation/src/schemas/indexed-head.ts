@@ -1,12 +1,15 @@
 import { z } from 'zod';
 import { PagedRecordRefSchema } from '../paged-record-index.js';
 import { AssetSchema, ToolDefinitionSchema } from './content.js';
+import { ContextEntrySchema } from './context-foundation.js';
 import { ConversationDeletedTurnSchema } from './conversation-delete-operation.js';
 import {
     CompactionRecordSchema,
     ConversationContextSchema,
     ConversationLineageSchema,
+    ProcessingBudgetSchema,
     ProcessingStateSchema,
+    ProcessorConfigurationSchema,
 } from './document.js';
 import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from './execution.js';
 import {
@@ -174,6 +177,8 @@ export const IndexedConversationProcessingHeaderSchema = ProcessingStateSchema.o
     supersessions: true,
     coverage_receipts: true,
 }).extend({
+    /** Accepted private policy command whose registered selected processors were verified before CAS. */
+    selected_policy_operation_id: IdentifierSchema.optional(),
     /** Validated migration witness; absent on older roots that cannot prove job drain by point lookup. */
     unresolved_job_count: NonnegativeSafeIntegerSchema.optional(),
     job_count: NonnegativeSafeIntegerSchema.optional(),
@@ -226,7 +231,12 @@ export type IndexedConversationSelectedContext = z.infer<typeof IndexedConversat
 /** Internal selected processing data only; never accepted by a native prepared-request compiler. */
 export const IndexedProcessingSelectedContextSchema = IndexedConversationSelectedContextSchema.omit({
     completeness: true,
-}).extend({ completeness: z.literal('active_processing_dependencies_verified') });
+}).extend({
+    completeness: z.literal('active_processing_dependencies_verified'),
+    /** Point-read accepted remainder entries from the original bounded sibling-job cohort. */
+    lineage_entry_witnesses: z.record(IdentifierSchema, ContextEntrySchema).optional(),
+    sibling_compaction_ids: z.array(IdentifierSchema).max(16).optional(),
+});
 export type IndexedProcessingSelectedContext = z.infer<typeof IndexedProcessingSelectedContextSchema>;
 
 /** Indexed coverage commits a persistent obligation identity, never an invented empty materialized
@@ -262,3 +272,30 @@ export const IndexedProcessingCoverageCommandSchema = z.strictObject({
     recorded_at: TimestampSchema,
 });
 export type IndexedProcessingCoverageCommand = z.infer<typeof IndexedProcessingCoverageCommandSchema>;
+
+/** Internal data command. The host owns the current head and selected policy authority. */
+export const IndexedProcessingPolicyCommandSchema = z.strictObject({
+    operation_id: IdentifierSchema,
+    expected_revision: NonnegativeSafeIntegerSchema,
+    recorded_at: TimestampSchema,
+    enabled: z.boolean(),
+    processors: z.array(ProcessorConfigurationSchema).max(16),
+    budget: ProcessingBudgetSchema.optional(),
+    supersede_job_ids: z.array(IdentifierSchema).max(256).optional(),
+    supersession_reason: IdentifierSchema.optional(),
+});
+export type IndexedProcessingPolicyCommand = z.infer<typeof IndexedProcessingPolicyCommandSchema>;
+
+/** Exact host-selected current entries, not a caller-supplied resolved plan or model proof. */
+export const IndexedProcessingQueueCommandSchema = z.strictObject({
+    operation_id: IdentifierSchema,
+    expected_revision: NonnegativeSafeIntegerSchema,
+    expected_context_revision: NonnegativeSafeIntegerSchema,
+    recorded_at: TimestampSchema,
+    processor_id: IdentifierSchema,
+    scope: z.enum(['manual', 'on_budget']),
+    selected_entry_ids: z.array(IdentifierSchema).min(1).max(INDEXED_PROCESSING_SELECTED_MAX_BLOCKS),
+    selected_block_ids: z.record(IdentifierSchema, z.array(IdentifierSchema).min(1)).optional(),
+    target_fingerprint: ContentHashSchema.optional(),
+});
+export type IndexedProcessingQueueCommand = z.infer<typeof IndexedProcessingQueueCommandSchema>;
