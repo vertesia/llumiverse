@@ -5,6 +5,8 @@ import {
     type IndexedConversationRecordStore,
     loadIndexedPendingProcessingJobs,
     loadIndexedProcessingAppendAcceptance,
+    loadIndexedProcessingJobState,
+    loadIndexedProcessingPredecessorEvidence,
     loadIndexedProcessingQueuedJobAcceptance,
     loadIndexedProcessingSelectedContext,
     loadIndexedSelectedTextContext,
@@ -16,11 +18,21 @@ import {
     stageIndexedProcessingQueue,
     stageIndexedRecordBatch,
 } from '../src/indexed-conversation.js';
-import { resolveIndexedProcessingTextInput } from '../src/indexed-processing-working-set.js';
+import {
+    indexedTextExternalizationOriginals,
+    resolveIndexedProcessingTextInput,
+} from '../src/indexed-processing-working-set.js';
 import { getPagedRecord } from '../src/paged-record-index.js';
-import { setProcessingPolicy } from '../src/processing.js';
+import {
+    type ProcessingStore,
+    resolveProcessingJobInput,
+    runProcessingJob,
+    setProcessingPolicy,
+} from '../src/processing.js';
 import { appendConversationRecordsWithProcessing } from '../src/runtime.js';
 import { INDEXED_PROCESSING_SELECTED_MAX_BLOCKS } from '../src/schemas/indexed-head.js';
+import { ProcessingResolvedInputSchema } from '../src/schemas/processing.js';
+import { parseConversationDocument } from '../src/validation.js';
 import { emptyDocument, RECORDED_AT, userTurn } from './fixtures.js';
 
 // Exhaustive CPU capacity fixtures include real immutable setup, dependency validation and retry;
@@ -82,6 +94,325 @@ async function configured() {
 }
 
 describe('indexed processing append index', () => {
+    it.each(['resolve', 'attempt', 'output'] as const)(
+        'rejects real fault-paused materialized %s before any indexed write',
+        async (phase) => {
+            const policy = await configured();
+            const turn = userTurn(`turn:paused-${phase}`);
+            const batch = {
+                turns: [turn],
+                context_entries: [{ id: `entry:paused-${phase}`, type: 'source_turn' as const, turn_id: turn.id }],
+            };
+            const accepted = await appendConversationRecordsWithProcessing(policy, batch, {
+                operation_id: `append:paused-${phase}`,
+                expected_revision: policy.revision,
+                recorded_at: RECORDED_AT,
+                payload_fingerprint: await fingerprintJson(batch),
+            });
+            let current = accepted.document;
+            const job = Object.values(current.processing.jobs ?? {})[0];
+            if (!job) throw new Error('Actual accepted append did not enqueue processing');
+            const unstarted = storage();
+            const initial = await stageIndexedConversationSnapshot(current, undefined, unstarted.store);
+            expect(
+                (await loadIndexedPendingProcessingJobs(unstarted.store, initial.root)).jobs.map(({ job }) => job.id),
+            ).toEqual([job.id]);
+            let armed = true;
+            let calls = 0;
+            const materialized: ProcessingStore = {
+                load: async () => structuredClone(current),
+                async commit(expected, document) {
+                    if (current.revision !== expected) return false;
+                    current = parseConversationDocument(document);
+                    if (armed && current.operation_receipts[`processing:${phase}:${job.id}`]) {
+                        armed = false;
+                        throw new Error('Actual phase committed but process lost its ACK');
+                    }
+                    return true;
+                },
+            };
+            const registry = {
+                resolve: () => ({
+                    run: async () => {
+                        calls += 1;
+                        return { kind: 'no_op' as const, reason: 'Genuine materialized processor output' };
+                    },
+                }),
+            };
+            await expect(
+                runProcessingJob(materialized, registry, job.id, `attempt:paused-${phase}`, () => RECORDED_AT),
+            ).rejects.toThrow('Actual phase committed but process lost its ACK');
+            const retained = structuredClone(current);
+            expect(retained.processing.resolved_inputs?.[job.id]).toBeDefined();
+            expect(retained.operation_receipts[`processing:${phase}:${job.id}`]).toBeDefined();
+            const writes = storage();
+            await expect(stageIndexedConversationSnapshot(current, undefined, writes.store)).rejects.toThrow(
+                'unresolved materialized phases to drain or be superseded',
+            );
+            expect(writes.pages.size).toBe(0);
+            expect(writes.records.size).toBe(0);
+            expect(current).toEqual(retained);
+            expect(calls).toBe(phase === 'output' ? 1 : 0);
+            if (phase === 'attempt') {
+                expect(
+                    (await runProcessingJob(materialized, registry, job.id, 'attempt:retry', () => RECORDED_AT)).status,
+                ).toBe('in_progress');
+                expect(calls).toBe(0); // An uncertain materialized attempt remains owned by its original recovery protocol.
+            } else {
+                await runProcessingJob(materialized, registry, job.id, 'attempt:retry', () => RECORDED_AT);
+                expect(calls).toBe(1);
+                const finished = storage();
+                const migrated = await stageIndexedConversationSnapshot(current, undefined, finished.store);
+                expect((await loadIndexedPendingProcessingJobs(finished.store, migrated.root)).jobs).toEqual([]);
+                expect((await loadIndexedProcessingJobState(finished.store, migrated.root, job.id)).completion).toEqual(
+                    current.processing.completions?.[job.id],
+                );
+            }
+            if (phase === 'resolve') {
+                const superseded = await setProcessingPolicy(retained, {
+                    operation_id: 'policy:supersede-paused',
+                    expected_revision: retained.revision,
+                    recorded_at: RECORDED_AT,
+                    enabled: true,
+                    processors: retained.processing.processors,
+                    supersede_job_ids: [job.id],
+                    supersession_reason: 'Explicit original-policy supersession',
+                });
+                const memory = storage();
+                const migrated = await stageIndexedConversationSnapshot(superseded.document, undefined, memory.store);
+                expect((await loadIndexedPendingProcessingJobs(memory.store, migrated.root)).jobs).toEqual([]);
+                const descriptor = await getPagedRecord(
+                    memory.store,
+                    migrated.root.directories.processing_records,
+                    JSON.stringify(['resolved_inputs', job.id]),
+                );
+                if (
+                    descriptor?.storage !== 'record' ||
+                    descriptor.kind !== 'processing_records' ||
+                    descriptor.id !== job.id
+                )
+                    throw new Error('Exact superseded resolution was not retained');
+                const bytes = await memory.store.readRecord(descriptor);
+                expect((await hashContentBytes(bytes)).content_hash).toBe(descriptor.content_hash);
+                expect(bytes.byteLength).toBe(descriptor.size_bytes);
+                expect(ProcessingResolvedInputSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))).toEqual(
+                    retained.processing.resolved_inputs?.[job.id],
+                );
+                await expect(loadIndexedProcessingJobState(memory.store, migrated.root, job.id)).rejects.toThrow(
+                    'not bound to its retained policy stage',
+                );
+            }
+        },
+    );
+
+    it.each([false, true])(
+        'retains genuine materialized processing phase bytes through indexed activation (duplicate hash present=%s)',
+        async (duplicateHash) => {
+            const configuration = (await configured()).processing.processors[0];
+            const policy = await setProcessingPolicy(emptyDocument('conversation:migrated-processing'), {
+                operation_id: 'policy:migrated',
+                expected_revision: 0,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors: [configuration],
+            });
+            const turn = userTurn('turn:migrated-processing');
+            const batch = {
+                turns: [turn],
+                context_entries: [{ id: 'entry:migrated-processing', type: 'source_turn' as const, turn_id: turn.id }],
+            };
+            const accepted = await appendConversationRecordsWithProcessing(policy.document, batch, {
+                operation_id: 'append:migrated-processing',
+                expected_revision: policy.document.revision,
+                recorded_at: RECORDED_AT,
+                payload_fingerprint: await fingerprintJson(batch),
+            });
+            let current = accepted.document;
+            const materialized: ProcessingStore = {
+                load: async () => structuredClone(current),
+                async commit(expected, document) {
+                    if (current.revision !== expected) return false;
+                    current = parseConversationDocument(document);
+                    return true;
+                },
+            };
+            const jobs = Object.values(current.processing.jobs ?? {}).sort((a, b) => a.stage_index - b.stage_index);
+            expect(jobs).toHaveLength(1);
+            let calls = 0;
+            const registry = {
+                resolve: () => ({
+                    run: async () => {
+                        calls += 1;
+                        return { kind: 'no_op' as const, reason: 'Actual materialized processing result' };
+                    },
+                }),
+            };
+            for (const job of jobs)
+                await runProcessingJob(materialized, registry, job.id, `attempt:${job.id}`, () => RECORDED_AT);
+            expect(calls).toBe(1);
+            for (const job of jobs) {
+                const resolution = current.processing.resolved_inputs?.[job.id];
+                const completion = current.processing.completions?.[job.id];
+                if (!resolution || !completion) throw new Error('Real materialized job did not complete');
+                expect(completion.status).toBe('no_op');
+                for (const [phase, value] of [
+                    ['resolve', resolution],
+                    ['complete', completion],
+                ] as const) {
+                    const receipt = current.operation_receipts[`processing:${phase}:${job.id}`];
+                    if (!receipt.processing_operation) throw new Error('Actual phase has no typed operation');
+                    expect(receipt.processing_operation.result_fingerprint).toBeUndefined();
+                    expect(receipt.payload_fingerprint).toBe(await fingerprintJson(value));
+                    if (duplicateHash) receipt.processing_operation.result_fingerprint = receipt.payload_fingerprint;
+                }
+            }
+            const memory = storage();
+            const migrated = await stageIndexedConversationSnapshot(current, undefined, memory.store);
+            if (!migrated.locator) throw new Error('Real imported processing fixture lacks root');
+            for (const job of jobs) {
+                const state = await loadIndexedProcessingJobState(memory.store, migrated.root, job.id);
+                expect(state.job).toEqual(job);
+                expect(state.resolution).toEqual(current.processing.resolved_inputs?.[job.id]);
+                expect(state.resolution_receipt).toEqual(current.operation_receipts[`processing:resolve:${job.id}`]);
+                expect(state.completion).toEqual(current.processing.completions?.[job.id]);
+            }
+            const selected = await loadIndexedProcessingSelectedContext(memory.store, migrated.root, migrated.locator);
+            const first = await loadIndexedProcessingJobState(memory.store, migrated.root, jobs[0].id);
+            if (!first.resolution || !first.resolution_receipt) throw new Error('Imported resolution missing');
+            // Completed imported jobs are read as retained evidence, not re-executed using
+            // the indexed executor's independently versioned selected-context fingerprint.
+            expect(await resolveProcessingJobInput(accepted.document, first.job, RECORDED_AT)).toEqual(
+                first.resolution,
+            );
+            const pending = await loadIndexedPendingProcessingJobs(memory.store, migrated.root);
+            expect(pending.jobs).toEqual([]);
+            expect(pending.unresolved_job_count).toBe(0);
+            const retainedTurn = selected.turns.find((projection) => projection.header.id === turn.id);
+            if (!retainedTurn) throw new Error('Bounded selected original turn missing');
+            expect(retainedTurn.selected_blocks).toEqual(turn.blocks);
+            expect(retainedTurn.selected_blocks).toEqual([
+                { id: turn.blocks[0].id, type: 'text', text: 'turn:migrated-processing-text', format: 'plain' },
+            ]);
+            const indexedResolution = await resolveIndexedProcessingTextInput(
+                { ...selected, source: { ...selected.source, revision: first.resolution.source_revision } },
+                first.job,
+                first.resolution.recorded_at,
+            );
+            expect(indexedResolution.source_fingerprint).toBe(first.resolution.source_fingerprint);
+            expect(indexedResolution.context_fingerprint).not.toBe(first.resolution.context_fingerprint);
+            await expect(
+                indexedTextExternalizationOriginals(selected, first.job, first.resolution, first.resolution_receipt),
+            ).rejects.toThrow('Indexed originals differ from their exact retained resolved selection');
+            const corrupted = structuredClone(current);
+            const receipt = corrupted.operation_receipts[`processing:resolve:${jobs[0].id}`];
+            if (!receipt.processing_operation) throw new Error('Corruption fixture lost actual phase');
+            receipt.processing_operation.result_fingerprint = `sha256:${'0'.repeat(64)}`;
+            const badMemory = storage();
+            const bad = await stageIndexedConversationSnapshot(corrupted, undefined, badMemory.store);
+            await expect(loadIndexedProcessingJobState(badMemory.store, bad.root, jobs[0].id)).rejects.toThrow(
+                'exact immutable phase receipt',
+            );
+        },
+    );
+
+    it('reads exact no-op predecessor receipts from a genuine multi-stage indexed policy', async () => {
+        const document = await configured();
+        const memory = storage();
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        if (!initial.locator) throw new Error('Indexed predecessor fixture lacks root');
+        const policy = await stageIndexedProcessingPolicy(
+            memory.store,
+            initial.root,
+            initial.locator,
+            {
+                operation_id: 'policy:indexed-predecessor',
+                expected_revision: initial.root.source.revision,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors: [document.processing.processors[0], document.processing.processors[0]],
+            },
+            async () => undefined,
+        );
+        const turn = {
+            ...userTurn('turn:indexed-predecessor'),
+            blocks: [{ id: 'block:indexed-predecessor', type: 'json' as const, value: { actual: true } }],
+        };
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:indexed-predecessor', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const appended = await stageIndexedRecordBatch(
+            policy.root,
+            {
+                conversation_id: document.id,
+                batch,
+                options: {
+                    operation_id: 'append:indexed-predecessor',
+                    expected_revision: policy.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        if (!appended.locator) throw new Error('Indexed predecessor append lacks root');
+        const jobs = (await loadIndexedPendingProcessingJobs(memory.store, appended.root)).jobs
+            .map(({ job }) => job)
+            .sort((a, b) => a.stage_index - b.stage_index);
+        expect(jobs).toHaveLength(2);
+        const selected = await loadIndexedProcessingSelectedContext(memory.store, appended.root, appended.locator);
+        const resolution = await resolveIndexedProcessingTextInput(selected, jobs[0], RECORDED_AT);
+        const resolved = await stageIndexedProcessingPhase(memory.store, appended.root, appended.locator, {
+            phase: 'resolve',
+            value: resolution,
+        });
+        const payload = {
+            kind: 'no_op' as const,
+            job_id: jobs[0].id,
+            reason: 'no_eligible_blocks',
+            resolved_input_fingerprint: await fingerprintJson(resolution),
+            recorded_at: RECORDED_AT,
+        };
+        const output = await stageIndexedProcessingPhase(memory.store, resolved.root, resolved.locator, {
+            phase: 'output',
+            value: { ...payload, output_fingerprint: await fingerprintJson(payload) },
+        });
+        const completed = await stageIndexedProcessingNoOpCompletion(
+            memory.store,
+            output.root,
+            output.locator,
+            jobs[0].id,
+        );
+        const first = await loadIndexedProcessingJobState(memory.store, completed.root, jobs[0].id);
+        const predecessor = await loadIndexedProcessingPredecessorEvidence(memory.store, completed.root, jobs[1].id);
+        if (!first.completion) throw new Error('Actual predecessor completion missing');
+        expect(first.completion.status).toBe('no_op');
+        expect(predecessor?.job).toEqual(jobs[0]);
+        expect(predecessor?.receipt.payload_fingerprint).toBe(await fingerprintJson(first.completion));
+        expect(predecessor?.receipt.processing_operation?.result_fingerprint).toBe(
+            predecessor?.receipt.payload_fingerprint,
+        );
+        const retained = await getPagedRecord(
+            memory.store,
+            completed.root.directories.operation_receipts,
+            `processing:complete:${jobs[0].id}`,
+        );
+        if (retained?.storage !== 'record' || !predecessor) throw new Error('Predecessor exact receipt missing');
+        memory.records.set(
+            retained.content_hash,
+            canonicalJsonContentBytes({
+                ...predecessor.receipt,
+                processing_operation: {
+                    ...predecessor.receipt.processing_operation,
+                    result_fingerprint: `sha256:${'0'.repeat(64)}`,
+                },
+            }),
+        );
+        await expect(
+            loadIndexedProcessingPredecessorEvidence(memory.store, completed.root, jobs[1].id),
+        ).rejects.toThrow();
+    });
+
     it('requires explicit supersession of every pending obligation for an enabled policy transition and exact retry', async () => {
         const document = await configured();
         const memory = storage();

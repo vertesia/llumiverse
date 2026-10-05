@@ -239,7 +239,8 @@ export async function indexedPredecessorEntrySelection(
         resolvedReceipt.processing_operation?.phase !== 'resolve' ||
         resolvedReceipt.processing_operation.job_id !== prior.id ||
         resolvedReceipt.processing_operation.policy_revision !== prior.policy_revision ||
-        resolvedReceipt.processing_operation.result_fingerprint !== (await fingerprintJson(resolution)) ||
+        (resolvedReceipt.processing_operation.result_fingerprint !== undefined &&
+            resolvedReceipt.processing_operation.result_fingerprint !== (await fingerprintJson(resolution))) ||
         resolvedReceipt.payload_fingerprint !== (await fingerprintJson(resolution)) ||
         resolvedReceipt.base_revision !== resolution.source_revision ||
         resolvedReceipt.result_revision !== resolution.source_revision + 1 ||
@@ -291,7 +292,8 @@ export async function indexedPredecessorEntrySelection(
               receipt.processing_operation?.phase !== 'complete' ||
               receipt.processing_operation.job_id !== prior.id ||
               receipt.processing_operation.policy_revision !== prior.policy_revision ||
-              receipt.processing_operation.result_fingerprint !== (await fingerprintJson(completion)) ||
+              (receipt.processing_operation.result_fingerprint !== undefined &&
+                  receipt.processing_operation.result_fingerprint !== (await fingerprintJson(completion))) ||
               receipt.payload_fingerprint !== (await fingerprintJson(completion)))
     )
         throw new Error('Indexed stage lost its exact accepted predecessor output and completion');
@@ -657,7 +659,8 @@ export async function indexedTextExternalizationOriginals(
             receipt.processing_operation?.phase !== 'resolve' ||
             receipt.processing_operation.job_id !== job.id ||
             receipt.processing_operation.policy_revision !== job.policy_revision ||
-            receipt.processing_operation.result_fingerprint !== identity ||
+            (receipt.processing_operation.result_fingerprint !== undefined &&
+                receipt.processing_operation.result_fingerprint !== identity) ||
             receipt.payload_fingerprint !== identity ||
             receipt.base_revision !== resolution.source_revision ||
             receipt.result_revision !== receipt.base_revision + 1 ||

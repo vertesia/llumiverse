@@ -454,6 +454,19 @@ export async function stageIndexedConversationSnapshot(
     if (Object.keys(document.deleted_turns ?? {}).length > 0) {
         throw new Error('Indexed migration cannot retain logical-delete tombstone witnesses yet');
     }
+    // Materialized resolutions use a different context-fingerprint profile. Preserve their
+    // exact retained facts, but never schedule an unfinished foreign-profile phase as indexed
+    // work. This check precedes every indexed page/record write and owner publication.
+    for (const job of Object.values(document.processing.jobs ?? {})) {
+        if (
+            isIndexedProcessingUnresolved(document.processing, job.id) &&
+            (document.processing.resolved_inputs?.[job.id] ||
+                document.processing.attempts?.[job.id] ||
+                document.processing.outputs?.[job.id] ||
+                document.processing.completions?.[job.id])
+        )
+            throw new Error('Indexed migration requires unresolved materialized phases to drain or be superseded');
+    }
     if (document.processing.enabled) {
         assertSupportedIndexedReadinessPolicy(document.processing);
         const turns = createContextTurnIndex(document);
@@ -4010,7 +4023,8 @@ export async function loadIndexedProcessingJobState(
             resolutionReceipt.processing_operation?.phase !== 'resolve' ||
             resolutionReceipt.processing_operation.job_id !== job.id ||
             resolutionReceipt.processing_operation.policy_revision !== job.policy_revision ||
-            resolutionReceipt.processing_operation.result_fingerprint !== identity ||
+            (resolutionReceipt.processing_operation.result_fingerprint !== undefined &&
+                resolutionReceipt.processing_operation.result_fingerprint !== identity) ||
             resolutionReceipt.payload_fingerprint !== identity ||
             resolutionReceipt.base_revision !== resolution.source_revision ||
             resolutionReceipt.result_revision !== resolution.source_revision + 1 ||
@@ -6960,6 +6974,88 @@ export async function renderIndexedConversationTopicText(
     store: IndexedConversationRecordStore,
     rootInput: IndexedConversationRoot,
 ): Promise<string> {
+    return renderIndexedConversationHistoricalText(store, rootInput, false);
+}
+
+/** Exact search/enrichment projection, excluding private reasoning/replay and non-transcript programs. */
+export async function renderIndexedConversationSearchText(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+): Promise<string> {
+    return renderIndexedConversationHistoricalText(store, rootInput, true);
+}
+
+/** Exact last N visible user/agent messages. Cold history is never loaded merely to select a tail.
+ * A long suffix of skipped turns or oversized selected bytes fails explicitly, rather than returning a partial tail. */
+export async function renderIndexedConversationRecentMessages(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    limit: number,
+): Promise<{ role: 'user' | 'assistant'; content: string }[]> {
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > 100)
+        throw new IndexedPresentationCapacityError('Indexed recent messages require a limit from 0 to 100');
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const count = root.live_turn_count;
+    const tail = root.active_tail_turn_id;
+    if (count === undefined || tail === undefined || (count === 0) !== (tail === null))
+        throw new Error('Indexed recent source lacks its exact live-turn profile');
+    if (limit === 0) return [];
+    const bounded = indexedPresentationReadStore(store);
+    const messages: { role: 'user' | 'assistant'; content: string }[] = [];
+    let id: string | undefined = tail ?? undefined;
+    let nextId: string | undefined;
+    let lastOrdinal = Number.MAX_SAFE_INTEGER;
+    let visited = 0;
+    let textBytes = 0;
+    while (id !== undefined && messages.length < limit) {
+        if (visited >= count) throw new Error('Indexed recent live-turn chain exceeds its retained count');
+        if (++visited > 4096)
+            throw new IndexedPresentationCapacityError(
+                'Indexed recent selection exceeds its bounded skipped-turn suffix',
+            );
+        const link = await presentationRecord(bounded, root, 'turn_links', id, IndexedConversationTurnLinkSchema);
+        if (link.id !== id || link.next_turn_id !== nextId || link.ordinal >= lastOrdinal)
+            throw new Error('Indexed recent live-turn order differs from its retained links');
+        const header = await presentationRecord(bounded, root, 'turns', id, IndexedConversationTurnHeaderSchema);
+        if (header.turn.id !== id) throw new Error('Indexed recent turn differs from its retained link');
+        if (header.turn.kind === 'user' || header.turn.kind === 'agent') {
+            const projection = await loadIndexedProjectedTurn(bounded, root, id);
+            if (projection.completeness !== 'full_turn') throw new Error('Indexed recent turn is incomplete');
+            const turn = ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
+            const content = turn.blocks
+                .filter((block) => block.type !== 'tool_call')
+                .map(indexedSearchBlockText)
+                .filter(Boolean)
+                .join('\n');
+            if (content.trim()) {
+                textBytes += new TextEncoder().encode(content).byteLength;
+                if (textBytes > INDEXED_TOPIC_MAX_TEXT_BYTES)
+                    throw new IndexedPresentationCapacityError(
+                        'Indexed recent text exceeds its 16MiB exact-render profile',
+                    );
+                messages.push({ role: turn.kind === 'agent' ? 'assistant' : 'user', content });
+            }
+        }
+        nextId = id;
+        lastOrdinal = link.ordinal;
+        id = link.previous_turn_id;
+    }
+    if (id === undefined && visited !== count) throw new Error('Indexed recent source lacks retained live turns');
+    return messages.reverse();
+}
+
+function indexedSearchBlockText(block: ConversationTurn['blocks'][number]): string {
+    if (block.type === 'reasoning' || block.type === 'native_replay' || block.type === 'extension') return '';
+    if (block.type === 'tool_result')
+        return `[TOOL RESULT]: ${block.call_id} → ${block.content.map(indexedSearchBlockText).filter(Boolean).join(' ')}`;
+    return renderContentBlockText(block);
+}
+
+async function renderIndexedConversationHistoricalText(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    search: boolean,
+): Promise<string> {
     const root = IndexedConversationRootSchema.parse(rootInput);
     const count = root.live_turn_count;
     const tail = root.active_tail_turn_id;
@@ -6989,7 +7085,11 @@ export async function renderIndexedConversationTopicText(
         const projection = await loadIndexedProjectedTurn(boundedStore, root, turnId);
         if (projection.completeness !== 'full_turn') throw new Error('Indexed topic source turn is incomplete');
         const turn = ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
-        const content = turn.blocks.map(renderContentBlockText).filter(Boolean).join(' ');
+        if (search && turn.kind === 'program' && turn.presentation !== 'transcript') continue;
+        const content = turn.blocks
+            .map(search ? indexedSearchBlockText : renderContentBlockText)
+            .filter(Boolean)
+            .join(' ');
         if (!content) continue;
         const role = turn.kind === 'agent' ? 'ASSISTANT' : turn.kind.toUpperCase();
         const line = `[${role}]: ${content}`;

@@ -28,6 +28,8 @@ import {
     loadIndexedTerminalProgramPresentation,
     loadIndexedToolCallSelection,
     loadIndexedToolCallTerminalResult,
+    renderIndexedConversationRecentMessages,
+    renderIndexedConversationSearchText,
     renderIndexedConversationTopicText,
     stageIndexedConversationDelete,
     stageIndexedConversationSnapshot,
@@ -48,7 +50,7 @@ import {
 } from '../src/processing.js';
 import { renderConversationText } from '../src/rendering.js';
 import { appendConversationRecords, appendConversationRecordsWithProcessing } from '../src/runtime.js';
-import { ProgramTurnSchema, ToolTurnSchema } from '../src/schemas/content.js';
+import { AgentTurnSchema, ProgramTurnSchema, ToolTurnSchema } from '../src/schemas/content.js';
 import { GenerationSchema } from '../src/schemas/execution.js';
 import { IndexedRecordBatchCommandSchema } from '../src/schemas/ingestion.js';
 import { validateToolExecutionResult } from '../src/tool-execution.js';
@@ -2464,7 +2466,18 @@ describe('indexed conversation snapshot', () => {
             () => RECORDED_AT,
         );
         expect(current.processing.completions?.[job.id]?.status).toBe('blocked');
-        await assertIndexedBlocked(disabledWithoutSupersession(current), 1);
+        const blocked = disabledWithoutSupersession(current);
+        await expect(assertProcessingReady(blocked, '', '')).rejects.toThrow(
+            'Accepted processing jobs remain outstanding',
+        );
+        const blockedMemory = memoryStore();
+        const blockedBefore = structuredClone(blocked);
+        await expect(stageIndexedConversationSnapshot(blocked, undefined, blockedMemory.store)).rejects.toThrow(
+            'unresolved materialized phases to drain or be superseded',
+        );
+        expect(blockedMemory.pages.size).toBe(0);
+        expect(blockedMemory.records.size).toBe(0);
+        expect(blocked).toEqual(blockedBefore);
 
         const superseded = await setProcessingPolicy(accepted.document, {
             operation_id: 'policy:supersede',
@@ -3852,6 +3865,136 @@ describe('bounded indexed historical presentation', () => {
         expect(await loadIndexedRetainedAcceptedOutputPresentation(memory.store, migrated.root, nomination)).toEqual(
             selected,
         );
+    });
+
+    it('selects the exact visible tail of a history larger than the topic profile without cold record reads', async () => {
+        const memory = memoryStore();
+        const document = emptyDocument('conversation:recent-tail');
+        const turns = Array.from({ length: 4100 }, (_, index) => userTurn(`turn:recent:${index}`));
+        const hidden = ProgramTurnSchema.parse({
+            ...turns[0],
+            id: 'program:recent:hidden',
+            kind: 'program',
+            presentation: 'transcript',
+            blocks: [textBlock('block:recent:hidden', 'program-only')],
+        });
+        const accepted = appendConversationRecords(
+            document,
+            { turns: [...turns, hidden] },
+            {
+                expected_revision: 0,
+                operation_id: 'operation:recent',
+                payload_fingerprint: 'sha256:recent',
+                recorded_at: RECORDED_AT,
+            },
+        );
+        const staged = await stageIndexedConversationSnapshot(accepted.document, undefined, memory.store);
+        memory.recordReads.length = 0;
+        memory.pageReads.length = 0;
+        expect(await renderIndexedConversationRecentMessages(memory.store, staged.root, 2)).toEqual([
+            { role: 'user', content: 'turn:recent:4098-text' },
+            { role: 'user', content: 'turn:recent:4099-text' },
+        ]);
+        expect(memory.recordReads.length).toBeLessThan(16);
+        expect(memory.pageReads.length).toBeLessThan(100);
+        expect(memory.recordReads).not.toContain('blocks:block:recent:hidden');
+        expect(memory.recordReads).not.toContain('turns:turn:recent:0');
+        await expect(renderIndexedConversationRecentMessages(memory.store, staged.root, 101)).rejects.toThrow(
+            IndexedPresentationCapacityError,
+        );
+        memory.recordReads.length = 0;
+        expect(await renderIndexedConversationRecentMessages(memory.store, staged.root, 0)).toEqual([]);
+        expect(memory.recordReads).toEqual([]);
+    });
+
+    it('filters private blocks and tool-only turns before selecting visible recent messages', async () => {
+        const memory = memoryStore();
+        const base = emptyDocument('conversation:recent-visibility');
+        const call = toolCallBlock('block:mail:call', 'call:mail');
+        call.arguments = { type: 'json', value: { password: 'private-argument' } };
+        const toolOnly = AgentTurnSchema.parse({ ...userTurn('turn:mail:tool-only'), kind: 'agent', blocks: [call] });
+        const answer = AgentTurnSchema.parse({
+            ...userTurn('turn:mail:answer'),
+            kind: 'agent',
+            blocks: [
+                textBlock('block:mail:answer', 'Visible answer'),
+                { id: 'block:mail:reasoning', type: 'reasoning', text: 'private reasoning', representation: 'text' },
+                { id: 'block:mail:json', type: 'json', value: { done: true } },
+            ],
+        });
+        const accepted = appendConversationRecords(
+            base,
+            { turns: [userTurn('turn:mail:user'), toolOnly, answer] },
+            {
+                expected_revision: 0,
+                operation_id: 'operation:mail:visible',
+                payload_fingerprint: 'sha256:mail',
+                recorded_at: RECORDED_AT,
+            },
+        );
+        const staged = await stageIndexedConversationSnapshot(accepted.document, undefined, memory.store);
+        expect(await renderIndexedConversationRecentMessages(memory.store, staged.root, 2)).toEqual([
+            { role: 'user', content: 'turn:mail:user-text' },
+            { role: 'assistant', content: 'Visible answer\n{"done":true}' },
+        ]);
+        expect(await renderIndexedConversationRecentMessages(memory.store, staged.root, 1)).toEqual([
+            { role: 'assistant', content: 'Visible answer\n{"done":true}' },
+        ]);
+    });
+
+    it('renders bounded exact search content without private reasoning or non-transcript programs', async () => {
+        const document = emptyDocument('conversation:indexed-lessons');
+        const memory = memoryStore();
+        const turn = userTurn('turn:search');
+        const program = ProgramTurnSchema.parse({
+            id: 'program:instruction',
+            kind: 'program',
+            authority: 'system',
+            status: 'completed',
+            timestamps: { recorded_at: RECORDED_AT },
+            provenance: { type: 'received' },
+            model_visibility: 'include',
+            presentation: 'internal',
+            blocks: [{ id: 'block:instruction', type: 'text', text: 'system instructions', format: 'plain' }],
+        });
+        const transcript = ProgramTurnSchema.parse({
+            ...program,
+            id: 'program:transcript',
+            authority: 'ordinary',
+            presentation: 'transcript',
+            blocks: [
+                { id: 'block:transcript', type: 'json', value: { done: true } },
+                { id: 'block:private-reasoning', type: 'reasoning', text: 'private thought', representation: 'text' },
+            ],
+        });
+        const accepted = appendConversationRecords(
+            document,
+            { turns: [turn, program, transcript] },
+            {
+                expected_revision: 0,
+                operation_id: 'operation:search',
+                payload_fingerprint: 'sha256:search',
+                recorded_at: RECORDED_AT,
+            },
+        );
+        const staged = await stageIndexedConversationSnapshot(accepted.document, undefined, memory.store);
+        const originalPages = memory.pages.size;
+        const originalRecords = memory.records.size;
+        expect(await renderIndexedConversationSearchText(memory.store, staged.root)).toBe(
+            '[USER]: turn:search-text\n\n[PROGRAM]: {"done":true}',
+        );
+        expect(await renderIndexedConversationTopicText(memory.store, staged.root)).toBe(
+            renderConversationText(accepted.document),
+        );
+        expect(memory.pages.size).toBe(originalPages);
+        expect(memory.records.size).toBe(originalRecords);
+        await expect(
+            renderIndexedConversationSearchText(memory.store, { ...staged.root, live_turn_count: 4097 }),
+        ).rejects.toThrow(IndexedPresentationCapacityError);
+        const record = [...memory.records.entries()].find(([key]) => key.startsWith('turns:'));
+        if (!record) throw new Error('Exact original turn record absent');
+        memory.records.set(record[0], new TextEncoder().encode('{}'));
+        await expect(renderIndexedConversationSearchText(memory.store, staged.root)).rejects.toThrow();
     });
 
     it('renders exact historical live turns, including nested tool content, and rejects an unbounded profile', async () => {
