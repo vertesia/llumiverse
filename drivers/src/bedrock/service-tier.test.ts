@@ -145,23 +145,26 @@ describe('Bedrock service tiers', () => {
     });
 });
 
-it('retains only usable images from a partial Nova Canvas batch', async () => {
-    const driver = new BedrockDriver({ region: 'us-east-1' });
-    Object.defineProperty(driver, 'getExecutor', {
-        value: () => ({
-            invokeModel: vi.fn().mockResolvedValue({
-                body: new TextEncoder().encode(JSON.stringify({ images: ['', 'YQ==', null, '   '] })),
+it.each([undefined, 'Filtered image'])(
+    'retains usable Nova Canvas images alongside provider error %s',
+    async (error) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({
+                invokeModel: vi.fn().mockResolvedValue({
+                    body: new TextEncoder().encode(JSON.stringify({ images: ['', 'YQ==', null, '   '], error })),
+                }),
+                destroy: vi.fn(),
             }),
-            destroy: vi.fn(),
-        }),
-    });
-    const result = await driver.requestImageGeneration(
-        { messages: [{ role: 'user', content: [{ text: 'Draw a tree' }] }] },
-        {
-            model: 'amazon.nova-canvas-v1:0',
-            model_options: { _option_id: 'bedrock-nova-canvas', taskType: 'TEXT_IMAGE' },
-        },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.result).toEqual([{ type: 'image', value: 'data:image/png;base64,YQ==' }]);
-});
+        });
+        const result = await driver.requestImageGeneration(
+            { messages: [{ role: 'user', content: [{ text: 'Draw a tree' }] }] },
+            {
+                model: 'amazon.nova-canvas-v1:0',
+                model_options: { _option_id: 'bedrock-nova-canvas', taskType: 'TEXT_IMAGE' },
+            },
+        );
+        expect(result.error).toEqual(error ? { code: 'content_policy_violation', message: error } : undefined);
+        expect(result.result).toEqual([{ type: 'image', value: 'data:image/png;base64,YQ==' }]);
+    },
+);
