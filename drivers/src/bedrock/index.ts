@@ -2640,12 +2640,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
         const bedrockResult = JSON.parse(body);
+        const images: string[] = (bedrockResult.images ?? []).filter(
+            (image: unknown): image is string => typeof image === 'string' && !!image.trim(),
+        );
 
         return {
-            error: bedrockResult.error,
-            result: bedrockResult.images.map((image: string) => ({
+            error: bedrockResult.error
+                ? { code: 'content_policy_violation', message: bedrockResult.error }
+                : !images.length
+                  ? { code: 'validation_error', message: 'No images returned by Nova Canvas' }
+                  : undefined,
+            result: images.map((image) => ({
                 type: 'image' as const,
-                value: image,
+                value: `data:image/png;base64,${image}`,
             })),
         };
     }

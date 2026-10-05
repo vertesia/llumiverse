@@ -864,16 +864,26 @@ export class ImagenModelDefinition {
             throw new Error('No predictions found');
         }
 
-        // Extract base64 encoded images from predictions
-        const images: string[] = predictions.map(
-            (prediction) => prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? '',
-        );
-
-        return {
-            result: images.map((image) => ({
-                type: 'image' as const,
-                value: image,
-            })),
-        };
+        const requestedMime = (options.model_options as ImagenOptions | undefined)?.image_file_type;
+        const result = predictions.flatMap((prediction) => {
+            const fields = prediction.structValue?.fields;
+            const data = fields?.bytesBase64Encoded?.stringValue;
+            if (!data?.trim()) return [];
+            const mime = fields?.mimeType?.stringValue || requestedMime || 'image/png';
+            return [{ type: 'image' as const, value: `data:${mime};base64,${data}` }];
+        });
+        if (!result.length) {
+            const reason = predictions.find(
+                (prediction) => prediction.structValue?.fields?.raiFilteredReason?.stringValue,
+            )?.structValue?.fields?.raiFilteredReason?.stringValue;
+            return {
+                result,
+                error: {
+                    code: reason ? 'content_policy_violation' : 'validation_error',
+                    message: reason || 'No images returned by Imagen',
+                },
+            };
+        }
+        return { result };
     }
 }
