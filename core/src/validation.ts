@@ -1,7 +1,7 @@
 import type { CompletionResult, JSONValue, ResultValidationError } from '@llumiverse/common';
 import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
-import { extractAndParseJSON } from './json.js';
+import { type JSONOutputParseOptions, parseJSONOutput } from './json.js';
 import { resolveField } from './resolver.js';
 
 const ajv = new Ajv({
@@ -54,42 +54,39 @@ export class ValidationError extends Error implements ResultValidationError {
     constructor(
         public code: 'validation_error' | 'json_error',
         message: string,
+        options?: ErrorOptions,
     ) {
-        super(message);
+        super(message, options);
         this.name = 'ValidationError';
     }
 }
 
-function parseCompletionAsJson(data: CompletionResult[], allowRepair: boolean) {
-    const text = data
-        .filter((part): part is Extract<CompletionResult, { type: 'text' }> => part.type === 'text')
-        .map((part) => part.value)
-        .join('');
-    if (!text.trim()) {
-        throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
-    }
-    try {
-        return extractAndParseJSON(text, allowRepair);
-    } catch (error: unknown) {
-        throw new ValidationError('json_error', errorMessage(error));
-    }
-}
-
-export function validateResult(data: CompletionResult[], schema: object, allowRepair = true): CompletionResult[] {
+export function validateResult(
+    data: CompletionResult[],
+    schema: object,
+    options: boolean | JSONOutputParseOptions = true,
+): CompletionResult[] {
+    const parseOptions = typeof options === 'boolean' ? { allowRepair: options } : options;
+    const content = data.filter((part) => part.type !== 'thoughts');
     let json: JSONValue;
-    if (Array.isArray(data)) {
-        const jsonResults = data.filter((r) => r.type === 'json');
-        if (jsonResults.length > 0) {
-            json = jsonResults[0].value;
-        } else {
-            try {
-                json = parseCompletionAsJson(data, allowRepair);
-            } catch (error: unknown) {
-                throw new ValidationError('json_error', errorMessage(error));
-            }
-        }
+    if (content.length === 1 && content[0].type === 'json') {
+        json = content[0].value;
     } else {
-        throw new Error('Data to validate must be an array');
+        if (content.length === 0 || content.some((part) => part.type !== 'text')) {
+            throw new ValidationError('json_error', 'Expected one JSON value or text-only response content');
+        }
+        const text = content
+            .filter((part): part is Extract<CompletionResult, { type: 'text' }> => part.type === 'text')
+            .map((part) => part.value)
+            .join('');
+        if (!text.trim()) {
+            throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
+        }
+        try {
+            json = parseJSONOutput(text, parseOptions);
+        } catch (error: unknown) {
+            throw new ValidationError('json_error', errorMessage(error), { cause: error });
+        }
     }
 
     const validate = compileSchema(schema);

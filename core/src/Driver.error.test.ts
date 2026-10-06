@@ -93,6 +93,43 @@ describe('AbstractDriver Error Formatting', () => {
 
         expect(completion.error).toBeUndefined();
         expect(completion.result).toEqual([{ type: 'json', value: { items: [{ id: 'a' }] } }]);
+        expect(completion.json_output_diagnostic).toMatchObject({
+            repaired: true,
+            extracted: false,
+            original_text: '{"items":[{"id":"a"},]}',
+            parse_error: expect.any(String),
+        });
+    });
+
+    it('preserves raw text and reports an error when repair is disabled', () => {
+        driver = new TestDriver({ jsonRepair: false });
+        const raw = [{ type: 'text' as const, value: '{"a":1,}' }];
+        const completion: Completion = { result: raw, finish_reason: 'stop' };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });
+        expect(completion.error).toMatchObject({ code: 'json_error', data: raw });
+        expect(completion.result).toBe(raw);
+        expect(completion.json_output_diagnostic).toBeUndefined();
+    });
+
+    it.each(['{"a":1}', '```json\n{"a":1}\n```'])(
+        'rejects token exhaustion even with parseable content: %s',
+        (value) => {
+            const completion: Completion = { result: [{ type: 'text', value }], finish_reason: 'length' };
+            driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });
+            expect(completion.error).toMatchObject({
+                code: 'json_error',
+                message: expect.stringContaining('token limit'),
+            });
+            expect(completion.result).toEqual([{ type: 'text', value }]);
+        },
+    );
+
+    it('retains recovery diagnostics when repaired JSON fails schema validation', () => {
+        const completion: Completion = { result: [{ type: 'text', value: '{"a":1,}' }], finish_reason: 'stop' };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object', required: ['b'] } });
+        expect(completion.error).toMatchObject({ code: 'validation_error' });
+        expect(completion.json_output_diagnostic).toMatchObject({ repaired: true, original_text: '{"a":1,}' });
+        expect(completion.result).toEqual([{ type: 'text', value: '{"a":1,}' }]);
     });
 
     describe('isRetryableError', () => {

@@ -28,6 +28,33 @@ describe('validateResult', () => {
         ]);
     });
 
+    it.each<CompletionResult[]>([
+        [
+            { type: 'json', value: { a: 1 } },
+            { type: 'json', value: { b: 2 } },
+        ],
+        [
+            { type: 'json', value: { a: 1 } },
+            { type: 'text', value: '{"b":2}' },
+        ],
+        [
+            { type: 'text', value: '{"a":1}' },
+            { type: 'image', value: 'image' },
+        ],
+        [{ type: 'thoughts', value: 'no answer' }],
+    ])('rejects multiple values or non-text response content: %j', (...parts) => {
+        expect(() => validateResult(parts, { type: 'object' })).toThrow(/Expected one JSON value/);
+    });
+
+    it('preserves the original parser failure as the validation error cause', () => {
+        try {
+            validateResult([{ type: 'text', value: '{"a":}' }], { type: 'object' });
+            expect.fail('Expected invalid JSON');
+        } catch (error: unknown) {
+            expect(error).toMatchObject({ code: 'json_error', cause: expect.any(SyntaxError) });
+        }
+    });
+
     // A stored result schema is deserialized into a new object on every execution, so an `$id` that
     // is already in the shared Ajv registry used to throw `schema with key or id "..." already
     // exists` from the second execution onward.

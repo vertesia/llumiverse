@@ -44,7 +44,7 @@ import {
     resolveDriverRequestTimeoutMs,
 } from './http-agent.js';
 import { createLogger } from './logger.js';
-import { validateResult } from './validation.js';
+import { ValidationError, validateResult } from './validation.js';
 
 export { createLogger } from './logger.js';
 
@@ -309,7 +309,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     validateResult(result: Completion, options: ExecutionOptions) {
         if (!result.tool_use && !result.error && options.result_schema) {
             try {
-                result.result = validateResult(result.result, options.result_schema, result.finish_reason !== 'length');
+                if (result.finish_reason === 'length') {
+                    throw new ValidationError('json_error', 'Structured output was interrupted by the token limit');
+                }
+                result.result = validateResult(result.result, options.result_schema, {
+                    allowRepair: this.options.jsonRepair !== false,
+                    onDiagnostic: (diagnostic) => {
+                        result.json_output_diagnostic = diagnostic;
+                    },
+                });
             } catch (error: unknown) {
                 const validationError = error instanceof Error ? error : new Error(String(error));
                 const rawCode = getObjectProperty(error, 'code');
