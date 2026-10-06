@@ -23,8 +23,8 @@ describe('Core Utilities', () => {
     });
 
     test('rejects incomplete structured output instead of repairing it into a plausible result', () => {
-        expect(() => extractAndParseJSON('{"lessons":[')).toThrow('Unexpected end of JSON input');
-        expect(() => extractAndParseJSON('{"items":[{"id":"a"}')).toThrow('Unexpected end of JSON input');
+        expect(() => extractAndParseJSON('{"lessons":[')).toThrow(/container boundaries/);
+        expect(() => extractAndParseJSON('{"items":[{"id":"a"}')).toThrow(/container boundaries/);
     });
 
     test('parseJSON', () => {
