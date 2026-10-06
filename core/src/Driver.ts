@@ -313,7 +313,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     throw new ValidationError('json_error', 'Structured output was interrupted by the token limit');
                 }
                 result.result = validateResult(result.result, options.result_schema, {
-                    allowRepair: this.options.jsonRepair !== false,
+                    allowRepair: (options.jsonRepair ?? this.options.jsonRepair) !== false,
                     onDiagnostic: (diagnostic) => {
                         result.json_output_diagnostic = diagnostic;
                     },

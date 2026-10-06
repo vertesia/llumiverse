@@ -248,6 +248,14 @@ export const StatelessExecutionOptionsSchema = z
     .strictObject({
         model: z.string(),
         result_schema: JSONSchemaSchema.optional(),
+        jsonRepair: z
+            .boolean()
+            .optional()
+            .meta({
+                description:
+                    'Allow conservative JSON syntax repair during result-schema validation for this execution. ' +
+                    'Overrides the driver default. Complete JSON wrappers may still be extracted when disabled.',
+            }),
         prompt_cache_schema_suffix: z
             .boolean()
             .meta({

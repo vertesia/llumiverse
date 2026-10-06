@@ -124,6 +124,19 @@ describe('AbstractDriver Error Formatting', () => {
         },
     );
 
+    it.each([true, false])('isolates per-execution repair overrides on a reused driver (default %s)', (jsonRepair) => {
+        driver = new TestDriver({ jsonRepair });
+        for (const override of [false, true, undefined]) {
+            const completion: Completion = { result: [{ type: 'text', value: '{"a":1,}' }], finish_reason: 'stop' };
+            driver.validateResult(completion, {
+                model: 'test-model',
+                result_schema: { type: 'object' },
+                jsonRepair: override,
+            });
+            expect(completion.error?.code).toBe((override ?? jsonRepair) ? undefined : 'json_error');
+        }
+    });
+
     it('retains recovery diagnostics when repaired JSON fails schema validation', () => {
         const completion: Completion = { result: [{ type: 'text', value: '{"a":1,}' }], finish_reason: 'stop' };
         driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object', required: ['b'] } });
