@@ -483,6 +483,15 @@ export interface ToolUse<ParamsT = JSONObject> {
     thought_signature?: string;
 }
 
+/** Records recovery of structured response content. The original text can contain sensitive model output. */
+export interface JSONOutputDiagnostic {
+    extracted: boolean;
+    repaired: boolean;
+    original_text: string;
+    /** The strict JSON parser error before syntax repair. Absent for extraction without repair. */
+    parse_error?: string;
+}
+
 export interface Completion {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver
     result: CompletionResult[];
@@ -491,6 +500,8 @@ export interface Completion {
     service_tier?: string;
     /** Safe diagnostics for the provider-side explicit prompt-cache path used by this completion. */
     prompt_cache_diagnostic?: PromptCacheDiagnostic;
+    /** Present when structured response content required extraction or syntax repair. */
+    json_output_diagnostic?: JSONOutputDiagnostic;
     /**
      * Contains the tools from which the model awaits information.
      */
@@ -558,6 +569,8 @@ export interface Logger {
 export type HttpTimeoutOptions = z.infer<typeof HttpTimeoutOptionsSchema>;
 
 export interface DriverOptions {
+    /** Allow conservative JSON syntax repair during result-schema validation. Defaults to true. */
+    jsonRepair?: boolean;
     logger?: Logger | 'console';
     /**
      * Optional HTTP timeouts applied to the driver's upstream LLM-provider
