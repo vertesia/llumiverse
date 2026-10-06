@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
     ExecutionTokenUsageSchema,
+    JSONOutputDiagnosticSchema,
     PromptCacheDiagnosticSchema,
     PromptCacheModeSchema,
     PromptCachePathSchema,
@@ -484,13 +485,7 @@ export interface ToolUse<ParamsT = JSONObject> {
 }
 
 /** Records recovery of structured response content. The original text can contain sensitive model output. */
-export interface JSONOutputDiagnostic {
-    extracted: boolean;
-    repaired: boolean;
-    original_text: string;
-    /** The strict JSON parser error before syntax repair. Absent for extraction without repair. */
-    parse_error?: string;
-}
+export type JSONOutputDiagnostic = z.infer<typeof JSONOutputDiagnosticSchema>;
 
 export interface Completion {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver

@@ -57,6 +57,18 @@ export const PromptCachePathSchema = z
     ])
     .meta({ id: 'PromptCachePath' });
 
+export const JSONOutputDiagnosticSchema = z
+    .strictObject({
+        extracted: z.boolean(),
+        repaired: z.boolean(),
+        original_text: z.string(),
+        parse_error: z.string().optional(),
+    })
+    .meta({
+        id: 'JSONOutputDiagnostic',
+        description: 'Records structured response recovery. The original text can contain sensitive model output.',
+    });
+
 export const PromptCacheDiagnosticSchema = z
     .strictObject({
         path: PromptCachePathSchema,
