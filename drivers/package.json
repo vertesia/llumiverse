@@ -147,7 +147,7 @@
         "@azure/ai-projects": "^2.7.1",
         "@azure/core-auth": "^1.11.0",
         "@azure/identity": "^4.13.3",
-        "@google-cloud/aiplatform": "^7.4.0",
+        "@google-cloud/aiplatform": "^7.4.1",
         "@google/genai": "^2.24.0",
         "@huggingface/inference": "^4.13.30",
         "@llumiverse/common": "workspace:*",
