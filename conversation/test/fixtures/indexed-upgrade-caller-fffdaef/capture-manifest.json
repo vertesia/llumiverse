@@ -7,7 +7,7 @@
     "encoder_sha256": "0121afcc2372ea1936ad070150e199fdbfe6428e1b56c029f4aedf75bc6dcb7b",
     "execution": "Executed fixture-local historical capture; no provider or network execution"
   },
-  "generator_sha256": "a1cfbf0903d24112b0ac08f9e1a6657a25ff1516481778529d00f5fb1056e762",
+  "generator_sha256": "7bd6f290cde2860bbc7413f3c7a206dec2e9d922956566a34c6d3e3bf3781061",
   "command": "node --experimental-transform-types capture.mjs <llumiverse-checkout>",
   "artifact": "historical-fffdaef-artifacts.json",
   "sha256": "d1e72c8fe0f6e93afd4bf681f01aa85fe9d4cfb3bdafa8961d22f8986ff0a7bc",
