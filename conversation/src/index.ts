@@ -1,5 +1,6 @@
 export * from './asset-resolution.js';
 export * from './builders.js';
+export * from './checkpoint-context-change.js';
 export * from './checkpoint-summary-fork.js';
 export * from './content-integrity.js';
 export * from './context-change.js';
@@ -8,6 +9,7 @@ export { resolveActiveContextSelection } from './context-selection-resolution.js
 export * from './conversation-delete.js';
 export * from './conversation-edit.js';
 export { applyConversationSliceEdit, planConversationSliceEdit } from './conversation-slice-edit.js';
+export { deletedContentIdentities } from './deleted-content-identities.js';
 export { ConversationValidationError } from './diagnostics.js';
 export * from './external-reference-retrieval.js';
 export * from './guards.js';
@@ -16,12 +18,19 @@ export * from './indexed-exchange-constants.js';
 export { buildIndexedExchangeOutput } from './indexed-exchange-processing.js';
 export { createIndexedProcessingScratchStore } from './indexed-processing-scratch-store.js';
 export {
+    applyIndexedTextExternalizationOutput,
     buildIndexedTextExternalizationOutput,
     buildIndexedTextExternalizationProposal,
     indexedProcessingContextFingerprint,
     indexedTextExternalizationOriginals,
     resolveIndexedProcessingTextInput,
 } from './indexed-processing-working-set.js';
+export * from './indexed-upgrade-accepted.js';
+export * from './indexed-upgrade-constants.js';
+export * from './indexed-upgrade-finish.js';
+export { IndexedConversationUpgradeResourceError } from './indexed-upgrade-io.js';
+export * from './indexed-upgrade-progress.js';
+export * from './indexed-upgrade-step.js';
 export * from './inspection.js';
 export * from './json-minification.js';
 export * from './json-minification-processor.js';
@@ -67,6 +76,11 @@ export * from './runtime.js';
 export * from './schemas/index.js';
 export type { IndexedProcessingReadinessCoverage, IndexedProcessingSelectedContext } from './schemas/indexed-head.js';
 export type { IndexedProcessingClaimWorkspace } from './schemas/indexed-processing.js';
+export type {
+    IndexedConversationUpgradeCommand,
+    IndexedConversationUpgradeProgress,
+} from './schemas/indexed-upgrade.js';
+export * from './schemas/indexed-upgrade.js';
 export * from './scope.js';
 export * from './selection.js';
 export { validateConversationSemantics } from './semantic-validation.js';

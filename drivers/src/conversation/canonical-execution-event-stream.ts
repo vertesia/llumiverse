@@ -6,6 +6,7 @@ import {
     CONVERSATION_STREAM_MAX_EVENT_BYTES,
     CONVERSATION_STREAM_MAX_EVENTS,
     CONVERSATION_STREAM_MAX_TOTAL_BYTES,
+    type ConversationAcceptedOutputFragment,
     ConversationStreamAccumulator,
     type ConversationStreamDraftBlock,
     type ConversationStreamEvent,
@@ -26,6 +27,7 @@ import {
     type CanonicalStreamOpenOptions,
     type CanonicalStreamTerminalEvent,
     canonicalToolSelectionDiagnostic,
+    finalizeCanonicalAcceptedOutputStream,
     finalizeCanonicalExecutionStreamResponse,
 } from '@llumiverse/core';
 
@@ -42,14 +44,22 @@ interface CanonicalNativeStreamPreparedReconciliation {
     deliver_final_events?(writer: CanonicalNativeStreamWriter): Promise<void>;
 }
 
-export interface CanonicalNativeStreamFinalization {
+interface CanonicalNativeStreamFinalizationBase {
     decoded: DecodedConversationResponse;
-    response: CanonicalExecutionResponse;
     reconciliations?: ConversationStreamReconciliation[];
     result_schema?: object;
     deliver_final_events?(writer: CanonicalNativeStreamWriter): Promise<void>;
     prepare_reconciliation?(writer: CanonicalNativeStreamWriter): Promise<CanonicalNativeStreamPreparedReconciliation>;
 }
+
+export type CanonicalNativeStreamFinalization = CanonicalNativeStreamFinalizationBase &
+    (
+        | { response: CanonicalExecutionResponse; accept_output?: never }
+        | {
+              response?: never;
+              accept_output(decoded: DecodedConversationResponse): Promise<ConversationAcceptedOutputFragment>;
+          }
+    );
 
 type ReconciledCanonicalNativeStreamFinalization = CanonicalNativeStreamFinalization & {
     reconciliations: ConversationStreamReconciliation[];
@@ -58,6 +68,8 @@ type ReconciledCanonicalNativeStreamFinalization = CanonicalNativeStreamFinaliza
 export interface CanonicalNativeEventStreamOptions<NativeEvent> {
     identity: Omit<ConversationStreamIdentity, 'stream_id'>;
     open: CanonicalStreamOpenOptions;
+    /** Host custody/receipt fencing is not provider dispatch. Cancellation still owns the stream while it waits. */
+    beforeTransport?(): Promise<void>;
     openSource(): AsyncIterable<NativeEvent> | Promise<AsyncIterable<NativeEvent>>;
     map(event: NativeEvent, writer: CanonicalNativeStreamWriter): void | Promise<void>;
     finalize(writer: CanonicalNativeStreamWriter): Promise<CanonicalNativeStreamFinalization>;
@@ -233,7 +245,71 @@ export class CanonicalNativeStreamWriter {
     }
 }
 
-/** One-consumer native stream that emits canonical drafts before accepting the authoritative terminal decode. */
+/** Allocate the same local validation resources before publication and before transport. */
+function canonicalNativeStreamResources(
+    identityInput: CanonicalNativeEventStreamOptions<unknown>['identity'],
+    open: CanonicalStreamOpenOptions,
+    onCancel: () => Promise<void>,
+) {
+    if ((open.retained_events?.length ?? 0) > 0 || open.resume_after !== undefined) {
+        throw new Error('A fresh provider transport cannot resume a retained canonical stream');
+    }
+    const identity = { ...identityInput, stream_id: open.stream_id };
+    const maxEventBytes = open.max_event_bytes ?? CONVERSATION_STREAM_MAX_EVENT_BYTES;
+    const maxEvents = open.max_events ?? CONVERSATION_STREAM_MAX_EVENTS;
+    const maxTotalBytes = open.max_total_bytes ?? CONVERSATION_STREAM_MAX_TOTAL_BYTES;
+    const terminalSequence = Math.max(0, maxEvents - 1);
+    const reservedTerminalBytes = Math.max(
+        serializedBytes(terminatedEvent(identity, terminalSequence, 'cancelled')),
+        serializedBytes(terminatedEvent(identity, terminalSequence, 'failed')),
+        serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', false)),
+        serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', true)),
+        serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'delivery')),
+        serializedBytes(
+            terminatedEvent(identity, terminalSequence, 'failed', 'provider', undefined, {
+                code: CANONICAL_REQUIRED_TOOL_CALL_MISSING,
+                message: 'Canonical response omitted a required tool call',
+                retryable: false,
+            }),
+        ),
+        serializedBytes(
+            terminatedEvent(identity, terminalSequence, 'failed', 'provider', undefined, {
+                code: CANONICAL_FORBIDDEN_TOOL_CALL,
+                message: 'Canonical response included a forbidden tool call',
+                retryable: false,
+            }),
+        ),
+    );
+    if (maxEventBytes < reservedTerminalBytes) {
+        throw new RangeError('max_event_bytes cannot hold a canonical stream terminal event');
+    }
+    if (maxTotalBytes < reservedTerminalBytes) {
+        throw new RangeError('max_total_bytes cannot hold a canonical stream terminal event');
+    }
+    if (maxEvents < 1) throw new RangeError('max_events cannot hold a canonical stream terminal event');
+    const accumulator = new ConversationStreamAccumulator(identity, {
+        max_event_bytes: open.max_event_bytes,
+        max_events: open.max_events,
+        max_total_bytes: open.max_total_bytes,
+        reserved_terminal_bytes: reservedTerminalBytes,
+        reserved_terminal_events: 1,
+    });
+    const channel = new CanonicalStreamEventChannel(open.max_buffered_events, async () => {
+        await onCancel();
+    });
+    return { accumulator, channel };
+}
+
+/** Validate the same fresh transport budget/cursor rules before any prepared publication.
+ * Allocates only local accumulator/channel state; starts no provider, listener or readiness token.
+ */
+export function validateCanonicalNativeStreamOpen(
+    identity: CanonicalNativeEventStreamOptions<unknown>['identity'],
+    open: CanonicalStreamOpenOptions,
+): void {
+    canonicalNativeStreamResources(identity, open, async () => {});
+}
+
 export class CanonicalNativeExecutionEventStream<NativeEvent> implements CanonicalExecutionEventStream {
     completion: CanonicalExecutionResponse | undefined;
     failure: unknown;
@@ -247,6 +323,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     private iteratorCleanup: Promise<void> | undefined;
     private runCompletion: Promise<void> | undefined;
     private executionStarted = false;
+    private decodedReceived = false;
     private started = false;
     private settled = false;
     private settlement: Promise<CanonicalStreamTerminalEvent> | undefined;
@@ -255,52 +332,11 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
 
     constructor(private readonly options: CanonicalNativeEventStreamOptions<NativeEvent>) {
         this.closed = this.closeDeferred.promise;
-        if ((options.open.retained_events?.length ?? 0) > 0 || options.open.resume_after !== undefined) {
-            throw new Error('A fresh provider transport cannot resume a retained canonical stream');
-        }
-        const identity = { ...options.identity, stream_id: options.open.stream_id };
-        const maxEventBytes = options.open.max_event_bytes ?? CONVERSATION_STREAM_MAX_EVENT_BYTES;
-        const maxEvents = options.open.max_events ?? CONVERSATION_STREAM_MAX_EVENTS;
-        const maxTotalBytes = options.open.max_total_bytes ?? CONVERSATION_STREAM_MAX_TOTAL_BYTES;
-        const terminalSequence = Math.max(0, maxEvents - 1);
-        const reservedTerminalBytes = Math.max(
-            serializedBytes(terminatedEvent(identity, terminalSequence, 'cancelled')),
-            serializedBytes(terminatedEvent(identity, terminalSequence, 'failed')),
-            serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', false)),
-            serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'provider', true)),
-            serializedBytes(terminatedEvent(identity, terminalSequence, 'failed', 'delivery')),
-            serializedBytes(
-                terminatedEvent(identity, terminalSequence, 'failed', 'provider', undefined, {
-                    code: CANONICAL_REQUIRED_TOOL_CALL_MISSING,
-                    message: 'Canonical response omitted a required tool call',
-                    retryable: false,
-                }),
-            ),
-            serializedBytes(
-                terminatedEvent(identity, terminalSequence, 'failed', 'provider', undefined, {
-                    code: CANONICAL_FORBIDDEN_TOOL_CALL,
-                    message: 'Canonical response included a forbidden tool call',
-                    retryable: false,
-                }),
-            ),
-        );
-        if (maxEventBytes < reservedTerminalBytes) {
-            throw new RangeError('max_event_bytes cannot hold a canonical stream terminal event');
-        }
-        if (maxTotalBytes < reservedTerminalBytes) {
-            throw new RangeError('max_total_bytes cannot hold a canonical stream terminal event');
-        }
-        if (maxEvents < 1) throw new RangeError('max_events cannot hold a canonical stream terminal event');
-        this.accumulator = new ConversationStreamAccumulator(identity, {
-            max_event_bytes: options.open.max_event_bytes,
-            max_events: options.open.max_events,
-            max_total_bytes: options.open.max_total_bytes,
-            reserved_terminal_bytes: reservedTerminalBytes,
-            reserved_terminal_events: 1,
-        });
-        this.channel = new CanonicalStreamEventChannel(options.open.max_buffered_events, async () => {
+        const resources = canonicalNativeStreamResources(options.identity, options.open, async () => {
             await this.cancel();
         });
+        this.accumulator = resources.accumulator;
+        this.channel = resources.channel;
         this.writer = new CanonicalNativeStreamWriter(this.accumulator, this.channel);
     }
 
@@ -339,6 +375,8 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             if (this.settled) return;
             this.opening = Promise.resolve().then(async () => {
                 if (this.settled) return undefined;
+                if (this.options.beforeTransport !== undefined) await this.options.beforeTransport();
+                if (this.settled) return undefined;
                 this.executionStarted = true;
                 return this.options.openSource();
             });
@@ -354,6 +392,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             if (this.settled) return;
             const accepted = await this.options.finalize(this.writer);
             this.completion = accepted.response;
+            this.decodedReceived = true;
             if (this.settled) return;
             const prepared = await accepted.prepare_reconciliation?.(this.writer);
             const finalized = prepared === undefined ? accepted : { ...accepted, ...prepared };
@@ -368,7 +407,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             this.failure = error;
             if (this.settlement === undefined) {
                 try {
-                    const failureKind = this.completion === undefined ? 'provider' : 'delivery';
+                    const failureKind = this.decodedReceived ? 'delivery' : 'provider';
                     await this.beginTermination(
                         'failed',
                         failureKind,
@@ -404,13 +443,19 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         finalized: ReconciledCanonicalNativeStreamFinalization,
     ): Promise<CanonicalStreamTerminalEvent> {
         try {
-            const accepted = await finalizeCanonicalExecutionStreamResponse({
+            const shared = {
                 accumulator: this.accumulator,
                 decoded: finalized.decoded,
-                response: finalized.response,
                 reconciliations: finalized.reconciliations,
                 ...(finalized.result_schema === undefined ? {} : { result_schema: finalized.result_schema }),
-            });
+            };
+            const accepted =
+                finalized.response !== undefined
+                    ? await finalizeCanonicalExecutionStreamResponse({ ...shared, response: finalized.response })
+                    : await finalizeCanonicalAcceptedOutputStream({
+                          ...shared,
+                          accepted_output: await finalized.accept_output(finalized.decoded),
+                      });
             await this.channel.terminate(accepted);
             return accepted;
         } catch (error: unknown) {

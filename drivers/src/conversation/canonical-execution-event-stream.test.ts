@@ -983,3 +983,191 @@ describe('canonical native execution event stream', () => {
         expect(closed).toBe(true);
     });
 });
+
+describe('fragment-published indexed native streams', () => {
+    it.each([false, true])(
+        'keeps the genuine materialized and fragment source refs distinct (fragment=%s)',
+        async (fragment) => {
+            const original = acceptedResponse();
+            const advanced = appendConversationRecords(
+                original.conversation,
+                {
+                    turns: [
+                        {
+                            id: 'received:after-output',
+                            kind: 'user',
+                            authority: 'ordinary',
+                            blocks: [{ id: 'text:after-output', type: 'text', text: 'Next input.', format: 'plain' }],
+                            status: 'completed',
+                            timestamps: { recorded_at: RECORDED_AT },
+                            provenance: { type: 'received' },
+                            model_visibility: 'include',
+                        },
+                    ],
+                },
+                {
+                    expected_revision: original.conversation.revision,
+                    operation_id: 'append:after-output',
+                    payload_fingerprint: 'sha256:next-input',
+                    recorded_at: RECORDED_AT,
+                },
+            ).document;
+            const response = createCanonicalExecutionResponse(
+                advanced,
+                identity.response_operation_id,
+                {},
+                original.accepted_output,
+            );
+            expect(response.accepted_output.source).toEqual(original.accepted_output.source);
+            expect(advanced.revision).toBe(original.accepted_output.source.revision + 1);
+            const stream = canonicalNativeExecutionEventStream({
+                identity,
+                open: { stream_id: `stream:source-ref:${fragment}` },
+                openSource: () => nativeSource('answer'),
+                map: emitText,
+                finalize: async (writer) => {
+                    await writer.finish({ outcome: 'completed', finish_reason: 'stop' });
+                    const common = {
+                        decoded: decoded(),
+                        reconciliations: [
+                            {
+                                draft_block_ids: ['draft-text'],
+                                native_positions: [position],
+                                committed_block_ids: ['text'],
+                                disposition: 'direct' as const,
+                            },
+                        ],
+                    };
+                    return fragment
+                        ? { ...common, accept_output: async () => response.accepted_output }
+                        : { ...common, response };
+                },
+                abort: vi.fn(),
+                close: vi.fn(),
+            });
+            const events: ConversationStreamEvent[] = [];
+            for await (const event of stream) events.push(event);
+            await stream.closed;
+            expect(events.at(-1)).toMatchObject({
+                type: 'response_accepted',
+                conversation: fragment
+                    ? original.accepted_output.source
+                    : {
+                          conversation_id: advanced.id,
+                          revision: advanced.revision,
+                      },
+                operation_receipt_id: identity.response_operation_id,
+            });
+            expect(stream.completion).toBe(fragment ? undefined : response);
+        },
+    );
+
+    it.each([false, true])(
+        'requires the exact authenticated fragment after provisional deltas (corrupt=%s)',
+        async (corrupt) => {
+            const publish = vi.fn(async () => acceptedResponse(corrupt ? 'changed' : 'answer').accepted_output);
+            const close = vi.fn();
+            const stream = canonicalNativeExecutionEventStream({
+                identity,
+                open: { stream_id: 'stream:indexed' },
+                openSource: () => nativeSource('answer'),
+                map: emitText,
+                finalize: async (writer) => {
+                    await writer.finish({ outcome: 'completed', finish_reason: 'stop' });
+                    return {
+                        decoded: decoded(),
+                        accept_output: publish,
+                        reconciliations: [
+                            {
+                                draft_block_ids: ['draft-text'],
+                                native_positions: [position],
+                                committed_block_ids: ['text'],
+                                disposition: 'direct',
+                            },
+                        ],
+                    };
+                },
+                abort: vi.fn(),
+                close,
+            });
+            const events: ConversationStreamEvent[] = [];
+            for await (const event of stream) events.push(event);
+            await stream.closed;
+            expect(publish).toHaveBeenCalledOnce();
+            expect(events.map((event) => event.type)).toContain('draft_text_delta');
+            expect(events.at(-1)?.type).toBe(corrupt ? 'stream_terminated' : 'response_accepted');
+            expect(stream.completion).toBeUndefined();
+            expect(close).toHaveBeenCalledOnce();
+        },
+    );
+
+    it('cancels fragment delivery before transport without accepting output', async () => {
+        const openSource = vi.fn(() => nativeSource('answer'));
+        const publish = vi.fn(async () => acceptedResponse().accepted_output);
+        const close = vi.fn();
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:indexed-cancel', max_buffered_events: 1 },
+            openSource,
+            map: emitText,
+            finalize: async () => ({ decoded: decoded(), accept_output: publish, reconciliations: [] }),
+            abort: vi.fn(),
+            close,
+        });
+        const iterator = stream[Symbol.asyncIterator]();
+        expect((await iterator.next()).value?.type).toBe('draft_started');
+        await expect(stream.cancel()).resolves.toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await stream.closed;
+        expect(openSource).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+        expect(close).toHaveBeenCalledOnce();
+    });
+});
+
+describe('pretransport custody fence', () => {
+    it('waits for a cancelled pending fence without marking dispatch or opening SDK transport', async () => {
+        let entered!: () => void;
+        const guardEntered = new Promise<void>((resolve) => {
+            entered = resolve;
+        });
+        let release!: () => void;
+        const guard = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const beforeTransport = vi.fn(async () => {
+            entered();
+            await guard;
+        });
+        const openSource = vi.fn(() => nativeSource('answer'));
+        const close = vi.fn();
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:cancel-fence' },
+            beforeTransport,
+            openSource,
+            map: emitText,
+            finalize: async () => ({ decoded: decoded(), response: acceptedResponse(), reconciliations: [] }),
+            abort: vi.fn(),
+            close,
+        });
+        const iterator = stream[Symbol.asyncIterator]();
+        expect((await iterator.next()).value?.type).toBe('draft_started');
+        await guardEntered;
+        expect(stream.execution_started).toBe(false);
+        await expect(stream.cancel()).resolves.toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        expect(openSource).not.toHaveBeenCalled();
+        release();
+        await stream.closed;
+        expect(closed).toBe(true);
+        expect(stream.execution_started).toBe(false);
+        expect(beforeTransport).toHaveBeenCalledOnce();
+        expect(openSource).not.toHaveBeenCalled();
+        expect(close).toHaveBeenCalledOnce();
+    });
+});

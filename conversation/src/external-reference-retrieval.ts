@@ -13,7 +13,7 @@ export interface ActiveTextExternalReference {
 }
 
 /**
- * Resolve an active canonical reference and its accepted original, independent of any host storage protocol.
+ * Resolve an active text/JSON canonical reference and its accepted original, independent of any host storage protocol.
  * The host remains responsible for interpreting the opaque locator, tool arguments, and retrieval capability.
  */
 export function resolveActiveTextExternalReference(
@@ -24,7 +24,7 @@ export function resolveActiveTextExternalReference(
     const document = parseConversationDocument(input);
     const asset = Object.hasOwn(document.assets, assetId) ? document.assets[assetId] : undefined;
     if (
-        asset?.kind !== 'text' ||
+        (asset?.kind !== 'text' && asset?.kind !== 'json') ||
         asset.storage.type !== 'external' ||
         asset.content_hash === undefined ||
         asset.byte_length === undefined
@@ -42,7 +42,7 @@ export function resolveActiveTextExternalReference(
                 candidate.type !== 'external_reference' ||
                 candidate.asset_id !== assetId ||
                 (blockId !== undefined && candidate.id !== blockId) ||
-                candidate.original_type !== 'text' ||
+                candidate.original_type !== asset.kind ||
                 candidate.content_hash !== asset.content_hash
             )
                 continue;
@@ -94,7 +94,7 @@ export function resolveIndexedTextExternalReference(
         throw new Error('Indexed retrieval requires the media/compaction witness profile');
     const asset = selected.assets[assetId];
     if (
-        asset?.kind !== 'text' ||
+        (asset?.kind !== 'text' && asset?.kind !== 'json') ||
         asset.storage.type !== 'external' ||
         asset.content_hash === undefined ||
         asset.byte_length === undefined
@@ -119,7 +119,7 @@ export function resolveIndexedTextExternalReference(
     const candidate = candidates[0];
     if (
         candidate?.type !== 'external_reference' ||
-        candidate.original_type !== 'text' ||
+        candidate.original_type !== asset.kind ||
         candidate.content_hash !== asset.content_hash ||
         candidate.retrieval.version !== 1
     )

@@ -5,6 +5,7 @@ import { applyContextChange, planContextChange } from '../src/context-change.js'
 import { resolveIndexedTextExternalReference } from '../src/external-reference-retrieval.js';
 import { fingerprintJson } from '../src/identity.js';
 import {
+    assertIndexedCurrentPolicy,
     assertIndexedFreshReceivedTextInput,
     assertIndexedFreshTextInput,
     IndexedAcceptedOutputHistoryUpgradeRequired,
@@ -12,6 +13,7 @@ import {
     IndexedPresentationCapacityError,
     IndexedPresentationNominationConflict,
     type IndexedRecordBatchCommand,
+    IndexedRestartSourceUnavailable,
     loadIndexedAcceptedOutputHistoryPage,
     loadIndexedAcceptedOutputPresentation,
     loadIndexedActiveContext,
@@ -20,11 +22,14 @@ import {
     loadIndexedProcessingJobState,
     loadIndexedProcessingSelectedContext,
     loadIndexedProjectedTurn,
+    loadIndexedReadySelectedContext,
+    loadIndexedRestartEvidence,
     loadIndexedRetainedAcceptedOutputPresentation,
     loadIndexedSelectedDependencyContext,
     loadIndexedSelectedMediaCompactionContext,
     loadIndexedSelectedTextContext,
     loadIndexedSettledProcessingSelectedContext,
+    loadIndexedSettledRetrievalSelectedContext,
     loadIndexedTerminalProgramPresentation,
     loadIndexedToolCallSelection,
     loadIndexedToolCallTerminalResult,
@@ -37,6 +42,7 @@ import {
     stageIndexedProgramAppend,
     stageIndexedRecordBatch,
     stageIndexedTextProcessingCompletion,
+    supportsIndexedInheritedProcessingPolicy,
 } from '../src/indexed-conversation.js';
 import { buildIndexedExchangeOutput } from '../src/indexed-exchange-processing.js';
 import { resolveIndexedProcessingTextInput } from '../src/indexed-processing-working-set.js';
@@ -52,6 +58,7 @@ import { renderConversationText } from '../src/rendering.js';
 import { appendConversationRecords, appendConversationRecordsWithProcessing } from '../src/runtime.js';
 import { AgentTurnSchema, ProgramTurnSchema, ToolTurnSchema } from '../src/schemas/content.js';
 import { GenerationSchema } from '../src/schemas/execution.js';
+import { IndexedConversationProcessingHeaderSchema } from '../src/schemas/indexed-head.js';
 import { IndexedRecordBatchCommandSchema } from '../src/schemas/ingestion.js';
 import { validateToolExecutionResult } from '../src/tool-execution.js';
 import type { Asset, ConversationDocument } from '../src/types.js';
@@ -228,6 +235,55 @@ async function toolMediaCommands(source: { conversation_id: string; revision: nu
 }
 
 describe('indexed conversation snapshot', () => {
+    it.each([
+        { id: 'externalize-text', scope: 'on_append' as const, version: '1', config: {}, supported: true },
+        { id: 'externalize-whole-exchange', scope: 'on_append' as const, version: '1', config: {}, supported: true },
+        { id: 'externalize-text', scope: 'manual' as const, version: '1', config: {}, supported: true },
+        { id: 'externalize-text', scope: 'on_budget' as const, version: '1', config: {}, supported: true },
+        { id: 'externalize-text', scope: 'on_append' as const, version: '2', config: {}, supported: false },
+    ])(
+        'retains inherited policy while independently proving native capability for $id/$scope/$version',
+        async (profile) => {
+            const policy = await setProcessingPolicy(emptyDocument('conversation:inherited-capability'), {
+                operation_id: 'policy:inherited-capability',
+                expected_revision: 0,
+                recorded_at: RECORDED_AT,
+                enabled: true,
+                processors: [
+                    {
+                        id: profile.id,
+                        scope: profile.scope,
+                        version: profile.version,
+                        config: profile.config,
+                        required: true,
+                        failure_behavior: 'block',
+                    },
+                ],
+            });
+            expect(supportsIndexedInheritedProcessingPolicy(policy.document.processing)).toBe(profile.supported);
+            const memory = memoryStore();
+            const staged = await stageIndexedConversationSnapshot(policy.document, undefined, memory.store);
+            expect(staged.root.source).toEqual({
+                conversation_id: policy.document.id,
+                revision: policy.document.revision,
+            });
+            const bytes = await memory.store.readRecord({
+                storage: 'record',
+                kind: 'processing_header',
+                id: staged.root.source.conversation_id,
+                ...staged.root.processing_header,
+            });
+            const header = IndexedConversationProcessingHeaderSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+            expect(header.processors).toEqual(policy.document.processing.processors);
+            if (profile.supported)
+                await expect(assertIndexedCurrentPolicy(memory.store, staged.root, header)).resolves.toBeUndefined();
+            else
+                await expect(assertIndexedCurrentPolicy(memory.store, staged.root, header)).rejects.toThrow(
+                    'Indexed readiness requires a registered bounded ordered text or whole-exchange policy',
+                );
+        },
+    );
+
     it('rejects an unbound retrieval requirement before indexed record publication', async () => {
         const memory = memoryStore();
         const staged = await stageIndexedConversationSnapshot(
@@ -802,7 +858,7 @@ describe('indexed conversation snapshot', () => {
                 },
                 memory.store,
             ),
-        ).rejects.toThrow('retained dependent record');
+        ).rejects.toThrow('retained asset or derivation lineage');
         await expect(
             stageIndexedConversationDelete(
                 response.root,
@@ -1154,7 +1210,7 @@ describe('indexed conversation snapshot', () => {
                 },
                 memory.store,
             ),
-        ).rejects.toThrow('dependent record');
+        ).rejects.toThrow('retained asset or derivation lineage');
     });
 
     it('retains complete point-lookup delete witnesses across later indexed appends', async () => {
@@ -1226,7 +1282,7 @@ describe('indexed conversation snapshot', () => {
                 },
                 memory.store,
             ),
-        ).rejects.toThrow('dependent record');
+        ).rejects.toThrow('live dependent turn');
     });
 
     it('deletes an older excluded turn and recovers its accepted append from the pinned predecessor', async () => {
@@ -1786,9 +1842,73 @@ describe('indexed conversation snapshot', () => {
         expect(stagedResult.receipt).toEqual(
             materializedResult.document.operation_receipts[resultOptions.operation_id],
         );
+        // Complete restart profiles retain only active nominations; the independent terminal
+        // call/result index remains authoritative after this pending nomination is removed.
+        expect(stagedResult.root.restart_index_profile).toBe(stagedAgent.root.restart_index_profile);
+        expect(stagedResult.root.restart_index_profile).toBeDefined();
         expect(
             await getPagedRecord(memory.store, stagedResult.root.directories.open_tool_calls, call.call_id),
+        ).toBeUndefined();
+        expect(await loadIndexedToolCallTerminalResult(memory.store, stagedResult.root, receipt.call_source)).toBe(
+            true,
+        );
+        const repeatBatch: IndexedRecordBatchCommand['batch'] = {
+            turns: [
+                {
+                    ...agent,
+                    id: 'turn:repeat-call',
+                    generation_id: 'generation:repeat-call',
+                    blocks: [{ ...call, id: 'block:repeat-call' }],
+                },
+            ],
+            generations: [
+                {
+                    ...generation,
+                    id: 'generation:repeat-call',
+                    request_id: 'request:repeat-call',
+                    source: stagedResult.root.source,
+                    request_receipt: {
+                        ...requestReceipt,
+                        id: 'receipt:repeat-call',
+                        request_id: 'request:repeat-call',
+                        source: stagedResult.root.source,
+                    },
+                },
+            ],
+        };
+        const recordsBeforeRepeat = memory.records.size;
+        await expect(
+            stageIndexedRecordBatch(
+                stagedResult.root,
+                {
+                    conversation_id: source.id,
+                    batch: repeatBatch,
+                    options: {
+                        expected_revision: stagedResult.root.source.revision,
+                        operation_id: 'operation:repeat-call',
+                        payload_fingerprint: await fingerprintJson(repeatBatch),
+                        recorded_at: RECORDED_AT,
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow(`Indexed append identity ${call.call_id} already exists`);
+        expect(memory.records.size).toBe(recordsBeforeRepeat);
+        // Older roots still preserve their historical closed-marker representation.
+        const { restart_index_profile: _restartProfile, ...oldMarkerProfile } = stagedAgent.root;
+        const oldResult = await stageIndexedRecordBatch(
+            oldMarkerProfile,
+            {
+                conversation_id: source.id,
+                batch: resultBatch,
+                options: resultOptions,
+            },
+            memory.store,
+        );
+        expect(
+            await getPagedRecord(memory.store, oldResult.root.directories.open_tool_calls, call.call_id),
         ).toMatchObject({ storage: 'marker', kind: 'closed_tool_call', id: call.call_id });
+        expect(await loadIndexedToolCallTerminalResult(memory.store, oldResult.root, receipt.call_source)).toBe(true);
         const resultTimestampRetry = {
             ...resultBatch,
             turns: [{ ...result, timestamps: { recorded_at: retryAt } }],
@@ -2342,6 +2462,34 @@ describe('indexed conversation snapshot', () => {
         expect(memory.recordReads).not.toContain('blocks:block:second');
     });
 
+    it('permits read-only settled retrieval and preparation for disabled processing without inventing readiness', async () => {
+        const memory = memoryStore();
+        const document = emptyDocument('conversation:disabled-retrieval');
+        const staged = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        const count = memory.records.size;
+        const selected = await loadIndexedSettledRetrievalSelectedContext(memory.store, staged.root, staged.locator);
+        expect(selected.source).toEqual(staged.root.source);
+        expect(selected.completeness).toBe('selected_media_compaction_pending_admission');
+        expect(selected.turns).toEqual([]);
+        expect(selected.execution_witnesses).toEqual({});
+        const preparation = await loadIndexedSettledProcessingSelectedContext(
+            memory.store,
+            staged.root,
+            staged.locator,
+        );
+        expect(preparation).toEqual(selected);
+        expect(preparation.completeness).toBe('selected_media_compaction_pending_admission');
+        await expect(
+            loadIndexedReadySelectedContext(memory.store, staged.root, staged.locator, {
+                target_fingerprint: `sha256:${'a'.repeat(64)}`,
+                measured_input_tokens: 1,
+                tokenizer_id: 'exact:test',
+                measurement_fingerprint: `sha256:${'b'.repeat(64)}`,
+            }),
+        ).rejects.toThrow('exact context/target/count is unavailable');
+        expect(memory.records.size).toBe(count);
+    });
+
     it('retains materialized processing job-drain parity when disabled policy hides pending or blocked work', async () => {
         const initial = emptyDocument('conversation:indexed-processing');
         const enabled = await setProcessingPolicy(initial, {
@@ -2391,6 +2539,9 @@ describe('indexed conversation snapshot', () => {
             await expect(loadIndexedSelectedTextContext(memory.store, staged.root, staged.locator)).rejects.toThrow(
                 'accepted processing jobs outstanding',
             );
+            await expect(
+                loadIndexedSettledRetrievalSelectedContext(memory.store, staged.root, staged.locator),
+            ).rejects.toThrow('unresolved processing obligations');
             expect(memory.records.size).toBe(recordCount);
             return { memory, staged };
         };
@@ -3831,6 +3982,10 @@ describe('bounded indexed historical presentation', () => {
         await expect(
             loadIndexedRetainedAcceptedOutputPresentation(memory.store, deleted.root, nomination),
         ).rejects.toThrow('logically deleted');
+        await expect(loadIndexedRestartEvidence(memory.store, deleted.root)).rejects.toMatchObject({
+            reason: 'logically_deleted',
+        });
+        expect((await loadIndexedRestartEvidence(memory.store, migrated.root)).kind).toBe('accepted_output');
         const deletedHistory = await loadIndexedAcceptedOutputHistoryPage(memory.store, deleted.root, {
             snapshot_revision: migrated.root.source.revision,
             limit: 1,
@@ -4081,5 +4236,231 @@ describe('bounded indexed application call selection', () => {
                 source,
             ),
         ).rejects.toThrow('active catalog');
+    });
+});
+
+describe('bounded indexed restart evidence', () => {
+    it('retains original executed output and application source while incremental result acceptance clears the pending index', async () => {
+        const memory = memoryStore();
+        const initial = await stageIndexedConversationSnapshot(
+            emptyDocument('conversation:restart'),
+            undefined,
+            memory.store,
+        );
+        expect(await loadIndexedRestartEvidence(memory.store, initial.root)).toEqual({
+            kind: 'no_output',
+            source: initial.root.source,
+        });
+        const commands = await toolMediaCommands(initial.root.source);
+        const called = await stageIndexedRecordBatch(initial.root, commands.agentCommand, memory.store);
+        memory.recordReads.length = 0;
+        memory.pageReads.length = 0;
+        const pending = await loadIndexedRestartEvidence(memory.store, called.root);
+        if (pending.kind !== 'accepted_output') throw new Error('Expected authentic accepted restart output');
+        expect(pending.accepted.source).toEqual(commands.execution.call_source.conversation);
+        expect(pending.pending).toEqual([
+            {
+                source: commands.execution.call_source,
+                call: {
+                    call_id: commands.call.call_id,
+                    tool_name: commands.call.tool_name,
+                    definition_id: commands.call.definition_id,
+                    executor: 'application',
+                },
+            },
+        ]);
+        expect(pending.materialized_input).toBeUndefined();
+        expect(memory.recordReads.length).toBeLessThan(32);
+        const completed = await stageIndexedRecordBatch(called.root, commands.resultCommand, memory.store);
+        const resumed = await loadIndexedRestartEvidence(memory.store, completed.root);
+        if (resumed.kind !== 'accepted_output') throw new Error('Expected authentic output after result');
+        expect(resumed.accepted).toEqual(pending.accepted);
+        expect(resumed.pending).toEqual([]);
+        expect(resumed.materialized_input).toEqual({
+            operation_id: commands.resultCommand.options.operation_id,
+            result_revision: completed.root.source.revision,
+        });
+        expect(completed.root.directories.open_tool_calls).toBeUndefined();
+        expect((await loadIndexedRestartEvidence(memory.store, called.root)).kind).toBe('accepted_output');
+        const { restart_index_profile: _profile, ...oldProfile } = completed.root;
+        await expect(loadIndexedRestartEvidence(memory.store, oldProfile)).rejects.toMatchObject({
+            reason: 'upgrade_required',
+        });
+    });
+
+    it.each(['imported', 'imported_turn', 'imported_without_generation', 'executed', 'tool'] as const)(
+        'refuses mixed migration with an old valid output and a newer unnominated %s turn',
+        async (kind) => {
+            const document = emptyDocument(`conversation:restart-mixed:${kind}`);
+            const commands = await toolMediaCommands({ conversation_id: document.id, revision: document.revision });
+            const called = appendConversationRecords(
+                document,
+                commands.agentCommand.batch,
+                commands.agentCommand.options,
+            ).document;
+            let mixed: ConversationDocument;
+            let operationId: string;
+            if (kind === 'tool') {
+                mixed = appendConversationRecords(
+                    called,
+                    commands.resultCommand.batch,
+                    commands.resultCommand.options,
+                ).document;
+                operationId = commands.resultCommand.options.operation_id;
+            } else {
+                const original = commands.agentCommand.batch.generations?.[0];
+                if (original?.record_source !== 'executed') throw new Error('Expected real executed fixture');
+                const source = { conversation_id: called.id, revision: called.revision };
+                const generation =
+                    kind !== 'executed'
+                        ? { ...importedGeneration('generation:mixed'), source }
+                        : {
+                              ...original,
+                              id: 'generation:mixed',
+                              request_id: 'request:mixed',
+                              attempt_id: 'attempt:mixed',
+                              source,
+                              request_receipt: {
+                                  ...original.request_receipt,
+                                  id: 'prepared:mixed',
+                                  request_id: 'request:mixed',
+                                  attempt_id: 'attempt:mixed',
+                                  source,
+                              },
+                          };
+                const { generation_id: _priorGenerationId, ...originalTurn } = commands.agent;
+                const turn = AgentTurnSchema.parse({
+                    ...originalTurn,
+                    id: 'turn:mixed',
+                    ...(kind === 'imported_without_generation' ? {} : { generation_id: generation.id }),
+                    provenance:
+                        kind === 'imported_turn' || kind === 'imported_without_generation'
+                            ? { type: 'imported' as const, source: 'recorded-history' }
+                            : commands.agent.provenance,
+                    blocks: [textBlock('block:mixed', 'Newest raw generated response')],
+                });
+                const batch = {
+                    ...(kind === 'imported_without_generation' ? {} : { generations: [generation] }),
+                    turns: [turn],
+                };
+                operationId = 'operation:mixed';
+                mixed = appendConversationRecords(called, batch, {
+                    expected_revision: called.revision,
+                    operation_id: operationId,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                }).document;
+            }
+            delete mixed.operation_receipts[operationId];
+            // This is a valid older canonical snapshot, not corruption manufactured past parsing.
+            const validated = parseConversationDocument(mixed);
+            expect(validated.operation_receipts[commands.agentCommand.options.operation_id]).toBeDefined();
+            const memory = memoryStore();
+            const migrated = await stageIndexedConversationSnapshot(validated, undefined, memory.store);
+            expect(migrated.root.restart_index_profile).toBeUndefined();
+            expect(migrated.root.restart_response).toBeUndefined();
+            await expect(loadIndexedRestartEvidence(memory.store, migrated.root)).rejects.toMatchObject({
+                reason: 'upgrade_required',
+            });
+        },
+    );
+
+    it('authentically migrates later tool input and refuses to rewind over a newest imported acceptance', async () => {
+        const memory = memoryStore();
+        const document = emptyDocument('conversation:restart-migration');
+        const commands = await toolMediaCommands({ conversation_id: document.id, revision: document.revision });
+        const called = appendConversationRecords(
+            document,
+            commands.agentCommand.batch,
+            commands.agentCommand.options,
+        ).document;
+        const completed = appendConversationRecords(
+            called,
+            commands.resultCommand.batch,
+            commands.resultCommand.options,
+        ).document;
+        const migrated = await stageIndexedConversationSnapshot(completed, undefined, memory.store);
+        const evidence = await loadIndexedRestartEvidence(memory.store, migrated.root);
+        if (evidence.kind !== 'accepted_output') throw new Error('Expected migrated executed acceptance');
+        expect(evidence.pending).toEqual([]);
+        expect(evidence.materialized_input).toEqual({
+            operation_id: commands.resultCommand.options.operation_id,
+            result_revision: completed.revision,
+        });
+        const generation = { ...importedGeneration('generation:restart-imported'), source: migrated.root.source };
+        const turn = {
+            ...commands.agent,
+            id: 'turn:restart-imported',
+            generation_id: generation.id,
+            blocks: [textBlock('block:restart-imported', 'Imported newest output')],
+        };
+        const batch = { generations: [generation], turns: [turn] };
+        const recordsBeforeImportedAppend = memory.records.size;
+        await expect(
+            stageIndexedRecordBatch(
+                migrated.root,
+                {
+                    conversation_id: document.id,
+                    batch,
+                    options: {
+                        expected_revision: migrated.root.source.revision,
+                        operation_id: 'operation:restart-imported',
+                        recorded_at: RECORDED_AT,
+                        payload_fingerprint: await fingerprintJson(batch),
+                    },
+                },
+                memory.store,
+            ),
+        ).rejects.toThrow('Indexed append requires an executed generation');
+        expect(memory.records.size).toBe(recordsBeforeImportedAppend);
+        const importedDocument = appendConversationRecords(completed, batch, {
+            expected_revision: completed.revision,
+            operation_id: 'operation:restart-imported',
+            recorded_at: RECORDED_AT,
+            payload_fingerprint: await fingerprintJson(batch),
+        }).document;
+        const importedMigration = await stageIndexedConversationSnapshot(importedDocument, undefined, memory.store);
+        expect(importedMigration.root.restart_index_profile).toBeDefined();
+        expect(importedMigration.root.restart_response?.operation_id).toBe('operation:restart-imported');
+        await expect(loadIndexedRestartEvidence(memory.store, importedMigration.root)).rejects.toMatchObject({
+            reason: 'imported',
+        });
+        await expect(
+            loadIndexedRestartEvidence(memory.store, {
+                ...importedMigration.root,
+                restart_response: {
+                    operation_id: 'operation:missing',
+                    result_revision: importedMigration.root.source.revision,
+                },
+            }),
+        ).rejects.toThrow();
+        const { generation_id: _importedGeneration, ...rawImportedTurn } = turn;
+        const rawBatch = {
+            turns: [
+                {
+                    ...rawImportedTurn,
+                    id: 'turn:restart-imported-no-generation',
+                    provenance: { type: 'imported' as const, source: 'recorded-history' },
+                    blocks: [textBlock('block:restart-imported-no-generation', 'Unspecified imported newest response')],
+                },
+            ],
+        };
+        const rawImportedDocument = appendConversationRecords(importedDocument, rawBatch, {
+            expected_revision: importedDocument.revision,
+            operation_id: 'operation:restart-imported-no-generation',
+            recorded_at: RECORDED_AT,
+            payload_fingerprint: await fingerprintJson(rawBatch),
+        }).document;
+        const rawImported = await stageIndexedConversationSnapshot(rawImportedDocument, undefined, memory.store);
+        // A legacy acceptance without its generation cannot establish complete restart evidence.
+        expect(rawImported.root.restart_index_profile).toBeUndefined();
+        expect(rawImported.root.restart_response).toBeUndefined();
+        await expect(loadIndexedRestartEvidence(memory.store, rawImported.root)).rejects.toMatchObject({
+            reason: 'upgrade_required',
+        });
+        const { restart_index_profile: _profile, ...incomplete } = importedMigration.root;
+        await expect(loadIndexedRestartEvidence(memory.store, incomplete)).rejects.toThrow(
+            IndexedRestartSourceUnavailable,
+        );
     });
 });

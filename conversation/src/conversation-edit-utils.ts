@@ -1,7 +1,7 @@
 import { ConversationValidationError } from './diagnostics.js';
 import { fingerprintJson } from './identity.js';
 import { preflightJsonInput } from './json-preflight.js';
-import type { ContextEntry, ConversationDocument, ConversationEditRecordRef } from './types.js';
+import type { ContextEntry, ConversationContext, ConversationDocument, ConversationEditRecordRef } from './types.js';
 
 export function preflight(input: unknown): void {
     const result = preflightJsonInput(input);
@@ -28,4 +28,21 @@ export function cacheAfterEdit(document: ConversationDocument, entries: ContextE
     if (cache.mode === 'required') throw new Error('Edit would invalidate required cache prefix');
     const { stable_through_entry_id: _boundary, ...retained } = cache;
     return retained;
+}
+
+/** Same invalidation as an accepted context-change exclusion; it is not a cache-preserving edit. */
+export function cacheAfterContextRemoval(context: ConversationContext, removedEntryIds: ReadonlySet<string>) {
+    const cache = context.cache_intent;
+    if (removedEntryIds.size === 0 || !cache) return cache;
+    if (cache.mode === 'required') throw new Error('Context change would invalidate required cache intent');
+    if (
+        cache.mode === 'auto' ||
+        (cache.mode === 'off' &&
+            cache.stable_through_entry_id !== undefined &&
+            removedEntryIds.has(cache.stable_through_entry_id))
+    ) {
+        const { stable_through_entry_id: _boundary, ...retained } = cache;
+        return retained;
+    }
+    return cache;
 }

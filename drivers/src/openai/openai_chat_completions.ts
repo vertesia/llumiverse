@@ -6,6 +6,7 @@ import type {
 import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import {
     type ToolDefinition as CanonicalToolDefinition,
+    type ConversationAcceptedOutputFragment,
     type ConversationDocument,
     type ConversationModelSwitchProjection,
     type ConversationPreparedRequestRecord,
@@ -76,7 +77,11 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
-import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
+import {
+    type CanonicalNativeStreamFinalization,
+    canonicalNativeExecutionEventStream,
+    validateCanonicalNativeStreamOpen,
+} from '../conversation/canonical-execution-event-stream.js';
 import {
     assertAcceptedCanonicalRequest,
     canonicalConversationTurnNumber,
@@ -86,6 +91,7 @@ import {
     recoverCanonicalExecutionResponse,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import { IndexedNativeCapabilityUnavailable } from '../conversation/indexed-capability.js';
 import {
     normalizeDecodedStructuredOutputForSchema,
     rejectDecodedStructuredOutput,
@@ -119,6 +125,7 @@ import {
     finalizeOpenAIChatPreparedRequest,
     OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    type OpenAIChatResponseDecodeEvidence,
     type PreparedOpenAIChatConversation,
     prepareOpenAIChatCanonicalContext,
     prepareOpenAIChatCanonicalState,
@@ -373,9 +380,9 @@ function openAIChatSemanticBlocks(decoded: DecodedConversationResponse, turnId: 
     return turn.blocks.filter((block) => block.type !== 'native_replay');
 }
 
-async function finalizeOpenAIChatStreamResponse(input: {
+async function decodeOpenAIChatStreamResponse(input: {
     response: OpenAIChatCompletionsResponse;
-    prepared: PreparedOpenAIChatConversation;
+    prepared: OpenAIChatResponseDecodeEvidence;
     finish_reason: string;
     options: ExecutionOptions;
 }) {
@@ -397,11 +404,23 @@ async function finalizeOpenAIChatStreamResponse(input: {
               )
             : rawDecoded;
     if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
-    const document = await appendOpenAIChatCanonicalResponseWithProcessing(input.prepared, decoded);
     return {
         raw_decoded: rawDecoded,
         decoded,
         normalized,
+    };
+}
+
+async function finalizeOpenAIChatStreamResponse(input: {
+    response: OpenAIChatCompletionsResponse;
+    prepared: PreparedOpenAIChatConversation;
+    finish_reason: string;
+    options: ExecutionOptions;
+}) {
+    const finalized = await decodeOpenAIChatStreamResponse(input);
+    const document = await appendOpenAIChatCanonicalResponseWithProcessing(input.prepared, finalized.decoded);
+    return {
+        ...finalized,
         response: createCanonicalExecutionResponse(document, input.prepared.runtime.response_operation_id, {
             ...(input.response.service_tier == null ? {} : { service_tier: input.response.service_tier }),
         }),
@@ -1309,6 +1328,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
         if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
         const options: ExecutionOptions = structuredClone(controls);
+        if (options.result_schema !== undefined)
+            throw new IndexedNativeCapabilityUnavailable(
+                'Indexed OpenAI Chat text transport does not support structured output',
+            );
         // Hydration is the first await. Capture constructor-owned native controls before it,
         // including nested extra-body values and the configured model alias.
         const ownProtocolField = <Key extends keyof OpenAIChatCompletionsProtocolOptions>(
@@ -1504,6 +1527,108 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 response_turn_id: record.response_turn_id,
             },
             typeof response.choices[0]?.finish_reason === 'string' ? response.choices[0].finish_reason : undefined,
+        );
+    }
+
+    /** Stream the exact counted indexed request and publish its decoded output once. */
+    async streamCommittedIndexedTextRequest(
+        driver: DriverT,
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            provider: string;
+            assert_committed: () => Promise<void>;
+            accept_output: (decoded: DecodedConversationResponse) => Promise<ConversationAcceptedOutputFragment>;
+            open: CanonicalStreamOpenOptions;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const record = parseConversationPreparedRequestRecord(structuredClone(input.record));
+        const ownOption = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed OpenAI option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownOption('model');
+        if (typeof model !== 'string') throw new TypeError('Indexed OpenAI model is unavailable');
+        const modelOptions = ownOption('model_options');
+        const resultSchema = ownOption('result_schema');
+        const stripImagesAfterTurns = ownOption('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownOption('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownOption('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        const provider = input.provider;
+        const assertCommitted = input.assert_committed;
+        const acceptOutput = input.accept_output;
+        const open = { ...input.open };
+        const signal = input.signal;
+        if (options.result_schema !== undefined) {
+            throw new Error('Indexed OpenAI Chat text transport does not support structured output');
+        }
+        const prepared = await this.prepareIndexedTextRequest(
+            {
+                selection,
+                runtime: record.runtime,
+                options,
+                provider,
+                stream: true,
+                signal,
+            },
+            ownedHostCapabilities,
+        );
+        if (!(await indexedPreparedReceiptMatches(record, selection, prepared.receipt))) {
+            throw new Error('Indexed native request differs from its durably prepared receipt');
+        }
+        signal?.throwIfAborted();
+        await assertCommitted();
+        signal?.throwIfAborted();
+        const evidence: OpenAIChatResponseDecodeEvidence = {
+            runtime: record.runtime,
+            receipt: record.request_receipt,
+            provider,
+            requested_model: record.request_receipt.target.model,
+            generation_id: record.generation_id,
+            response_turn_id: record.response_turn_id,
+            tool_definitions: selection.context.active_tool_definition_ids.map((id) => {
+                const definition = selection.tool_definitions[id];
+                if (!definition) throw new Error(`Indexed stream tool ${id} is unavailable`);
+                return definition;
+            }),
+        };
+        return this.streamPreparedTextEvents(
+            driver,
+            evidence,
+            prepared.payload,
+            options,
+            signal,
+            open,
+            async (response, finishReason) => ({
+                ...(await decodeOpenAIChatStreamResponse({
+                    response,
+                    prepared: evidence,
+                    finish_reason: finishReason,
+                    options,
+                })),
+                accept_output: acceptOutput,
+            }),
+            assertCommitted,
         );
     }
 
@@ -2202,6 +2327,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 { ...open, origin: 'accepted_recovery' },
             );
         }
+        validateCanonicalNativeStreamOpen(identity, open);
         const measured = await this.projectCanonicalMeasurement(
             canonicalState,
             payload,
@@ -2223,6 +2349,39 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                       receipt: { ...finalized.receipt, measurement: measured.measurement },
                   };
 
+        await publishCanonicalPreparedRequest(prepared, options, measured);
+        return this.streamPreparedTextEvents(
+            driver,
+            prepared,
+            payload,
+            options,
+            signal,
+            open,
+            (response, finishReason) =>
+                finalizeOpenAIChatStreamResponse({ response, prepared, finish_reason: finishReason, options }),
+        );
+    }
+
+    private async streamPreparedTextEvents(
+        driver: DriverT,
+        prepared: OpenAIChatResponseDecodeEvidence,
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        finalizeNative: (
+            response: OpenAIChatCompletionsResponse,
+            finishReason: string,
+        ) => Promise<Awaited<ReturnType<typeof decodeOpenAIChatStreamResponse>> & CanonicalNativeStreamFinalization>,
+        beforeTransport?: () => Promise<void>,
+    ): Promise<CanonicalExecutionEventStream> {
+        const identity = {
+            request_id: prepared.runtime.request_id,
+            attempt_id: prepared.runtime.attempt_id,
+            response_operation_id: prepared.runtime.response_operation_id,
+            generation_id: prepared.generation_id,
+            draft_turn_id: prepared.response_turn_id,
+        };
         const abortController = new AbortController();
         const forwardAbort = () => abortController.abort(signal?.reason);
         let nativeContent = '';
@@ -2253,7 +2412,17 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const eventStream = canonicalNativeExecutionEventStream({
             identity,
             open,
+            ...(beforeTransport === undefined
+                ? {}
+                : {
+                      beforeTransport: async () => {
+                          signal?.throwIfAborted();
+                          await beforeTransport();
+                          signal?.throwIfAborted();
+                      },
+                  }),
             openSource: async () => {
+                signal?.throwIfAborted();
                 const stream = await this.postChatCompletionStream(driver, payload, options, abortController.signal);
                 return openAIChatNativeSSE(stream);
             },
@@ -2433,15 +2602,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                         : { system_fingerprint: responseSystemFingerprint }),
                     ...(responseUsage === undefined ? {} : { usage: responseUsage }),
                 };
-                const finalized = await finalizeOpenAIChatStreamResponse({
-                    response,
-                    prepared,
-                    finish_reason: responseFinishReason,
-                    options,
-                });
+                const finalized = await finalizeNative(response, responseFinishReason);
                 return {
                     decoded: finalized.decoded,
-                    response: finalized.response,
+                    ...(finalized.response !== undefined
+                        ? { response: finalized.response }
+                        : { accept_output: finalized.accept_output }),
                     prepare_reconciliation: async () => {
                         const { raw_decoded: rawDecoded, normalized } = finalized;
                         let { decoded } = finalized;
@@ -2558,7 +2724,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             abort: () => abortController.abort(),
             close: () => signal?.removeEventListener('abort', forwardAbort),
         });
-        await publishCanonicalPreparedRequest(prepared, options, measured);
         if (signal?.aborted) forwardAbort();
         else signal?.addEventListener('abort', forwardAbort, { once: true });
         return eventStream;
@@ -3066,6 +3231,28 @@ export abstract class OpenAIChatCompletionsDriverBase<
         hostCapabilities?: CanonicalHostCapabilities,
     ): Promise<DecodedConversationResponse> {
         return this.chatCompletionsProtocol.executeCommittedIndexedTextRequest(
+            this,
+            {
+                ...input,
+                provider: this.provider,
+            },
+            hostCapabilities,
+        );
+    }
+
+    streamCommittedIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            assert_committed: () => Promise<void>;
+            accept_output: (decoded: DecodedConversationResponse) => Promise<ConversationAcceptedOutputFragment>;
+            open: CanonicalStreamOpenOptions;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.streamCommittedIndexedTextRequest(
             this,
             {
                 ...input,

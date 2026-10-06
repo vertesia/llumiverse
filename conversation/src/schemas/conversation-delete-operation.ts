@@ -12,6 +12,7 @@ export const ConversationDeletedTurnRefSchema = z
         id: IdentifierSchema,
         fingerprint: ContentHashSchema,
         block_ids: z.array(IdentifierSchema).min(1),
+        call_ids: z.array(IdentifierSchema).min(1).optional(),
         accepted_operation_id: IdentifierSchema,
     })
     .meta({ id: 'ConversationDeletedTurnRef' });
@@ -28,6 +29,8 @@ export const ConversationDeleteOperationSchema = z
         source: ConversationRefSchema,
         source_fingerprint: ContentHashSchema,
         dependency_policy: z.literal('reject'),
+        /** Exact active entries removed atomically, only under explicit exclusion policy. */
+        excluded_context_entry_ids: z.array(IdentifierSchema).min(1).max(4096).optional(),
         deleted_turns: z.array(ConversationDeletedTurnRefSchema).min(1).max(4096),
     })
     .meta({ id: 'ConversationDeleteOperation' });

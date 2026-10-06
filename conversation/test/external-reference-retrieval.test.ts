@@ -1,15 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { hashUtf8Content } from '../src/content-integrity.js';
-import { resolveActiveTextExternalReference } from '../src/external-reference-retrieval.js';
+import {
+    resolveActiveTextExternalReference,
+    resolveIndexedTextExternalReference,
+} from '../src/external-reference-retrieval.js';
+import {
+    type IndexedConversationRecordStore,
+    loadIndexedSelectedMediaCompactionContext,
+    stageIndexedConversationSnapshot,
+} from '../src/indexed-conversation.js';
 import { appendConversationRecords } from '../src/runtime.js';
 import type { ConversationDocument } from '../src/types.js';
 import { emptyDocument, RECORDED_AT, userTurn } from './fixtures.js';
 
 const PATH = 'archive/assets/asset-text.txt';
 
-async function referencedDocument(): Promise<ConversationDocument> {
+async function referencedDocument(kind: 'text' | 'json' = 'text'): Promise<ConversationDocument> {
     const initial = emptyDocument('conversation:retrieval');
-    const bytes = await hashUtf8Content('Exact original text');
+    const bytes = await hashUtf8Content(
+        kind === 'json' ? JSON.stringify({ exact: 'JSON original α', count: 2 }) : 'Exact original text',
+    );
     const retrieval = {
         capability: 'read_artifact',
         version: 1,
@@ -22,7 +32,7 @@ async function referencedDocument(): Promise<ConversationDocument> {
             id: 'block:reference',
             type: 'external_reference',
             asset_id: 'asset:text',
-            original_type: 'text',
+            original_type: kind,
             description: 'Archived source',
             content_hash: bytes.content_hash,
             preview: 'Exact original',
@@ -31,8 +41,8 @@ async function referencedDocument(): Promise<ConversationDocument> {
     ];
     const asset = {
         id: 'asset:text',
-        kind: 'text',
-        mime_type: 'text/plain',
+        kind,
+        mime_type: kind === 'json' ? 'application/json' : 'text/plain',
         storage: {
             type: 'external',
             resolver: 'vertesia.agent_artifact',
@@ -47,6 +57,16 @@ async function referencedDocument(): Promise<ConversationDocument> {
         initial,
         {
             assets: [asset],
+            turns: [turn],
+            context_entries: [{ id: 'entry:reference', type: 'source_turn', turn_id: turn.id }],
+            retrieval_requirements: [
+                {
+                    id: 'requirement:read',
+                    asset_id: 'asset:text',
+                    retrieval,
+                    accepted_asset_operation_id: 'archive:text',
+                },
+            ],
             tool_definitions: [
                 {
                     id: 'definition:read',
@@ -64,14 +84,6 @@ async function referencedDocument(): Promise<ConversationDocument> {
             recorded_at: RECORDED_AT,
         },
     ).document;
-    document.turns.push(turn);
-    document.context.entries.push({ id: 'entry:reference', type: 'source_turn', turn_id: turn.id });
-    document.context.retrieval_requirements.push({
-        id: 'requirement:read',
-        asset_id: 'asset:text',
-        retrieval,
-        accepted_asset_operation_id: 'archive:text',
-    });
     return document;
 }
 
@@ -130,4 +142,49 @@ describe('resolveActiveTextExternalReference', () => {
         wrongHash.assets['asset:text'].content_hash = `sha256:${'0'.repeat(64)}`;
         expect(() => resolveActiveTextExternalReference(wrongHash, 'asset:text')).toThrow();
     });
+});
+
+it('retains exact JSON type, archive hash and accepted requirement through materialized and indexed lookup', async () => {
+    const document = await referencedDocument('json');
+    const materialized = resolveActiveTextExternalReference(document, 'asset:text');
+    expect(materialized.asset.kind).toBe('json');
+    expect(materialized.asset.mime_type).toBe('application/json');
+    expect(materialized.block.original_type).toBe('json');
+    const pages = new Map<string, Uint8Array>();
+    const records = new Map<string, Uint8Array>();
+    const store: IndexedConversationRecordStore = {
+        async read(ref) {
+            const bytes = pages.get(ref.content_hash);
+            if (!bytes) throw new Error('Missing page');
+            return Uint8Array.from(bytes);
+        },
+        async write(bytes, ref) {
+            pages.set(ref.content_hash, Uint8Array.from(bytes));
+        },
+        async readRecord(ref) {
+            const bytes = records.get(`${ref.kind}:${ref.content_hash}`);
+            if (!bytes) throw new Error('Missing record');
+            return Uint8Array.from(bytes);
+        },
+        async writeRecord(ref, bytes) {
+            records.set(`${ref.kind}:${ref.content_hash}`, Uint8Array.from(bytes));
+        },
+    };
+    const snapshot = await stageIndexedConversationSnapshot(document, undefined, store);
+    const selected = await loadIndexedSelectedMediaCompactionContext(store, snapshot.root, snapshot.locator);
+    const indexed = resolveIndexedTextExternalReference(selected, 'asset:text', 'block:reference');
+    expect(indexed).toEqual(materialized);
+    const changed = structuredClone(selected);
+    changed.assets['asset:text'].kind = 'text';
+    expect(() => resolveIndexedTextExternalReference(changed, 'asset:text', 'block:reference')).toThrow(
+        'differs from its asset/ABI',
+    );
+    const withoutRequirement = structuredClone(selected);
+    withoutRequirement.context.retrieval_requirements = [];
+    expect(() => resolveIndexedTextExternalReference(withoutRequirement, 'asset:text', 'block:reference')).toThrow(
+        'active tool and accepted-asset evidence',
+    );
+    const inactive = structuredClone(document);
+    inactive.context.active_tool_definition_ids = [];
+    expect(() => resolveActiveTextExternalReference(inactive, 'asset:text')).toThrow();
 });

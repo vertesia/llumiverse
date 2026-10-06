@@ -28,5 +28,6 @@ export function retrievableTextReference(document: unknown, block: ExternalRefer
     if (args.length > MAX_RETRIEVAL_ARGUMENTS_LENGTH) {
         throw new TypeError(`Canonical external reference ${block.id} has oversized retrieval arguments`);
     }
-    return `Preview: ${preview}\n[Full original text is available through ${resolved.tool_definition.name} with ${args}.]`;
+    const original = resolved.asset.kind === 'json' ? 'JSON' : 'text';
+    return `Preview: ${preview}\n[Full original ${original} is available through ${resolved.tool_definition.name} with ${args}.]`;
 }

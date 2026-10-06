@@ -359,6 +359,7 @@ export async function renderIndexedToolRetrievalResult(
         throw new IndexedToolRetrievalConflict('Indexed exchange archive requires exact bounded byte paging');
     const referenceBlocks = [...selected.turns, ...(selected.replacement_turns ?? []).map((item) => item.projection)]
         .flatMap((turn) => turn.selected_blocks)
+        .flatMap((block) => (block.type === 'tool_result' ? block.content : [block]))
         .filter((block) => block.type === 'external_reference' && block.asset_id === assetId);
     if (referenceBlocks.length !== 1)
         throw new IndexedToolRetrievalConflict('Indexed retrieval has no one selected external reference');

@@ -10,6 +10,7 @@ import {
     planContextChangeWorkingSet,
     selectedRanges,
 } from './context-change-working-set.js';
+import { cacheAfterContextRemoval } from './conversation-edit-utils.js';
 import { deriveConversationId } from './identity.js';
 import { ContextChangeSchema } from './schemas/change.js';
 import { ContextChangePlanInputSchema } from './schemas/context-change.js';
@@ -421,14 +422,7 @@ export async function applyContextMutationWorkingSet(
     }
     const nextRevision = frame.source.revision + 1;
     if (!Number.isSafeInteger(nextRevision)) throw new RangeError('Conversation revision exceeds safe integer range');
-    const cacheIntent = frame.context.cache_intent;
-    const clearedCacheIntent =
-        cacheIntent?.mode === 'auto' ||
-        (cacheIntent?.mode === 'off' &&
-            cacheIntent.stable_through_entry_id !== undefined &&
-            selected.has(cacheIntent.stable_through_entry_id))
-            ? Object.fromEntries(Object.entries(cacheIntent).filter(([key]) => key !== 'stable_through_entry_id'))
-            : cacheIntent;
+    const clearedCacheIntent = cacheAfterContextRemoval(frame.context, selected);
     const change = ContextChangeSchema.parse({
         operation_id: request.operation_id,
         conversation_id: frame.source.conversation_id,

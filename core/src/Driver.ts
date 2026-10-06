@@ -78,6 +78,7 @@ import {
 import { createLogger } from './logger.js';
 import { normalizeCompletionResult } from './validation.js';
 
+export { leaseCanonicalExecutionEventStream } from './CompletionStream.js';
 export { createLogger } from './logger.js';
 
 /** A configured, non-generation provider counter; unavailable is the fail-closed default. */

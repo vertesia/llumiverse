@@ -1,5 +1,11 @@
 import { createConversationDocument, createUserTurn } from './builders.js';
 import { deriveConversationId } from './identity.js';
+import { preflightJsonInput } from './json-preflight.js';
+import type {
+    IndexedConversationRoot,
+    IndexedConversationSelectedContext,
+    IndexedProcessingSelectedContext,
+} from './schemas/indexed-head.js';
 import type { ConversationDocument } from './types.js';
 import { parseConversationDocument } from './validation.js';
 
@@ -7,7 +13,6 @@ export async function createCheckpointSummaryFork(
     source: ConversationDocument,
     operationId: string,
 ): Promise<ConversationDocument> {
-    const forkId = await deriveConversationId('checkpoint_summary', source.id, operationId);
     const sourceTurns = new Map(source.turns.map((turn) => [turn.id, turn]));
     const selected = source.context.entries.flatMap((entry) => {
         const turn =
@@ -26,6 +31,81 @@ export async function createCheckpointSummaryFork(
             },
         ];
     });
+    return createSelectedCheckpointSummaryFork(
+        {
+            id: source.id,
+            revision: source.revision,
+            updated_at: source.updated_at,
+            context_revision: source.context.revision,
+        },
+        selected,
+        operationId,
+    );
+}
+
+/** Exact selected projections supply original positions/accepted dependencies. This constructs
+ * a genuine separate fork, never a partial source document or new source authority. */
+export async function createCheckpointSummaryForkFromIndexedSelection(
+    root: IndexedConversationRoot,
+    selection: IndexedConversationSelectedContext | IndexedProcessingSelectedContext,
+    operationId: string,
+): Promise<ConversationDocument> {
+    if (
+        selection.source.conversation_id !== root.source.conversation_id ||
+        selection.source.revision !== root.source.revision
+    )
+        throw new TypeError('Checkpoint selected context differs from its exact indexed source');
+    const turns = new Map(selection.turns.map((turn) => [turn.header.id, turn]));
+    const replacements = new Map(
+        (selection.replacement_turns ?? []).map((turn) => [
+            JSON.stringify([turn.compaction_id, turn.projection.header.id]),
+            turn.projection,
+        ]),
+    );
+    const selected = selection.context.entries.flatMap((entry) => {
+        const projection =
+            entry.type === 'source_turn'
+                ? turns.get(entry.turn_id)
+                : replacements.get(JSON.stringify([entry.compaction_id, entry.turn_id]));
+        if (!projection) throw new Error(`Checkpoint selected context lacks turn ${entry.turn_id}`);
+        if (projection.header.model_visibility === 'exclude') return [];
+        const ids = entry.block_ids ? new Set(entry.block_ids) : undefined;
+        const blocks = projection.selected_blocks.filter((block) => !ids || ids.has(block.id));
+        if (ids && blocks.length !== ids.size)
+            throw new Error('Checkpoint selected context lacks an exact active block');
+        return [{ turn: projection.header, blocks }];
+    });
+    return createSelectedCheckpointSummaryFork(
+        {
+            id: root.source.conversation_id,
+            revision: root.source.revision,
+            updated_at: root.updated_at,
+            context_revision: selection.context.revision,
+        },
+        selected,
+        operationId,
+    );
+}
+
+export class CheckpointSummaryForkCapacityError extends RangeError {
+    constructor(message: string) {
+        super(message);
+        this.name = 'CheckpointSummaryForkCapacityError';
+    }
+}
+
+// Reserve envelope/fork lineage overhead inside the 16MiB private JSON response budget.
+const MAX_CHECKPOINT_TRANSCRIPT_JSON_BYTES = 16 * 1024 * 1024 - 64 * 1024;
+type SelectedCheckpointTurn = {
+    turn: Pick<ConversationDocument['turns'][number], 'id' | 'kind'>;
+    blocks: readonly ConversationDocument['turns'][number]['blocks'][number][];
+};
+async function createSelectedCheckpointSummaryFork(
+    source: { id: string; revision: number; updated_at: string; context_revision: number },
+    selected: readonly SelectedCheckpointTurn[],
+    operationId: string,
+): Promise<ConversationDocument> {
+    const forkId = await deriveConversationId('checkpoint_summary', source.id, operationId);
     const selectedResultIds = new Set(
         selected.flatMap(({ turn, blocks }) =>
             turn.kind === 'tool'
@@ -33,15 +113,30 @@ export async function createCheckpointSummaryFork(
                 : [],
         ),
     );
-    const transcript = selected.flatMap(({ turn, blocks }) => {
+    const transcript: string[] = [];
+    let encodedBytes = 2;
+    const append = (line: string) => {
+        const remaining = MAX_CHECKPOINT_TRANSCRIPT_JSON_BYTES - encodedBytes;
+        const inspected = preflightJsonInput(line, { max_bytes: Math.max(1, remaining) });
+        if (!inspected.success)
+            throw new CheckpointSummaryForkCapacityError('Checkpoint fork transcript exceeds its encoded JSON budget');
+        encodedBytes += inspected.bytes - 2 + (transcript.length ? 2 : 0);
+        if (encodedBytes > MAX_CHECKPOINT_TRANSCRIPT_JSON_BYTES)
+            throw new CheckpointSummaryForkCapacityError('Checkpoint fork transcript exceeds its encoded JSON budget');
+        transcript.push(line);
+    };
+    for (const { turn, blocks } of selected) {
         const visibleBlocks = blocks.filter((block) => block.type !== 'native_replay');
-        if (visibleBlocks.length === 0) return [];
+        if (visibleBlocks.length === 0) continue;
         const rendered = visibleBlocks.flatMap((block) => renderCheckpointBlock(block, selectedResultIds));
-        return rendered.length > 0 ? [`[${turn.kind}:${turn.id}]`, ...rendered] : [];
-    });
+        if (rendered.length > 0) {
+            append(`[${turn.kind}:${turn.id}]`);
+            for (const line of rendered) append(line);
+        }
+    }
     const fork = createConversationDocument({ id: forkId, created_at: source.updated_at });
     fork.revision = source.revision;
-    fork.context.revision = source.context.revision;
+    fork.context.revision = source.context_revision;
     fork.lineage = {
         parents: [{ relation: 'fork', source: { conversation_id: source.id, revision: source.revision } }],
     };

@@ -6,6 +6,8 @@ import {
     CONVERSATION_STREAM_MAX_EVENT_BYTES,
     CONVERSATION_STREAM_MAX_EVENTS,
     CONVERSATION_STREAM_MAX_TOTAL_BYTES,
+    type ConversationAcceptedOutputFragment,
+    type ConversationRef,
     ConversationStreamAccumulator,
     type ConversationStreamAccumulatorOptions,
     type ConversationStreamCursor,
@@ -15,6 +17,7 @@ import {
     canonicalJsonContentString,
     conversationStreamEventId,
     type DecodedConversationResponse,
+    parseAcceptedOutputFragment,
 } from '@llumiverse/conversation';
 import {
     CanonicalAcceptedOutputRecovered,
@@ -280,9 +283,10 @@ function terminatedEvent(
 function acceptedEvent(
     identity: ConversationStreamIdentity,
     sequence: number,
-    response: CanonicalExecutionResponse,
+    response: Pick<CanonicalExecutionResponse, 'accepted_output'>,
     origin: 'live_transport' | 'accepted_recovery',
     reconciliations: ConversationStreamReconciliation[] = [],
+    conversation: ConversationRef = response.accepted_output.source,
 ): CanonicalStreamTerminalEvent {
     const output = response.accepted_output;
     if (
@@ -298,7 +302,7 @@ function acceptedEvent(
         ...streamEnvelope(identity, sequence),
         type: 'response_accepted',
         origin,
-        conversation: { conversation_id: response.conversation.id, revision: response.conversation.revision },
+        conversation,
         operation_receipt_id: output.receipt.id,
         committed_turn_id: output.turn.id,
         turn_status: output.turn.status,
@@ -441,7 +445,7 @@ async function assertStructuredReconciliation(
 
 function assertAcceptedResponseMatchesDecode(
     decoded: DecodedConversationResponse,
-    response: CanonicalExecutionResponse,
+    response: Pick<CanonicalExecutionResponse, 'accepted_output'>,
 ): void {
     const output = response.accepted_output;
     if (
@@ -474,7 +478,7 @@ function assertAcceptedResponseMatchesDecode(
 function assertTerminalOnlyBlocksHaveDecodeMappings(
     accumulator: ConversationStreamAccumulator,
     decoded: DecodedConversationResponse,
-    response: CanonicalExecutionResponse,
+    response: Pick<CanonicalExecutionResponse, 'accepted_output'>,
     reconciliations: readonly ConversationStreamReconciliation[],
 ): void {
     if (accumulator.draft_snapshot().length > 0 || response.accepted_output.turn.blocks.length === 0) return;
@@ -501,17 +505,42 @@ export async function finalizeCanonicalExecutionStreamResponse(input: {
     result_schema?: object;
     origin?: 'live_transport' | 'accepted_recovery';
 }): Promise<Extract<ConversationStreamEvent, { type: 'response_accepted' }>> {
+    return finalizeCanonicalAcceptedOutputStreamAt(
+        { ...input, accepted_output: input.response.accepted_output },
+        { conversation_id: input.response.conversation.id, revision: input.response.conversation.revision },
+    );
+}
+
+/** Indexed publication supplies the genuine accepted fragment, never a fabricated document. */
+export async function finalizeCanonicalAcceptedOutputStream(input: {
+    accumulator: ConversationStreamAccumulator;
+    decoded: DecodedConversationResponse;
+    accepted_output: ConversationAcceptedOutputFragment;
+    reconciliations: ConversationStreamReconciliation[];
+    result_schema?: object;
+    origin?: 'live_transport' | 'accepted_recovery';
+}): Promise<Extract<ConversationStreamEvent, { type: 'response_accepted' }>> {
+    const accepted_output = parseAcceptedOutputFragment(input.accepted_output);
+    return finalizeCanonicalAcceptedOutputStreamAt({ ...input, accepted_output }, accepted_output.source);
+}
+
+async function finalizeCanonicalAcceptedOutputStreamAt(
+    input: Parameters<typeof finalizeCanonicalAcceptedOutputStream>[0],
+    conversation: ConversationRef,
+): Promise<Extract<ConversationStreamEvent, { type: 'response_accepted' }>> {
+    const response = { accepted_output: input.accepted_output };
     await assertConversationStreamDecodeEvidence(input.decoded);
-    assertAcceptedResponseMatchesDecode(input.decoded, input.response);
-    assertTerminalOnlyBlocksHaveDecodeMappings(input.accumulator, input.decoded, input.response, input.reconciliations);
+    assertAcceptedResponseMatchesDecode(input.decoded, response);
+    assertTerminalOnlyBlocksHaveDecodeMappings(input.accumulator, input.decoded, response, input.reconciliations);
     assertDirectDraftBinding(input.accumulator, input.decoded, input.reconciliations);
     await assertStructuredReconciliation(input.accumulator, input.decoded, input.reconciliations, input.result_schema);
     const event = acceptedEvent(
         input.accumulator.identity,
         input.accumulator.next_sequence,
-        input.response,
+        response,
         input.origin ?? 'live_transport',
         input.reconciliations,
+        conversation,
     );
     const appended = input.accumulator.append(event).event;
     if (appended.type !== 'response_accepted') throw new Error('Canonical stream finalization lost its accepted event');

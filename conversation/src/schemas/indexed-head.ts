@@ -48,6 +48,14 @@ export const INDEXED_CONVERSATION_PROCESSING_PROFILE =
     'llumiverse.conversation/indexed-processing/2026-10-04.v1' as const;
 export const INDEXED_CONVERSATION_DELETE_PROFILE = 'llumiverse.conversation/indexed-delete/2026-10-03.v1' as const;
 
+export const INDEXED_CONVERSATION_DELETE_PROFILE_V2 = 'llumiverse.conversation/indexed-delete/2026-10-06.v2' as const;
+
+export const INDEXED_CONVERSATION_RESTART_PROFILE = 'llumiverse.conversation/indexed-restart/2026-10-05.v1' as const;
+const IndexedRestartOperationSchema = z.strictObject({
+    operation_id: IdentifierSchema,
+    result_revision: NonnegativeSafeIntegerSchema,
+});
+
 /** Every named family remains independently addressable without scanning lifetime history. */
 export const IndexedConversationDirectoriesSchema = z.strictObject({
     identifiers: PagedRecordRefSchema.optional(),
@@ -81,6 +89,10 @@ export const IndexedConversationDirectoriesSchema = z.strictObject({
     turn_acceptances: PagedRecordRefSchema.optional(),
     block_owners: PagedRecordRefSchema.optional(),
     deletion_blockers: PagedRecordRefSchema.optional(),
+    /** v2 typed reverse dependencies, keyed by target hash and dependency identity. */
+    deletion_dependencies: PagedRecordRefSchema.optional(),
+    /** Reverse ordinal of LIVE completed display answers; deletion removes keys, not bodies. */
+    display_answer_order: PagedRecordRefSchema.optional(),
     turn_links: PagedRecordRefSchema.optional(),
     deleted_turns: PagedRecordRefSchema.optional(),
 });
@@ -105,6 +117,7 @@ export const IndexedConversationDeleteCommandSchema = z.strictObject({
     expected_source_root: PagedRecordRefSchema,
     recorded_at: TimestampSchema,
     dependency_policy: z.literal('reject'),
+    context_policy: z.literal('exclude').optional(),
     turn_ids: z.array(IdentifierSchema).min(1).max(4096),
 });
 export type IndexedConversationDeleteCommand = z.infer<typeof IndexedConversationDeleteCommandSchema>;
@@ -141,7 +154,9 @@ export const IndexedConversationRootSchema = z.strictObject({
     version: z.literal(1),
     validator_profile: z.literal(INDEXED_CONVERSATION_PROFILE),
     /** Missing on older roots; no deletion may rely on an incomplete reverse index. */
-    delete_index_profile: z.literal(INDEXED_CONVERSATION_DELETE_PROFILE).optional(),
+    delete_index_profile: z
+        .enum([INDEXED_CONVERSATION_DELETE_PROFILE, INDEXED_CONVERSATION_DELETE_PROFILE_V2])
+        .optional(),
     /** Absent on older v1 roots, whose tool-result closure cannot be proven by point lookup. */
     tool_call_state_complete: z.literal(true).optional(),
     /** Missing on older roots; enabled-policy transitions cannot infer outbox completeness. */
@@ -162,6 +177,13 @@ export const IndexedConversationRootSchema = z.strictObject({
     processing_header: PagedRecordRefSchema,
     directories: IndexedConversationDirectoriesSchema,
     accepted_response: IndexedConversationAcceptedResponseSchema.optional(),
+    /** Migration validates complete receipt coverage; incremental append preserves it atomically.
+     * Missing on older roots, which cannot infer restart completeness from absent pointers. */
+    restart_index_profile: z.literal(INDEXED_CONVERSATION_RESTART_PROFILE).optional(),
+    /** Newest RAW response acceptance, including imported or invalid tuples. Never rewind on rejection. */
+    restart_response: IndexedRestartOperationSchema.optional(),
+    /** Newest accepted tool input; its exact original receipt/executions remain in existing families. */
+    restart_tool_input: IndexedRestartOperationSchema.optional(),
     /** Explicit completeness, including empty history. Older roots require authenticated snapshot upgrade. */
     accepted_output_index_complete: z.literal(true).optional(),
 });

@@ -209,3 +209,5 @@ export async function importNativeConversationHistory(
             );
     }
 }
+
+export { IndexedNativeCapabilityUnavailable } from './indexed-capability.js';

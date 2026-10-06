@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { INDEXED_CONVERSATION_UPGRADE_PROFILE } from '../indexed-upgrade-constants.js';
+import { PagedRecordRefSchema } from '../paged-record-index.js';
 import { CONVERSATION_USAGE_METRICS } from '../runtime-constants.js';
 import { ContextEntrySchema, ContextRetrievalRequirementSchema } from './context-foundation.js';
 import { ContextMeasurementSchema } from './context-measurement.js';
@@ -296,6 +298,17 @@ export const AcceptedToolSelectionSchema = z
     ])
     .meta({ id: 'ConversationAcceptedToolSelection' });
 
+/** An audited physical-index evolution changes the canonical revision, not its context selection. */
+export const IndexedConversationUpgradeOperationSchema = z
+    .strictObject({
+        version: z.literal(1),
+        profile: z.literal(INDEXED_CONVERSATION_UPGRADE_PROFILE),
+        source: ConversationRefSchema,
+        predecessor_root: PagedRecordRefSchema,
+        completed_progress: PagedRecordRefSchema,
+    })
+    .meta({ id: 'ConversationIndexedUpgradeOperation' });
+
 export const OperationReceiptSchema = z
     .strictObject({
         id: IdentifierSchema,
@@ -316,11 +329,14 @@ export const OperationReceiptSchema = z
         accepted_retrieval_requirements: z.array(ContextRetrievalRequirementSchema).optional(),
         accepted_tool_selection: AcceptedToolSelectionSchema.optional(),
         /** Absent on append receipts, including historical ones. */
-        operation_kind: z.enum(['context_change', 'conversation_edit', 'conversation_delete', 'processing']).optional(),
+        operation_kind: z
+            .enum(['context_change', 'conversation_edit', 'conversation_delete', 'processing', 'indexed_upgrade'])
+            .optional(),
         context_change: ContextChangeOperationSchema.optional(),
         conversation_edit: ConversationEditOperationSchema.optional(),
         conversation_delete: ConversationDeleteOperationSchema.optional(),
         processing_operation: ProcessingOperationSchema.optional(),
+        indexed_upgrade: IndexedConversationUpgradeOperationSchema.optional(),
     })
     .meta({ id: 'ConversationOperationReceipt' });
 

@@ -7,11 +7,14 @@ import {
     type ConversationDeletePlanInput,
     type ConversationDeleteRequest,
     fingerprintJson,
+    hashContentBytes,
     type IndexedConversationRecordStore,
+    loadIndexedActiveContext,
     parseConversationDocument,
     planContextChange,
     planConversationDelete,
     setProcessingPolicy,
+    stageIndexedConversationDelete,
     stageIndexedConversationSnapshot,
 } from '../src/index.js';
 import { emptyDocument, importedGeneration, textBlock, toolCallBlock, userTurn } from './fixtures.js';
@@ -144,6 +147,155 @@ describe('logical source-turn deletion', () => {
         ];
         await expect(deleteRequest(parseConversationDocument(tool))).rejects.toThrow('/turns/0/blocks');
         expect(excluded.turns[0].id).toBe('source');
+    });
+
+    it.each([
+        { mode: 'auto', selectedId: 'source', active: true },
+        { mode: 'auto', selectedId: 'anchor', active: true },
+        { mode: 'off', selectedId: 'source', active: true },
+        { mode: 'off', selectedId: 'anchor', active: true },
+        { mode: 'auto', selectedId: 'source', active: false },
+        { mode: 'off', selectedId: 'source', active: false },
+        { mode: 'required', selectedId: 'source', active: false },
+    ] as const)(
+        'preserves cache parity for $mode deleting $selectedId with active source $active',
+        async ({ mode, selectedId, active }) => {
+            const first = appendSource(active);
+            const source = appendConversationRecords(
+                first.document,
+                {
+                    turns: [userTurn('anchor')],
+                    context_entries: [{ id: 'entry:anchor', type: 'source_turn', turn_id: 'anchor' }],
+                },
+                {
+                    expected_revision: first.document.revision,
+                    operation_id: 'append:anchor',
+                    payload_fingerprint: 'sha256:anchor',
+                    recorded_at: at,
+                },
+            ).document;
+            source.context.cache_intent = { mode, namespace: 'cache', stable_through_entry_id: 'entry:anchor' };
+            const frozen = structuredClone(source);
+            const input: ConversationDeletePlanInput = {
+                version: 1,
+                operation_id: `delete:cache:${selectedId}`,
+                conversation: { conversation_id: source.id, revision: source.revision },
+                recorded_at: later,
+                dependency_policy: 'reject',
+                context_policy: 'exclude',
+                turn_ids: [selectedId],
+            };
+            const plan = await planConversationDelete(source, input);
+            const materialized = await applyConversationDelete(source, {
+                ...input,
+                expected_source_fingerprint: plan.operation.source_fingerprint,
+            });
+            expect(materialized.document.context.cache_intent).toEqual(
+                !active || (mode === 'off' && selectedId !== 'anchor')
+                    ? source.context.cache_intent
+                    : { mode, namespace: 'cache' },
+            );
+            const objects = new Map<string, Uint8Array>();
+            let writes = 0;
+            const store: IndexedConversationRecordStore = {
+                async read(ref) {
+                    const bytes = objects.get(ref.content_hash);
+                    if (!bytes) throw new Error('Missing actual indexed page');
+                    return Uint8Array.from(bytes);
+                },
+                async write(bytes, ref) {
+                    expect((await hashContentBytes(bytes)).content_hash).toBe(ref.content_hash);
+                    objects.set(ref.content_hash, Uint8Array.from(bytes));
+                    writes++;
+                },
+                async readRecord(ref) {
+                    const bytes = objects.get(ref.content_hash);
+                    if (!bytes) throw new Error('Missing actual indexed record');
+                    return Uint8Array.from(bytes);
+                },
+                async writeRecord(ref, bytes) {
+                    expect((await hashContentBytes(bytes)).content_hash).toBe(ref.content_hash);
+                    objects.set(ref.content_hash, Uint8Array.from(bytes));
+                    writes++;
+                },
+            };
+            const snapshot = await stageIndexedConversationSnapshot(source, undefined, store);
+            const command = {
+                operation_id: input.operation_id,
+                source: snapshot.root.source,
+                expected_source_root: snapshot.locator,
+                recorded_at: later,
+                dependency_policy: 'reject' as const,
+                context_policy: 'exclude' as const,
+                turn_ids: [selectedId],
+            };
+            const indexed = await stageIndexedConversationDelete(snapshot.root, command, store);
+            expect(await loadIndexedActiveContext(store, indexed.root)).toEqual(materialized.document.context);
+            expect(await loadIndexedActiveContext(store, snapshot.root)).toEqual(source.context);
+            expect(materialized.document.operation_receipts['append:source']).toEqual(
+                source.operation_receipts['append:source'],
+            );
+            expect(source).toEqual(frozen);
+            expect((await stageIndexedConversationDelete(indexed.root, command, store)).applied).toBe(false);
+            if (!active) return;
+            const required = structuredClone(source);
+            required.context.cache_intent = {
+                mode: 'required',
+                namespace: 'cache',
+                stable_through_entry_id: 'entry:anchor',
+            };
+            await expect(planConversationDelete(required, input)).rejects.toThrow('required cache intent');
+            const requiredSnapshot = await stageIndexedConversationSnapshot(required, undefined, store);
+            const count = writes;
+            await expect(
+                stageIndexedConversationDelete(
+                    requiredSnapshot.root,
+                    {
+                        ...command,
+                        source: requiredSnapshot.root.source,
+                        expected_source_root: requiredSnapshot.locator,
+                    },
+                    store,
+                ),
+            ).rejects.toThrow('required cache intent');
+            expect(writes).toBe(count);
+            expect(await loadIndexedActiveContext(store, requiredSnapshot.root)).toEqual(required.context);
+        },
+    );
+    it('atomically excludes a selected active turn only under explicit policy and retains historical acceptance', async () => {
+        const { document } = appendSource();
+        const input = {
+            version: 1 as const,
+            operation_id: 'delete:atomic',
+            conversation: { conversation_id: document.id, revision: document.revision },
+            recorded_at: later,
+            dependency_policy: 'reject' as const,
+            context_policy: 'exclude' as const,
+            turn_ids: ['source'],
+        };
+        const planned = await planConversationDelete(document, input);
+        expect(planned.operation.excluded_context_entry_ids).toEqual(['entry:source']);
+        const request = { ...input, expected_source_fingerprint: planned.operation.source_fingerprint };
+        const deleted = await applyConversationDelete(document, request);
+        expect(deleted.document.context.revision).toBe(document.context.revision + 1);
+        expect(deleted.document.context.entries).toEqual([]);
+        expect(deleted.document.operation_receipts['append:source']).toEqual(
+            document.operation_receipts['append:source'],
+        );
+        expect((await applyConversationDelete(deleted.document, request)).applied).toBe(false);
+        await expect(
+            applyConversationDelete(deleted.document, { ...request, context_policy: undefined }),
+        ).rejects.toThrow();
+        const corrupted = structuredClone(deleted.document);
+        const detail = corrupted.operation_receipts[input.operation_id].conversation_delete;
+        if (!detail) throw new Error('Delete operation missing');
+        detail.excluded_context_entry_ids = ['entry:foreign'];
+        expect(() => parseConversationDocument(corrupted)).toThrow();
+        const protectedSource = parseConversationDocument({
+            ...document,
+            context: { ...document.context, protected_entry_ids: ['entry:source'] },
+        });
+        await expect(planConversationDelete(protectedSource, input)).rejects.toThrow('/context/entries/0');
     });
 
     it('rejects changed requests, tampered tombstones, and reuse of deleted IDs', async () => {

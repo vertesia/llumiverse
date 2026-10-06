@@ -1,4 +1,5 @@
 import {
+    appendConversationRecords,
     appendConversationRecordsWithProcessing,
     type ConversationDocument,
     createConversationDocument,
@@ -6,6 +7,7 @@ import {
     createTextExternalizationProcessor,
     createUserTurn,
     fingerprintJson,
+    hashUtf8Content,
     type ProcessingStore,
     parseConversationDocument,
     runProcessingJob,
@@ -212,4 +214,118 @@ describe('native projection of actual externalize-text output', () => {
         retainedAsset.content_hash = `sha256:${'0'.repeat(64)}`;
         expect(() => compile(document)).toThrow();
     });
+});
+
+async function jsonOriginal() {
+    const original = JSON.stringify({
+        count: 3,
+        exact: 'private JSON original α'.repeat(10_000),
+        flags: [false, null],
+    });
+    const integrity = await hashUtf8Content(original);
+    const retrieval = {
+        capability: 'read_artifact',
+        version: 1,
+        tool_definition_id: 'definition:json:read',
+        arguments: { asset_id: 'asset:json', path: 'original.json', start_byte: 0, byte_count: 5000 },
+    };
+    const block = {
+        id: 'block:json',
+        type: 'external_reference' as const,
+        asset_id: 'asset:json',
+        original_type: 'json' as const,
+        description: 'Exact JSON original',
+        preview: 'Archived exact JSON original',
+        content_hash: integrity.content_hash,
+        retrieval,
+    };
+    const document = appendConversationRecords(
+        createConversationDocument({ id: 'conversation:json:cue', created_at: AT }),
+        {
+            turns: [
+                createUserTurn({
+                    id: 'turn:json',
+                    authority: 'ordinary',
+                    status: 'completed',
+                    model_visibility: 'include',
+                    timestamps: { recorded_at: AT },
+                    provenance: { type: 'received' },
+                    blocks: [block],
+                }),
+            ],
+            context_entries: [{ id: 'entry:json', type: 'source_turn', turn_id: 'turn:json' }],
+            assets: [
+                {
+                    id: 'asset:json',
+                    kind: 'json',
+                    mime_type: 'application/json',
+                    storage: {
+                        type: 'external',
+                        resolver: 'vertesia.agent_artifact',
+                        locator: { storage_id: 'owner:run', artifact_path: 'original.json' },
+                    },
+                    provenance: { type: 'received' },
+                    created_at: AT,
+                    ...integrity,
+                },
+            ],
+            tool_definitions: [
+                {
+                    id: 'definition:json:read',
+                    name: 'read_artifact',
+                    version: 'json:1',
+                    input_schema: {
+                        type: 'object',
+                        properties: { asset_id: { type: 'string' } },
+                        required: ['asset_id'],
+                        additionalProperties: false,
+                    },
+                },
+            ],
+            active_tool_definition_ids: ['definition:json:read'],
+            retrieval_requirements: [
+                {
+                    id: 'requirement:json',
+                    asset_id: 'asset:json',
+                    retrieval,
+                    accepted_asset_operation_id: 'accept:json',
+                },
+            ],
+        },
+        {
+            expected_revision: 0,
+            operation_id: 'accept:json',
+            payload_fingerprint: await fingerprintJson({ original, block }),
+            recorded_at: AT,
+        },
+    ).document;
+    return { document, block, original };
+}
+
+describe('native JSON-original retrieval cues', () => {
+    it.each(Object.entries(compilers))(
+        '%s keeps authentic typed JSON external without hydrating full original',
+        async (_name, compile) => {
+            const { document, original } = await jsonOriginal();
+            const native = JSON.stringify(compile(document));
+            expect(native).toContain('Full original JSON is available through read_artifact');
+            expect(native).toContain('original.json');
+            expect(native).toContain('Preview: Archived exact JSON original');
+            expect(native).not.toContain(original);
+            expect(native.length).toBeLessThan(4096);
+            expect(document.assets['asset:json'].kind).toBe('json');
+        },
+    );
+
+    it.each(Object.entries(compilers))(
+        '%s rejects JSON reference/asset type mismatch and missing accepted requirement',
+        async (_name, compile) => {
+            const { document } = await jsonOriginal();
+            const changed = structuredClone(document);
+            changed.assets['asset:json'].kind = 'text';
+            expect(() => compile(changed)).toThrow();
+            document.context.retrieval_requirements = [];
+            expect(() => compile(document)).toThrow();
+        },
+    );
 });

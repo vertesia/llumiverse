@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "provenance": {
+    "repository": "https://github.com/vertesia/llumiverse",
+    "commit": "fffdaef7f2be1d50461a8891c3c0e29706dfb443",
+    "encoder_path": "conversation/src/indexed-conversation.ts",
+    "encoder_sha256": "0121afcc2372ea1936ad070150e199fdbfe6428e1b56c029f4aedf75bc6dcb7b",
+    "execution": "Executed fixture-local historical capture; no provider or network execution"
+  },
+  "generator_sha256": "dd808c911670c7ecfa44113bc3cfe68bc3f29d59b5e4fa8c7f77337b7a244f70",
+  "command": "node --experimental-transform-types capture.mjs <llumiverse-checkout>",
+  "artifact": "historical-fffdaef-artifacts.json",
+  "sha256": "0a0c3ed13999e5dee8b6925d0216257eae9169900dc0797cb8d0ad3fd1fc8311",
+  "bytes": 576388
+}

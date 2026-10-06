@@ -836,3 +836,103 @@ describe('explicit host-selected transcript metadata', () => {
         expect(fragment.turns.every((turn) => turn.metadata === undefined)).toBe(true);
     });
 });
+
+describe('bounded external original transcript cues', () => {
+    it.each(['text', 'json'] as const)(
+        'projects an exact %s tool original without its private read capability',
+        (kind) => {
+            const input = transcriptInput();
+            const original: Asset = {
+                id: 'asset:original',
+                kind,
+                mime_type: kind === 'json' ? 'application/json' : 'text/plain',
+                storage: {
+                    type: 'external',
+                    resolver: 'private-resolver',
+                    locator: { private_path: 'not-a-public-grant' },
+                },
+                provenance: { type: 'received' },
+                content_hash: 'sha256:exact-original',
+                byte_length: 1_000_000,
+                created_at: recordedAt,
+            };
+            input.assets.push(original);
+            const reference = {
+                id: 'block:original',
+                type: 'external_reference' as const,
+                asset_id: original.id,
+                original_type: kind,
+                content_hash: original.content_hash,
+                description: 'Original description '.repeat(100),
+                preview: `${'x'.repeat(511)}😀full original must not be emitted`,
+                retrieval: {
+                    capability: 'read_artifact',
+                    version: 1,
+                    tool_definition_id: 'private:definition',
+                    arguments: { private_path: 'not-a-public-grant' },
+                },
+            };
+            toolTurn(input).blocks[0].content.push(reference);
+            const fragment = createConversationTranscriptFragment(input);
+            const turn = fragment.turns.find((turn) => turn.kind === 'tool');
+            const cue = turn?.blocks[0]?.content.find((block) => block.id === reference.id);
+            expect(cue).toEqual({
+                id: reference.id,
+                type: reference.type,
+                asset_id: original.id,
+                original_type: kind,
+                content_hash: original.content_hash,
+                description: reference.description.slice(0, 512),
+                preview: 'x'.repeat(511),
+            });
+            expect(fragment.assets).not.toHaveProperty(original.id);
+            expect(fragment.completeness.omitted_blocks.some((block) => block.block_id === reference.id)).toBe(false);
+            expect(parseConversationTranscriptFragment(JSON.parse(JSON.stringify(fragment)))).toEqual(fragment);
+            for (const secret of [
+                'private-resolver',
+                'not-a-public-grant',
+                'private:definition',
+                'full original must not be emitted',
+            ])
+                expect(JSON.stringify(fragment)).not.toContain(secret);
+            for (const mutation of ['missing asset', 'changed hash', 'changed kind'] as const) {
+                const forged = structuredClone(input);
+                if (mutation === 'missing asset')
+                    forged.assets = forged.assets.filter((asset) => asset.id !== original.id);
+                else {
+                    const asset = forged.assets.find((asset) => asset.id === original.id);
+                    if (!asset) throw new Error('Missing exact original fixture');
+                    if (mutation === 'changed hash') asset.content_hash = 'different-original';
+                    else asset.kind = 'image';
+                }
+                const rejected = createConversationTranscriptFragment(forged);
+                expect(rejected.completeness.omitted_blocks, mutation).toContainEqual({
+                    turn_id: toolTurn(input).id,
+                    block_id: reference.id,
+                    reason: 'unsupported_external_reference',
+                });
+            }
+            if (!cue) throw new Error('Missing projected original cue');
+            const unsafeWire = {
+                ...fragment,
+                turns: fragment.turns.map((turn) =>
+                    turn.kind === 'tool'
+                        ? {
+                              ...turn,
+                              blocks: [
+                                  {
+                                      ...turn.blocks[0],
+                                      content: [
+                                          ...turn.blocks[0].content,
+                                          { ...cue, id: 'block:forged', retrieval: reference.retrieval },
+                                      ],
+                                  },
+                              ],
+                          }
+                        : turn,
+                ),
+            };
+            expect(ConversationTranscriptFragmentSchema.safeParse(unsafeWire).success).toBe(false);
+        },
+    );
+});

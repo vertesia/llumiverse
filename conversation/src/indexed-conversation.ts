@@ -1,12 +1,20 @@
 import { z } from 'zod';
 import {
+    assertSelectedCheckpointRetry,
+    buildSelectedCheckpointRequest,
+    IndexedCheckpointSummaryCommandSchema,
+} from './checkpoint-context-change.js';
+import {
     canonicalJsonContentBytes,
     canonicalJsonContentString,
     hashContentBytes,
     inlineAssetContentIntegrity,
 } from './content-integrity.js';
-import { planContextChangeWorkingSet } from './context-change-working-set.js';
+import { applyContextMutationWorkingSet, type ContextMutationResult } from './context-change-transition.js';
+import { collectAssetIds, planContextChangeWorkingSet } from './context-change-working-set.js';
 import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
+import { cacheAfterContextRemoval } from './conversation-edit-utils.js';
+import { deletedContentIdentities } from './deleted-content-identities.js';
 import { deriveConversationId, fingerprintJson } from './identity.js';
 import { INDEXED_EXCHANGE_PROCESSOR_ID, INDEXED_EXCHANGE_PROCESSOR_VERSION } from './indexed-exchange-constants.js';
 import { applyIndexedExchangeOutput } from './indexed-exchange-processing.js';
@@ -63,8 +71,10 @@ import {
 import {
     INDEXED_CONVERSATION_ACTIVE_MAX_BYTES,
     INDEXED_CONVERSATION_DELETE_PROFILE,
+    INDEXED_CONVERSATION_DELETE_PROFILE_V2,
     INDEXED_CONVERSATION_PROCESSING_PROFILE,
     INDEXED_CONVERSATION_PROFILE,
+    INDEXED_CONVERSATION_RESTART_PROFILE,
     INDEXED_CONVERSATION_ROOT_MAX_BYTES,
     INDEXED_PROCESSING_MAX_IO_BYTES,
     INDEXED_PROCESSING_MAX_PAGE_READS,
@@ -118,12 +128,16 @@ import {
     ProcessingResolvedInputSchema,
     ProcessingSupersessionReceiptSchema,
 } from './schemas/processing.js';
+import { ConversationToolExecutionResultSchema } from './schemas/tool-execution.js';
 import { validateConversationSemantics, validateUsage } from './semantic-validation.js';
 import { conversationDocumentFromJson } from './serialization.js';
+import { validateToolExecutionResult } from './tool-execution.js';
 import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
 import type {
     AppendConversationRecordsOptions,
     Asset,
+    CompactionRecord,
+    ConversationContext,
     ConversationDocument,
     ConversationRecordBatch,
     ConversationRef,
@@ -148,7 +162,7 @@ const IndexedProgramRecordsSchema = z.strictObject({
 });
 export type IndexedProgramRecords = z.infer<typeof IndexedProgramRecordsSchema>;
 
-const IndexedCallStateSchema = z.strictObject({
+export const IndexedCallStateSchema = z.strictObject({
     call_id: z.string().min(1),
     turn_id: z.string().min(1),
     block_id: z.string().min(1),
@@ -156,6 +170,7 @@ const IndexedCallStateSchema = z.strictObject({
     result_block_id: z.string().min(1).optional(),
     terminal_receipt_id: z.string().min(1).optional(),
 });
+const IndexedOpenToolCallSchema = IndexedCallStateSchema.omit({ result_block_id: true, terminal_receipt_id: true });
 type IndexedCallState = z.infer<typeof IndexedCallStateSchema>;
 
 /** Semantic conflicts in one bounded append; storage/deadline failures retain their original errors. */
@@ -225,7 +240,7 @@ function tupleKey(first: string, second: string): string {
     return JSON.stringify([first, second]);
 }
 
-async function stageRecord(
+export async function stageRecord(
     store: IndexedConversationRecordStore,
     kind: string,
     id: string,
@@ -254,7 +269,7 @@ async function stageRecord(
     return value;
 }
 
-async function loadRecord<Shape extends z.ZodType>(
+export async function loadRecord<Shape extends z.ZodType>(
     store: IndexedConversationRecordStore,
     value: PagedRecordValue | undefined,
     schema: Shape,
@@ -292,14 +307,16 @@ function acceptedResponse(document: ConversationDocument, operationId: string) {
     };
 }
 
-const IndexedProcessingOperationJobsSchema = z.strictObject({
+export const IndexedProcessingOperationJobsSchema = z.strictObject({
     version: z.literal(1),
     operation_id: IdentifierSchema,
     receipt_fingerprint: ContentHashSchema,
     job_ids: z.array(IdentifierSchema).max(16),
 });
 
-async function indexedCoverageIdentity(coverage: z.infer<typeof ProcessingReadinessCoverageSchema>): Promise<string> {
+export async function indexedCoverageIdentity(
+    coverage: z.infer<typeof ProcessingReadinessCoverageSchema>,
+): Promise<string> {
     return fingerprintJson({
         context_fingerprint: coverage.context_fingerprint,
         policy_revision: coverage.policy_revision,
@@ -326,6 +343,217 @@ function processingRecordGroups(processing: ConversationDocument['processing']):
     ];
 }
 
+/** v1 readers retain their conservative contract; v2 is independently complete, never inferred from missing families. */
+export function hasIndexedDeleteProfile(root: IndexedConversationRoot): boolean {
+    return (
+        root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE ||
+        root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2
+    );
+}
+export function indexedDisplayAnswer(turn: IndexedConversationTurnHeader['turn']): boolean {
+    return (
+        turn.status === 'completed' &&
+        ((turn.kind === 'agent' && turn.authority === 'ordinary') ||
+            (turn.kind === 'program' && turn.presentation === 'transcript'))
+    );
+}
+export function indexedDisplayAnswerKey(ordinal: number): string {
+    return indexedOrderedKey(Number.MAX_SAFE_INTEGER - ordinal);
+}
+export interface IndexedDeleteDependency {
+    target_turn_id: string;
+    kind: 'turn' | 'asset' | 'compaction' | 'job';
+    owner_id: string;
+}
+/** Hash keys keep even maximum-length canonical IDs inside the fixed index key bound. */
+export async function indexedDeleteDependencyEntry(dependency: IndexedDeleteDependency) {
+    const target = await fingerprintJson({ domain: 'indexed-delete-target/v2', id: dependency.target_turn_id });
+    const owner = await fingerprintJson({ kind: dependency.kind, id: dependency.owner_id });
+    return {
+        key: `${target}:${owner}`,
+        value: { storage: 'marker' as const, kind: `delete_dependency_${dependency.kind}`, id: dependency.owner_id },
+    };
+}
+/** All retained forensic generation/execution receipts remain immutable; they are NOT live body dependencies. */
+export function indexedSnapshotDeleteDependencies(document: ConversationDocument): IndexedDeleteDependency[] {
+    const dependencies: IndexedDeleteDependency[] = [];
+    const turns = [
+        ...document.turns,
+        ...Object.values(document.compactions).flatMap((value) => value.replacement_turns),
+    ];
+    const owners = new Map(
+        turns.flatMap((turn) => deletedContentIdentities(turn.blocks).block_ids.map((id) => [id, turn.id] as const)),
+    );
+    const callOwners = new Map(
+        turns.flatMap((turn) =>
+            turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [[block.call_id, turn.id] as const] : [])),
+        ),
+    );
+    const entries = new Map(
+        Object.values(document.operation_receipts).flatMap((receipt) =>
+            (receipt.accepted_context_entries ?? []).map((entry) => [entry.id, entry.turn_id] as const),
+        ),
+    );
+    const add = (target: string | undefined, kind: IndexedDeleteDependency['kind'], owner: string) => {
+        if (target !== undefined) dependencies.push({ target_turn_id: target, kind, owner_id: owner });
+    };
+    for (const turn of turns) {
+        add(turn.parent_turn_id, 'turn', turn.id);
+        if (turn.provenance.type === 'derived')
+            for (const id of turn.provenance.source_turn_ids) add(id, 'turn', turn.id);
+        for (const block of turn.blocks)
+            if (block.type === 'native_replay') {
+                for (const id of block.dependencies.turn_ids) add(id, 'turn', turn.id);
+                for (const id of block.dependencies.block_ids) add(owners.get(id), 'turn', turn.id);
+                for (const callId of block.dependencies.call_ids) {
+                    add(callOwners.get(callId), 'turn', turn.id);
+                }
+            }
+    }
+    for (const receipt of Object.values(document.execution_receipts))
+        if (receipt.result_turn_id)
+            add(receipt.call_source?.turn_id ?? callOwners.get(receipt.call_id), 'turn', receipt.result_turn_id);
+    for (const asset of Object.values(document.assets))
+        if (asset.provenance.type === 'received') add(asset.provenance.source_turn_id, 'asset', asset.id);
+    for (const compaction of Object.values(document.compactions)) {
+        for (const id of compaction.source.turn_ids) add(id, 'compaction', compaction.id);
+        for (const id of compaction.source.block_ids ?? []) add(owners.get(id), 'compaction', compaction.id);
+    }
+    for (const job of Object.values(document.processing.jobs ?? {})) {
+        if (job.selection.kind === 'entries') {
+            for (const id of job.selection.entry_ids) add(entries.get(id), 'job', job.id);
+            for (const entry of job.selection.selected_entries ?? []) add(entry.turn_id, 'job', job.id);
+        }
+        for (const id of document.operation_receipts[job.source_operation_id]?.accepted_turn_ids ?? [])
+            add(id, 'job', job.id);
+    }
+    return dependencies;
+}
+async function appendIndexedDeleteDependencies(
+    store: IndexedConversationRecordStore,
+    directories: IndexedConversationDirectories,
+    dependencies: readonly IndexedDeleteDependency[],
+) {
+    const entries = new Map<string, Awaited<ReturnType<typeof indexedDeleteDependencyEntry>>>();
+    for (const dependency of dependencies) {
+        const entry = await indexedDeleteDependencyEntry(dependency);
+        if (!entries.has(entry.key) && !(await getPagedRecord(store, directories.deletion_dependencies, entry.key)))
+            entries.set(entry.key, entry);
+    }
+    await insertFreshIndexedRecords(store, directories, 'deletion_dependencies', [...entries.values()]);
+}
+async function assertIndexedDeleteDependencies(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    turnId: string,
+    selected: ReadonlySet<string>,
+) {
+    const prefix = `${await fingerprintJson({ domain: 'indexed-delete-target/v2', id: turnId })}:`;
+    const range = await readPagedRecordRange(store, root.directories.deletion_dependencies, {
+        after: prefix,
+        limit: 256,
+        max_page_reads: 64,
+        max_bytes: 8 * 1024 * 1024,
+    });
+    if (range.has_more && range.entries.at(-1)?.key.startsWith(prefix))
+        throw new IndexedPresentationCapacityError('Indexed deletion exceeds 256 dependency witnesses per turn');
+    for (const entry of range.entries) {
+        if (!entry.key.startsWith(prefix)) break;
+        const dependency = entry.value;
+        if (dependency.storage !== 'marker') throw new Error('Indexed deletion dependency is not a typed marker');
+        const kind = dependency.kind.slice('delete_dependency_'.length);
+        if (
+            !['turn', 'asset', 'compaction', 'job'].includes(kind) ||
+            entry.key !== `${prefix}${await fingerprintJson({ kind, id: dependency.id })}`
+        )
+            throw new Error('Indexed deletion dependency key differs from its typed owner');
+        if (dependency.kind === 'delete_dependency_turn') {
+            if (selected.has(dependency.id)) continue;
+            const body = await getPagedRecord(store, root.directories.turns, dependency.id);
+            if (body?.storage === 'marker' && body.kind === 'deleted_turn') {
+                const acceptance = await getPagedRecord(store, root.directories.turn_acceptances, dependency.id);
+                const receipt =
+                    acceptance?.storage === 'marker' && acceptance.kind === 'turn_acceptance'
+                        ? await indexedRecordById(
+                              store,
+                              root,
+                              'operation_receipts',
+                              acceptance.id,
+                              OperationReceiptSchema,
+                          )
+                        : undefined;
+                if (!receipt) throw new Error('Deleted dependent lacks its accepted operation');
+                await loadIndexedAcceptedTurn(store, root, dependency.id, receipt);
+                continue;
+            }
+            if (body?.storage !== 'record') throw new Error('Indexed live dependency lost its retained body');
+            throw new IndexedConversationDeleteConflict('Indexed deletion leaves a live dependent turn');
+        }
+        if (dependency.kind === 'delete_dependency_job') {
+            const job = await indexedProcessingRecord(store, root, 'jobs', dependency.id, ProcessingJobSchema);
+            if (!job) throw new Error('Indexed deletion dependency lost its retained job');
+            const completion = await indexedProcessingRecord(
+                store,
+                root,
+                'completions',
+                dependency.id,
+                ProcessingCompletionReceiptSchema,
+            );
+            const supersession = await indexedProcessingRecord(
+                store,
+                root,
+                'supersessions',
+                dependency.id,
+                ProcessingSupersessionReceiptSchema,
+            );
+            if (
+                (completion &&
+                    (completion.job_id !== dependency.id || completion.result_revision > root.source.revision)) ||
+                (supersession && supersession.job_id !== dependency.id)
+            )
+                throw new Error('Indexed deletion job dependency has another completion identity');
+            if (!supersession && (!completion || completion.status === 'blocked'))
+                throw new IndexedConversationDeleteConflict('Indexed deletion leaves unresolved processing');
+            continue;
+        }
+        if (dependency.kind === 'delete_dependency_asset' || dependency.kind === 'delete_dependency_compaction')
+            throw new IndexedConversationDeleteConflict('Indexed deletion has retained asset or derivation lineage');
+        throw new Error('Indexed deletion dependency has an unknown semantic kind');
+    }
+}
+/** The first reverse LIVE ordinal is the latest display answer, independent of accepted provider-output pointers. */
+export async function loadIndexedLastDisplayAnswer(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+) {
+    if (root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE_V2)
+        throw new IndexedConversationDeleteConflict(
+            'Indexed last-answer update requires complete v2 display nominations',
+        );
+    const range = await readPagedRecordRange(store, root.directories.display_answer_order, {
+        limit: 1,
+        max_page_reads: 64,
+        max_bytes: 8 * 1024 * 1024,
+    });
+    const entry = range.entries[0];
+    if (!entry) return undefined;
+    const ordinal = Number.MAX_SAFE_INTEGER - Number(entry.key);
+    if (
+        !Number.isSafeInteger(ordinal) ||
+        ordinal < 0 ||
+        ordinal >= root.turn_count ||
+        entry.value.storage !== 'marker' ||
+        entry.value.kind !== 'display_answer'
+    )
+        throw new Error('Indexed display-answer nomination has another ordinal/family');
+    const projected = await loadIndexedProjectedTurn(store, root, entry.value.id);
+    const turn = ConversationTurnSchema.parse({ ...projected.header, blocks: projected.selected_blocks });
+    const link = await indexedRecordById(store, root, 'turn_links', turn.id, IndexedConversationTurnLinkSchema);
+    if (!link || link.ordinal !== ordinal || projected.completeness !== 'full_turn' || !indexedDisplayAnswer(turn))
+        throw new Error('Indexed display-answer nomination differs from its live canonical turn');
+    return { turn_id: turn.id, ordinal };
+}
+
 /** A conservative one-pass reverse witness. A marker may reject a closed deletion, but never permit a dependent one. */
 function migrationDeleteBlockers(document: ConversationDocument): Set<string> {
     const blocked = new Set<string>();
@@ -338,7 +566,7 @@ function migrationDeleteBlockers(document: ConversationDocument): Set<string> {
     const entryTurn = new Map<string, string>();
     const acceptedTurns = new Map<string, string[]>();
     for (const turn of turns) {
-        for (const block of turn.blocks) blockOwner.set(block.id, turn.id);
+        for (const id of deletedContentIdentities(turn.blocks).block_ids) blockOwner.set(id, turn.id);
         if (turn.blocks.some((block) => ['tool_call', 'tool_result', 'native_replay'].includes(block.type))) {
             blocked.add(turn.id);
         }
@@ -468,7 +696,8 @@ export async function stageIndexedConversationSnapshot(
             throw new Error('Indexed migration requires unresolved materialized phases to drain or be superseded');
     }
     if (document.processing.enabled) {
-        assertSupportedIndexedReadinessPolicy(document.processing);
+        // Migration preserves validated pluggable policy records. Native execution separately
+        // proves a supported registered profile through assertIndexedCurrentPolicy.
         const turns = createContextTurnIndex(document);
         const blockCount = document.context.entries.reduce(
             (count, entry) =>
@@ -507,6 +736,8 @@ export async function stageIndexedConversationSnapshot(
         turn_acceptances: [],
         block_owners: [],
         deletion_blockers: [],
+        deletion_dependencies: [],
+        display_answer_order: [],
         turn_links: [],
         deleted_turns: [],
     };
@@ -563,10 +794,8 @@ export async function stageIndexedConversationSnapshot(
         } satisfies IndexedConversationTurnHeader);
         for (const block of blocks) {
             await stageFamily('blocks', block.id, block);
-            families.block_owners.push({
-                key: block.id,
-                value: { storage: 'marker', kind: 'block_owner', id: turn.id },
-            });
+            for (const id of deletedContentIdentities([block]).block_ids)
+                families.block_owners.push({ key: id, value: { storage: 'marker', kind: 'block_owner', id: turn.id } });
         }
     };
 
@@ -621,6 +850,18 @@ export async function stageIndexedConversationSnapshot(
             });
         }
     }
+    const uniqueDependencies = new Map<string, Awaited<ReturnType<typeof indexedDeleteDependencyEntry>>>();
+    for (const dependency of indexedSnapshotDeleteDependencies(document)) {
+        const entry = await indexedDeleteDependencyEntry(dependency);
+        uniqueDependencies.set(entry.key, entry);
+    }
+    families.deletion_dependencies.push(...uniqueDependencies.values());
+    for (let ordinal = 0; ordinal < document.turns.length; ordinal++)
+        if (indexedDisplayAnswer(document.turns[ordinal]))
+            families.display_answer_order.push({
+                key: indexedDisplayAnswerKey(ordinal),
+                value: { storage: 'marker', kind: 'display_answer', id: document.turns[ordinal].id },
+            });
     for (const id of migrationDeleteBlockers(document)) {
         families.deletion_blockers.push({ key: id, value: { storage: 'marker', kind: 'delete_blocker', id } });
     }
@@ -802,10 +1043,12 @@ export async function stageIndexedConversationSnapshot(
     const directories = Object.fromEntries(
         builtDirectories.filter((item) => item.root !== undefined).map((item) => [item.family, item.root]),
     );
+    const restart = await indexedSnapshotRestartWitness(document);
     const root = IndexedConversationRootSchema.parse({
+        ...restart,
         version: 1,
         validator_profile: INDEXED_CONVERSATION_PROFILE,
-        delete_index_profile: INDEXED_CONVERSATION_DELETE_PROFILE,
+        delete_index_profile: INDEXED_CONVERSATION_DELETE_PROFILE_V2,
         accepted_output_index_complete: true,
         tool_call_state_complete: true,
         processing_index_profile: INDEXED_CONVERSATION_PROCESSING_PROFILE,
@@ -880,13 +1123,87 @@ async function appendDeleteIndex(
     operationId: string,
     batch: ConversationRecordBatch,
 ): Promise<{ live_turn_count?: number; active_tail_turn_id?: string | null }> {
-    if (root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE) return {};
+    if (!hasIndexedDeleteProfile(root)) return {};
     if (root.live_turn_count === undefined || root.active_tail_turn_id === undefined) {
         throw new Error('Indexed delete profile lacks its live-turn witnesses');
     }
     const newTurns = new Map((batch.turns ?? []).map((turn) => [turn.id, turn]));
     const newBlockOwners = new Map<string, string>();
-    for (const turn of batch.turns ?? []) for (const block of turn.blocks) newBlockOwners.set(block.id, turn.id);
+    for (const turn of batch.turns ?? [])
+        for (const id of deletedContentIdentities(turn.blocks).block_ids) newBlockOwners.set(id, turn.id);
+    if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2) {
+        const dependencies: IndexedDeleteDependency[] = [];
+        for (const turn of batch.turns ?? []) {
+            if (turn.parent_turn_id)
+                dependencies.push({ target_turn_id: turn.parent_turn_id, kind: 'turn', owner_id: turn.id });
+            for (const block of turn.blocks)
+                if (block.type === 'native_replay') {
+                    const add = (target_turn_id: string) =>
+                        dependencies.push({ target_turn_id, kind: 'turn', owner_id: turn.id });
+                    for (const id of block.dependencies.turn_ids) add(id);
+                    for (const id of block.dependencies.block_ids) {
+                        const fresh = newBlockOwners.get(id);
+                        const retained =
+                            fresh === undefined
+                                ? await getPagedRecord(store, root.directories.block_owners, id)
+                                : undefined;
+                        if (fresh !== undefined) add(fresh);
+                        else if (retained?.storage === 'marker' && retained.kind === 'block_owner') add(retained.id);
+                        else throw new Error('Indexed replay dependency lost its exact retained block owner');
+                    }
+                    for (const id of block.dependencies.call_ids) {
+                        const fresh = (batch.turns ?? []).find((value) =>
+                            value.blocks.some(
+                                (candidate) => candidate.type === 'tool_call' && candidate.call_id === id,
+                            ),
+                        );
+                        const retained =
+                            fresh === undefined
+                                ? await indexedRecordById(store, root, 'tool_call_states', id, IndexedCallStateSchema)
+                                : undefined;
+                        if (!fresh && !retained)
+                            throw new Error('Indexed replay dependency lost its exact retained call owner');
+                        if (fresh) add(fresh.id);
+                        else if (retained) add(retained.turn_id);
+                    }
+                }
+        }
+        for (const receipt of batch.execution_receipts ?? []) {
+            if (!receipt.result_turn_id) continue;
+            const fresh = (batch.turns ?? []).find((turn) =>
+                turn.blocks.some((block) => block.type === 'tool_call' && block.call_id === receipt.call_id),
+            );
+            const retained = fresh
+                ? undefined
+                : await indexedRecordById(store, root, 'tool_call_states', receipt.call_id, IndexedCallStateSchema);
+            const target = receipt.call_source?.turn_id ?? fresh?.id ?? retained?.turn_id;
+            if (!target) throw new Error('Indexed terminal dependency lost its exact original call owner');
+            dependencies.push({ target_turn_id: target, kind: 'turn', owner_id: receipt.result_turn_id });
+        }
+        for (const asset of batch.assets ?? [])
+            if (asset.provenance.type === 'received' && asset.provenance.source_turn_id)
+                dependencies.push({
+                    target_turn_id: asset.provenance.source_turn_id,
+                    kind: 'asset',
+                    owner_id: asset.id,
+                });
+        await appendIndexedDeleteDependencies(store, directories, dependencies);
+        await insertFreshIndexedRecords(
+            store,
+            directories,
+            'display_answer_order',
+            (batch.turns ?? []).flatMap((turn, index) =>
+                indexedDisplayAnswer(turn)
+                    ? [
+                          {
+                              key: indexedDisplayAnswerKey(root.turn_count + index),
+                              value: { storage: 'marker', kind: 'display_answer', id: turn.id },
+                          },
+                      ]
+                    : [],
+            ),
+        );
+    }
     const blockers = new Set<string>();
     const markTurn = async (id: string | undefined) => {
         if (id === undefined) return;
@@ -896,6 +1213,7 @@ async function appendDeleteIndex(
         }
         const existing = await getPagedRecord(store, root.directories.turns, id);
         if (existing?.storage === 'marker' && existing.kind === 'deleted_turn') {
+            if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2) return;
             throw new Error('Indexed append references a logically deleted turn');
         }
         if (existing?.storage === 'record') blockers.add(id);
@@ -908,6 +1226,7 @@ async function appendDeleteIndex(
         }
         const descriptor = await getPagedRecord(store, root.directories.blocks, id);
         if (descriptor?.storage === 'marker' && descriptor.kind === 'deleted_block') {
+            if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2) return;
             throw new Error('Indexed append references a logically deleted block');
         }
         const retained = await getPagedRecord(store, root.directories.block_owners, id);
@@ -957,8 +1276,8 @@ async function appendDeleteIndex(
         directories,
         'block_owners',
         turns.flatMap((turn) =>
-            turn.blocks.map((block) => ({
-                key: block.id,
+            deletedContentIdentities(turn.blocks).block_ids.map((id) => ({
+                key: id,
                 value: { storage: 'marker', kind: 'block_owner', id: turn.id },
             })),
         ),
@@ -1245,20 +1564,7 @@ async function loadIndexedSelectedContext(
                 );
                 if (operation?.storage === 'record') reserve(operation.size_bytes, operation.content_hash);
                 const acceptance = await loadRecord(store, operation, OperationReceiptSchema);
-                if (
-                    compaction.id !== compactionId ||
-                    acceptance.id !== compaction.operation_id ||
-                    acceptance.conversation_id !== root.source.conversation_id ||
-                    acceptance.operation_kind !== 'context_change' ||
-                    acceptance.context_change?.kind !== 'replace_with_compaction' ||
-                    acceptance.context_change.source_fingerprint !== compaction.source.source_fingerprint ||
-                    acceptance.result_revision !== acceptance.base_revision + 1 ||
-                    compaction.created_at !== acceptance.recorded_at ||
-                    acceptance.result_revision > root.source.revision ||
-                    compaction.metadata?.applied_revision !== acceptance.result_revision ||
-                    compaction.metadata?.payload_fingerprint !== acceptance.payload_fingerprint
-                )
-                    throw new Error('Indexed replacement lacks its exact accepted compaction operation');
+                assertIndexedAcceptedCompaction(root, compactionId, compaction, acceptance);
                 witness = { compaction, acceptance };
                 compactionWitnesses.set(compactionId, witness);
                 operationWitnesses.set(acceptance.id, acceptance);
@@ -1431,7 +1737,10 @@ async function loadIndexedSelectedContext(
                         }
                     }
                     if (content.type === 'external_reference') {
-                        if (!includeMediaCompaction || content.original_type !== 'text')
+                        if (
+                            !includeMediaCompaction ||
+                            (content.original_type !== 'text' && content.original_type !== 'json')
+                        )
                             throw new Error('Indexed dependency projection needs an externalization receipt witness');
                         const asset = await readDependency('assets', content.asset_id, AssetSchema);
                         const requirement = context.retrieval_requirements.filter(
@@ -1449,7 +1758,7 @@ async function loadIndexedSelectedContext(
                             definition.name !== content.retrieval.capability ||
                             content.retrieval.version !== 1 ||
                             asset.id !== content.asset_id ||
-                            asset.kind !== 'text' ||
+                            asset.kind !== content.original_type ||
                             asset.storage.type !== 'external' ||
                             asset.content_hash !== content.content_hash ||
                             asset.byte_length === undefined ||
@@ -1601,7 +1910,7 @@ async function loadIndexedSelectedContext(
                     ) {
                         throw new Error('Indexed selected result differs from its exact execution/source receipt');
                     }
-                    if (root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE) {
+                    if (!hasIndexedDeleteProfile(root)) {
                         throw new Error('Indexed selected result lacks a complete operation-acceptance index');
                     }
                     const accepted = await getPagedRecord(
@@ -1628,16 +1937,15 @@ async function loadIndexedSelectedContext(
             }
         }
     }
-    const tail =
-        root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE
-            ? root.active_tail_turn_id === null
-                ? undefined
-                : root.active_tail_turn_id === undefined
-                  ? null
-                  : { storage: 'marker' as const, kind: 'turn_order', id: root.active_tail_turn_id }
-            : root.turn_count === 0
-              ? undefined
-              : await getPagedRecord(store, root.directories.turn_order, indexedOrderedKey(root.turn_count - 1));
+    const tail = hasIndexedDeleteProfile(root)
+        ? root.active_tail_turn_id === null
+            ? undefined
+            : root.active_tail_turn_id === undefined
+              ? null
+              : { storage: 'marker' as const, kind: 'turn_order', id: root.active_tail_turn_id }
+        : root.turn_count === 0
+          ? undefined
+          : await getPagedRecord(store, root.directories.turn_order, indexedOrderedKey(root.turn_count - 1));
     if (tail === null || (tail !== undefined && (tail.storage !== 'marker' || tail.kind !== 'turn_order'))) {
         throw new Error('Indexed source tail turn is unavailable');
     }
@@ -2085,7 +2393,7 @@ async function indexedRecordById<Shape extends z.ZodType>(
 }
 
 /** A deleted turn is recoverable only through the immutable root authenticated by its current tombstone. */
-async function loadIndexedAcceptedTurn(
+export async function loadIndexedAcceptedTurn(
     store: IndexedConversationRecordStore,
     root: IndexedConversationRoot,
     turnId: string,
@@ -2096,7 +2404,7 @@ async function loadIndexedAcceptedTurn(
     if (descriptor?.storage !== 'marker' || descriptor.kind !== 'deleted_turn') {
         throw new Error('Indexed accepted turn is unavailable');
     }
-    if (root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE) {
+    if (!hasIndexedDeleteProfile(root)) {
         throw new Error('Indexed deleted turn has no complete deletion profile');
     }
     const tombstone = await indexedRecordById(
@@ -2130,6 +2438,7 @@ async function loadIndexedAcceptedTurn(
             id: turnId,
             fingerprint: tombstone.deleted_turn.fingerprint,
             block_ids: tombstone.deleted_turn.block_ids,
+            ...(tombstone.deleted_turn.call_ids === undefined ? {} : { call_ids: tombstone.deleted_turn.call_ids }),
             accepted_operation_id: acceptance.id,
         }) ||
         detail?.source_fingerprint !==
@@ -2150,7 +2459,7 @@ async function loadIndexedAcceptedTurn(
     if (
         predecessor.source.conversation_id !== root.source.conversation_id ||
         predecessor.source.revision !== deletion.base_revision ||
-        predecessor.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE
+        !hasIndexedDeleteProfile(predecessor)
     ) {
         throw new Error('Indexed accepted turn predecessor differs from its delete receipt');
     }
@@ -2168,8 +2477,14 @@ async function loadIndexedAcceptedTurn(
     if (
         original.completeness !== 'full_turn' ||
         !sameIndexedRecord(
-            original.selected_blocks.map((block) => block.id),
+            predecessor.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2
+                ? deletedContentIdentities(original.selected_blocks).block_ids
+                : original.selected_blocks.map((block) => block.id),
             tombstone.deleted_turn.block_ids,
+        ) ||
+        !sameIndexedRecord(
+            deletedContentIdentities(original.selected_blocks).call_ids,
+            tombstone.deleted_turn.call_ids ?? [],
         ) ||
         (await fingerprintJson({ ...original.header, blocks: original.selected_blocks })) !==
             tombstone.deleted_turn.fingerprint
@@ -2435,7 +2750,7 @@ export async function stageIndexedRecordBatch(
         // Exact operation retries returned above without requiring another byte grant/read.
         if (asset.storage.type === 'external') await verifyExternalAsset(asset);
     }
-    if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE) {
+    if (hasIndexedDeleteProfile(root)) {
         const historicalIds = new Set<string>();
         for (const item of batch.generations ?? []) {
             if (item.record_source !== 'executed') continue;
@@ -3234,6 +3549,21 @@ export async function stageIndexedRecordBatch(
             },
         ]);
     if (root.processing_index_profile === INDEXED_CONVERSATION_PROCESSING_PROFILE) {
+        if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2) {
+            const dependencies: IndexedDeleteDependency[] = [];
+            for (const job of acceptedJobs) {
+                const targets = new Set(batch.turns?.map((turn) => turn.id) ?? []);
+                if (job.selection.kind === 'entries')
+                    for (const id of job.selection.entry_ids) {
+                        const entry = nextContext.entries.find((value) => value.id === id);
+                        if (!entry) throw new Error('Indexed new job lost its selected context dependency');
+                        targets.add(entry.turn_id);
+                    }
+                for (const target_turn_id of targets)
+                    dependencies.push({ target_turn_id, kind: 'job', owner_id: job.id });
+            }
+            await appendIndexedDeleteDependencies(store, directories, dependencies);
+        }
         for (const job of acceptedJobs) {
             directories.processing_records = await putPagedRecord(
                 store,
@@ -3276,13 +3606,20 @@ export async function stageIndexedRecordBatch(
         const retainedOpen = await getPagedRecord(store, root.directories.open_tool_calls, id);
         if (state.result_block_id !== undefined) {
             if (retainedOpen) {
-                directories.open_tool_calls = await putPagedRecord(
-                    store,
-                    directories.open_tool_calls,
-                    id,
-                    { storage: 'marker', kind: 'closed_tool_call', id },
-                    'replace',
-                );
+                if (root.restart_index_profile === INDEXED_CONVERSATION_RESTART_PROFILE) {
+                    const remaining = await removePagedRecord(store, directories.open_tool_calls, id);
+                    if (!remaining.applied) throw new Error('Indexed terminal acceptance lost its exact open call');
+                    if (remaining.root === undefined) delete directories.open_tool_calls;
+                    else directories.open_tool_calls = remaining.root;
+                } else {
+                    directories.open_tool_calls = await putPagedRecord(
+                        store,
+                        directories.open_tool_calls,
+                        id,
+                        { storage: 'marker', kind: 'closed_tool_call', id },
+                        'replace',
+                    );
+                }
             }
         } else if (!retainedOpen) {
             await write('open_tool_calls', id, {
@@ -3370,6 +3707,18 @@ export async function stageIndexedRecordBatch(
     }
     const nextRoot = IndexedConversationRootSchema.parse({
         ...root,
+        ...(root.restart_index_profile === INDEXED_CONVERSATION_RESTART_PROFILE
+            ? {
+                  ...((receipt.accepted_generation_ids?.length ?? 0) > 0 ||
+                  batch.turns?.some(indexedRawRestartResponseTurn)
+                      ? { restart_response: { operation_id: receipt.id, result_revision: receipt.result_revision } }
+                      : {}),
+                  ...((receipt.accepted_execution_receipt_ids?.length ?? 0) > 0 ||
+                  batch.turns?.some((turn) => turn.kind === 'tool')
+                      ? { restart_tool_input: { operation_id: receipt.id, result_revision: receipt.result_revision } }
+                      : {}),
+              }
+            : {}),
         source: { ...root.source, revision: nextRevision },
         turn_count: root.turn_count + (batch.turns?.length ?? 0),
         ...deleteIndex,
@@ -3400,6 +3749,14 @@ export async function stageIndexedRecordBatch(
 }
 
 /** Stage body-free logical deletion using only authenticated index point reads and the active context. */
+/** A proven invalid delete nomination or unsupported dependency policy; storage failures remain unwrapped. */
+export class IndexedConversationDeleteConflict extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'IndexedConversationDeleteConflict';
+    }
+}
+
 export async function stageIndexedConversationDelete(
     rootInput: IndexedConversationRoot,
     input: IndexedConversationDeleteCommand,
@@ -3416,11 +3773,13 @@ export async function stageIndexedConversationDelete(
     }
     const command = IndexedConversationDeleteCommandSchema.parse(input);
     const root = IndexedConversationRootSchema.parse(rootInput);
-    if (root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE) {
-        throw new Error('Indexed root has no complete logical-delete witness profile');
+    if (!hasIndexedDeleteProfile(root)) {
+        throw new IndexedConversationDeleteConflict('Indexed root has no complete logical-delete witness profile');
     }
     if (command.source.conversation_id !== root.source.conversation_id) {
-        throw new Error('Indexed deletion conversation differs from its authenticated root');
+        throw new IndexedConversationDeleteConflict(
+            'Indexed deletion conversation differs from its authenticated root',
+        );
     }
     const payloadFingerprint = await fingerprintJson({
         domain: 'llumiverse.conversation.indexed-delete',
@@ -3457,7 +3816,7 @@ export async function stageIndexedConversationDelete(
                 command.turn_ids,
             )
         ) {
-            throw new Error('Indexed deletion retry conflicts with its accepted receipt');
+            throw new IndexedConversationDeleteConflict('Indexed deletion retry conflicts with its accepted receipt');
         }
         for (const ref of detail.deleted_turns) {
             const witness = await indexedRecordById(
@@ -3477,6 +3836,7 @@ export async function stageIndexedConversationDelete(
                     id: witness.deleted_turn.id,
                     fingerprint: witness.deleted_turn.fingerprint,
                     block_ids: witness.deleted_turn.block_ids,
+                    ...(witness.deleted_turn.call_ids === undefined ? {} : { call_ids: witness.deleted_turn.call_ids }),
                     accepted_operation_id: witness.deleted_turn.accepted_operation_id,
                 }) ||
                 body?.storage !== 'marker' ||
@@ -3500,10 +3860,10 @@ export async function stageIndexedConversationDelete(
         };
     }
     if (!sameIndexedRecord(command.source, root.source)) {
-        throw new Error('Indexed deletion source revision conflict');
+        throw new IndexedConversationDeleteConflict('Indexed deletion source revision conflict');
     }
     if (await getPagedRecord(store, root.directories.identifiers, command.operation_id)) {
-        throw new Error('Indexed deletion operation identity already exists');
+        throw new IndexedConversationDeleteConflict('Indexed deletion operation identity already exists');
     }
     if (root.source.revision === Number.MAX_SAFE_INTEGER) {
         throw new RangeError('Indexed deletion revision is exhausted');
@@ -3527,20 +3887,27 @@ export async function stageIndexedConversationDelete(
     if (root.live_turn_count === undefined || root.active_tail_turn_id === undefined) {
         throw new Error('Indexed deletion root lacks its live-turn count or tail');
     }
-    if (
-        command.turn_ids.length > root.live_turn_count ||
-        (root.live_turn_count === 0) !== (root.active_tail_turn_id === null)
-    ) {
+    if (command.turn_ids.length > root.live_turn_count)
+        throw new IndexedConversationDeleteConflict('Indexed deletion nominates more turns than the live source');
+    if ((root.live_turn_count === 0) !== (root.active_tail_turn_id === null)) {
         throw new Error('Indexed deletion root has inconsistent live-turn witnesses');
     }
     if (new Set(command.turn_ids).size !== command.turn_ids.length) {
-        throw new Error('Indexed deletion repeats a turn ID');
+        throw new IndexedConversationDeleteConflict('Indexed deletion repeats a turn ID');
     }
     const selected = new Set(command.turn_ids);
     const context = await loadIndexedActiveContext(store, root);
-    if (context.entries.some((entry) => selected.has(entry.turn_id))) {
-        throw new Error('Indexed deletion requires prior active-context exclusion');
-    }
+    const excludedEntries = context.entries.filter((entry) => selected.has(entry.turn_id));
+    if (excludedEntries.length > 0 && command.context_policy !== 'exclude')
+        throw new IndexedConversationDeleteConflict('Indexed deletion requires prior active-context exclusion');
+    if (excludedEntries.some((entry) => context.protected_entry_ids.includes(entry.id)))
+        throw new IndexedConversationDeleteConflict('Indexed deletion cannot exclude protected entries');
+    if (excludedEntries.length > 0 && context.cache_intent?.mode === 'required')
+        throw new IndexedConversationDeleteConflict('Context change would invalidate required cache intent');
+    const excludedEntryIds = new Set(excludedEntries.map((entry) => entry.id));
+    const cacheIntent = cacheAfterContextRemoval(context, excludedEntryIds);
+    if (excludedEntries.length > 0 && context.revision === Number.MAX_SAFE_INTEGER)
+        throw new IndexedPresentationCapacityError('Indexed deletion context revision is exhausted');
     const refs: z.infer<typeof ConversationDeleteOperationSchema>['deleted_turns'] = [];
     const links = new Map<string, z.infer<typeof IndexedConversationTurnLinkSchema>>();
     let selectedBytes = 0;
@@ -3549,20 +3916,25 @@ export async function stageIndexedConversationDelete(
         selectedBytes += bytes;
         selectedRecords += 1;
         if (selectedBytes > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES || selectedRecords > 100_000) {
-            throw new RangeError('Indexed deletion selected source exceeds its bounded working set');
+            throw new IndexedPresentationCapacityError(
+                'Indexed deletion selected source exceeds its bounded working set',
+            );
         }
     };
     let lastOrdinal = -1;
     for (const id of command.turn_ids) {
-        if (id === root.accepted_response?.turn_id) {
-            throw new Error('Indexed deletion cannot remove the retained accepted response');
-        }
-        if (await getPagedRecord(store, root.directories.deletion_blockers, id)) {
-            throw new Error('Indexed deletion has a retained dependent record');
-        }
+        const descriptor = await getPagedRecord(store, root.directories.turns, id);
+        if (!descriptor || (descriptor.storage === 'marker' && descriptor.kind === 'deleted_turn'))
+            throw new IndexedConversationDeleteConflict('Indexed deletion turn is unavailable or already deleted');
+        if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2)
+            await assertIndexedDeleteDependencies(store, root, id, selected);
+        else if (await getPagedRecord(store, root.directories.deletion_blockers, id))
+            throw new IndexedConversationDeleteConflict('Indexed v1 deletion has a retained dependent record');
         const link = await indexedRecordById(store, root, 'turn_links', id, IndexedConversationTurnLinkSchema);
         const header = await indexedRecordById(store, root, 'turns', id, IndexedConversationTurnHeaderSchema);
         const accepted = await getPagedRecord(store, root.directories.turn_acceptances, id);
+        if (link && link.ordinal <= lastOrdinal)
+            throw new IndexedConversationDeleteConflict('Indexed deletion turn IDs must follow source order');
         if (
             !link ||
             link.id !== id ||
@@ -3595,13 +3967,64 @@ export async function stageIndexedConversationDelete(
         }
         const turn = await loadIndexedProjectedTurn(store, root, id, undefined, reserve);
         if (turn.completeness !== 'full_turn') throw new Error('Indexed deletion source turn is incomplete');
-        if (turn.selected_blocks.some((block) => ['tool_call', 'tool_result', 'native_replay'].includes(block.type))) {
-            throw new Error('Indexed deletion cannot remove executed or replay-bearing tool facts');
+        if (
+            excludedEntries.some((entry) => entry.turn_id === id) &&
+            context.retrieval_requirements.some((requirement) =>
+                collectAssetIds(turn.selected_blocks).has(requirement.asset_id),
+            )
+        )
+            throw new IndexedConversationDeleteConflict(
+                'Indexed deletion cannot discard an unresolved retrieval obligation',
+            );
+        for (const block of turn.selected_blocks) {
+            if (
+                root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE_V2 &&
+                ['tool_call', 'tool_result', 'native_replay'].includes(block.type)
+            )
+                throw new IndexedConversationDeleteConflict(
+                    'Indexed v1 deletion cannot remove executed or replay-bearing tool facts',
+                );
+            if (block.type === 'tool_call') {
+                const state = await indexedRecordById(
+                    store,
+                    root,
+                    'tool_call_states',
+                    block.call_id,
+                    IndexedCallStateSchema,
+                );
+                if (
+                    !state ||
+                    state.turn_id !== id ||
+                    state.block_id !== block.id ||
+                    state.call_fingerprint !== (await fingerprintJson(block))
+                )
+                    throw new Error('Indexed deletion lost its retained original tool call state');
+                if (!state.terminal_receipt_id)
+                    throw new IndexedConversationDeleteConflict(
+                        'Indexed deletion cannot remove an unresolved tool call',
+                    );
+                await loadIndexedTerminalCallWitness(store, root, state);
+            }
+            if (block.type === 'tool_result') {
+                const state = await indexedRecordById(
+                    store,
+                    root,
+                    'tool_call_states',
+                    block.call_id,
+                    IndexedCallStateSchema,
+                );
+                if (!state?.terminal_receipt_id || state.result_block_id !== block.id)
+                    throw new Error('Indexed deletion result lost its terminal call/receipt binding');
+                await loadIndexedTerminalCallWitness(store, root, state);
+            }
         }
         refs.push({
             id,
             fingerprint: await fingerprintJson({ ...turn.header, blocks: turn.selected_blocks }),
-            block_ids: turn.selected_blocks.map((block) => block.id),
+            block_ids: deletedContentIdentities(turn.selected_blocks).block_ids,
+            ...(deletedContentIdentities(turn.selected_blocks).call_ids.length === 0
+                ? {}
+                : { call_ids: deletedContentIdentities(turn.selected_blocks).call_ids }),
             accepted_operation_id: accepted.id,
         });
         links.set(id, link);
@@ -3612,6 +4035,9 @@ export async function stageIndexedConversationDelete(
         source: command.source,
         source_fingerprint: sourceFingerprint,
         dependency_policy: 'reject',
+        ...(excludedEntries.length === 0
+            ? {}
+            : { excluded_context_entry_ids: excludedEntries.map((entry) => entry.id) }),
         deleted_turns: refs,
     });
     const nextRevision = root.source.revision + 1;
@@ -3711,7 +4137,7 @@ export async function stageIndexedConversationDelete(
                 directories.blocks,
                 blockId,
                 { storage: 'marker', kind: 'deleted_block', id: blockId },
-                'replace',
+                (await getPagedRecord(store, directories.blocks, blockId)) === undefined ? 'insert' : 'replace',
             );
         }
         const tombstone = IndexedConversationDeletedTurnSchema.parse({
@@ -3728,6 +4154,17 @@ export async function stageIndexedConversationDelete(
             ref.id,
             await stageRecord(store, 'deleted_turns', ref.id, tombstone),
         );
+        if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2) {
+            const link = links.get(ref.id);
+            if (!link) throw new Error('Deleted answer nomination lost its actual ordinal');
+            const removed = await removePagedRecord(
+                store,
+                directories.display_answer_order,
+                indexedDisplayAnswerKey(link.ordinal),
+            );
+            if (removed.root === undefined) delete directories.display_answer_order;
+            else directories.display_answer_order = removed.root;
+        }
         if (activeTail === ref.id) activeTail = previousId ?? null;
     }
     directories.operation_receipts = await putPagedRecord(
@@ -3741,8 +4178,60 @@ export async function stageIndexedConversationDelete(
         kind: 'operation receipt',
         id: receipt.id,
     });
+    let contextLocator = root.context_header;
+    let processingLocator = root.processing_header;
+    if (excludedEntries.length > 0) {
+        const nextContext = {
+            ...context,
+            revision: context.revision + 1,
+            ...(context.cache_intent === undefined ? {} : { cache_intent: cacheIntent }),
+            entries: context.entries.filter((entry) => !selected.has(entry.turn_id)),
+        };
+        const { entries, ...header } = nextContext;
+        const nextHeader = await stageRecord(
+            store,
+            'context_header',
+            root.source.conversation_id,
+            IndexedConversationContextHeaderSchema.parse({
+                ...header,
+                active_entry_count: entries.length,
+                active_entry_bytes: canonicalJsonContentBytes(entries).byteLength,
+                context_fingerprint: (await hashContentBytes(canonicalJsonContentBytes(nextContext))).content_hash,
+            }),
+        );
+        contextLocator = { content_hash: nextHeader.content_hash, size_bytes: nextHeader.size_bytes };
+        const order = await buildPagedRecordIndex(
+            store,
+            entries.map((entry, index) => ({
+                key: indexedOrderedKey(index),
+                value: { storage: 'marker' as const, kind: 'context_order', id: entry.id },
+            })),
+        );
+        if (order === undefined) delete directories.active_context_order;
+        else directories.active_context_order = order;
+        const processing = await loadRecord(
+            store,
+            {
+                storage: 'record',
+                kind: 'processing_header',
+                id: root.source.conversation_id,
+                ...root.processing_header,
+            },
+            IndexedConversationProcessingHeaderSchema,
+        );
+        const { coverage: _coverage, ...withoutCoverage } = processing;
+        const processingRecord = await stageRecord(
+            store,
+            'processing_header',
+            root.source.conversation_id,
+            withoutCoverage,
+        );
+        processingLocator = { content_hash: processingRecord.content_hash, size_bytes: processingRecord.size_bytes };
+    }
     const nextRoot = IndexedConversationRootSchema.parse({
         ...root,
+        context_header: contextLocator,
+        processing_header: processingLocator,
         source: { ...root.source, revision: nextRevision },
         updated_at: command.recorded_at,
         live_turn_count: root.live_turn_count - refs.length,
@@ -3900,7 +4389,7 @@ async function indexedProcessingRecord<Shape extends z.ZodType>(
     return loadRecord(store, record, schema);
 }
 
-async function ownedIndexedProcessingJob(
+export async function ownedIndexedProcessingJob(
     store: IndexedConversationRecordStore,
     root: IndexedConversationRoot,
     jobId: string,
@@ -3985,6 +4474,19 @@ export async function loadIndexedProcessingJobState(
         IndexedConversationProcessingHeaderSchema,
     );
     assertIndexedProcessingCounts(header);
+    return auditIndexedProcessingJobEvidence(store, root, job, header);
+}
+
+/** Shared immutable evidence audit only. This does not certify complete indexes, counters or readiness.
+ * The ordinary inspection entry point validates those independently before invoking this function.
+ */
+export async function auditIndexedProcessingJobEvidence(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    job: ProcessingJob,
+    header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
+) {
+    const jobId = job.id;
     const configuration = header.processors[job.processor_index];
     if (
         !configuration ||
@@ -4663,6 +5165,121 @@ export interface StagedIndexedProcessingCompletion extends StagedIndexedProcessi
     completion: z.infer<typeof ProcessingCompletionReceiptSchema>;
 }
 
+/** Shared immutable context mutation publication. This helper neither creates nor settles jobs.
+ * Every caller has already applied the pure working-set mutation and owns its exact receipt.
+ */
+async function stageIndexedContextMutationRecords(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    previousContext: ConversationContext,
+    mutation: ContextMutationResult,
+): Promise<IndexedConversationDirectories> {
+    const compaction = mutation.compaction;
+    if (!compaction) throw new Error('Indexed context mutation lost its exact new compaction');
+    // Replacement entities must retain their semantic identity kinds for later selected preparation.
+    const newIdentities = [
+        { id: compaction.id, kind: 'compaction' },
+        { id: mutation.receipt.id, kind: 'operation receipt' },
+        ...compaction.replacement_turns.flatMap((turn) => [
+            { id: turn.id, kind: 'replacement turn' },
+            ...turn.blocks.map((block) => ({ id: block.id, kind: 'block' })),
+        ]),
+        ...mutation.change.operations[0].inserted_entry_ids.map((id) => ({ id, kind: 'context entry' })),
+        ...mutation.context.retrieval_requirements
+            .filter((item) => !previousContext.retrieval_requirements.some((old) => old.id === item.id))
+            .map((item) => ({ id: item.id, kind: 'retrieval requirement' })),
+    ];
+    const newIds = newIdentities.map(({ id }) => id);
+    if (new Set(newIds).size !== newIds.length)
+        throw new Error('Indexed context mutation creates duplicate record identities');
+    for (const id of newIds)
+        if (await getPagedRecord(store, root.directories.identifiers, id))
+            throw new Error('Indexed context mutation identity already belongs to a retained record');
+    const directories = { ...root.directories };
+    const insertions = new Map<keyof IndexedConversationDirectories, { key: string; value: PagedRecordValue }[]>();
+    const nominate = (family: keyof IndexedConversationDirectories, key: string, value: PagedRecordValue) => {
+        const commands = insertions.get(family) ?? [];
+        commands.push({ key, value });
+        insertions.set(family, commands);
+    };
+    const write = async (family: keyof IndexedConversationDirectories, id: string, value: unknown, key = id) => {
+        nominate(family, key, await stageRecord(store, family, id, value));
+    };
+    const { replacement_turns: replacementTurns, ...compactionHeader } = compaction;
+    await write('compactions', compaction.id, compactionHeader);
+    for (const turn of replacementTurns) {
+        const { blocks, ...header } = turn;
+        const blockIds = blocks.map((block) => block.id);
+        await write(
+            'turns',
+            turn.id,
+            IndexedConversationTurnHeaderSchema.parse({
+                turn: header,
+                source: 'replacement',
+                compaction_id: compaction.id,
+                block_ids: blockIds,
+                block_ids_hash: (await hashContentBytes(canonicalJsonContentBytes(blockIds))).content_hash,
+            }),
+        );
+        for (const block of blocks) {
+            await write('blocks', block.id, block);
+            for (const id of deletedContentIdentities([block]).block_ids)
+                nominate('block_owners', id, { storage: 'marker', kind: 'block_owner', id: turn.id });
+        }
+    }
+    // Complete reverse delete witnesses: compaction originals and replacement block owners remain
+    // protected even when subsequent provider receipts refer only to the replacement.
+    const protectedTurns = new Set([...compaction.source.turn_ids, ...replacementTurns.map((turn) => turn.id)]);
+    for (const blockId of compaction.source.block_ids ?? []) {
+        const owner = await getPagedRecord(store, root.directories.block_owners, blockId);
+        if (owner?.storage !== 'marker' || owner.kind !== 'block_owner')
+            throw new Error('Indexed compaction source block loses its immutable owner');
+        protectedTurns.add(owner.id);
+    }
+    if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2)
+        await appendIndexedDeleteDependencies(
+            store,
+            directories,
+            [...protectedTurns].map((target_turn_id) => ({
+                target_turn_id,
+                kind: 'compaction',
+                owner_id: compaction.id,
+            })),
+        );
+    for (const turnId of protectedTurns)
+        if (!(await getPagedRecord(store, directories.deletion_blockers, turnId)))
+            nominate('deletion_blockers', turnId, {
+                storage: 'marker',
+                kind: 'delete_blocker',
+                id: turnId,
+            });
+    for (const entry of mutation.context.entries) {
+        const existing = await getPagedRecord(store, directories.context_entries, entry.id);
+        if (!existing) await write('context_entries', entry.id, entry);
+        else {
+            const actual = await loadRecord(store, existing, ContextEntrySchema);
+            if (!sameIndexedRecord(actual, entry)) throw new Error('Indexed retained context entry differs');
+        }
+    }
+    directories.active_context_order = await buildPagedRecordIndex(
+        store,
+        mutation.context.entries.map((entry, i) => ({
+            key: indexedOrderedKey(i),
+            value: { storage: 'marker' as const, kind: 'context_order', id: entry.id },
+        })),
+    );
+    for (const { id, kind } of newIdentities)
+        nominate('identifiers', id, {
+            storage: 'marker',
+            kind,
+            id,
+        });
+
+    await write('operation_receipts', mutation.receipt.id, mutation.receipt);
+    for (const [family, commands] of insertions) await insertFreshIndexedRecords(store, directories, family, commands);
+    return directories;
+}
+
 /** Settle an already durably stored pure text output. Global identifiers and archive records are
  * looked up individually; originals stay immutable and cold. A completion removes only this job's
  * unresolved marker, retains its full resolution/attempt/output/receipts, and invalidates readiness.
@@ -4766,99 +5383,7 @@ export async function stageIndexedTextProcessingCompletion(
         job.processor_version === INDEXED_EXCHANGE_PROCESSOR_VERSION
             ? await applyIndexedExchangeOutput(currentWorkspace, output, originalArchiveBytes)
             : await applyIndexedTextExternalizationOutput(currentWorkspace, output);
-    const compaction = mutation.compaction;
-    if (!compaction) throw new Error('Indexed text output lost its exact new compaction');
-    // Replacement entities must retain their semantic identity kinds for later selected preparation.
-    const newIdentities = [
-        { id: compaction.id, kind: 'compaction' },
-        { id: mutation.receipt.id, kind: 'operation receipt' },
-        ...compaction.replacement_turns.flatMap((turn) => [
-            { id: turn.id, kind: 'replacement turn' },
-            ...turn.blocks.map((block) => ({ id: block.id, kind: 'block' })),
-        ]),
-        ...mutation.change.operations[0].inserted_entry_ids.map((id) => ({ id, kind: 'context entry' })),
-        ...mutation.context.retrieval_requirements
-            .filter((item) => !selected.context.retrieval_requirements.some((old) => old.id === item.id))
-            .map((item) => ({ id: item.id, kind: 'retrieval requirement' })),
-    ];
-    const newIds = newIdentities.map(({ id }) => id);
-    if (new Set(newIds).size !== newIds.length)
-        throw new Error('Indexed processing creates duplicate record identities');
-    for (const id of newIds)
-        if (await getPagedRecord(store, root.directories.identifiers, id))
-            throw new Error('Indexed processing identity already belongs to a retained record');
-    const directories = { ...root.directories };
-    const insertions = new Map<keyof IndexedConversationDirectories, { key: string; value: PagedRecordValue }[]>();
-    const nominate = (family: keyof IndexedConversationDirectories, key: string, value: PagedRecordValue) => {
-        const commands = insertions.get(family) ?? [];
-        commands.push({ key, value });
-        insertions.set(family, commands);
-    };
-    const write = async (family: keyof IndexedConversationDirectories, id: string, value: unknown, key = id) => {
-        nominate(family, key, await stageRecord(store, family, id, value));
-    };
-    const { replacement_turns: replacementTurns, ...compactionHeader } = compaction;
-    await write('compactions', compaction.id, compactionHeader);
-    for (const turn of replacementTurns) {
-        const { blocks, ...header } = turn;
-        const blockIds = blocks.map((block) => block.id);
-        await write(
-            'turns',
-            turn.id,
-            IndexedConversationTurnHeaderSchema.parse({
-                turn: header,
-                source: 'replacement',
-                compaction_id: compaction.id,
-                block_ids: blockIds,
-                block_ids_hash: (await hashContentBytes(canonicalJsonContentBytes(blockIds))).content_hash,
-            }),
-        );
-        for (const block of blocks) {
-            await write('blocks', block.id, block);
-            nominate('block_owners', block.id, {
-                storage: 'marker',
-                kind: 'block_owner',
-                id: turn.id,
-            });
-        }
-    }
-    // Complete reverse delete witnesses: compaction originals and replacement block owners remain
-    // protected even when subsequent provider receipts refer only to the replacement.
-    const protectedTurns = new Set([...compaction.source.turn_ids, ...replacementTurns.map((turn) => turn.id)]);
-    for (const blockId of compaction.source.block_ids ?? []) {
-        const owner = await getPagedRecord(store, root.directories.block_owners, blockId);
-        if (owner?.storage !== 'marker' || owner.kind !== 'block_owner')
-            throw new Error('Indexed compaction source block loses its immutable owner');
-        protectedTurns.add(owner.id);
-    }
-    for (const turnId of protectedTurns)
-        if (!(await getPagedRecord(store, directories.deletion_blockers, turnId)))
-            nominate('deletion_blockers', turnId, {
-                storage: 'marker',
-                kind: 'delete_blocker',
-                id: turnId,
-            });
-    for (const entry of mutation.context.entries) {
-        const existing = await getPagedRecord(store, directories.context_entries, entry.id);
-        if (!existing) await write('context_entries', entry.id, entry);
-        else {
-            const actual = await loadRecord(store, existing, ContextEntrySchema);
-            if (!sameIndexedRecord(actual, entry)) throw new Error('Indexed retained context entry differs');
-        }
-    }
-    directories.active_context_order = await buildPagedRecordIndex(
-        store,
-        mutation.context.entries.map((entry, i) => ({
-            key: indexedOrderedKey(i),
-            value: { storage: 'marker' as const, kind: 'context_order', id: entry.id },
-        })),
-    );
-    for (const { id, kind } of newIdentities)
-        nominate('identifiers', id, {
-            storage: 'marker',
-            kind,
-            id,
-        });
+    const directories = await stageIndexedContextMutationRecords(store, root, selected.context, mutation);
     const completion = ProcessingCompletionReceiptSchema.parse({
         job_id: job.id,
         output_fingerprint: outputFingerprint,
@@ -4868,11 +5393,12 @@ export async function stageIndexedTextProcessingCompletion(
         context_change_operation_id: mutation.receipt.id,
         recorded_at: workspace.snapshot_at,
     });
-    await write('processing_records', job.id, completion, tupleKey('completions', job.id));
-    await write('operation_receipts', mutation.receipt.id, mutation.receipt);
-    for (const [family, commands] of insertions) {
-        directories[family] = await insertPagedRecords(store, directories[family], commands);
-    }
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('completions', job.id),
+        await stageRecord(store, 'processing_records', job.id, completion),
+    );
     const removed = await removePagedRecord(store, directories.processing_pending, job.id);
     if (
         !removed.applied ||
@@ -5265,6 +5791,13 @@ export async function stageIndexedProcessingQueue(
         processing_operation: { phase: 'queue', policy_revision: header.policy_revision, job_id: job.id },
     });
     const directories = { ...root.directories };
+    if (root.delete_index_profile === INDEXED_CONVERSATION_DELETE_PROFILE_V2)
+        await appendIndexedDeleteDependencies(
+            store,
+            directories,
+            selectedEntries.map((entry) => ({ target_turn_id: entry.turn_id, kind: 'job', owner_id: job.id })),
+        );
+
     directories.processing_records = await putPagedRecord(
         store,
         directories.processing_records,
@@ -5676,7 +6209,7 @@ export async function stageIndexedProcessingPolicy(
             enabled: command.enabled,
             policy_revision: header.policy_revision + 1,
             processors: command.processors,
-            ...(command.enabled ? { selected_policy_operation_id: receipt.id } : {}),
+            selected_policy_operation_id: receipt.id,
             ...(command.budget === undefined ? {} : { budget: command.budget }),
             unresolved_job_count: unresolved,
             required_unresolved_job_count: requiredUnresolved,
@@ -5705,7 +6238,7 @@ export async function stageIndexedProcessingPolicy(
 export type { IndexedProcessingPolicyCommand } from './schemas/indexed-head.js';
 export { IndexedProcessingPolicyCommandSchema } from './schemas/indexed-head.js';
 
-async function indexedReadinessIdentity(coverage: IndexedProcessingReadinessCoverage): Promise<string> {
+export async function indexedReadinessIdentity(coverage: IndexedProcessingReadinessCoverage): Promise<string> {
     return fingerprintJson({
         profile: coverage.profile,
         context_fingerprint: coverage.context_fingerprint,
@@ -5717,33 +6250,59 @@ async function indexedReadinessIdentity(coverage: IndexedProcessingReadinessCove
     });
 }
 
+/** Finite built-in selected policy profile shared with native hosts and snapshot adoption. */
+export function supportsIndexedRegisteredProcessingPolicy(
+    header: Pick<z.infer<typeof IndexedConversationProcessingHeaderSchema>, 'enabled' | 'processors'>,
+): boolean {
+    const exchangeOnly =
+        header.processors.length === 1 &&
+        header.processors[0].id === INDEXED_EXCHANGE_PROCESSOR_ID &&
+        header.processors[0].version === '1' &&
+        header.processors[0].scope === 'on_append' &&
+        Object.keys(header.processors[0].config).length === 0;
+    const orderedText =
+        header.processors.length > 0 &&
+        header.processors.length <= MAX_PROCESSING_STAGES_PER_OPERATION &&
+        header.processors.every(
+            (processor) =>
+                processor.id === 'externalize-text' &&
+                processor.version === '1' &&
+                (processor.scope === 'on_append' || processor.scope === 'manual' || processor.scope === 'on_budget') &&
+                Object.keys(processor.config).length === 0,
+        );
+    return header.enabled && (exchangeOnly || orderedText);
+}
+
+/** Initial activation accepts disabled processing or the finite registered execution profile.
+ * A disabled policy schedules no work. This predicate grants no accepted-source, count or readiness authority. */
+export function supportsIndexedInheritedProcessingPolicy(
+    header: Pick<z.infer<typeof IndexedConversationProcessingHeaderSchema>, 'enabled' | 'processors'>,
+): boolean {
+    return !header.enabled || supportsIndexedRegisteredProcessingPolicy(header);
+}
+
 function assertSupportedIndexedReadinessPolicy(
     header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
 ): void {
-    if (
-        !header.enabled ||
-        header.processors.length !== 1 ||
-        header.processors.some(
-            (processor) =>
-                !(
-                    (processor.id === 'externalize-text' || processor.id === INDEXED_EXCHANGE_PROCESSOR_ID) &&
-                    processor.version === '1'
-                ) ||
-                processor.scope !== 'on_append' ||
-                Object.keys(processor.config).length !== 0,
-        )
-    )
-        throw new Error('Indexed readiness requires one registered on-append text or whole-exchange processor');
+    if (header.enabled && !supportsIndexedRegisteredProcessingPolicy(header))
+        throw new Error('Indexed readiness requires a registered bounded ordered text or whole-exchange policy');
 }
 
-/** Migration without a private policy command keeps its narrow finite profile. A selected-policy
- * transition is accepted only with its point-addressed command and exact current policy receipt.
+/** Migration without a private policy command authenticates its immutable header; enabled policies
+ * additionally require the finite registered stage profile. A selected-policy transition, including
+ * disabling processing, requires its point-addressed command and exact current policy receipt.
  */
 export async function assertIndexedCurrentPolicy(
     store: IndexedConversationRecordStore,
     root: IndexedConversationRoot,
     header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
 ): Promise<void> {
+    const integrity = await hashContentBytes(canonicalJsonContentBytes(header));
+    if (
+        integrity.byte_length !== root.processing_header.size_bytes ||
+        integrity.content_hash !== root.processing_header.content_hash
+    )
+        throw new Error('Indexed current policy header differs from its immutable root descriptor');
     const operationId = header.selected_policy_operation_id;
     if (!operationId) return assertSupportedIndexedReadinessPolicy(header);
     const command = await indexedProcessingRecord(
@@ -5755,10 +6314,9 @@ export async function assertIndexedCurrentPolicy(
     );
     const receipt = await indexedRecordById(store, root, 'operation_receipts', operationId, OperationReceiptSchema);
     if (
-        !header.enabled ||
         !command ||
         !receipt ||
-        !command.enabled ||
+        command.enabled !== header.enabled ||
         command.operation_id !== receipt.id ||
         receipt.operation_kind !== 'processing' ||
         receipt.processing_operation?.phase !== 'policy' ||
@@ -5773,6 +6331,8 @@ export async function assertIndexedCurrentPolicy(
         canonicalJsonContentString(command.budget ?? null) !== canonicalJsonContentString(header.budget ?? null)
     )
         throw new Error('Indexed selected processor policy lost its accepted registered command');
+    // A selected policy has already passed its host-owned processor registry before publication.
+    // Keep portable custom processors valid; native hosts separately enforce their execution profile.
 }
 
 function assertIndexedRequiredIdentity(
@@ -5978,7 +6538,7 @@ async function loadIndexedSettledSelectedContext(
     storeInput: IndexedConversationRecordStore,
     rootInput: IndexedConversationRoot,
     locatorInput: PagedRecordRef,
-    allowPendingCalls: boolean,
+    purpose: 'preparation' | 'retrieval',
 ) {
     const input = { root: rootInput, locator: locatorInput };
     if (!preflightJsonInput(input).success) throw new TypeError('Indexed dry preparation is not bounded JSON');
@@ -6001,6 +6561,9 @@ async function loadIndexedSettledSelectedContext(
         },
         IndexedConversationProcessingHeaderSchema,
     );
+    // Processing is opt-in. Disabled preparation still proves the immutable policy and any
+    // retained policy command, then passes the same complete pending/count fence below.
+    // Retrieval independently owns call/requirement/custody authority.
     await assertIndexedCurrentPolicy(store, root, header);
     const counts = assertIndexedRequiredIdentity(root, header);
     if (
@@ -6009,7 +6572,7 @@ async function loadIndexedSettledSelectedContext(
         root.directories.processing_pending !== undefined
     )
         throw new Error('Indexed dry preparation still has unresolved processing obligations');
-    if (allowPendingCalls) {
+    if (purpose === 'retrieval') {
         // A retrieval call is accepted before its result exists. This view retains the same
         // drained-processing fence but verifies its pending call index instead of inventing a result.
         const selected = await loadIndexedSelectedContext(
@@ -6034,6 +6597,50 @@ async function loadIndexedSettledSelectedContext(
     });
 }
 
+/** Read-only summary derivation from a settled exact source. Pending application calls retain
+ * their authenticated dependency/index witnesses; this processing-only view grants no preparation,
+ * native measurement, provider transport, or readiness authority. */
+export async function loadIndexedCheckpointSummarySelectedContext(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+) {
+    const input = { root: rootInput, locator: locatorInput };
+    if (!preflightJsonInput(input).success) throw new TypeError('Indexed checkpoint source is not bounded JSON');
+    const { root, locator } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+        })
+        .parse(structuredClone(input));
+    if (root.processing_index_profile !== INDEXED_CONVERSATION_PROCESSING_PROFILE)
+        throw new IndexedPresentationNominationConflict(
+            'Indexed checkpoint source requires complete processing indexes',
+        );
+    const store = boundedIndexedProcessingReader(storeInput);
+    const header = await loadRecord(
+        store,
+        {
+            storage: 'record',
+            kind: 'processing_header',
+            id: root.source.conversation_id,
+            ...root.processing_header,
+        },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    const counts = assertIndexedRequiredIdentity(root, header);
+    if (
+        counts.unresolved_job_count !== 0 ||
+        counts.required_blocked_job_count !== 0 ||
+        root.directories.processing_pending !== undefined
+    )
+        throw new IndexedPresentationNominationConflict(
+            'Indexed checkpoint source still has unresolved processing obligations',
+        );
+    if (header.enabled) await assertIndexedCurrentPolicy(store, root, header);
+    return loadIndexedProcessingContext(store, root, locator, true);
+}
+
 /** Dry native preparation after the independently drained outbox. The host still counts the
  * native request and publishes exact target/measurement coverage before dispatch.
  */
@@ -6042,7 +6649,7 @@ export async function loadIndexedSettledProcessingSelectedContext(
     root: IndexedConversationRoot,
     locator: PagedRecordRef,
 ) {
-    return loadIndexedSettledSelectedContext(store, root, locator, false);
+    return loadIndexedSettledSelectedContext(store, root, locator, 'preparation');
 }
 
 /** A drained processing projection for an accepted read call whose terminal result is still pending.
@@ -6054,7 +6661,7 @@ export async function loadIndexedSettledRetrievalSelectedContext(
     root: IndexedConversationRoot,
     locator: PagedRecordRef,
 ) {
-    return loadIndexedSettledSelectedContext(store, root, locator, true);
+    return loadIndexedSettledSelectedContext(store, root, locator, 'retrieval');
 }
 
 export interface IndexedReadySelectedContext {
@@ -6438,6 +7045,136 @@ export async function loadIndexedToolCallSelection(
     return selected;
 }
 
+/** Retained terminal facts remain verifiable after either body is deleted; this grants no execution authority. */
+async function loadIndexedTerminalCallWitness(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    state: z.infer<typeof IndexedCallStateSchema>,
+) {
+    if (!root.tool_call_state_complete || !state.terminal_receipt_id || !state.result_block_id)
+        throw new Error('Indexed terminal call has an incomplete retained fence');
+    const acceptedTurn = async (turnId: string) => {
+        const accepted = await getPagedRecord(store, root.directories.turn_acceptances, turnId);
+        const operation =
+            accepted?.storage === 'marker' && accepted.kind === 'turn_acceptance'
+                ? await indexedRecordById(store, root, 'operation_receipts', accepted.id, OperationReceiptSchema)
+                : undefined;
+        if (
+            !operation ||
+            operation.operation_kind !== undefined ||
+            operation.conversation_id !== root.source.conversation_id ||
+            !operation.accepted_turn_ids?.includes(turnId) ||
+            operation.result_revision > root.source.revision ||
+            operation.result_revision !== operation.base_revision + 1
+        )
+            throw new Error('Indexed terminal fact lost its exact accepted append');
+        return { operation, turn: await loadIndexedAcceptedTurn(store, root, turnId, operation) };
+    };
+    const original = await acceptedTurn(state.turn_id);
+    const call = original.turn.selected_blocks.find((block) => block.id === state.block_id);
+    if (
+        call?.type !== 'tool_call' ||
+        call.call_id !== state.call_id ||
+        (await fingerprintJson(call)) !== state.call_fingerprint ||
+        original.turn.header.kind !== 'agent'
+    )
+        throw new Error('Indexed terminal fact differs from its original call');
+    // Imported closed facts can be removed as historical bodies, without inventing a
+    // runnable generation/request. Execution selection retains its separate strict guard.
+    const archival = original.turn.header.provenance.type === 'imported';
+    const verifyGeneration = async (accepted: Awaited<ReturnType<typeof acceptedTurn>>, imported: boolean) => {
+        const header = accepted.turn.header;
+        if (
+            header.kind !== 'agent' ||
+            (imported ? header.provenance.type !== 'imported' : header.provenance.type !== 'generated')
+        )
+            throw new Error('Indexed terminal call lost its accepted generation/request chain');
+        if (!('generation_id' in header) || header.generation_id === undefined) {
+            if (imported) return;
+            throw new Error('Indexed terminal call lost its accepted generation/request chain');
+        }
+        const generation = await indexedRecordById(store, root, 'generations', header.generation_id, GenerationSchema);
+        const generationAcceptance = await getPagedRecord(
+            store,
+            root.directories.generation_acceptances,
+            header.generation_id,
+        );
+        if (
+            !generation ||
+            generation.id !== header.generation_id ||
+            generationAcceptance?.storage !== 'marker' ||
+            generationAcceptance.kind !== 'generation_acceptance' ||
+            generationAcceptance.id !== accepted.operation.id ||
+            !accepted.operation.accepted_generation_ids?.includes(generation.id) ||
+            generation.source.conversation_id !== root.source.conversation_id ||
+            generation.source.revision !== accepted.operation.base_revision
+        )
+            throw new Error('Indexed terminal call lost its accepted generation/request chain');
+        if (imported) {
+            if (generation.record_source !== 'imported')
+                throw new Error('Indexed imported terminal fact changed its recorded generation provenance');
+        } else if (
+            generation.record_source !== 'executed' ||
+            generation.request_receipt.source.conversation_id !== root.source.conversation_id ||
+            generation.request_receipt.source.revision !== generation.source.revision ||
+            generation.request_receipt.request_id !== generation.request_id
+        )
+            throw new Error('Indexed terminal call lost its accepted generation/request chain');
+    };
+    await verifyGeneration(original, archival);
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'execution_receipts',
+        state.terminal_receipt_id,
+        ExecutionReceiptSchema,
+    );
+    if (
+        !receipt?.result_turn_id ||
+        receipt.id !== state.terminal_receipt_id ||
+        receipt.call_id !== call.call_id ||
+        receipt.executor !== call.executor
+    )
+        throw new Error('Indexed terminal call lost its original execution receipt');
+    const source = receipt.call_source;
+    if (
+        (call.executor === 'application' && !source && !archival) ||
+        (source &&
+            (source.conversation.conversation_id !== root.source.conversation_id ||
+                source.conversation.revision < original.operation.result_revision ||
+                source.conversation.revision > root.source.revision ||
+                source.turn_id !== state.turn_id ||
+                source.block_id !== state.block_id ||
+                source.call_id !== state.call_id ||
+                source.call_fingerprint !== state.call_fingerprint))
+    )
+        throw new Error('Indexed terminal receipt changed its exact original call source');
+    const accepted = await acceptedTurn(receipt.result_turn_id);
+    const result = accepted.turn.selected_blocks.find((block) => block.id === state.result_block_id);
+    if (
+        result?.type !== 'tool_result' ||
+        result.call_id !== state.call_id ||
+        result.status !== receipt.status ||
+        !accepted.operation.accepted_execution_receipt_ids?.includes(receipt.id)
+    )
+        throw new Error('Indexed terminal result lost its exact accepted receipt');
+    if (accepted.turn.header.kind === 'tool') {
+        if (
+            accepted.turn.header.execution_id !== receipt.id &&
+            !(
+                archival &&
+                accepted.turn.header.execution_id === undefined &&
+                (accepted.turn.header.provenance.type === 'received' ||
+                    accepted.turn.header.provenance.type === 'imported')
+            )
+        )
+            throw new Error('Indexed terminal result turn has another execution identity');
+    } else if (call.executor === 'provider' && accepted.turn.header.kind === 'agent') {
+        await verifyGeneration(accepted, archival);
+    } else throw new Error('Indexed terminal result has no authentic result turn');
+    await assertToolResultReceiptFingerprint(result, receipt);
+}
+
 /** Point-check the current duplicate-result fence without scanning turns or receipt history. */
 export async function loadIndexedToolCallTerminalResult(
     store: IndexedConversationRecordStore,
@@ -6462,7 +7199,7 @@ export async function loadIndexedToolCallTerminalResult(
     if (state.result_block_id === undefined && state.terminal_receipt_id === undefined) return false;
     if (state.result_block_id === undefined || state.terminal_receipt_id === undefined)
         throw new IndexedToolCallSelectionConflict('Indexed current call has an incomplete terminal result fence');
-    const result = await indexedRecordById(store, root, 'blocks', state.result_block_id, ContentBlockSchema);
+
     const receipt = await indexedRecordById(
         store,
         root,
@@ -6470,6 +7207,16 @@ export async function loadIndexedToolCallTerminalResult(
         state.terminal_receipt_id,
         ExecutionReceiptSchema,
     );
+    if (!receipt?.result_turn_id)
+        throw new IndexedToolCallSelectionConflict('Indexed terminal receipt lacks its exact result turn');
+    const accepted = await getPagedRecord(store, root.directories.turn_acceptances, receipt.result_turn_id);
+    const operation =
+        accepted?.storage === 'marker' && accepted.kind === 'turn_acceptance'
+            ? await indexedRecordById(store, root, 'operation_receipts', accepted.id, OperationReceiptSchema)
+            : undefined;
+    if (!operation) throw new Error('Indexed terminal result lost its accepted operation');
+    const resultTurn = await loadIndexedAcceptedTurn(store, root, receipt.result_turn_id, operation);
+    const result = resultTurn.selected_blocks.find((block) => block.id === state.result_block_id);
     if (
         result?.type !== 'tool_result' ||
         result.id !== state.result_block_id ||
@@ -6485,12 +7232,6 @@ export async function loadIndexedToolCallTerminalResult(
         throw new IndexedToolCallSelectionConflict('Indexed terminal result lost its exact execution/source witness');
     if (!receipt.result_turn_id)
         throw new IndexedToolCallSelectionConflict('Indexed terminal receipt lacks its exact result turn');
-    const resultTurn = await loadIndexedProjectedTurn(store, root, receipt.result_turn_id, [result.id]);
-    const accepted = await getPagedRecord(store, root.directories.turn_acceptances, receipt.result_turn_id);
-    const operation =
-        accepted?.storage === 'marker' && accepted.kind === 'turn_acceptance'
-            ? await indexedRecordById(store, root, 'operation_receipts', accepted.id, OperationReceiptSchema)
-            : undefined;
     if (
         resultTurn.header.kind !== 'tool' ||
         resultTurn.header.execution_id !== receipt.id ||
@@ -6677,7 +7418,7 @@ export async function loadIndexedAcceptedOutputHistoryPage(
                 IndexedConversationDeletedTurnSchema,
             );
             if (
-                root.delete_index_profile !== INDEXED_CONVERSATION_DELETE_PROFILE ||
+                !hasIndexedDeleteProfile(root) ||
                 turnDescriptor.id !== turnId ||
                 tombstone.deleted_turn.id !== turnId ||
                 tombstone.deleted_turn.accepted_operation_id !== receipt.id
@@ -6704,6 +7445,9 @@ export async function loadIndexedAcceptedOutputHistoryPage(
                     id: turnId,
                     fingerprint: tombstone.deleted_turn.fingerprint,
                     block_ids: tombstone.deleted_turn.block_ids,
+                    ...(tombstone.deleted_turn.call_ids === undefined
+                        ? {}
+                        : { call_ids: tombstone.deleted_turn.call_ids }),
                     accepted_operation_id: receipt.id,
                 }) ||
                 detail?.source_fingerprint !==
@@ -7099,4 +7843,550 @@ async function renderIndexedConversationHistoricalText(
         lines.push(line);
     }
     return lines.join('\n\n');
+}
+
+/** Restart indexes are maintained by the same canonical snapshot/append publication, never
+ * derived from a filtered history page or a host content mirror. */
+function indexedRawRestartResponseTurn(turn: ConversationTurn): boolean {
+    return (
+        turn.kind === 'agent' &&
+        (turn.provenance.type === 'generated' ||
+            turn.provenance.type === 'imported' ||
+            ('generation_id' in turn && turn.generation_id !== undefined))
+    );
+}
+
+async function indexedSnapshotRestartWitness(document: ConversationDocument) {
+    const receipts = Object.values(document.operation_receipts);
+    const byTurn = new Map<string, OperationReceipt[]>();
+    const byGeneration = new Map<string, OperationReceipt[]>();
+    const byExecution = new Map<string, OperationReceipt[]>();
+    const index = (map: Map<string, OperationReceipt[]>, ids: string[] | undefined, receipt: OperationReceipt) => {
+        for (const id of ids ?? []) {
+            const bindings = map.get(id) ?? [];
+            bindings.push(receipt);
+            map.set(id, bindings);
+        }
+    };
+    for (const receipt of receipts) {
+        index(byTurn, receipt.accepted_turn_ids, receipt);
+        index(byGeneration, receipt.accepted_generation_ids, receipt);
+        index(byExecution, receipt.accepted_execution_receipt_ids, receipt);
+    }
+    const generated = new Set(document.turns.filter(indexedRawRestartResponseTurn).map((turn) => turn.id));
+    const tools = new Set(document.turns.filter((turn) => turn.kind === 'tool').map((turn) => turn.id));
+    const turns = new Map(document.turns.map((turn) => [turn.id, turn]));
+    const outputs = receipts
+        .filter(
+            (receipt) =>
+                (receipt.accepted_generation_ids?.length ?? 0) > 0 ||
+                receipt.accepted_turn_ids?.some((id) => generated.has(id)),
+        )
+        .sort((a, b) => b.result_revision - a.result_revision);
+    const inputs = receipts
+        .filter(
+            (receipt) =>
+                (receipt.accepted_execution_receipt_ids?.length ?? 0) > 0 ||
+                receipt.accepted_turn_ids?.some((id) => tools.has(id)),
+        )
+        .sort((a, b) => b.result_revision - a.result_revision);
+    // Semantic validation checks references that exist, but does not require every raw
+    // generated/tool turn to have an append receipt. An old valid output must never hide
+    // a newer unnominated imported/generated turn or unreceipted tool input on migration.
+    for (const turn of document.turns) {
+        if (!generated.has(turn.id) && !tools.has(turn.id)) continue;
+        const bindings = byTurn.get(turn.id) ?? [];
+        if (bindings.length !== 1) return {};
+        const receipt = bindings[0];
+        if (receipt.operation_kind !== undefined || receipt.result_revision !== receipt.base_revision + 1) return {};
+        if (turn.kind === 'agent') {
+            const generationId = 'generation_id' in turn ? turn.generation_id : undefined;
+            const generation = generationId ? document.generations[generationId] : undefined;
+            if (
+                !generation ||
+                generation.source.conversation_id !== document.id ||
+                generation.source.revision !== receipt.base_revision ||
+                receipt.accepted_turn_ids?.length !== 1 ||
+                receipt.accepted_generation_ids?.length !== 1 ||
+                receipt.accepted_generation_ids[0] !== generation.id
+            )
+                return {};
+        } else if (turn.kind === 'tool') {
+            const execution = turn.execution_id ? document.execution_receipts[turn.execution_id] : undefined;
+            if (
+                !execution ||
+                execution.result_turn_id !== turn.id ||
+                receipt.accepted_execution_receipt_ids?.filter((id) => id === execution.id).length !== 1
+            )
+                return {};
+        }
+    }
+    // One-time complete migration checks. Steady-state append already authenticates these
+    // exact canonical associations before publishing either new pointer in the same root.
+    for (const generation of Object.values(document.generations)) {
+        if (generation.record_source !== 'executed') continue;
+        const bindings = byGeneration.get(generation.id) ?? [];
+        if (
+            bindings.length !== 1 ||
+            bindings[0].base_revision !== generation.source.revision ||
+            bindings[0].accepted_generation_ids?.length !== 1 ||
+            bindings[0].accepted_turn_ids?.length !== 1
+        )
+            return {}; // Explicit older/incomplete profile; restart will reject, never guess.
+    }
+    for (const execution of Object.values(document.execution_receipts)) {
+        if (execution.executor !== 'application') continue;
+        const bindings = byExecution.get(execution.id) ?? [];
+        if (bindings.length !== 1) return {};
+    }
+    if (
+        (outputs[0] && outputs[1]?.result_revision === outputs[0].result_revision) ||
+        (inputs[0] && inputs[1]?.result_revision === inputs[0].result_revision)
+    )
+        return {};
+    for (const receipt of inputs.filter((input) => !outputs[0] || input.result_revision > outputs[0].result_revision)) {
+        const ids = receipt.accepted_turn_ids ?? [];
+        const executions = new Set(receipt.accepted_execution_receipt_ids ?? []);
+        if (ids.length === 0 || executions.size !== ids.length || (receipt.accepted_generation_ids?.length ?? 0) !== 0)
+            return {};
+        const matched = new Set<string>();
+        for (const id of ids) {
+            const turn = turns.get(id);
+            const execution =
+                turn?.kind === 'tool' && turn.execution_id ? document.execution_receipts[turn.execution_id] : undefined;
+            if (
+                turn?.kind !== 'tool' ||
+                !execution ||
+                execution.executor !== 'application' ||
+                !executions.has(execution.id) ||
+                matched.has(execution.id) ||
+                !execution.call_source
+            )
+                return {};
+            const result = ConversationToolExecutionResultSchema.safeParse({
+                source: execution.call_source,
+                turn,
+                execution_receipt: execution,
+            });
+            if (!result.success) return {};
+            await validateToolExecutionResult(document, result.data);
+            matched.add(execution.id);
+        }
+    }
+    return {
+        restart_index_profile: INDEXED_CONVERSATION_RESTART_PROFILE,
+        ...(outputs[0]
+            ? { restart_response: { operation_id: outputs[0].id, result_revision: outputs[0].result_revision } }
+            : {}),
+        ...(inputs[0]
+            ? { restart_tool_input: { operation_id: inputs[0].id, result_revision: inputs[0].result_revision } }
+            : {}),
+    };
+}
+export class IndexedRestartSourceUnavailable extends Error {
+    constructor(
+        readonly reason: 'upgrade_required' | 'imported' | 'logically_deleted' | 'invalid_acceptance',
+        message: string,
+    ) {
+        super(message);
+        this.name = 'IndexedRestartSourceUnavailable';
+    }
+}
+/** Bounded restart authority from complete raw nominations, exact immutable receipts and
+ * the current live call index. Original output and tool source revisions are never rewritten. */
+export async function loadIndexedRestartEvidence(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+) {
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    if (root.restart_index_profile !== INDEXED_CONVERSATION_RESTART_PROFILE || root.tool_call_state_complete !== true)
+        throw new IndexedRestartSourceUnavailable(
+            'upgrade_required',
+            'Indexed restart requires an authenticated complete restart profile',
+        );
+    const store = indexedPresentationReadStore(storeInput);
+    const nomination = root.restart_response;
+    if (!nomination) return { kind: 'no_output' as const, source: root.source };
+    const receipt = await presentationRecord(
+        store,
+        root,
+        'operation_receipts',
+        nomination.operation_id,
+        OperationReceiptSchema,
+    );
+    if (
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.result_revision !== receipt.base_revision + 1 ||
+        receipt.result_revision !== nomination.result_revision ||
+        receipt.result_revision > root.source.revision ||
+        receipt.accepted_generation_ids?.length !== 1 ||
+        receipt.accepted_turn_ids?.length !== 1
+    )
+        throw new IndexedRestartSourceUnavailable(
+            'invalid_acceptance',
+            'Newest raw restart response has no exact accepted generation and turn',
+        );
+    const generation = await presentationRecord(
+        store,
+        root,
+        'generations',
+        receipt.accepted_generation_ids[0],
+        GenerationSchema,
+    );
+    if (generation.record_source !== 'executed')
+        throw new IndexedRestartSourceUnavailable(
+            'imported',
+            'Newest raw restart acceptance is imported, not executed',
+        );
+    const live = await getPagedRecord(store, root.directories.turns, receipt.accepted_turn_ids[0]);
+    if (live?.storage === 'marker' && live.kind === 'deleted_turn')
+        throw new IndexedRestartSourceUnavailable(
+            'logically_deleted',
+            'Newest raw restart acceptance was logically deleted',
+        );
+    const output = await loadIndexedRetainedAcceptedOutputPresentation(
+        store,
+        root,
+        ConversationOutputReceiptSchema.parse({
+            id: receipt.id,
+            conversation_id: receipt.conversation_id,
+            base_revision: receipt.base_revision,
+            result_revision: receipt.result_revision,
+            recorded_at: receipt.recorded_at,
+            accepted_turn_ids: receipt.accepted_turn_ids,
+            accepted_generation_ids: receipt.accepted_generation_ids,
+            ...(receipt.accepted_asset_ids === undefined ? {} : { accepted_asset_ids: receipt.accepted_asset_ids }),
+        }),
+    );
+    let materialized_input: { operation_id: string; result_revision: number } | undefined;
+    const input = root.restart_tool_input;
+    if (input && input.result_revision > receipt.result_revision) {
+        const accepted = await presentationRecord(
+            store,
+            root,
+            'operation_receipts',
+            input.operation_id,
+            OperationReceiptSchema,
+        );
+        const turns = accepted.accepted_turn_ids ?? [];
+        const executions = new Set(accepted.accepted_execution_receipt_ids ?? []);
+        if (
+            accepted.conversation_id !== root.source.conversation_id ||
+            accepted.result_revision !== input.result_revision ||
+            input.result_revision > root.source.revision ||
+            turns.length === 0 ||
+            turns.length > 256 ||
+            executions.size !== turns.length ||
+            (accepted.accepted_generation_ids?.length ?? 0) !== 0
+        )
+            throw new IndexedRestartSourceUnavailable(
+                'invalid_acceptance',
+                'Newest restart tool input has no exact accepted execution batch',
+            );
+        const matched = new Set<string>();
+        for (const id of turns) {
+            const descriptor = await getPagedRecord(store, root.directories.turns, id);
+            if (descriptor?.storage === 'marker' && descriptor.kind === 'deleted_turn')
+                throw new IndexedRestartSourceUnavailable(
+                    'logically_deleted',
+                    'Newest raw restart tool input was logically deleted',
+                );
+            const selected = await loadIndexedProjectedTurn(store, root, id);
+            if (
+                selected.header.kind !== 'tool' ||
+                !selected.header.execution_id ||
+                !executions.has(selected.header.execution_id) ||
+                matched.has(selected.header.execution_id)
+            )
+                throw new IndexedRestartSourceUnavailable(
+                    'invalid_acceptance',
+                    'Restart tool input has an unbound result turn',
+                );
+            const execution = await presentationRecord(
+                store,
+                root,
+                'execution_receipts',
+                selected.header.execution_id,
+                ExecutionReceiptSchema,
+            );
+            const binding = await getPagedRecord(store, root.directories.turn_acceptances, id);
+            if (
+                execution.result_turn_id !== id ||
+                execution.id !== selected.header.execution_id ||
+                !execution.call_source ||
+                execution.executor !== 'application' ||
+                binding?.storage !== 'marker' ||
+                binding.kind !== 'turn_acceptance' ||
+                binding.id !== accepted.id ||
+                !(await loadIndexedToolCallTerminalResult(store, root, execution.call_source))
+            )
+                throw new IndexedRestartSourceUnavailable(
+                    'invalid_acceptance',
+                    'Restart tool input lacks exact call/result/receipt acceptance',
+                );
+            matched.add(execution.id);
+        }
+        materialized_input = { operation_id: accepted.id, result_revision: accepted.result_revision };
+    }
+    const open = await readPagedRecordRange(store, root.directories.open_tool_calls, { limit: 256 });
+    if (open.has_more) throw new IndexedPresentationCapacityError('Indexed restart exceeds its 256 pending-call bound');
+    const pending: PendingApplicationToolCall[] = [];
+    for (const item of open.entries) {
+        const original = await indexedRecordById(store, root, 'open_tool_calls', item.key, IndexedOpenToolCallSchema);
+        const state = await indexedRecordById(store, root, 'tool_call_states', item.key, IndexedCallStateSchema);
+        if (
+            !original ||
+            original.call_id !== item.key ||
+            !state ||
+            original.call_id !== state.call_id ||
+            original.turn_id !== state.turn_id ||
+            original.block_id !== state.block_id ||
+            original.call_fingerprint !== state.call_fingerprint
+        )
+            throw new Error('Restart open-call nomination differs from its complete durable original');
+        if (!state || state.result_block_id !== undefined || state.terminal_receipt_id !== undefined)
+            throw new Error('Complete restart open-call index has another terminal state');
+        const projected = await loadIndexedProjectedTurn(store, root, state.turn_id, [state.block_id]);
+        const call = projected.selected_blocks[0];
+        if (
+            call?.type !== 'tool_call' ||
+            call.call_id !== state.call_id ||
+            (await fingerprintJson(call)) !== state.call_fingerprint
+        )
+            throw new Error('Restart pending call differs from its immutable original block');
+        if (call.executor !== 'application') continue;
+        if (
+            call.arguments.type === 'invalid' ||
+            projected.header.kind !== 'agent' ||
+            projected.header.provenance.type !== 'generated' ||
+            !('generation_id' in projected.header) ||
+            !projected.header.generation_id
+        )
+            throw new IndexedRestartSourceUnavailable(
+                'invalid_acceptance',
+                'Restart pending application call has no valid generated source',
+            );
+        const binding = await getPagedRecord(
+            store,
+            root.directories.generation_acceptances,
+            projected.header.generation_id,
+        );
+        if (binding?.storage !== 'marker' || binding.kind !== 'generation_acceptance')
+            throw new Error('Restart pending call lost its original acceptance');
+        const accepted = await presentationRecord(
+            store,
+            root,
+            'operation_receipts',
+            binding.id,
+            OperationReceiptSchema,
+        );
+        const generation = await presentationRecord(
+            store,
+            root,
+            'generations',
+            projected.header.generation_id,
+            GenerationSchema,
+        );
+        if (
+            generation.record_source !== 'executed' ||
+            accepted.conversation_id !== root.source.conversation_id ||
+            generation.source.conversation_id !== root.source.conversation_id ||
+            accepted.result_revision !== accepted.base_revision + 1 ||
+            !accepted.accepted_turn_ids?.includes(state.turn_id) ||
+            !accepted.accepted_generation_ids?.includes(generation.id) ||
+            accepted.base_revision !== generation.source.revision ||
+            accepted.result_revision > root.source.revision
+        )
+            throw new Error('Restart pending call has another original accepted request/generation tuple');
+        pending.push({
+            source: {
+                conversation: { conversation_id: root.source.conversation_id, revision: accepted.result_revision },
+                turn_id: state.turn_id,
+                block_id: state.block_id,
+                call_id: state.call_id,
+                call_fingerprint: state.call_fingerprint,
+            },
+            call: {
+                call_id: call.call_id,
+                tool_name: call.tool_name,
+                executor: 'application',
+                ...(call.definition_id === undefined ? {} : { definition_id: call.definition_id }),
+            },
+        });
+    }
+    const definitions = await loadIndexedActiveToolDefinitions(store, root);
+    return {
+        kind: 'accepted_output' as const,
+        source: root.source,
+        accepted: output.fragment,
+        pending,
+        ...(materialized_input === undefined ? {} : { materialized_input }),
+        active_tool_names: definitions.map((definition) => definition.name),
+    };
+}
+
+export interface StagedIndexedCheckpointSummary {
+    root: IndexedConversationRoot;
+    locator: PagedRecordRef;
+    receipt: OperationReceipt;
+    compaction: CompactionRecord;
+    applied: boolean;
+}
+
+/** One ordinary semantic checkpoint from a complete settled selected working set. The host
+ * authenticates its scheduled activity, retained accepted output and genuine summary-fork result.
+ * This operation never fabricates a processing job, readiness receipt, or materialized document.
+ */
+export async function stageIndexedCheckpointSummary(
+    storeInput: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    locatorInput: PagedRecordRef,
+    commandInput: unknown,
+): Promise<StagedIndexedCheckpointSummary> {
+    const envelope = { root: rootInput, locator: locatorInput, command: commandInput };
+    if (!preflightJsonInput(envelope, { max_bytes: 2 * 1024 * 1024 }).success)
+        throw new TypeError('Indexed checkpoint intent exceeds its bounded JSON profile');
+    const { root, locator, command } = z
+        .strictObject({
+            root: IndexedConversationRootSchema,
+            locator: PagedRecordRefSchema,
+            command: IndexedCheckpointSummaryCommandSchema,
+        })
+        .parse(structuredClone(envelope));
+    const store = boundedIndexedProcessingReader(storeInput);
+    if (root.source.conversation_id !== command.source.conversation_id)
+        throw new IndexedPresentationNominationConflict('Checkpoint source belongs to another conversation');
+    const retained = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        command.operation_id,
+        OperationReceiptSchema,
+    );
+    if (retained) {
+        if (retained.result_revision > root.source.revision)
+            throw new Error('Checkpoint receipt is newer than its authentic retained root');
+        const id = await deriveConversationId('compaction', root.source.conversation_id, command.operation_id);
+        const header = await indexedRecordById(
+            store,
+            root,
+            'compactions',
+            id,
+            IndexedConversationCompactionHeaderSchema,
+        );
+        if (!header) throw new Error('Checkpoint retry lost its exact retained compaction header');
+        const replacements = [];
+        const expectedTurnId = await deriveConversationId('turn', id, 'summary');
+        for (const turnId of [expectedTurnId]) {
+            const projection = await loadIndexedProjectedTurn(store, root, turnId);
+            if (projection.completeness !== 'full_turn')
+                throw new Error('Checkpoint retry lost its complete replacement');
+            replacements.push(
+                ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks }),
+            );
+        }
+        const compaction = { ...header, replacement_turns: replacements };
+        const selectedEntries =
+            retained.context_change?.selected_block_ids === undefined
+                ? undefined
+                : await Promise.all(
+                      retained.context_change.removed_entry_ids.map(async (entryId) => {
+                          const entry = await indexedRecordById(
+                              store,
+                              root,
+                              'context_entries',
+                              entryId,
+                              ContextEntrySchema,
+                          );
+                          if (!entry) throw new Error('Checkpoint retry lost its exact original selected entry');
+                          return entry;
+                      }),
+                  );
+        await assertSelectedCheckpointRetry(command, compaction, retained, selectedEntries);
+        return { root, locator, receipt: retained, compaction, applied: false };
+    }
+    if (root.source.revision !== command.source.revision)
+        throw new IndexedPresentationNominationConflict('Checkpoint predecessor changed before publication');
+    const selected = await loadIndexedCheckpointSummarySelectedContext(store, root, locator);
+    const frame = activeIndexedContextWorkingSet(selected);
+    const request = await buildSelectedCheckpointRequest(frame, command);
+    const mutation = await applyContextMutationWorkingSet(
+        frame,
+        {
+            compactions: Object.fromEntries(
+                Object.entries(selected.compaction_witnesses ?? []).map(([id, witness]) => [
+                    id,
+                    { id: witness.compaction.id },
+                ]),
+            ),
+            tool_definitions: selected.tool_definitions,
+            operation_receipts: selected.operation_witnesses ?? {},
+        },
+        request,
+        await fingerprintJson(request),
+    );
+    const compaction = mutation.compaction;
+    if (!compaction) throw new Error('Semantic checkpoint produced no compaction');
+    const directories = await stageIndexedContextMutationRecords(store, root, selected.context, mutation);
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'processing_header', id: root.source.conversation_id, ...root.processing_header },
+        IndexedConversationProcessingHeaderSchema,
+    );
+    const { coverage: _coverage, ...processing } = header;
+    const processingHeader = await stageRecord(
+        store,
+        'processing_header',
+        root.source.conversation_id,
+        IndexedConversationProcessingHeaderSchema.parse(processing),
+    );
+    const { entries: _entries, ...contextFields } = mutation.context;
+    const contextHeader = await stageRecord(
+        store,
+        'context_header',
+        root.source.conversation_id,
+        IndexedConversationContextHeaderSchema.parse({
+            ...contextFields,
+            active_entry_count: mutation.context.entries.length,
+            active_entry_bytes: canonicalJsonContentBytes(mutation.context.entries).byteLength,
+            context_fingerprint: (await hashContentBytes(canonicalJsonContentBytes(mutation.context))).content_hash,
+        }),
+    );
+    const nextRoot = IndexedConversationRootSchema.parse({
+        ...root,
+        directories,
+        source: { ...root.source, revision: mutation.receipt.result_revision },
+        updated_at: command.recorded_at,
+        context_header: { content_hash: contextHeader.content_hash, size_bytes: contextHeader.size_bytes },
+        processing_header: { content_hash: processingHeader.content_hash, size_bytes: processingHeader.size_bytes },
+    });
+    const rootRecord = await stageRecord(store, 'root', root.source.conversation_id, nextRoot);
+    if (rootRecord.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES)
+        throw new RangeError('Indexed checkpoint root exceeds its manifest bound');
+    const nextLocator = { content_hash: rootRecord.content_hash, size_bytes: rootRecord.size_bytes };
+    await loadIndexedCheckpointSummarySelectedContext(store, nextRoot, nextLocator);
+    return { root: nextRoot, locator: nextLocator, receipt: mutation.receipt, compaction, applied: true };
+}
+
+/** Shared immutable compaction acceptance proof; no preparation/readiness authority. */
+export function assertIndexedAcceptedCompaction(
+    root: IndexedConversationRoot,
+    compactionId: string,
+    compaction: z.infer<typeof IndexedConversationCompactionHeaderSchema>,
+    acceptance: z.infer<typeof OperationReceiptSchema>,
+): void {
+    if (
+        compaction.id !== compactionId ||
+        acceptance.id !== compaction.operation_id ||
+        acceptance.conversation_id !== root.source.conversation_id ||
+        acceptance.operation_kind !== 'context_change' ||
+        acceptance.context_change?.kind !== 'replace_with_compaction' ||
+        acceptance.context_change.source_fingerprint !== compaction.source.source_fingerprint ||
+        acceptance.result_revision !== acceptance.base_revision + 1 ||
+        compaction.created_at !== acceptance.recorded_at ||
+        acceptance.result_revision > root.source.revision ||
+        compaction.metadata?.applied_revision !== acceptance.result_revision ||
+        compaction.metadata?.payload_fingerprint !== acceptance.payload_fingerprint
+    )
+        throw new Error('Indexed replacement lacks its exact accepted compaction operation');
 }

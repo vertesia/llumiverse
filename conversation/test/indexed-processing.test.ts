@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canonicalJsonContentBytes, hashContentBytes } from '../src/content-integrity.js';
 import { fingerprintJson } from '../src/identity.js';
 import {
+    assertIndexedCurrentPolicy,
     type IndexedConversationRecordStore,
     loadIndexedPendingProcessingJobs,
     loadIndexedProcessingAppendAcceptance,
@@ -9,7 +10,9 @@ import {
     loadIndexedProcessingPredecessorEvidence,
     loadIndexedProcessingQueuedJobAcceptance,
     loadIndexedProcessingSelectedContext,
+    loadIndexedReadySelectedContext,
     loadIndexedSelectedTextContext,
+    loadIndexedSettledProcessingSelectedContext,
     stageIndexedConversationSnapshot,
     stageIndexedProcessingCoverage,
     stageIndexedProcessingNoOpCompletion,
@@ -17,6 +20,8 @@ import {
     stageIndexedProcessingPolicy,
     stageIndexedProcessingQueue,
     stageIndexedRecordBatch,
+    supportsIndexedInheritedProcessingPolicy,
+    supportsIndexedRegisteredProcessingPolicy,
 } from '../src/indexed-conversation.js';
 import {
     indexedTextExternalizationOriginals,
@@ -30,7 +35,10 @@ import {
     setProcessingPolicy,
 } from '../src/processing.js';
 import { appendConversationRecordsWithProcessing } from '../src/runtime.js';
-import { INDEXED_PROCESSING_SELECTED_MAX_BLOCKS } from '../src/schemas/indexed-head.js';
+import {
+    INDEXED_PROCESSING_SELECTED_MAX_BLOCKS,
+    IndexedConversationProcessingHeaderSchema,
+} from '../src/schemas/indexed-head.js';
 import { ProcessingResolvedInputSchema } from '../src/schemas/processing.js';
 import { parseConversationDocument } from '../src/validation.js';
 import { emptyDocument, RECORDED_AT, userTurn } from './fixtures.js';
@@ -94,6 +102,264 @@ async function configured() {
 }
 
 describe('indexed processing append index', () => {
+    it('prepares default-disabled indexed input without scheduling work and binds readiness to the exact target/count', async () => {
+        const document = emptyDocument('conversation:disabled-native');
+        const memory = storage();
+        const snapshot = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        const turn = userTurn('turn:disabled-native');
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:disabled-native', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const accepted = await stageIndexedRecordBatch(
+            snapshot.root,
+            {
+                conversation_id: document.id,
+                batch,
+                options: {
+                    operation_id: 'append:disabled-native',
+                    expected_revision: snapshot.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        if (!accepted.locator) throw new Error('Disabled accepted input lacks its actual root');
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, accepted.root);
+        expect(pending.enabled).toBe(false);
+        expect(pending.job_count).toBe(0);
+        expect(pending.jobs).toEqual([]);
+        const selected = await loadIndexedSettledProcessingSelectedContext(
+            memory.store,
+            accepted.root,
+            accepted.locator,
+        );
+        expect(selected.turns[0].selected_blocks).toEqual(turn.blocks);
+        expect(supportsIndexedInheritedProcessingPolicy(document.processing)).toBe(true);
+        expect(supportsIndexedRegisteredProcessingPolicy(document.processing)).toBe(false);
+        const binding = {
+            target_fingerprint: `sha256:${'a'.repeat(64)}`,
+            measured_input_tokens: 8,
+            tokenizer_id: 'tokenizer:disabled',
+            measurement_fingerprint: `sha256:${'b'.repeat(64)}`,
+        };
+        const covered = await stageIndexedProcessingCoverage(memory.store, accepted.root, accepted.locator, {
+            ...binding,
+            operation_id: 'coverage:disabled-native',
+            expected_revision: accepted.root.source.revision,
+            recorded_at: RECORDED_AT,
+        });
+        expect(covered.coverage.status).toBe('ready');
+        expect(
+            (await loadIndexedReadySelectedContext(memory.store, covered.root, covered.locator, binding)).coverage,
+        ).toEqual(covered.coverage);
+        for (const changed of [
+            { ...binding, target_fingerprint: `sha256:${'c'.repeat(64)}` },
+            { ...binding, measured_input_tokens: binding.measured_input_tokens + 1 },
+            { ...binding, measurement_fingerprint: `sha256:${'d'.repeat(64)}` },
+        ]) {
+            await expect(
+                loadIndexedReadySelectedContext(memory.store, covered.root, covered.locator, changed),
+            ).rejects.toThrow('exact context/target/count');
+        }
+        const writes = [memory.pages.size, memory.records.size];
+        await expect(
+            stageIndexedProcessingQueue(memory.store, covered.root, covered.locator, {
+                operation_id: 'queue:disabled-native',
+                expected_revision: covered.root.source.revision,
+                expected_context_revision: selected.context.revision,
+                recorded_at: RECORDED_AT,
+                processor_id: 'externalize-text',
+                scope: 'manual',
+                selected_entry_ids: ['entry:disabled-native'],
+            }),
+        ).rejects.toThrow('no enabled bounded policy capacity');
+        expect([memory.pages.size, memory.records.size]).toEqual(writes);
+    });
+
+    it('retains the genuine disable command through preparation and rejects missing or tampered accepted policy evidence', async () => {
+        const document = await configured();
+        const memory = storage();
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        const command = {
+            operation_id: 'policy:disable-native',
+            expected_revision: initial.root.source.revision,
+            recorded_at: RECORDED_AT,
+            enabled: false,
+            processors: document.processing.processors,
+        };
+        const disabled = await stageIndexedProcessingPolicy(
+            memory.store,
+            initial.root,
+            initial.locator,
+            command,
+            async () => {
+                throw new Error('Disabling must not invoke processor execution capability');
+            },
+        );
+        const headerBytes = memory.records.get(disabled.root.processing_header.content_hash);
+        if (!headerBytes) throw new Error('Actual disabled header is absent');
+        const header = IndexedConversationProcessingHeaderSchema.parse(
+            JSON.parse(new TextDecoder().decode(headerBytes)),
+        );
+        expect(header.enabled).toBe(false);
+        expect(header.selected_policy_operation_id).toBe(command.operation_id);
+        await expect(
+            loadIndexedSettledProcessingSelectedContext(memory.store, disabled.root, disabled.locator),
+        ).resolves.toMatchObject({ source: disabled.root.source });
+        expect(
+            (
+                await stageIndexedProcessingPolicy(
+                    memory.store,
+                    disabled.root,
+                    disabled.locator,
+                    command,
+                    async () => undefined,
+                )
+            ).receipt,
+        ).toEqual(disabled.receipt);
+        for (const descriptor of [
+            await getPagedRecord(memory.store, disabled.root.directories.operation_receipts, command.operation_id),
+            await getPagedRecord(
+                memory.store,
+                disabled.root.directories.processing_records,
+                JSON.stringify(['selected_policy_commands', command.operation_id]),
+            ),
+        ]) {
+            if (descriptor?.storage !== 'record') throw new Error('Accepted disabled policy point witness is absent');
+            const original = memory.records.get(descriptor.content_hash);
+            if (!original) throw new Error('Accepted disabled policy bytes are absent');
+            memory.records.delete(descriptor.content_hash);
+            await expect(
+                loadIndexedSettledProcessingSelectedContext(memory.store, disabled.root, disabled.locator),
+            ).rejects.toThrow('Indexed record absent');
+            memory.records.set(descriptor.content_hash, canonicalJsonContentBytes({ ...command, enabled: true }));
+            await expect(
+                loadIndexedSettledProcessingSelectedContext(memory.store, disabled.root, disabled.locator),
+            ).rejects.toThrow();
+            memory.records.set(descriptor.content_hash, original);
+        }
+        await expect(
+            assertIndexedCurrentPolicy(memory.store, disabled.root, { ...header, enabled: true }),
+        ).rejects.toThrow('immutable root descriptor');
+        await expect(
+            loadIndexedSettledProcessingSelectedContext(memory.store, disabled.root, disabled.locator),
+        ).resolves.toMatchObject({ source: disabled.root.source });
+    });
+
+    it('does not erase accepted required work when disabling processing without explicit supersession', async () => {
+        const document = await configured();
+        const memory = storage();
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        const turn = userTurn('turn:disable-pending');
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:disable-pending', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const accepted = await stageIndexedRecordBatch(
+            initial.root,
+            {
+                conversation_id: document.id,
+                batch,
+                options: {
+                    operation_id: 'append:disable-pending',
+                    expected_revision: initial.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        if (!accepted.locator) throw new Error('Actual pending source lacks its root');
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, accepted.root);
+        expect(pending.required_unresolved_job_count).toBe(1);
+        const writes = [memory.pages.size, memory.records.size];
+        await expect(
+            stageIndexedProcessingPolicy(
+                memory.store,
+                accepted.root,
+                accepted.locator,
+                {
+                    operation_id: 'policy:disable-pending',
+                    expected_revision: accepted.root.source.revision,
+                    recorded_at: RECORDED_AT,
+                    enabled: false,
+                    processors: document.processing.processors,
+                },
+                async () => undefined,
+            ),
+        ).rejects.toThrow('explicit supersession of every unresolved job');
+        expect([memory.pages.size, memory.records.size]).toEqual(writes);
+        expect(await loadIndexedPendingProcessingJobs(memory.store, accepted.root)).toEqual(pending);
+        await expect(
+            loadIndexedSettledProcessingSelectedContext(memory.store, accepted.root, accepted.locator),
+        ).rejects.toThrow('unresolved processing obligations');
+    });
+
+    it('retains registered ordered automatic and budget policy through a real materialized snapshot', async () => {
+        const initial = await configured();
+        const configuration = initial.processing.processors[0];
+        const policy = await setProcessingPolicy(initial, {
+            operation_id: 'policy:inherited-ordered',
+            expected_revision: initial.revision,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [configuration, { ...configuration }, { ...configuration, scope: 'on_budget' }],
+            budget: { max_input_tokens: 128, output_reserve_tokens: 16, measurement_policy: 'exact_only' },
+        });
+        const turn = userTurn('turn:inherited-ordered');
+        const accepted = await appendConversationRecordsWithProcessing(
+            policy.document,
+            {
+                turns: [turn],
+                context_entries: [{ id: 'entry:inherited-ordered', type: 'source_turn', turn_id: turn.id }],
+            },
+            {
+                operation_id: 'append:inherited-ordered',
+                expected_revision: policy.document.revision,
+                payload_fingerprint: 'sha256:inherited-ordered',
+                recorded_at: RECORDED_AT,
+            },
+        );
+        const memory = storage();
+        const staged = await stageIndexedConversationSnapshot(accepted.document, undefined, memory.store);
+        const bytes = memory.records.get(staged.root.processing_header.content_hash);
+        if (!bytes) throw new Error('Inherited policy lacks its actual immutable header');
+        const header = IndexedConversationProcessingHeaderSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+        expect(header.selected_policy_operation_id).toBeUndefined();
+        expect(header.processors).toEqual(policy.document.processing.processors);
+        await expect(assertIndexedCurrentPolicy(memory.store, staged.root, header)).resolves.toBeUndefined();
+        const pending = await loadIndexedPendingProcessingJobs(memory.store, staged.root);
+        expect(pending.jobs.map(({ job }) => job.processor_index).sort((left, right) => left - right)).toEqual([0, 1]);
+        await expect(
+            assertIndexedCurrentPolicy(memory.store, staged.root, {
+                ...header,
+                processors: [{ ...configuration, id: 'unregistered' }],
+            }),
+        ).rejects.toThrow('immutable root descriptor');
+        const unsupported = await setProcessingPolicy(initial, {
+            operation_id: 'policy:unregistered-inherited',
+            expected_revision: initial.revision,
+            recorded_at: RECORDED_AT,
+            enabled: true,
+            processors: [{ ...configuration, id: 'unregistered' }],
+        });
+        const unsupportedSnapshot = await stageIndexedConversationSnapshot(
+            unsupported.document,
+            undefined,
+            memory.store,
+        );
+        const unsupportedBytes = memory.records.get(unsupportedSnapshot.root.processing_header.content_hash);
+        if (!unsupportedBytes) throw new Error('Unsupported policy lacks its actual snapshot header');
+        await expect(
+            assertIndexedCurrentPolicy(
+                memory.store,
+                unsupportedSnapshot.root,
+                IndexedConversationProcessingHeaderSchema.parse(JSON.parse(new TextDecoder().decode(unsupportedBytes))),
+            ),
+        ).rejects.toThrow('registered bounded');
+    });
     it.each(['resolve', 'attempt', 'output'] as const)(
         'rejects real fault-paused materialized %s before any indexed write',
         async (phase) => {
@@ -663,6 +929,31 @@ describe('indexed processing append index', () => {
         );
         if (!policy.locator) throw new Error('Indexed policy was not staged');
         expect(supported).toEqual(['externalize-text', 'semantic-summary']);
+        const selectedPolicyBytes = memory.records.get(policy.root.processing_header.content_hash);
+        if (!selectedPolicyBytes) throw new Error('Actual selected custom policy lacks its immutable header');
+        const selectedPolicy = IndexedConversationProcessingHeaderSchema.parse(
+            JSON.parse(new TextDecoder().decode(selectedPolicyBytes)),
+        );
+        expect(selectedPolicy.selected_policy_operation_id).toBe(policyCommand.operation_id);
+        // The portable core retains a host-validated registered extension. This is not native
+        // processor execution capability: the native host predicate still refuses this profile.
+        expect(supportsIndexedRegisteredProcessingPolicy(selectedPolicy)).toBe(false);
+        await expect(assertIndexedCurrentPolicy(memory.store, policy.root, selectedPolicy)).resolves.toBeUndefined();
+        const selectedPolicyReceipt = await getPagedRecord(
+            memory.store,
+            policy.root.directories.operation_receipts,
+            policyCommand.operation_id,
+        );
+        if (selectedPolicyReceipt?.storage !== 'record')
+            throw new Error('Actual selected custom policy receipt is absent');
+        const receiptBytes = memory.records.get(selectedPolicyReceipt.content_hash);
+        if (!receiptBytes) throw new Error('Actual selected custom policy receipt bytes are absent');
+        memory.records.delete(selectedPolicyReceipt.content_hash);
+        await expect(assertIndexedCurrentPolicy(memory.store, policy.root, selectedPolicy)).rejects.toThrow(
+            'Indexed record absent',
+        );
+        memory.records.set(selectedPolicyReceipt.content_hash, receiptBytes);
+
         expect(
             (
                 await stageIndexedProcessingPolicy(
@@ -841,7 +1132,7 @@ describe('indexed processing append index', () => {
         ).rejects.toThrow();
     });
 
-    it('rejects unsupported mixed trigger policy before indexed activation rather than queueing an irrecoverable policy-index job', async () => {
+    it('retains mixed trigger policy data but rejects unsupported native preparation and queue before publication', async () => {
         const mixed = (
             await setProcessingPolicy(emptyDocument('conversation:mixed-policy'), {
                 operation_id: 'operation:mixed-policy',
@@ -869,10 +1160,56 @@ describe('indexed processing append index', () => {
                 budget: { max_input_tokens: 200, output_reserve_tokens: 0, measurement_policy: 'exact_only' },
             })
         ).document;
-        const { store } = storage();
-        await expect(stageIndexedConversationSnapshot(mixed, undefined, store)).rejects.toThrow(
-            'one registered on-append text or whole-exchange processor',
+        const turn = userTurn('turn:mixed-policy');
+        const batch = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:mixed-policy', type: 'source_turn' as const, turn_id: turn.id }],
+        };
+        const accepted = await appendConversationRecordsWithProcessing(mixed, batch, {
+            operation_id: 'append:mixed-policy',
+            expected_revision: mixed.revision,
+            payload_fingerprint: await fingerprintJson(batch),
+            recorded_at: RECORDED_AT,
+        });
+        const memory = storage();
+        const staged = await stageIndexedConversationSnapshot(accepted.document, undefined, memory.store);
+        const bytes = await memory.store.readRecord({
+            storage: 'record',
+            kind: 'processing_header',
+            id: staged.root.source.conversation_id,
+            ...staged.root.processing_header,
+        });
+        const header = IndexedConversationProcessingHeaderSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+        expect(header.processors).toEqual(mixed.processing.processors);
+        expect(header.budget).toEqual(mixed.processing.budget);
+        const pendingBefore = await loadIndexedPendingProcessingJobs(memory.store, staged.root);
+        expect(pendingBefore.jobs).toHaveLength(1);
+        const recordsBefore = memory.records.size;
+        const pagesBefore = memory.pages.size;
+        await expect(assertIndexedCurrentPolicy(memory.store, staged.root, header)).rejects.toThrow(
+            'registered bounded ordered text or whole-exchange policy',
         );
+        await expect(
+            loadIndexedSettledProcessingSelectedContext(memory.store, staged.root, staged.locator),
+        ).rejects.toThrow('registered bounded ordered text or whole-exchange policy');
+        await expect(
+            stageIndexedProcessingQueue(memory.store, staged.root, staged.locator, {
+                operation_id: 'queue:unsupported-budget',
+                expected_revision: staged.root.source.revision,
+                expected_context_revision: accepted.document.context.revision,
+                processor_id: 'future-budget',
+                scope: 'on_budget',
+                selected_entry_ids: ['entry:mixed-policy'],
+                target_fingerprint: 'sha256:measured-target',
+                recorded_at: RECORDED_AT,
+            }),
+        ).rejects.toThrow('registered bounded ordered text or whole-exchange policy');
+        expect(memory.records.size).toBe(recordsBefore);
+        expect(memory.pages.size).toBe(pagesBefore);
+        expect(await loadIndexedPendingProcessingJobs(memory.store, staged.root)).toEqual(pendingBefore);
+        expect(
+            await getPagedRecord(memory.store, staged.root.directories.operation_receipts, 'queue:unsupported-budget'),
+        ).toBeUndefined();
     });
 
     it(

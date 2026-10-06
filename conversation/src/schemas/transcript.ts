@@ -4,6 +4,7 @@ import {
     AudioBlockSchema,
     ConversationTurnSchema,
     DocumentBlockSchema,
+    ExternalReferenceBlockSchema,
     ImageBlockSchema,
     JsonBlockSchema,
     ReasoningBlockSchema,
@@ -105,6 +106,23 @@ export const ConversationTranscriptToolCallBlockSchema = z
     })
     .meta({ id: 'ConversationTranscriptToolCallBlock' });
 
+/** Presentation cue only: no private retrieval arguments, resolver or locator capability. */
+export const ConversationTranscriptExternalReferenceBlockSchema = ExternalReferenceBlockSchema.pick({
+    id: true,
+    type: true,
+    asset_id: true,
+    original_type: true,
+    description: true,
+    content_hash: true,
+    preview: true,
+})
+    .extend({
+        content_hash: ExternalReferenceBlockSchema.shape.content_hash.unwrap(),
+        description: z.string().min(1).max(512),
+        preview: z.string().max(512).optional(),
+    })
+    .meta({ id: 'ConversationTranscriptExternalReferenceBlock' });
+
 export const ConversationTranscriptRenderableBlockSchema = z
     .discriminatedUnion('type', [
         TextBlockSchema,
@@ -113,6 +131,7 @@ export const ConversationTranscriptRenderableBlockSchema = z
         DocumentBlockSchema,
         AudioBlockSchema,
         VideoBlockSchema,
+        ConversationTranscriptExternalReferenceBlockSchema,
         ReasoningBlockSchema,
     ])
     .meta({ id: 'ConversationTranscriptRenderableBlock' });
@@ -135,6 +154,7 @@ export const ConversationTranscriptUserBlockSchema = z
         DocumentBlockSchema,
         AudioBlockSchema,
         VideoBlockSchema,
+        ConversationTranscriptExternalReferenceBlockSchema,
     ])
     .meta({ id: 'ConversationTranscriptUserBlock' });
 
@@ -146,6 +166,7 @@ export const ConversationTranscriptAgentBlockSchema = z
         DocumentBlockSchema,
         AudioBlockSchema,
         VideoBlockSchema,
+        ConversationTranscriptExternalReferenceBlockSchema,
         ReasoningBlockSchema,
         ConversationTranscriptToolCallBlockSchema,
     ])

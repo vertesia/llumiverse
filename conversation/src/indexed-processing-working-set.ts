@@ -211,6 +211,34 @@ export async function indexedPredecessorEntrySelection(
         throw new TypeError('Indexed predecessor evidence is not bounded JSON');
     const job = ProcessingJobSchema.parse(structuredClone(jobInput));
     const evidence = IndexedProcessingPredecessorEvidenceSchema.parse(structuredClone(evidenceInput));
+    const prior = evidence.job;
+    if (
+        job.selection.kind !== 'predecessor_output' ||
+        job.selection_fingerprint !== (await fingerprintJson(job.selection)) ||
+        job.configuration_fingerprint !== (await fingerprintJson(job.configuration)) ||
+        job.stage_index < 1 ||
+        job.selection.job_id !== prior.id ||
+        prior.stage_index + 1 !== job.stage_index ||
+        prior.processor_index >= job.processor_index ||
+        prior.scope !== job.scope ||
+        prior.source_operation_id !== job.source_operation_id ||
+        prior.enqueue_revision !== job.enqueue_revision ||
+        prior.policy_revision !== job.policy_revision ||
+        prior.target_fingerprint !== job.target_fingerprint
+    )
+        throw new Error('Indexed stage lost its exact accepted predecessor output and completion');
+    return indexedCompletedJobEntrySelection(evidence);
+}
+
+/** Shared data-only audit of actual completion evidence, independent of a following policy stage.
+ * This derives no readiness or authority: callers still prove original accepted source/job custody.
+ */
+export async function indexedCompletedJobEntrySelection(
+    evidenceInput: IndexedProcessingPredecessorEvidence,
+): Promise<Pick<ProcessingResolvedInput, 'entry_ids' | 'selected_block_ids' | 'selected_entries'>> {
+    if (!preflightJsonInput(evidenceInput, { max_bytes: MAX_WORKING_SET_BYTES }).success)
+        throw new TypeError('Indexed completed evidence is not bounded JSON');
+    const evidence = IndexedProcessingPredecessorEvidenceSchema.parse(structuredClone(evidenceInput));
     const {
         job: prior,
         resolution,
@@ -222,14 +250,6 @@ export async function indexedPredecessorEntrySelection(
     } = evidence;
     const { output_fingerprint: _outputFingerprint, ...outputPayload } = output;
     if (
-        job.selection.kind !== 'predecessor_output' ||
-        job.selection_fingerprint !== (await fingerprintJson(job.selection)) ||
-        job.configuration_fingerprint !== (await fingerprintJson(job.configuration)) ||
-        job.stage_index < 1 ||
-        job.selection.job_id !== prior.id ||
-        prior.stage_index + 1 !== job.stage_index ||
-        prior.processor_index >= job.processor_index ||
-        prior.scope !== job.scope ||
         prior.selection_fingerprint !== (await fingerprintJson(prior.selection)) ||
         prior.configuration_fingerprint !== (await fingerprintJson(prior.configuration)) ||
         resolution.target_fingerprint !== prior.target_fingerprint ||
@@ -253,10 +273,6 @@ export async function indexedPredecessorEntrySelection(
               attempt.job_id !== prior.id ||
               attempt.attempt_token !== output.attempt_token ||
               attempt.resolved_input_fingerprint !== output.resolved_input_fingerprint) ||
-        prior.source_operation_id !== job.source_operation_id ||
-        prior.enqueue_revision !== job.enqueue_revision ||
-        prior.policy_revision !== job.policy_revision ||
-        prior.target_fingerprint !== job.target_fingerprint ||
         resolution.job_id !== prior.id ||
         output.job_id !== prior.id ||
         output.resolved_input_fingerprint !== (await fingerprintJson(resolution)) ||

@@ -1,5 +1,7 @@
 import { canonicalJsonContentString } from './content-integrity.js';
-import { nextRevision } from './conversation-edit-utils.js';
+import { collectAssetIds } from './context-change-working-set.js';
+import { cacheAfterContextRemoval, nextRevision } from './conversation-edit-utils.js';
+import { deletedContentIdentities } from './deleted-content-identities.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { fingerprintJson } from './identity.js';
 import { preflightJsonInput } from './json-preflight.js';
@@ -12,6 +14,7 @@ import {
 } from './schemas/conversation-delete.js';
 import { verifyDerivedBlockLineage } from './source-slice-lineage.js';
 import type {
+    ContentBlock,
     ConversationDeletedTurnRef,
     ConversationDeleteOperation,
     ConversationDeletePlan,
@@ -32,13 +35,19 @@ function same(first: unknown, second: unknown): boolean {
     return canonicalJsonContentString(first) === canonicalJsonContentString(second);
 }
 
-function assertDependencyClosure(document: ConversationDocument, selected: ReadonlySet<string>): void {
+function assertDependencyClosure(
+    document: ConversationDocument,
+    selected: ReadonlySet<string>,
+    excludeContext: boolean,
+): void {
     const reject = (path: string): never => {
         throw new Error(`Conversation delete has a retained dependency at ${path}`);
     };
-    const selectedBlocks = new Set(
-        document.turns.filter((turn) => selected.has(turn.id)).flatMap((turn) => turn.blocks.map((block) => block.id)),
+    const identities = deletedContentIdentities(
+        document.turns.filter((turn) => selected.has(turn.id)).flatMap<ContentBlock>((turn) => turn.blocks),
     );
+    const selectedBlocks = new Set(identities.block_ids);
+    const selectedCalls = new Set(identities.call_ids);
     const selectedEntryIds = new Set<string>();
     const selectedAppendOperations = new Set<string>();
     for (const receipt of Object.values(document.operation_receipts)) {
@@ -49,19 +58,40 @@ function assertDependencyClosure(document: ConversationDocument, selected: Reado
         }
     }
     for (const [index, entry] of document.context.entries.entries()) {
-        if (selected.has(entry.turn_id)) reject(`/context/entries/${index}`);
+        if (!selected.has(entry.turn_id)) continue;
+        if (!excludeContext || document.context.protected_entry_ids.includes(entry.id))
+            reject(`/context/entries/${index}`);
     }
+    cacheAfterContextRemoval(
+        document.context,
+        new Set(document.context.entries.filter((entry) => selected.has(entry.turn_id)).map((entry) => entry.id)),
+    );
     for (const [index, turn] of document.turns.entries()) {
         if (selected.has(turn.id)) {
             if (
-                turn.blocks.some(
-                    (block) =>
-                        block.type === 'tool_call' || block.type === 'tool_result' || block.type === 'native_replay',
+                excludeContext &&
+                document.context.entries.some((entry) => entry.turn_id === turn.id) &&
+                document.context.retrieval_requirements.some((requirement) =>
+                    collectAssetIds(turn.blocks).has(requirement.asset_id),
                 )
             )
-                reject(`/turns/${index}/blocks`);
+                reject(`/turns/${index}/retrieval_requirement`);
+            for (const block of turn.blocks)
+                if (block.type === 'tool_call') {
+                    const terminal = Object.values(document.execution_receipts).filter(
+                        (receipt) => receipt.call_id === block.call_id,
+                    );
+                    if (terminal.length !== 1) reject(`/turns/${index}/blocks`);
+                }
             continue;
         }
+        for (const block of turn.blocks)
+            if (block.type === 'tool_result') {
+                const call = document.turns.find((candidate) =>
+                    candidate.blocks.some((value) => value.type === 'tool_call' && value.call_id === block.call_id),
+                );
+                if (call && selected.has(call.id)) reject(`/turns/${index}/blocks`);
+            }
         if (turn.parent_turn_id && selected.has(turn.parent_turn_id)) reject(`/turns/${index}/parent_turn_id`);
         if (turn.provenance.type === 'derived' && turn.provenance.source_turn_ids.some((id) => selected.has(id))) {
             reject(`/turns/${index}/provenance/source_turn_ids`);
@@ -70,7 +100,8 @@ function assertDependencyClosure(document: ConversationDocument, selected: Reado
             if (
                 block.type === 'native_replay' &&
                 (block.dependencies.turn_ids.some((id) => selected.has(id)) ||
-                    block.dependencies.block_ids.some((id) => selectedBlocks.has(id)))
+                    block.dependencies.block_ids.some((id) => selectedBlocks.has(id)) ||
+                    block.dependencies.call_ids.some((id) => selectedCalls.has(id)))
             )
                 reject(`/turns/${index}/blocks/${blockIndex}/dependencies`);
         }
@@ -90,27 +121,11 @@ function assertDependencyClosure(document: ConversationDocument, selected: Reado
         )
             reject(`/assets/${id}/provenance/source_turn_id`);
     }
-    for (const [id, generation] of Object.entries(document.generations)) {
-        if (generation.record_source !== 'executed') continue;
-        const receipt = generation.request_receipt;
-        if (receipt.source_tail_turn_id && selected.has(receipt.source_tail_turn_id)) {
-            reject(`/generations/${id}/request_receipt/source_tail_turn_id`);
-        }
-        if (
-            receipt.item_mappings.some(
-                (mapping) => selected.has(mapping.canonical_id) || selectedBlocks.has(mapping.canonical_id),
-            )
-        )
-            reject(`/generations/${id}/request_receipt/item_mappings`);
-    }
-    for (const [id, receipt] of Object.entries(document.execution_receipts)) {
-        if (receipt.result_turn_id && selected.has(receipt.result_turn_id))
-            reject(`/execution_receipts/${id}/result_turn_id`);
-        if (receipt.call_source && selected.has(receipt.call_source.turn_id)) {
-            reject(`/execution_receipts/${id}/call_source/turn_id`);
-        }
-    }
+    const unresolved = (id: string) =>
+        !document.processing.supersessions?.[id] &&
+        (!document.processing.completions?.[id] || document.processing.completions[id].status === 'blocked');
     for (const [id, resolved] of Object.entries(document.processing.resolved_inputs ?? {})) {
+        if (!unresolved(id)) continue;
         if (
             resolved.source_turn_ids.some((turnId) => selected.has(turnId)) ||
             resolved.selected_entries?.some((entry) => selected.has(entry.turn_id)) ||
@@ -119,6 +134,7 @@ function assertDependencyClosure(document: ConversationDocument, selected: Reado
             reject(`/processing/resolved_inputs/${id}`);
     }
     for (const [id, job] of Object.entries(document.processing.jobs ?? {})) {
+        if (!unresolved(id)) continue;
         if (
             selectedAppendOperations.has(job.source_operation_id) ||
             (job.selection.kind === 'entries' &&
@@ -149,7 +165,7 @@ async function prepareDelete(
     ) {
         throw new Error('Conversation delete selects unavailable or unordered source turns');
     }
-    assertDependencyClosure(document, selected);
+    assertDependencyClosure(document, selected, input.context_policy === 'exclude');
     const acceptedByTurn = new Map<string, string>();
     const duplicateAcceptedTurns = new Set<string>();
     for (const receipt of Object.values(document.operation_receipts)) {
@@ -169,7 +185,10 @@ async function prepareDelete(
         deletedTurns.push({
             id: turn.id,
             fingerprint: await fingerprintJson(turn),
-            block_ids: turn.blocks.map((block) => block.id),
+            block_ids: deletedContentIdentities(turn.blocks).block_ids,
+            ...(deletedContentIdentities(turn.blocks).call_ids.length === 0
+                ? {}
+                : { call_ids: deletedContentIdentities(turn.blocks).call_ids }),
             accepted_operation_id: acceptedOperationId,
         });
     }
@@ -178,6 +197,13 @@ async function prepareDelete(
         source: input.conversation,
         source_fingerprint: await fingerprintJson({ document, turn_ids: input.turn_ids }),
         dependency_policy: 'reject',
+        ...(input.context_policy === 'exclude' && document.context.entries.some((entry) => selected.has(entry.turn_id))
+            ? {
+                  excluded_context_entry_ids: document.context.entries
+                      .filter((entry) => selected.has(entry.turn_id))
+                      .map((entry) => entry.id),
+              }
+            : {}),
         deleted_turns: deletedTurns,
     };
 }
@@ -251,6 +277,7 @@ export async function applyConversationDelete(
                 witness.fingerprint !== ref.fingerprint ||
                 witness.accepted_operation_id !== ref.accepted_operation_id ||
                 !same(witness.block_ids, ref.block_ids) ||
+                !same(witness.call_ids ?? [], ref.call_ids ?? []) ||
                 document.turns.some((turn) => turn.id === ref.id)
             )
                 throw new Error('Conversation delete retry lacks its retained tombstone');
@@ -276,11 +303,31 @@ export async function applyConversationDelete(
                 },
             ] as const,
     );
+    const { coverage: _coverage, ...uncoveredProcessing } = document.processing;
     const updated = parseConversationDocument({
         ...document,
         revision,
         updated_at: request.recorded_at,
         turns: document.turns.filter((turn: ConversationTurn) => !request.turn_ids.includes(turn.id)),
+        processing: operation.excluded_context_entry_ids === undefined ? document.processing : uncoveredProcessing,
+        context:
+            operation.excluded_context_entry_ids === undefined
+                ? document.context
+                : {
+                      ...document.context,
+                      revision: nextRevision(document.context.revision),
+                      ...(document.context.cache_intent === undefined
+                          ? {}
+                          : {
+                                cache_intent: cacheAfterContextRemoval(
+                                    document.context,
+                                    new Set(operation.excluded_context_entry_ids),
+                                ),
+                            }),
+                      entries: document.context.entries.filter(
+                          (entry) => !operation.excluded_context_entry_ids?.includes(entry.id),
+                      ),
+                  },
         deleted_turns: Object.fromEntries([...Object.entries(document.deleted_turns ?? {}), ...witnesses]),
         operation_receipts: {
             ...document.operation_receipts,

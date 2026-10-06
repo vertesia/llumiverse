@@ -784,6 +784,8 @@ export function validateConversationSemantics(
         for (const [index, blockId] of witness.block_ids.entries()) {
             registerId(blockId, 'deleted block', `${path}/block_ids/${index}`);
         }
+        for (const [index, callId] of (witness.call_ids ?? []).entries())
+            registerId(callId, 'deleted tool call', `${path}/call_ids/${index}`);
         const accepted = hasOwn(document.operation_receipts, witness.accepted_operation_id)
             ? document.operation_receipts[witness.accepted_operation_id]
             : undefined;
@@ -804,7 +806,8 @@ export function validateConversationSemantics(
                     ref.id === id &&
                     ref.fingerprint === witness.fingerprint &&
                     ref.accepted_operation_id === witness.accepted_operation_id &&
-                    JSON.stringify(ref.block_ids) === JSON.stringify(witness.block_ids),
+                    JSON.stringify(ref.block_ids) === JSON.stringify(witness.block_ids) &&
+                    JSON.stringify(ref.call_ids ?? []) === JSON.stringify(witness.call_ids ?? []),
             )
         ) {
             add('REFERENCE_NOT_FOUND', path, 'Deleted turn lacks matching append and delete receipts', id);
@@ -1315,6 +1318,28 @@ export function validateConversationSemantics(
         if ((receipt.operation_kind === 'conversation_delete') !== (receipt.conversation_delete !== undefined)) {
             add('CONTEXT_REVISION_INVALID', path, 'Conversation-delete receipt kind and details must be paired');
         }
+        if ((receipt.operation_kind === 'indexed_upgrade') !== (receipt.indexed_upgrade !== undefined)) {
+            add('CONTEXT_REVISION_INVALID', path, 'Indexed-upgrade receipt kind and details must be paired');
+        }
+        if (receipt.indexed_upgrade) {
+            const detail = receipt.indexed_upgrade;
+            if (
+                detail.source.conversation_id !== document.id ||
+                detail.source.revision !== receipt.base_revision ||
+                receipt.result_revision !== receipt.base_revision + 1 ||
+                (receipt.accepted_turn_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_generation_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_asset_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_tool_definition_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_execution_receipt_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_context_entry_ids?.length ?? 0) !== 0 ||
+                (receipt.accepted_context_entries?.length ?? 0) !== 0 ||
+                (receipt.accepted_retrieval_requirements?.length ?? 0) !== 0 ||
+                receipt.accepted_tool_selection !== undefined
+            ) {
+                add('CONTEXT_REVISION_INVALID', path, 'Indexed-upgrade source, revision or content effects differ');
+            }
+        }
         if (receipt.conversation_delete) {
             const detail = receipt.conversation_delete;
             if (
@@ -1335,6 +1360,26 @@ export function validateConversationSemantics(
                     'Conversation-delete source, revision or accepted effects differ',
                 );
             }
+            if (detail.excluded_context_entry_ids !== undefined) {
+                const excluded = detail.excluded_context_entry_ids;
+                const deletedIds = new Set(detail.deleted_turns.map((turn) => turn.id));
+                const archives = Object.values(document.operation_receipts).flatMap(
+                    (operation) => operation.accepted_context_entries ?? [],
+                );
+                if (
+                    new Set(excluded).size !== excluded.length ||
+                    excluded.some(
+                        (id) =>
+                            !archives.some((entry) => entry.id === id && deletedIds.has(entry.turn_id)) ||
+                            document.context.entries.some((entry) => entry.id === id),
+                    )
+                )
+                    add(
+                        'CONTEXT_REVISION_INVALID',
+                        path,
+                        'Delete exclusion must name exact accepted entries of its deleted turns',
+                    );
+            }
             for (const ref of detail.deleted_turns) {
                 const witness =
                     document.deleted_turns && hasOwn(document.deleted_turns, ref.id)
@@ -1346,7 +1391,8 @@ export function validateConversationSemantics(
                     witness.source_revision !== receipt.base_revision ||
                     witness.fingerprint !== ref.fingerprint ||
                     witness.accepted_operation_id !== ref.accepted_operation_id ||
-                    JSON.stringify(witness.block_ids) !== JSON.stringify(ref.block_ids)
+                    JSON.stringify(witness.block_ids) !== JSON.stringify(ref.block_ids) ||
+                    JSON.stringify(witness.call_ids ?? []) !== JSON.stringify(ref.call_ids ?? [])
                 ) {
                     add(
                         'REFERENCE_NOT_FOUND',

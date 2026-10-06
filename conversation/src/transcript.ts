@@ -13,6 +13,7 @@ import {
     type ConversationTranscriptAssetOmissionSchema,
     type ConversationTranscriptAssetSchema,
     type ConversationTranscriptBlockOmissionSchema,
+    type ConversationTranscriptExternalReferenceBlockSchema,
     ConversationTranscriptFragmentSchema,
     type ConversationTranscriptGenerationInputOmissionSchema,
     type ConversationTranscriptGenerationOmissionSchema,
@@ -39,6 +40,9 @@ import type {
 import { diagnosticsFromZodError } from './validation.js';
 
 export type ConversationTranscriptProjectionInput = z.infer<typeof ConversationTranscriptProjectionInputSchema>;
+export type ConversationTranscriptExternalReferenceBlock = z.infer<
+    typeof ConversationTranscriptExternalReferenceBlockSchema
+>;
 export type ConversationTranscriptFragment = z.infer<typeof ConversationTranscriptFragmentSchema>;
 export type ConversationTranscriptTurn = z.infer<typeof ConversationTranscriptTurnSchema>;
 export type ConversationTranscriptAsset = z.infer<typeof ConversationTranscriptAssetSchema>;
@@ -295,13 +299,31 @@ function projectRenderableBlock(
                 'omitted blocks',
             );
             return undefined;
-        case 'external_reference':
+        case 'external_reference': {
+            const asset = assetsById.get(block.asset_id);
+            if (
+                asset?.kind === block.original_type &&
+                asset.content_hash !== undefined &&
+                block.content_hash === asset.content_hash
+            ) {
+                const boundedCue = (value: string) => value.slice(0, 512).replace(/[\uD800-\uDBFF]$/u, '');
+                return {
+                    id: block.id,
+                    type: block.type,
+                    asset_id: asset.id,
+                    original_type: block.original_type,
+                    content_hash: asset.content_hash,
+                    description: boundedCue(block.description),
+                    ...(block.preview === undefined ? {} : { preview: boundedCue(block.preview) }),
+                };
+            }
             appendBounded(
                 omittedBlocks,
                 { turn_id: turnId, block_id: block.id, reason: 'unsupported_external_reference' },
                 'omitted blocks',
             );
             return undefined;
+        }
         case 'tool_call':
             return undefined;
     }

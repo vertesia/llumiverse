@@ -1,5 +1,7 @@
 import {
     appendConversationRecords,
+    type ConversationStreamEvent,
+    createAcceptedOutputFragment,
     createConversationDocument,
     createTextBlock,
     createUserTurn,
@@ -8,6 +10,7 @@ import {
     fingerprintJson,
     hashContentBytes,
     type IndexedConversationRecordStore,
+    loadIndexedAcceptedOutputContinuation,
     loadIndexedSelectedDependencyContext,
     loadIndexedSelectedMediaCompactionContext,
     loadIndexedSelectedTextContext,
@@ -672,4 +675,218 @@ describe('committed indexed Responses received failure custody', () => {
             );
         },
     );
+});
+
+it('streams exact indexed Responses text and tool deltas before genuine retained output publication', async () => {
+    const { document, selection, runtime, store } = await selectedText(true);
+    const driver = new OpenAIDriver({ apiKey: 'test' });
+    const bodies: unknown[] = [];
+    const message = responseBody().output[0];
+    if (message?.type !== 'message') throw new Error('Expected real message fixture');
+    const call = {
+        type: 'function_call' as const,
+        id: 'native:read',
+        call_id: 'call:read',
+        name: 'read_image',
+        arguments: '{}',
+        status: 'completed' as const,
+    };
+    const finalResponse = { ...responseBody(), output: [message, call] };
+    const frames = [
+        {
+            type: 'response.output_text.delta',
+            sequence_number: 1,
+            output_index: 0,
+            item_id: message.id,
+            content_index: 0,
+            delta: 'Do',
+            logprobs: [],
+        },
+        {
+            type: 'response.output_item.added',
+            sequence_number: 2,
+            output_index: 1,
+            item: { ...call, arguments: '', status: 'in_progress' },
+        },
+        {
+            type: 'response.function_call_arguments.delta',
+            sequence_number: 3,
+            output_index: 1,
+            item_id: call.id,
+            delta: '{',
+        },
+        {
+            type: 'response.output_text.delta',
+            sequence_number: 4,
+            output_index: 0,
+            item_id: message.id,
+            content_index: 0,
+            delta: 'ne',
+            logprobs: [],
+        },
+        {
+            type: 'response.function_call_arguments.delta',
+            sequence_number: 5,
+            output_index: 1,
+            item_id: call.id,
+            delta: '}',
+        },
+        { type: 'response.output_item.done', sequence_number: 6, output_index: 0, item: message },
+        { type: 'response.output_item.done', sequence_number: 7, output_index: 1, item: call },
+        { type: 'response.completed', sequence_number: 8, response: finalResponse },
+    ];
+    driver.service = new OpenAI({
+        apiKey: 'test',
+        baseURL: 'https://indexed.test/v1',
+        fetch: async (_url, init) => {
+            bodies.push(JSON.parse(String(init?.body)));
+            return new Response(
+                frames.map((frame) => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(''),
+                { headers: { 'content-type': 'text/event-stream' } },
+            );
+        },
+    });
+    const options = { model: 'gpt-5.4' };
+    const prepared = await driver.prepareIndexedTextRequest({ selection, runtime, options, stream: true });
+    const record = parseConversationPreparedRequestRecord({
+        source: selection.source,
+        runtime,
+        request_receipt: prepared.receipt,
+        generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+        response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+    });
+    const publish = vi.fn(async (decoded: Parameters<typeof decodedResponseBatchFromAcceptedRecord>[1]) => {
+        const operation = decodedResponseBatchFromAcceptedRecord(record, decoded, {
+            operation_id: runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.completed_at ?? runtime.recorded_at,
+        });
+        // A real complete canonical fixture and snapshot publisher, never a partial document/fragment.
+        const accepted = appendConversationRecords(document, operation.batch, operation.options).document;
+        const indexed = await stageIndexedConversationSnapshot(accepted, undefined, store);
+        // Nominate the exact public receipt projection; the reader independently reloads full
+        // immutable append evidence from indexed storage and authenticates the original call bytes.
+        const receipt = createAcceptedOutputFragment(accepted, runtime.response_operation_id).receipt;
+        return (await loadIndexedAcceptedOutputContinuation(store, indexed.root, receipt)).fragment;
+    });
+    const wrong = await driver.prepareIndexedTextRequest({ selection, runtime, options, stream: false });
+    await expect(
+        driver.streamCommittedIndexedTextRequest({
+            selection,
+            options,
+            record: {
+                ...record,
+                request_receipt: wrong.receipt,
+            },
+            assert_committed: async () => undefined,
+            accept_output: publish,
+            open: { stream_id: 'stream:wrong' },
+        }),
+    ).rejects.toThrow('durable prepared receipt');
+    expect(bodies).toHaveLength(0);
+    const stream = await driver.streamCommittedIndexedTextRequest({
+        selection,
+        options,
+        record,
+        assert_committed: async () => undefined,
+        accept_output: publish,
+        open: { stream_id: 'stream:actual' },
+    });
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    await stream.closed;
+    expect(bodies).toEqual([prepared.native_request]);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(
+        events
+            .filter((event) => event.type === 'draft_text_delta' || event.type === 'draft_tool_arguments_delta')
+            .map((event) => event.type),
+    ).toEqual(['draft_text_delta', 'draft_tool_arguments_delta', 'draft_text_delta', 'draft_tool_arguments_delta']);
+    expect(stream.failure).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({
+        type: 'response_accepted',
+        origin: 'live_transport',
+        operation_receipt_id: runtime.response_operation_id,
+    });
+    expect(stream.completion).toBeUndefined();
+});
+
+it('streams configured Chat text and exact tool arguments through the same indexed acceptance boundary', async () => {
+    const { document, selection, runtime, store } = await selectedText(true);
+    const driver = new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://indexed.test/v1' });
+    const bodies: unknown[] = [];
+    const chunk = (delta: unknown, finishReason: string | null = null) => ({
+        id: 'chat:stream',
+        object: 'chat.completion.chunk',
+        created: 1,
+        model: 'gpt-4o-mini-2024-07-18',
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+    });
+    const frames = [
+        chunk({ role: 'assistant', content: 'Do' }),
+        chunk({
+            tool_calls: [
+                { index: 0, id: 'call:read', type: 'function', function: { name: 'read_image', arguments: '{' } },
+            ],
+        }),
+        chunk({ content: 'ne' }),
+        chunk({ tool_calls: [{ index: 0, function: { arguments: '}' } }] }),
+        chunk({}, 'tool_calls'),
+        { ...chunk({}), choices: [], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } },
+    ];
+    driver.service = new OpenAI({
+        apiKey: 'test',
+        baseURL: 'https://indexed.test/v1',
+        fetch: async (_url, init) => {
+            bodies.push(JSON.parse(String(init?.body)));
+            return new Response(
+                `${frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')}data: [DONE]\n\n`,
+                { headers: { 'content-type': 'text/event-stream' } },
+            );
+        },
+    });
+    const options = { model: 'gpt-4o-mini-2024-07-18' };
+    const prepared = await driver.prepareIndexedTextRequest({ selection, runtime, options, stream: true });
+    const record = parseConversationPreparedRequestRecord({
+        source: selection.source,
+        runtime,
+        request_receipt: prepared.receipt,
+        generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+        response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+    });
+    const publish = vi.fn(async (decoded: Parameters<typeof decodedResponseBatchFromAcceptedRecord>[1]) => {
+        const operation = decodedResponseBatchFromAcceptedRecord(record, decoded, {
+            operation_id: runtime.response_operation_id,
+            recorded_at: decoded.generation.timestamps.completed_at ?? runtime.recorded_at,
+        });
+        const accepted = appendConversationRecords(document, operation.batch, operation.options).document;
+        const indexed = await stageIndexedConversationSnapshot(accepted, undefined, store);
+        // Nominate the exact public receipt projection; the reader independently reloads full
+        // immutable append evidence from indexed storage and authenticates the original call bytes.
+        const receipt = createAcceptedOutputFragment(accepted, runtime.response_operation_id).receipt;
+        return (await loadIndexedAcceptedOutputContinuation(store, indexed.root, receipt)).fragment;
+    });
+    const stream = await driver.streamCommittedIndexedTextRequest({
+        selection,
+        options,
+        record,
+        assert_committed: async () => undefined,
+        accept_output: publish,
+        open: { stream_id: 'stream:chat' },
+    });
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    await stream.closed;
+    expect(bodies).toEqual([prepared.native_request]);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(
+        events
+            .filter((event) => event.type === 'draft_text_delta' || event.type === 'draft_tool_arguments_delta')
+            .map((event) => event.type),
+    ).toEqual(['draft_text_delta', 'draft_tool_arguments_delta', 'draft_text_delta', 'draft_tool_arguments_delta']);
+    expect(stream.failure).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({
+        type: 'response_accepted',
+        operation_receipt_id: runtime.response_operation_id,
+    });
+    expect(stream.completion).toBeUndefined();
 });

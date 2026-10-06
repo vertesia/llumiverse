@@ -11,6 +11,7 @@ const inputShape = {
     conversation: ConversationRefSchema,
     recorded_at: TimestampSchema,
     dependency_policy: z.literal('reject'),
+    context_policy: z.literal('exclude').optional(),
     turn_ids: z.array(IdentifierSchema).min(1).max(4096),
 };
 

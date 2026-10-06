@@ -38,6 +38,7 @@ import {
     CanonicalStreamEventChannel,
     type CanonicalStreamTerminalEvent,
     FallbackCanonicalExecutionEventStream,
+    finalizeCanonicalAcceptedOutputStream,
     finalizeCanonicalExecutionStreamResponse,
     LegacyCanonicalExecutionEventProjection,
 } from './CanonicalStreaming.js';
@@ -395,6 +396,50 @@ describe('canonical execution response', () => {
 
         expect(recovered.conversation.revision).toBe(2);
         expect(recovered.accepted_output).toEqual(original.accepted_output);
+        const turn = accepted.turns.find((candidate) => candidate.id === 'agent-turn');
+        const generation = accepted.generations.generation;
+        if (turn?.kind !== 'agent' || !generation || generation.record_source !== 'executed')
+            throw new Error('Expected the actual accepted generated output before externalization');
+        const decoded: DecodedConversationResponse = {
+            turns: [turn],
+            generation,
+            diagnostics: [],
+            payload_fingerprint: accepted.operation_receipts['response-operation'].payload_fingerprint,
+            stream_evidence: {
+                item_mappings: turn.blocks.map((block, index) => ({
+                    canonical_id: block.id,
+                    kind: 'block',
+                    native_position: { protocol: 'provider.protocol', path: ['output', index] },
+                })),
+                transformations: [],
+            },
+        };
+        const accumulator = (streamId: string) =>
+            new ConversationStreamAccumulator({
+                stream_id: streamId,
+                request_id: 'request',
+                attempt_id: 'attempt',
+                response_operation_id: 'response-operation',
+                generation_id: 'generation',
+                draft_turn_id: 'agent-turn',
+            });
+        const materializedTerminal = await finalizeCanonicalExecutionStreamResponse({
+            accumulator: accumulator('stream:externalized-materialized'),
+            decoded,
+            response: recovered,
+            reconciliations: [],
+        });
+        const fragmentTerminal = await finalizeCanonicalAcceptedOutputStream({
+            accumulator: accumulator('stream:externalized-fragment'),
+            decoded,
+            accepted_output: original.accepted_output,
+            reconciliations: [],
+        });
+        expect(materializedTerminal.conversation).toEqual({ conversation_id: accepted.id, revision: 2 });
+        expect(fragmentTerminal.conversation).toEqual(original.accepted_output.source);
+        expect(fragmentTerminal.conversation.revision).toBe(1);
+        expect(materializedTerminal.operation_receipt_id).toBe(fragmentTerminal.operation_receipt_id);
+
         expect(legacyCompletionFromCanonicalExecution(recovered).tool_use).toEqual([
             { id: 'call-1', tool_name: 'lookup', tool_input: { query: 'answer' } },
         ]);

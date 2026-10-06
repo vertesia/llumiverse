@@ -539,3 +539,7 @@ export type JsonMinificationMeasuredProjection = z.infer<
 >;
 
 export type ToolRetrievalExcerpt = z.infer<typeof import('./schemas/execution.js').ToolRetrievalExcerptSchema>;
+
+export type ConversationIndexedUpgradeOperation = z.infer<
+    typeof import('./schemas/execution.js').IndexedConversationUpgradeOperationSchema
+>;
