@@ -48,6 +48,12 @@ import {
 } from '../src/indexed-conversation.js';
 import { buildIndexedExchangeOutput } from '../src/indexed-exchange-processing.js';
 import { resolveIndexedProcessingTextInput } from '../src/indexed-processing-working-set.js';
+import { INDEXED_CONVERSATION_UPGRADE_PROFILE } from '../src/indexed-upgrade-constants.js';
+import { finishIndexedConversationUpgrade } from '../src/indexed-upgrade-finish.js';
+import { INDEXED_UPGRADE_ACTIVE_LIMITS, INDEXED_UPGRADE_STEP_LIMITS } from '../src/indexed-upgrade-io.js';
+import { beginIndexedConversationUpgrade } from '../src/indexed-upgrade-progress.js';
+import { advanceIndexedConversationUpgrade } from '../src/indexed-upgrade-step.js';
+
 import { preflightJsonInput } from '../src/json-preflight.js';
 import { getPagedRecord, putPagedRecord } from '../src/paged-record-index.js';
 import {
@@ -61,6 +67,7 @@ import { appendConversationRecords, appendConversationRecordsWithProcessing } fr
 import { AgentTurnSchema, ProgramTurnSchema, ToolTurnSchema } from '../src/schemas/content.js';
 import { GenerationSchema } from '../src/schemas/execution.js';
 import { IndexedConversationProcessingHeaderSchema } from '../src/schemas/indexed-head.js';
+import type { IndexedConversationUpgradeCommand } from '../src/schemas/indexed-upgrade.js';
 import { IndexedRecordBatchCommandSchema } from '../src/schemas/ingestion.js';
 import { validateToolExecutionResult } from '../src/tool-execution.js';
 import type { Asset, ConversationDocument } from '../src/types.js';
@@ -2621,11 +2628,74 @@ describe('indexed conversation snapshot', () => {
         const ordinaryLegacyRootBytes = canonicalJsonContentBytes(ordinaryLegacyRoot);
         const ordinaryLegacyRootHash = (await hashContentBytes(ordinaryLegacyRootBytes)).content_hash;
         ordinaryMemory.records.set(`root:${ordinaryLegacyRootHash}`, ordinaryLegacyRootBytes);
+        const ordinaryLegacyLocator = {
+            content_hash: ordinaryLegacyRootHash,
+            size_bytes: ordinaryLegacyRootBytes.byteLength,
+        };
+        const ordinaryRecordsBeforePreparation = ordinaryMemory.records.size;
+        const ordinaryPagesBeforePreparation = ordinaryMemory.pages.size;
+        // A retained policy epoch is processing history even when it has no jobs. A missing
+        // drain count is not inferred during hot preparation; explicit upgrade audits the index.
         await expect(
-            loadIndexedSelectedTextContext(ordinaryMemory.store, ordinaryLegacyRoot, {
-                content_hash: ordinaryLegacyRootHash,
-                size_bytes: ordinaryLegacyRootBytes.byteLength,
-            }),
+            loadIndexedSelectedTextContext(ordinaryMemory.store, ordinaryLegacyRoot, ordinaryLegacyLocator),
+        ).rejects.toThrow('no accepted processing job-drain witness');
+        expect(ordinaryMemory.records.size).toBe(ordinaryRecordsBeforePreparation);
+        expect(ordinaryMemory.pages.size).toBe(ordinaryPagesBeforePreparation);
+        const upgradeCommand: IndexedConversationUpgradeCommand = {
+            version: 1,
+            profile: INDEXED_CONVERSATION_UPGRADE_PROFILE,
+            operation_id: 'upgrade:ordinary-legacy-empty',
+            source: ordinaryLegacyRoot.source,
+            predecessor_root: ordinaryLegacyLocator,
+            recorded_at: RECORDED_AT,
+        };
+        let progress = await beginIndexedConversationUpgrade(ordinaryMemory.store, upgradeCommand);
+        let steps = 0;
+        while (progress.progress.phase !== 'complete') {
+            if (++steps > 10000) throw new Error('Empty legacy processing upgrade failed to terminate');
+            const limits =
+                progress.progress.phase === 'active_window'
+                    ? INDEXED_UPGRADE_ACTIVE_LIMITS
+                    : INDEXED_UPGRADE_STEP_LIMITS;
+            const advanced = await advanceIndexedConversationUpgrade(
+                ordinaryMemory.store,
+                upgradeCommand,
+                progress.locator,
+            );
+            expect(advanced.usage.record_reads).toBeLessThanOrEqual(limits.record_reads);
+            expect(advanced.usage.page_reads).toBeLessThanOrEqual(limits.page_reads);
+            expect(advanced.usage.bytes).toBeLessThanOrEqual(limits.bytes);
+            expect(advanced.usage.writes).toBeLessThanOrEqual(limits.writes);
+            progress = advanced;
+        }
+        const upgraded = await finishIndexedConversationUpgrade(
+            ordinaryMemory.store,
+            ordinaryLegacyRoot,
+            ordinaryLegacyLocator,
+            upgradeCommand,
+            progress.locator,
+        );
+        expect(upgraded.applied).toBe(true);
+        expect(upgraded.receipt).toMatchObject({
+            operation_kind: 'indexed_upgrade',
+            base_revision: ordinaryLegacyRoot.source.revision,
+            result_revision: ordinaryLegacyRoot.source.revision + 1,
+        });
+        const upgradedHeaderBytes = ordinaryMemory.records.get(
+            `processing_header:${upgraded.root.processing_header.content_hash}`,
+        );
+        if (!upgradedHeaderBytes) throw new Error('Upgraded empty processing header was not retained');
+        expect(
+            IndexedConversationProcessingHeaderSchema.parse(JSON.parse(new TextDecoder().decode(upgradedHeaderBytes))),
+        ).toMatchObject({
+            job_count: 0,
+            unresolved_job_count: 0,
+            required_job_count: 0,
+            required_unresolved_job_count: 0,
+            required_blocked_job_count: 0,
+        });
+        await expect(
+            loadIndexedSelectedTextContext(ordinaryMemory.store, upgraded.root, upgraded.locator),
         ).resolves.toMatchObject({ turns: [] });
 
         let current = accepted.document;
