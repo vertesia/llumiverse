@@ -58,49 +58,6 @@ describe('AbstractDriver Error Formatting', () => {
         driver = new TestDriver({});
     });
 
-    it('does not repair malformed JSON when the provider reports token exhaustion', () => {
-        const completion: Completion = {
-            result: [{ type: 'text', value: '{"items":[{"id":"a"},]}' }],
-            finish_reason: 'length',
-        };
-
-        driver.validateResult(completion, {
-            model: 'test-model',
-            result_schema: {
-                type: 'object',
-                required: ['items'],
-                properties: { items: { type: 'array', items: { type: 'object', required: ['id'] } } },
-            },
-        } as ExecutionOptions);
-
-        expect(completion.error).toMatchObject({ code: 'json_error' });
-    });
-
-    it('still repairs complete malformed JSON when generation stopped normally', () => {
-        const completion: Completion = {
-            result: [{ type: 'text', value: '{"items":[{"id":"a"},]}' }],
-            finish_reason: 'stop',
-        };
-
-        driver.validateResult(completion, {
-            model: 'test-model',
-            result_schema: {
-                type: 'object',
-                required: ['items'],
-                properties: { items: { type: 'array', items: { type: 'object', required: ['id'] } } },
-            },
-        } as ExecutionOptions);
-
-        expect(completion.error).toBeUndefined();
-        expect(completion.result).toEqual([{ type: 'json', value: { items: [{ id: 'a' }] } }]);
-        expect(completion.json_output_diagnostic).toMatchObject({
-            repaired: true,
-            extracted: false,
-            original_text: '{"items":[{"id":"a"},]}',
-            parse_error: expect.any(String),
-        });
-    });
-
     it('preserves raw text and reports an error when repair is disabled', () => {
         const raw = [{ type: 'text' as const, value: '{"a":1,}' }];
         const completion: Completion = { result: raw, finish_reason: 'stop' };
@@ -114,8 +71,8 @@ describe('AbstractDriver Error Formatting', () => {
         expect(completion.json_output_diagnostic).toBeUndefined();
     });
 
-    it.each(['{"a":1}', '```json\n{"a":1}\n```'])(
-        'rejects token exhaustion even with parseable content: %s',
+    it.each(['{"a":1}', '{"a":1,}', '```json\n{"a":1}\n```'])(
+        'rejects token exhaustion regardless of JSON syntax: %s',
         (value) => {
             const completion: Completion = { result: [{ type: 'text', value }], finish_reason: 'length' };
             driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });

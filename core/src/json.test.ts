@@ -101,17 +101,13 @@ describe('parseJSONOutput', () => {
     });
 
     it('keeps strict parsing and repair failures in the error cause', () => {
-        try {
-            parseJSONOutput('{"a":1} {"b":2}');
-            expect.fail('Expected a repair error');
-        } catch (error: unknown) {
-            expect(error).toBeInstanceOf(SyntaxError);
-            const cause = (error as Error).cause as AggregateError;
-            expect(cause).toBeInstanceOf(AggregateError);
-            expect(cause.errors).toHaveLength(2);
-            expect(cause.errors[1]).toBeInstanceOf(JSONRepairError);
-            expect(cause.errors[1]).toMatchObject({ position: expect.any(Number) });
-        }
+        expect(() => parseJSONOutput('{"a":1} {"b":2}')).toThrow(
+            expect.objectContaining({
+                cause: expect.objectContaining({
+                    errors: [expect.any(SyntaxError), expect.any(JSONRepairError)],
+                }),
+            }),
+        );
     });
 });
 

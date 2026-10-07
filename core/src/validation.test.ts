@@ -47,12 +47,9 @@ describe('validateResult', () => {
     });
 
     it('preserves the original parser failure as the validation error cause', () => {
-        try {
-            validateResult([{ type: 'text', value: '{"a":}' }], { type: 'object' });
-            expect.fail('Expected invalid JSON');
-        } catch (error: unknown) {
-            expect(error).toMatchObject({ code: 'json_error', cause: expect.any(SyntaxError) });
-        }
+        expect(() => validateResult([{ type: 'text', value: '{"a":}' }], { type: 'object' })).toThrow(
+            expect.objectContaining({ code: 'json_error', cause: expect.any(SyntaxError) }),
+        );
     });
 
     // A stored result schema is deserialized into a new object on every execution, so an `$id` that

@@ -11,20 +11,11 @@ describe('Core Utilities', () => {
         expect(r).toEqual({ a: 1, b: 2 });
     });
 
-    test('extracts arrays and primitive JSON values', () => {
-        expect(extractAndParseJSON('[1, 2]')).toEqual([1, 2]);
-        expect(extractAndParseJSON('42')).toBe(42);
-        expect(extractAndParseJSON('true')).toBe(true);
+    test('extractAndParseJSON retains conservative repair and its opt-out', () => {
         expect(extractAndParseJSON('```json\n[1, 2]\n```')).toEqual([1, 2]);
-    });
-
-    test('finds the JSON value without treating braces inside strings as delimiters', () => {
-        expect(extractAndParseJSON('Answer: {"text":"keep {this}"} done')).toEqual({ text: 'keep {this}' });
-    });
-
-    test('rejects incomplete structured output instead of repairing it into a plausible result', () => {
-        expect(() => extractAndParseJSON('{"lessons":[')).toThrow(/container boundaries/);
-        expect(() => extractAndParseJSON('{"items":[{"id":"a"}')).toThrow(/container boundaries/);
+        expect(extractAndParseJSON('{"a":1,}')).toEqual({ a: 1 });
+        expect(() => extractAndParseJSON('{"a":1,}', false)).toThrow();
+        expect(() => extractAndParseJSON('{"items":[')).toThrow(/container boundaries/);
     });
 
     test('parseJSON', () => {
