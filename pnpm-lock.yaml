@@ -232,8 +232,8 @@ importers:
         version: 4.6.5
     devDependencies:
       '@types/node':
-        specifier: ^24.13.6
-        version: 24.13.6
+        specifier: ^24.19.0
+        version: 24.19.1
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -248,7 +248,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@24.13.6)(vite@8.0.16(@types/node@24.13.6))
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   core:
     dependencies:
