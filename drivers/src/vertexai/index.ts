@@ -714,7 +714,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'imagen-product-recontext-preview',
                     'embedding',
                     'embed',
-                    'gemini-live',
+                    '-live',
                     'live-',
                     'transcribe-live',
                     'native-audio',
@@ -979,7 +979,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
 function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {
     const modelName = modelId.split('/').pop() ?? modelId;
-    return publisher === 'xai' || (publisher === 'google' && isGeminiOmniVideoModel(modelName));
+    return (
+        publisher === 'xai' ||
+        (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || modelName.includes('gemini-nano-banana')))
+    );
 }
 
 function isExecutableGoogleModel(model: Model): boolean {
