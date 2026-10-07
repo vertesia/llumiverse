@@ -563,3 +563,49 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         expect(originalContents[1].parts[0]).toHaveProperty('functionResponse');
     });
 });
+
+describe('Nano Banana image requests', () => {
+    it.each(['gemini-nano-banana-2.1', 'gemini-nano-banana-3.0'])(
+        'uses image configuration without sampling for %s',
+        (model) => {
+            const payload = getGeminiPayload(
+                {
+                    model,
+                    result_schema: { type: 'object' },
+                    model_options: {
+                        _option_id: 'vertexai-gemini',
+                        temperature: 1,
+                        top_p: 0.9,
+                        top_k: 40,
+                        seed: 42,
+                        image_size: '2K',
+                        image_aspect_ratio: '16:9',
+                        effort: 'minimal',
+                    },
+                },
+                { contents: [{ role: 'user', parts: [{ text: 'Draw a banana.' }] }] },
+            );
+            expect(payload.config).toMatchObject({
+                responseModalities: ['TEXT', 'IMAGE'],
+                imageConfig: { imageSize: '2K', aspectRatio: '16:9' },
+                thinkingConfig: { thinkingLevel: 'MINIMAL' },
+            });
+            for (const key of ['temperature', 'topP', 'topK', 'seed', 'logprobs', 'responseJsonSchema']) {
+                expect(payload.config?.[key as keyof NonNullable<typeof payload.config>]).toBeUndefined();
+            }
+        },
+    );
+
+    it.each([false, true])('routes image requests globally (streaming=%s)', async (streaming) => {
+        const driver = makeDriver({ generateContent: async () => mockNonStreamingResponse });
+        const getClient = vi.spyOn(driver, 'getGoogleGenAIClient');
+        const model = new GeminiModelDefinition('gemini-nano-banana-2.1');
+        const prompt = { contents: [{ role: 'user', parts: [{ text: 'Draw a banana.' }] }] };
+        const options: ExecutionOptions = {
+            model: 'locations/us-central1/publishers/google/models/gemini-nano-banana-2.1',
+        };
+        if (streaming) await model.requestTextCompletionStream(driver, prompt, options);
+        else await model.requestTextCompletion(driver, prompt, options);
+        expect(getClient).toHaveBeenCalledWith('global', undefined, undefined);
+    });
+});

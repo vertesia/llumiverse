@@ -394,7 +394,7 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
     if (model.includes('gemini-3-pro-image')) {
         return { High: 'high' };
     }
-    if (model.includes('gemini-3.1-flash-image')) {
+    if (model.includes('gemini-3.1-flash-image') || model.includes('gemini-nano-banana')) {
         return { Minimal: 'minimal', High: 'high' };
     }
     if (model.includes('pro') && isGeminiModelVersionGte(model, '3.1')) {
@@ -422,9 +422,10 @@ function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
 
 function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     // Special handling for gemini image / nano banana models
-    if (model.includes('image')) {
-        const isGemini25OrLater = isGeminiModelVersionGte(model, '2.5');
-        const isGemini3OrLater = isGeminiModelVersionGte(model, '3.0');
+    if (model.includes('image') || model.includes('gemini-nano-banana')) {
+        const isNanoBanana = model.includes('gemini-nano-banana');
+        const isGemini25OrLater = isNanoBanana || isGeminiModelVersionGte(model, '2.5');
+        const isGemini3OrLater = isNanoBanana || isGeminiModelVersionGte(model, '3.0');
 
         const max_tokens_limit = getGeminiMaxTokensLimit(model);
         const excludeOptions = [
@@ -435,6 +436,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             'top_k',
             'include_thoughts',
         ];
+        if (isNanoBanana) excludeOptions.push('temperature', 'top_p');
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
         // Set max temperature to 2.0
@@ -745,8 +747,8 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
 }
 
 function getGeminiMaxTokensLimit(model: string): number {
-    if (model.includes('image')) {
-        return isGeminiModelVersionGte(model, '2.5') ? 32768 : 8192;
+    if (model.includes('image') || model.includes('gemini-nano-banana')) {
+        return model.includes('gemini-nano-banana') || isGeminiModelVersionGte(model, '2.5') ? 32768 : 8192;
     }
     if (model.includes('thinking') || isGeminiModelVersionGte(model, '2.5')) {
         return 65535; // API upper bound is exclusive

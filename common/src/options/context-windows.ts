@@ -33,7 +33,8 @@ export function getMaxOutputTokens(model: string): number {
     // Gemini models
     if (model.includes('gemini')) {
         if (model.includes('-1.0-')) return 2_048;
-        if (model.includes('flash-image') || model.includes('pro-image')) return 32_768;
+        if (model.includes('flash-image') || model.includes('pro-image') || model.includes('gemini-nano-banana'))
+            return 32_768;
         return 65_535; // Gemini 1.5, 2.0, 2.5, 3 — API upper bound is exclusive
     }
     // OpenAI o-series
@@ -105,6 +106,7 @@ export function getContextWindowSize(model: string): number | undefined {
     // Gemini models
     if (model.includes('gemini')) {
         if (model.includes('-1.0-')) return 32_000;
+        if (model.includes('gemini-nano-banana')) return 131_072;
         return 1_000_000; // Gemini 1.5, 2.0, 2.5, 3 all support 1M
     }
     // OpenAI o-series (check before gpt-4 to avoid false matches)
