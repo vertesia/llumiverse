@@ -25,5 +25,6 @@
         "useUnknownInCatchVariables": true
     },
     "include": ["src"],
-    "exclude": ["node_modules", "**/*.test.ts", "lib", "test"]
+    "exclude": ["node_modules", "**/*.test.ts", "lib", "test"],
+    "references": [{ "path": "../conversation" }]
 }

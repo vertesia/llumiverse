@@ -1,14 +1,14 @@
 /**
- * Gemini identifies a function call by name only, so llumiverse uses the name as the tool-use id.
- * When the model calls the same tool several times in one turn (four `create_document` calls),
- * every call shares that id. The core completion stream merges streamed tool-use fragments by
- * id, which folded such a batch into a single call: the stored model turn kept all four
+ * Gemini may omit function-call ids. When the model calls the same tool several times in one turn
+ * (four `create_document` calls), canonical ingestion assigns a distinct deterministic id to each
+ * call. This prevents the core completion stream from folding the batch into a single call while
+ * the stored model turn keeps all four
  * functionCall parts, only one tool ran, and the next request carried one functionResponse for
  * four calls — rejected by Vertex with 400 "Please ensure that the number of function response
  * parts is equal to the number of function call parts of the function call turn."
  *
- * The stream now keys each streamed call uniquely and restores the name-based id through
- * `_actual_id`, so the accumulator keeps every call.
+ * The stream and follow-up tool results use those distinct ids while the provider projection keeps
+ * the shared function name.
  */
 
 import { FinishReason } from '@google/genai';
@@ -72,19 +72,12 @@ async function streamParallelCalls(requests: unknown[], conversation?: unknown) 
 }
 
 describe('Gemini streaming: parallel calls to the same tool', () => {
-    it('gives every streamed call its own accumulator key while keeping the name-based id', async () => {
+    it('gives every streamed call its own stable tool-use id', async () => {
         const { toolUse } = await streamParallelCalls([]);
 
         expect(toolUse).toHaveLength(4);
         // Distinct keys: the core accumulator (keyed by `id`) must not merge them.
         expect(new Set(toolUse.map((tool) => tool.id)).size).toBe(4);
-        // The provider-facing id stays the function name, restored by the accumulator at finalize.
-        expect(toolUse.map((tool) => (tool as { _actual_id?: string })._actual_id)).toEqual([
-            'create_document',
-            'create_document',
-            'create_document',
-            'create_document',
-        ]);
         expect(toolUse.map((tool) => tool.tool_input)).toEqual([
             { name: 'Acme' },
             { name: 'Globex' },
@@ -97,12 +90,12 @@ describe('Gemini streaming: parallel calls to the same tool', () => {
 
     it('sends one function response part per function call part on the next request', async () => {
         const requests: unknown[] = [];
-        const { modelDef, driver, conversation } = await streamParallelCalls(requests);
+        const { modelDef, driver, toolUse, conversation } = await streamParallelCalls(requests);
 
-        // One tool result per call, all carrying the name-based id (what the workflow sends back).
+        // One tool result per call, carrying the distinct id returned by the prior completion.
         const results: PromptSegment[] = ['Acme', 'Globex', 'Soylent', 'Omni'].map((name, index) => ({
             role: PromptRole.tool,
-            tool_use_id: 'create_document',
+            tool_use_id: toolUse[index].id,
             content: `{"error":"The 'source' parameter must be a reference (${name})"}`,
             thought_signature: index === 0 ? 'first-signature' : undefined,
         }));

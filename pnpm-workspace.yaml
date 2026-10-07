@@ -1,6 +1,7 @@
 packages:
   # pnpm 12 workspace discovery requires patterns without a leading "./".
   - common
+  - conversation
   - core
   - drivers
   - examples
@@ -14,7 +15,6 @@ blockExoticSubdeps: true
 minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
 minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/foundry-sdk@0.5.2'
   # Current Images API and Responses image-tool SDK types.
   - openai@7.25.0
   - '@vertesia/*'

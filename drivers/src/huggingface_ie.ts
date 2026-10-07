@@ -2,16 +2,22 @@ import { InferenceClient, type TextGenerationStreamOutput } from '@huggingface/i
 import {
     type AIModel,
     AIModelStatus,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type CompletionChunkObject,
     type DriverCompletionStream,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type PromptSegment,
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import type { HuggingFaceIEDriverOptions } from './driver-options.js';
+import { executeHuggingFaceCanonical, streamHuggingFaceCanonicalEvents } from './huggingface_ie.canonical.js';
 
 export type { HuggingFaceIEDriverOptions } from './driver-options.js';
 
@@ -19,7 +25,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     static PROVIDER = 'huggingface_ie';
     provider = HuggingFaceIEDriver.PROVIDER;
     service: FetchClient;
-    _executor?: InferenceClient;
+    private readonly executors = new Map<string, Promise<{ executor: InferenceClient; url: string }>>();
 
     constructor(options: HuggingFaceIEDriverOptions) {
         super(options);
@@ -38,19 +44,83 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         };
     }
 
-    async getExecutor(model: string) {
-        if (!this._executor) {
-            const endpoint = await this.getModelURLEndpoint(model);
-            if (!endpoint.url) throw new Error(`Endpoint URL not found for model ${model}`);
-            if (endpoint.status !== AIModelStatus.Available)
-                throw new Error(`Endpoint ${model} is not running - current status: ${endpoint.status}`);
+    async getExecutorTarget(model: string): Promise<{ executor: InferenceClient; url: string }> {
+        let pending = this.executors.get(model);
+        if (pending === undefined) {
+            pending = (async () => {
+                const endpoint = await this.getModelURLEndpoint(model);
+                if (!endpoint.url) throw new Error(`Endpoint URL not found for model ${model}`);
+                if (endpoint.status !== AIModelStatus.Available)
+                    throw new Error(`Endpoint ${model} is not running - current status: ${endpoint.status}`);
 
-            // Use the new InferenceClient and bind it to the endpoint URL
-            this._executor = new InferenceClient(this.options.apiKey, { fetch: this.getDriverFetch() }).endpoint(
-                endpoint.url,
-            );
+                // Use the new InferenceClient and bind it to the endpoint URL
+                return {
+                    executor: new InferenceClient(this.options.apiKey, { fetch: this.getDriverFetch() }).endpoint(
+                        endpoint.url,
+                    ),
+                    url: endpoint.url,
+                };
+            })();
+            this.executors.set(model, pending);
+            const registered = pending;
+            void registered.catch(() => {
+                if (this.executors.get(model) === registered) this.executors.delete(model);
+            });
         }
-        return this._executor;
+        return pending;
+    }
+
+    async getExecutor(model: string): Promise<InferenceClient> {
+        return (await this.getExecutorTarget(model)).executor;
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    private validateCanonicalPromptSegments(segments: PromptSegment[]): void {
+        for (const segment of segments) {
+            if (segment.files?.length) throw new TypeError('Hugging Face text generation does not support media input');
+            if (segment.role === 'tool' || segment.role === 'negative' || segment.role === 'mask') {
+                throw new TypeError(`Hugging Face text generation does not support ${segment.role} prompt segments`);
+            }
+        }
+    }
+
+    override executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        this.validateCanonicalPromptSegments(segments);
+        return super.executeCanonical(segments, options, signal);
+    }
+
+    override streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        this.validateCanonicalPromptSegments(segments);
+        return super.streamCanonicalEvents(segments, options, signal, open);
+    }
+
+    async requestCanonicalTextCompletion(
+        prompt: string,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeHuggingFaceCanonical({ driver: this, prompt, options, signal });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: string,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return streamHuggingFaceCanonicalEvents({ driver: this, prompt, options, signal, open });
     }
 
     async requestTextCompletionStream(
@@ -76,18 +146,16 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         );
 
         return transformAsyncIterator(req, (val: TextGenerationStreamOutput): CompletionChunkObject => {
-            //special like <s> are not part of the result
-            if (val.token.special) return { result: [] };
             let finish_reason = val.details?.finish_reason as string;
             if (finish_reason === 'eos_token') {
                 finish_reason = 'stop';
             }
             return {
-                result: val.token.text ? [{ type: 'text' as const, value: val.token.text }] : [],
-                finish_reason: finish_reason,
-                token_usage: {
-                    result: val.details?.generated_tokens ?? 0,
-                },
+                // Special tokens such as </s> are protocol evidence, not display text.
+                result: !val.token.special && val.token.text ? [{ type: 'text' as const, value: val.token.text }] : [],
+                finish_reason,
+                token_usage:
+                    val.details?.generated_tokens === undefined ? undefined : { result: val.details.generated_tokens },
             };
         });
     }

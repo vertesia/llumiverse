@@ -1,24 +1,67 @@
+import type {
+    CanonicalProjectedRequestMeasurement,
+    CanonicalRequestProjectionCompiler,
+    ExecutionOptions,
+} from '@llumiverse/common';
+import { ModelOptionsSchema } from '@llumiverse/common/schemas';
+import {
+    type ToolDefinition as CanonicalToolDefinition,
+    type ConversationAcceptedOutputFragment,
+    type ConversationDocument,
+    type ConversationModelSwitchProjection,
+    type ConversationPreparedRequestRecord,
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    fingerprintJson,
+    type IndexedConversationSelectedContext,
+    IndexedConversationSelectedContextSchema,
+    type JsonObject,
+    type JsonValue,
+    type ModelTarget,
+    type NativeStreamPosition,
+    parseConversationDocument,
+    parseConversationPreparedRequestRecord,
+    preflightJsonInput,
+    type RequestSourceWorkingSet,
+    RequestSourceWorkingSetSchema,
+    type ResolvedConversationRuntimeContext,
+    ResolvedConversationRuntimeContextSchema,
+} from '@llumiverse/conversation';
+import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalModelSwitchProjectionControls,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    canonicalToolSelectionPolicy,
+    createCanonicalExecutionResponse,
     type DriverCompletionStream,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
-    type ExecutionOptions,
     type ExecutionResponse,
+    type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
+    legacyCompletionFromCanonicalExecution,
     ModelType,
+    markCanonicalAcceptedRecovery,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
+    ownCanonicalHostCapabilities,
     type PromptOptions,
     PromptRole,
     type PromptSegment,
@@ -34,16 +77,68 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
+import {
+    type CanonicalNativeStreamFinalization,
+    canonicalNativeExecutionEventStream,
+    validateCanonicalNativeStreamOpen,
+} from '../conversation/canonical-execution-event-stream.js';
+import {
+    assertAcceptedCanonicalRequest,
+    canonicalConversationTurnNumber,
+    canonicalToolSelectionTargetOptions,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+    selectedCanonicalTurns,
+} from '../conversation/canonical-runtime.js';
+import { IndexedNativeCapabilityUnavailable } from '../conversation/indexed-capability.js';
+import {
+    normalizeDecodedStructuredOutputForSchema,
+    rejectDecodedStructuredOutput,
+} from '../conversation/structured-output.js';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
+import {
+    executeOpenAIAudioCanonical,
+    executeOpenAIAudioRequest,
+    openAIAudioTask,
+    openAIInputAudioPart,
+    streamOpenAIAudioCanonicalEvents,
+} from './audio.js';
+import {
+    boundedCanonicalProjectionOperation,
+    projectCanonicalRequestMeasurement,
+} from './canonical-request-measurement.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
+import {
+    appendOpenAIChatCanonicalResponseWithProcessing,
+    assertOpenAIChatSelectedPreparedRequestEvidence,
+    compileOpenAIChatCompletionsConversation,
+    compileOpenAIChatIndexedSelectedText,
+    compileOpenAIChatPreparedDocumentWithHostAssets,
+    compileOpenAIChatProspectiveJsonMinification,
+    compileOpenAIChatSelectedWorkingSet,
+    createOpenAIChatIndexedTextRequestReceipt,
+    decodeOpenAIChatCanonicalResponse,
+    finalizeOpenAIChatPreparedRequest,
+    OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+    OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    type OpenAIChatResponseDecodeEvidence,
+    type PreparedOpenAIChatConversation,
+    prepareOpenAIChatCanonicalContext,
+    prepareOpenAIChatCanonicalState,
+} from './openai-chat-conversation-adapter.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
 export type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
+
+import { hydrateCanonicalSelectedImageAssets } from '../conversation/canonical-host-images.js';
+import { indexedPreparedReceiptMatches } from '../conversation/indexed-prepared-receipt.js';
+
+export { compileOpenAIChatIndexedSelectedText } from './openai-chat-conversation-adapter.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
 
@@ -61,6 +156,13 @@ export type OpenAIChatCompletionsContentPart =
 export type OpenAIChatCompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
 export type OpenAIChatCompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
 
+export type OpenAIChatProviderReplay = JsonObject & {
+    provider: string;
+    protocol: string;
+    adapter_version: string;
+    payload: JsonValue;
+};
+
 export type OpenAIChatCompletionsMessage = {
     role: string;
     content?: string | null | OpenAIChatCompletionsContentPart[];
@@ -69,6 +171,8 @@ export type OpenAIChatCompletionsMessage = {
      * Per OpenAI API spec: https://platform.openai.com/docs/api-reference/chat/messages#message-role
      */
     tool_call_id?: string;
+    /** Internal canonical-ingestion status; removed when building the provider request. */
+    tool_result_status?: 'success' | 'error' | 'cancelled' | 'denied';
     /**
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
@@ -76,6 +180,8 @@ export type OpenAIChatCompletionsMessage = {
     /** Provider-native reasoning fields used by OpenAI-compatible APIs for replay. */
     reasoning_content?: string | null;
     reasoning?: string | null;
+    /** Provider-scoped opaque replay. Never serialized by the OpenAI transport. */
+    provider_replay?: OpenAIChatProviderReplay;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -85,6 +191,7 @@ export type OpenAIChatCompletionsRequestMessage = {
     tool_calls?: OpenAIChatCompletionsToolCall[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
 };
 
 export type OpenAIChatCompletionsPayload = Omit<
@@ -98,7 +205,10 @@ export type OpenAIChatCompletionsPayload = Omit<
     extra_body?: Record<string, unknown>;
 };
 
-type OpenAIChatCompletionsUsage = ChatCompletionsUsage;
+type OpenAIChatCompletionsUsage = ChatCompletionsUsage & {
+    /** Provider-native usage retained when this compatibility protocol normalizes field names. */
+    provider_usage?: JsonValue;
+};
 type OpenAIChatCompletionsResponseMessage = Omit<
     Partial<OpenAI.Chat.ChatCompletionMessage>,
     'content' | 'tool_calls'
@@ -107,6 +217,7 @@ type OpenAIChatCompletionsResponseMessage = Omit<
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_calls?: OpenAI.Chat.ChatCompletionMessageToolCall[];
 };
 type OpenAIChatCompletionsResponseChoice = Omit<
@@ -128,6 +239,7 @@ type OpenAIChatCompletionsStreamChoiceDelta = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -244,6 +356,77 @@ type StreamChunk = string | Uint8Array;
 type ReadableAsyncStream = AsyncIterable<StreamChunk>;
 type StreamingOpenAIToolUse = ToolUse<unknown> & { _actual_id?: string };
 
+interface OpenAIChatCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call';
+    tool_index?: number;
+}
+
+function openAIChatStreamPosition(path: Array<string | number>): NativeStreamPosition {
+    return { protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, path };
+}
+
+async function* openAIChatNativeSSE(stream: ReadableStream): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
+    for await (const event of stream as unknown as AsyncIterable<{ type: string; data?: string }>) {
+        if (event.type !== 'event' || event.data === undefined || event.data === '[DONE]') continue;
+        yield JSON.parse(event.data) as OpenAIChatCompletionsStreamResponse;
+    }
+}
+
+function openAIChatSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('OpenAI Chat stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+async function decodeOpenAIChatStreamResponse(input: {
+    response: OpenAIChatCompletionsResponse;
+    prepared: OpenAIChatResponseDecodeEvidence;
+    finish_reason: string;
+    options: ExecutionOptions;
+}) {
+    const message = input.response.choices[0]?.message;
+    if (message === undefined) throw new Error('Chat Completions stream has no terminal assistant message');
+    const hasTools = (message.tool_calls?.length ?? 0) > 0;
+    const rawDecoded = await decodeOpenAIChatCanonicalResponse(input.response, input.prepared, input.finish_reason);
+    const normalized =
+        !hasTools && input.options.result_schema
+            ? normalizeDecodedStructuredOutputForSchema(rawDecoded, input.options.result_schema)
+            : undefined;
+    let decoded =
+        normalized?.status === 'valid'
+            ? await decodeOpenAIChatCanonicalResponse(
+                  input.response,
+                  input.prepared,
+                  input.finish_reason,
+                  normalized.structured_output,
+              )
+            : rawDecoded;
+    if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+    return {
+        raw_decoded: rawDecoded,
+        decoded,
+        normalized,
+    };
+}
+
+async function finalizeOpenAIChatStreamResponse(input: {
+    response: OpenAIChatCompletionsResponse;
+    prepared: PreparedOpenAIChatConversation;
+    finish_reason: string;
+    options: ExecutionOptions;
+}) {
+    const finalized = await decodeOpenAIChatStreamResponse(input);
+    const document = await appendOpenAIChatCanonicalResponseWithProcessing(input.prepared, finalized.decoded);
+    return {
+        ...finalized,
+        response: createCanonicalExecutionResponse(document, input.prepared.runtime.response_operation_id, {
+            ...(input.response.service_tier == null ? {} : { service_tier: input.response.service_tier }),
+        }),
+    };
+}
+
 async function streamToString(stream: ReadableAsyncStream): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
@@ -267,7 +450,10 @@ export function updateOpenAIChatCompletionsConversation(
 
 export function prepareOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt,
-    options: Pick<ExecutionOptions, 'tools'> & Partial<Pick<ExecutionOptions, 'model'>>,
+    options: {
+        tools?: readonly (Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition)[];
+        model?: string;
+    },
 ): OpenAIChatCompletionsPrompt {
     let messages = fixOrphanedOpenAIChatCompletionsToolResults(
         fixOrphanedOpenAIChatCompletionsToolUse(conversation.messages),
@@ -629,7 +815,10 @@ export function extractOpenAIChatCompletionsContentText(
 }
 
 export function convertToolsToOpenAIChatCompletionsFormat(
-    tools: ToolDefinition[] | undefined,
+    tools:
+        | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+        | ToolDefinition[]
+        | undefined,
     mode: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'] = 'openai_strict',
 ): OpenAIChatCompletionsToolDefinition[] | undefined {
     if (!tools || tools.length === 0) {
@@ -791,6 +980,14 @@ function finalizeOpenAIChatCompletionsConversation(
     options: ExecutionOptions,
 ): OpenAIChatCompletionsPrompt {
     conversation = incrementConversationTurn(conversation) as OpenAIChatCompletionsPrompt;
+    return projectOpenAIChatCompletionsHistory(conversation, options, getConversationMeta(conversation).turnNumber);
+}
+
+export function projectOpenAIChatCompletionsHistory(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: ExecutionOptions,
+    currentTurn: number,
+): OpenAIChatCompletionsPrompt {
     const reasoningPolicy = getOpenAIChatReasoningReplayPolicy(options.model);
     if (reasoningPolicy === 'omit') {
         conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
@@ -814,7 +1011,6 @@ function finalizeOpenAIChatCompletionsConversation(
     if (reasoningPolicy === 'active_tool_turn') {
         conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
     }
-    const currentTurn = getConversationMeta(conversation).turnNumber;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
@@ -843,11 +1039,664 @@ function getOpenAIChatDriverProvider(driver: unknown): string {
     return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
 }
 
+function prepareCanonicalOpenAIProjectionFromNative(
+    native: OpenAIChatCompletionsPrompt,
+    priorNativeMessageCount: number,
+    options: ExecutionOptions,
+    currentTurn: number,
+    tools: readonly (Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'> | ToolDefinition)[],
+): OpenAIChatCompletionsPrompt {
+    const prior: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: native.messages.slice(0, priorNativeMessageCount),
+    };
+    const projectedPrior = projectOpenAIChatCompletionsHistory(prior, options, currentTurn);
+    return prepareOpenAIChatCompletionsConversation(
+        {
+            _is_openai_chat_completions: true,
+            messages: [...projectedPrior.messages, ...native.messages.slice(priorNativeMessageCount)],
+        },
+        { model: options.model, tools },
+    );
+}
+
+function prepareCanonicalOpenAIProjection(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): OpenAIChatCompletionsPrompt {
+    return prepareCanonicalOpenAIProjectionFromNative(
+        prepared.native_conversation,
+        prepared.prior_native_message_count,
+        options,
+        canonicalConversationTurnNumber(prepared.document),
+        prepared.tool_definitions,
+    );
+}
+
+function canonicalOpenAIUsage(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    const reported = usage.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    );
+    const reportedProjection = mapOpenAIChatCompletionsUsage(reportedChatCompletionsUsage(reported?.payload));
+    if (reportedProjection !== undefined) return reportedProjection;
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function reportedChatCompletionsUsage(value: unknown): ChatCompletionsUsage | undefined {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const payload = value as Record<string, unknown>;
+    const promptTokens = payload.prompt_tokens;
+    const completionTokens = payload.completion_tokens;
+    const totalTokens = payload.total_tokens;
+    if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number') {
+        return undefined;
+    }
+    const details = payload.prompt_tokens_details;
+    if (details !== undefined && details !== null && (typeof details !== 'object' || Array.isArray(details))) {
+        return undefined;
+    }
+    const detailRecord = details as Record<string, unknown> | null | undefined;
+    const cachedTokens = detailRecord?.cached_tokens;
+    const cacheWriteTokens = detailRecord?.cache_write_tokens;
+    if (
+        (cachedTokens !== undefined && cachedTokens !== null && typeof cachedTokens !== 'number') ||
+        (cacheWriteTokens !== undefined && cacheWriteTokens !== null && typeof cacheWriteTokens !== 'number')
+    ) {
+        return undefined;
+    }
+    const cost = payload.cost;
+    const isByok = payload.is_byok;
+    if (
+        (cost !== undefined && cost !== null && typeof cost !== 'number') ||
+        (isByok !== undefined && isByok !== null && typeof isByok !== 'boolean')
+    ) {
+        return undefined;
+    }
+    return {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: totalTokens,
+        ...(details === undefined
+            ? {}
+            : {
+                  prompt_tokens_details:
+                      details === null
+                          ? null
+                          : {
+                                ...(cachedTokens == null ? {} : { cached_tokens: cachedTokens }),
+                                ...(cacheWriteTokens == null ? {} : { cache_write_tokens: cacheWriteTokens }),
+                            },
+              }),
+        ...(cost === undefined ? {} : { cost }),
+        ...(isByok === undefined ? {} : { is_byok: isByok }),
+    };
+}
+
+function recoverOpenAICompletion(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Chat Completions response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Chat Completions response cannot reconstruct original_response');
+    }
+    const projection = compileOpenAIChatCompletionsConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
+    const mapping = projection.mappings.find(
+        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+    );
+    const match = mapping === undefined ? undefined : /^messages\/(\d+)$/.exec(mapping.native_id);
+    const message = match == null ? undefined : projection.conversation.messages[Number(match[1])];
+    if (message?.role !== 'assistant') {
+        throw new Error(`Accepted Chat Completions turn ${accepted.turn.id} has no native projection`);
+    }
+    const toolUse = parseOpenAIChatCompletionsToolCalls(message.tool_calls);
+    return {
+        result: extractOpenAIChatCompletionsResults(message, includeThoughts),
+        tool_use: toolUse,
+        token_usage: canonicalOpenAIUsage(prepared),
+        finish_reason: normalizeOpenAIChatCompletionsFinishReason(accepted.generation.finish_reason, !!toolUse?.length),
+        conversation: prepared.document,
+    };
+}
+
+function recoveredOpenAIStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+            service_tier: completion.service_tier,
+        };
+    })();
+    return markCanonicalAcceptedRecovery(
+        Object.assign(stream, {
+            finalizeConversation: () => completion.conversation,
+        }),
+    );
+}
+
+interface OpenAIChatRequestBinding {
+    payload: JsonValue;
+    target_options?: JsonObject;
+}
+
+/** Shared native request builder: transport, dry measurement and accepted-view attestation use identical fields. */
+export function buildOpenAIChatCompletionsPayload(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: ExecutionOptions,
+    protocolOptions: OpenAIChatCompletionsProtocolOptions,
+    modelName: string,
+    stream: boolean,
+    provider: string = Providers.openai_compatible,
+    tools:
+        | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+        | ToolDefinition[]
+        | undefined = options.tools,
+): OpenAIChatCompletionsPayload {
+    const modelOptions = options.model_options as TextFallbackOptions & {
+        effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+        reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+        seed?: number;
+        service_tier?: string;
+        tool_choice?: 'auto' | 'none' | 'any' | 'required';
+        /** Internal execution hint supplied after public model-option validation. */
+        required_tool_name?: string;
+        /** Internal execution hint used with a required named tool. */
+        parallel_tool_calls?: boolean;
+    };
+    const payload: OpenAIChatCompletionsPayload = {
+        model: modelName,
+        messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
+        // Some OpenAI-compatible providers return empty/truncated completions unless a
+        // documented or runtime-validated token budget is supplied. Caller options still win.
+        max_tokens: modelOptions?.max_tokens ?? protocolOptions.defaultMaxTokens,
+        temperature: modelOptions?.temperature,
+        top_p: modelOptions?.top_p,
+        presence_penalty: modelOptions?.presence_penalty,
+        frequency_penalty: modelOptions?.frequency_penalty,
+        n: 1,
+        stop: modelOptions?.stop_sequence,
+        seed: modelOptions?.seed,
+        reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
+        service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
+        stream,
+    };
+
+    const executionExtraBody = getOpenAIExtraBody(modelOptions);
+    if (protocolOptions.extraBody || executionExtraBody) {
+        payload.extra_body = { ...protocolOptions.extraBody, ...executionExtraBody };
+    }
+
+    const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(tools, protocolOptions.toolSchemaMode);
+    const forcedToolChoice =
+        typeof modelOptions?.required_tool_name === 'string' ||
+        modelOptions?.tool_choice === 'required' ||
+        modelOptions?.tool_choice === 'any';
+    if (forcedToolChoice && (!toolsPayload || toolsPayload.length === 0)) {
+        throw createToolChoiceConfigurationError(
+            '[OpenAI Chat Completions API] A required tool choice was requested, but no tools are available.',
+            { provider, model: options.model, operation: stream ? 'stream' : 'execute' },
+        );
+    }
+    if (toolsPayload && toolsPayload.length > 0) {
+        payload.tools = toolsPayload;
+        payload.tool_choice = modelOptions?.required_tool_name
+            ? { type: 'function', function: { name: modelOptions.required_tool_name } }
+            : modelOptions?.tool_choice === 'any'
+              ? 'required'
+              : modelOptions?.tool_choice;
+        payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
+    }
+
+    if (options.result_schema && protocolOptions.resultSchemaMode !== 'prompt') {
+        const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
+        payload.response_format = {
+            type: 'json_schema',
+            json_schema: { name: 'output', strict: formattedSchema.strict, schema: formattedSchema.schema },
+        };
+    }
+
+    return payload;
+}
+
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
     constructor(options: OpenAIChatCompletionsProtocolOptions) {
         this.options = options;
+    }
+
+    /** Prepare exact native payload and receipt from a bounded indexed selection; host durability still gates dispatch. */
+    async prepareIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            runtime: ResolvedConversationRuntimeContext;
+            options: ExecutionOptions;
+            provider: string;
+            stream: boolean;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ) {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        // Own every JSON input used after receipt hashing yields. ExecutionOptions may also contain
+        // callbacks, so copy only the request controls consumed by this indexed compiler.
+        if (!preflightJsonInput(input.selection).success || !preflightJsonInput(input.runtime).success) {
+            throw new TypeError('Indexed OpenAI source or runtime is not bounded JSON');
+        }
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const runtime = ResolvedConversationRuntimeContextSchema.parse(structuredClone(input.runtime));
+        const ownField = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed OpenAI option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownField('model');
+        const modelOptions = ownField('model_options');
+        const resultSchema = ownField('result_schema');
+        const stripImagesAfterTurns = ownField('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownField('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownField('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        if (options.result_schema !== undefined)
+            throw new IndexedNativeCapabilityUnavailable(
+                'Indexed OpenAI Chat text transport does not support structured output',
+            );
+        // Hydration is the first await. Capture constructor-owned native controls before it,
+        // including nested extra-body values and the configured model alias.
+        const ownProtocolField = <Key extends keyof OpenAIChatCompletionsProtocolOptions>(
+            key: Key,
+        ): OpenAIChatCompletionsProtocolOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(this.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value'))
+                throw new TypeError(`Indexed OpenAI protocol option ${key} must be an owned value`);
+            return descriptor?.value;
+        };
+        const defaultMaxTokens = ownProtocolField('defaultMaxTokens');
+        const extraBody = ownProtocolField('extraBody');
+        const resultSchemaMode = ownProtocolField('resultSchemaMode');
+        const toolSchemaMode = ownProtocolField('toolSchemaMode');
+        const protocolControls = {
+            ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
+            ...(extraBody === undefined ? {} : { extraBody }),
+            ...(resultSchemaMode === undefined ? {} : { resultSchemaMode }),
+            ...(toolSchemaMode === undefined ? {} : { toolSchemaMode }),
+        };
+        if (!preflightJsonInput(protocolControls).success)
+            throw new TypeError('Indexed OpenAI protocol controls are not bounded JSON');
+        const ownedProtocolControls = structuredClone(protocolControls);
+        const actualModel = this.getModelName(options);
+        const provider = input.provider;
+        const stream = input.stream;
+        const resolver = ownedHostCapabilities?.resolve_canonical_asset;
+        const signal = input.signal;
+        signal?.throwIfAborted();
+        const imageIds = new Set<string>();
+        for (const projection of [
+            ...selection.turns,
+            ...(selection.replacement_turns ?? []).map((value) => value.projection),
+        ]) {
+            for (const block of projection.selected_blocks) {
+                for (const item of block.type === 'tool_result' ? block.content : [block])
+                    if (item.type === 'image') imageIds.add(item.asset_id);
+            }
+        }
+        const nativeAssets = await hydrateCanonicalSelectedImageAssets({
+            label: 'Indexed native preparation',
+            assets: selection.assets,
+            selected_ids: imageIds,
+            resolve_asset: resolver,
+            signal,
+            hydrated: new Map(),
+            native_external: () => false,
+        });
+        signal?.throwIfAborted();
+        const compiled = compileOpenAIChatIndexedSelectedText(
+            { ...selection, assets: nativeAssets },
+            {
+                provider,
+                model: options.model,
+            },
+        );
+        const tools = selection.context.active_tool_definition_ids.map((id) => {
+            const tool = Object.hasOwn(selection.tool_definitions, id) ? selection.tool_definitions[id] : undefined;
+            if (!tool) throw new Error(`Indexed OpenAI Chat tool ${id} is unavailable`);
+            return tool;
+        });
+        const nativeConversation = prepareCanonicalOpenAIProjectionFromNative(
+            compiled.conversation,
+            compiled.conversation.messages.length,
+            options,
+            selection.source_turn_count,
+            tools,
+        );
+        const builtPayload = buildOpenAIChatCompletionsPayload(
+            nativeConversation,
+            options,
+            ownedProtocolControls,
+            actualModel,
+            stream,
+            provider,
+            tools,
+        );
+        if (builtPayload.extra_body !== undefined && !preflightJsonInput(builtPayload.extra_body).success) {
+            throw new TypeError('Indexed OpenAI extra body is not bounded JSON');
+        }
+        // Protocol configuration is constructor-owned and can contain nested mutable extra-body values.
+        // Keep the returned payload and hashed receipt bound to one owned value across the await below.
+        const payload = structuredClone(builtPayload);
+        const binding = this.requestBinding(payload, options, provider);
+        const targetOptions = canonicalToolSelectionTargetOptions(
+            binding.target_options,
+            canonicalToolSelectionPolicy(options),
+        );
+        const receipt = await createOpenAIChatIndexedTextRequestReceipt({
+            selection,
+            runtime,
+            target: {
+                provider,
+                protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                model: options.model,
+                adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                ...(targetOptions === undefined ? {} : { options: targetOptions }),
+            },
+            native_payload: binding.payload,
+            mappings: compiled.mappings,
+        });
+        return {
+            status: 'awaiting_durable_prepared_record' as const,
+            source: selection.source,
+            native_conversation: nativeConversation,
+            payload,
+            // Exact already-bound request JSON, separately owned for host native counting.
+            native_request: structuredClone(binding.payload),
+            receipt,
+        };
+    }
+
+    /** Dispatch only an exact, already committed indexed text request through this configured transport. */
+    async executeCommittedIndexedTextRequest(
+        driver: DriverT,
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            provider: string;
+            assert_committed: () => Promise<void>;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<DecodedConversationResponse> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const record = parseConversationPreparedRequestRecord(structuredClone(input.record));
+        const ownOption = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed OpenAI option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownOption('model');
+        if (typeof model !== 'string') throw new TypeError('Indexed OpenAI model is unavailable');
+        const modelOptions = ownOption('model_options');
+        const resultSchema = ownOption('result_schema');
+        const stripImagesAfterTurns = ownOption('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownOption('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownOption('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        const provider = input.provider;
+        const assertCommitted = input.assert_committed;
+        const signal = input.signal;
+        if (options.result_schema !== undefined) {
+            throw new Error('Indexed OpenAI Chat text transport does not support structured output');
+        }
+        const prepared = await this.prepareIndexedTextRequest(
+            {
+                selection,
+                runtime: record.runtime,
+                options,
+                provider,
+                stream: false,
+                signal,
+            },
+            ownedHostCapabilities,
+        );
+        if (!(await indexedPreparedReceiptMatches(record, selection, prepared.receipt))) {
+            throw new Error('Indexed native request differs from its durably prepared receipt');
+        }
+        signal?.throwIfAborted();
+        await assertCommitted();
+        signal?.throwIfAborted();
+        const response = await this.postChatCompletion(driver, prepared.payload, options, signal);
+        const toolDefinitions = selection.context.active_tool_definition_ids.map((id) => {
+            const tool = Object.hasOwn(selection.tool_definitions, id) ? selection.tool_definitions[id] : undefined;
+            if (!tool) throw new Error(`Indexed OpenAI Chat tool ${id} is unavailable`);
+            return tool;
+        });
+        return decodeOpenAIChatCanonicalResponse(
+            response,
+            {
+                runtime: record.runtime,
+                receipt: record.request_receipt,
+                provider,
+                requested_model: record.request_receipt.target.model,
+                tool_definitions: toolDefinitions,
+                generation_id: record.generation_id,
+                response_turn_id: record.response_turn_id,
+            },
+            typeof response.choices[0]?.finish_reason === 'string' ? response.choices[0].finish_reason : undefined,
+        );
+    }
+
+    /** Stream the exact counted indexed request and publish its decoded output once. */
+    async streamCommittedIndexedTextRequest(
+        driver: DriverT,
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            provider: string;
+            assert_committed: () => Promise<void>;
+            accept_output: (decoded: DecodedConversationResponse) => Promise<ConversationAcceptedOutputFragment>;
+            open: CanonicalStreamOpenOptions;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const ownedHostCapabilities = ownCanonicalHostCapabilities(hostCapabilities);
+        if ('resolve_canonical_asset' in input.options)
+            throw new TypeError('Indexed asset resolvers must use per-call host capabilities');
+        const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(input.selection));
+        const record = parseConversationPreparedRequestRecord(structuredClone(input.record));
+        const ownOption = <Key extends keyof ExecutionOptions>(key: Key): ExecutionOptions[Key] => {
+            const descriptor = Object.getOwnPropertyDescriptor(input.options, key);
+            if (descriptor !== undefined && !Object.hasOwn(descriptor, 'value')) {
+                throw new TypeError(`Indexed OpenAI option ${key} must be an owned value`);
+            }
+            return descriptor?.value;
+        };
+        const model = ownOption('model');
+        if (typeof model !== 'string') throw new TypeError('Indexed OpenAI model is unavailable');
+        const modelOptions = ownOption('model_options');
+        const resultSchema = ownOption('result_schema');
+        const stripImagesAfterTurns = ownOption('stripImagesAfterTurns');
+        const stripHeartbeatsAfterTurns = ownOption('stripHeartbeatsAfterTurns');
+        const stripTextMaxTokens = ownOption('stripTextMaxTokens');
+        const controls = {
+            model,
+            ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+            ...(resultSchema === undefined ? {} : { result_schema: resultSchema }),
+            ...(stripImagesAfterTurns === undefined ? {} : { stripImagesAfterTurns }),
+            ...(stripHeartbeatsAfterTurns === undefined ? {} : { stripHeartbeatsAfterTurns }),
+            ...(stripTextMaxTokens === undefined ? {} : { stripTextMaxTokens }),
+        };
+        if (!preflightJsonInput(controls).success) throw new TypeError('Indexed OpenAI controls are not bounded JSON');
+        const options: ExecutionOptions = structuredClone(controls);
+        const provider = input.provider;
+        const assertCommitted = input.assert_committed;
+        const acceptOutput = input.accept_output;
+        const open = { ...input.open };
+        const signal = input.signal;
+        if (options.result_schema !== undefined) {
+            throw new Error('Indexed OpenAI Chat text transport does not support structured output');
+        }
+        const prepared = await this.prepareIndexedTextRequest(
+            {
+                selection,
+                runtime: record.runtime,
+                options,
+                provider,
+                stream: true,
+                signal,
+            },
+            ownedHostCapabilities,
+        );
+        if (!(await indexedPreparedReceiptMatches(record, selection, prepared.receipt))) {
+            throw new Error('Indexed native request differs from its durably prepared receipt');
+        }
+        signal?.throwIfAborted();
+        await assertCommitted();
+        signal?.throwIfAborted();
+        const evidence: OpenAIChatResponseDecodeEvidence = {
+            runtime: record.runtime,
+            receipt: record.request_receipt,
+            provider,
+            requested_model: record.request_receipt.target.model,
+            generation_id: record.generation_id,
+            response_turn_id: record.response_turn_id,
+            tool_definitions: selection.context.active_tool_definition_ids.map((id) => {
+                const definition = selection.tool_definitions[id];
+                if (!definition) throw new Error(`Indexed stream tool ${id} is unavailable`);
+                return definition;
+            }),
+        };
+        return this.streamPreparedTextEvents(
+            driver,
+            evidence,
+            prepared.payload,
+            options,
+            signal,
+            open,
+            async (response, finishReason) => ({
+                ...(await decodeOpenAIChatStreamResponse({
+                    response,
+                    prepared: evidence,
+                    finish_reason: finishReason,
+                    options,
+                })),
+                accept_output: acceptOutput,
+            }),
+            assertCommitted,
+        );
+    }
+
+    /**
+     * Compare an authenticated selected-content archive with the existing requestBinding JSON receipt.
+     * SDK request conversion happens later and has no separate retained wire digest. This parity check
+     * neither makes the archive execution-ready nor authorizes provider transport.
+     */
+    async attestSelectedPreparedRequest(input: {
+        record: ConversationPreparedRequestRecord;
+        working_set: RequestSourceWorkingSet;
+        runtime: ResolvedConversationRuntimeContext;
+        options: ExecutionOptions;
+        provider: string;
+        stream: boolean;
+        current_turn: number;
+        prior_native_message_count?: number;
+    }): Promise<void> {
+        const record = parseConversationPreparedRequestRecord(input.record);
+        if (!preflightJsonInput(input.working_set).success) {
+            throw new TypeError('Selected OpenAI Chat working set is not bounded JSON');
+        }
+        const workingSet = RequestSourceWorkingSetSchema.parse(structuredClone(input.working_set));
+        const selected = compileOpenAIChatSelectedWorkingSet(workingSet, {
+            provider: input.provider,
+            model: input.options.model,
+        });
+        const priorCount = input.prior_native_message_count ?? selected.conversation.messages.length;
+        if (
+            !Number.isSafeInteger(input.current_turn) ||
+            input.current_turn < 0 ||
+            !Number.isSafeInteger(priorCount) ||
+            priorCount < 0 ||
+            priorCount > selected.conversation.messages.length
+        ) {
+            throw new RangeError('Selected OpenAI Chat projection counters are invalid');
+        }
+        const tools = workingSet.context.active_tool_definition_ids.map((id) => {
+            const tool = Object.hasOwn(workingSet.tool_definitions, id) ? workingSet.tool_definitions[id] : undefined;
+            if (tool === undefined) throw new Error(`Selected OpenAI Chat tool ${id} is unavailable`);
+            return tool;
+        });
+        const conversation = prepareCanonicalOpenAIProjectionFromNative(
+            selected.conversation,
+            priorCount,
+            input.options,
+            input.current_turn,
+            tools,
+        );
+        const payload = this.buildPayload(conversation, input.options, input.stream, input.provider, tools);
+        const binding = this.requestBinding(payload, input.options, input.provider);
+        const targetOptions = canonicalToolSelectionTargetOptions(
+            binding.target_options,
+            canonicalToolSelectionPolicy(input.options),
+        );
+        await assertOpenAIChatSelectedPreparedRequestEvidence({
+            record,
+            working_set: workingSet,
+            runtime: input.runtime,
+            target: {
+                provider: input.provider,
+                protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                model: input.options.model,
+                adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                ...(targetOptions === undefined ? {} : { options: targetOptions }),
+            },
+            native_payload: binding.payload,
+        });
     }
 
     async createPrompt(
@@ -924,6 +1773,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 const toolMessage: OpenAIChatCompletionsMessage = {
                     role: 'tool',
                     tool_call_id: segment.tool_use_id,
+                    ...(segment.tool_result_status === undefined
+                        ? {}
+                        : { tool_result_status: segment.tool_result_status }),
                     content: content.length === 1 && content[0]?.type === 'text' ? content[0].text : content,
                 };
                 messages.push(toolMessage);
@@ -976,20 +1828,87 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
     }
 
-    async requestTextCompletion(
+    async requestCanonicalTextCompletion(
         driver: DriverT,
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
-    ): Promise<Completion> {
-        let conversation = updateOpenAIChatCompletionsConversation(
-            options.conversation as OpenAIChatCompletionsPrompt,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
             prompt,
-        );
-        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
+            options,
+            provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        });
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, provider, signal);
+    }
+
+    async requestCanonicalContextCompletion(
+        driver: DriverT,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalContext({
+            options,
+            provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        });
+        return this.requestPreparedCanonicalTextCompletion(driver, canonicalState, options, provider, signal);
+    }
+
+    private async requestPreparedCanonicalTextCompletion(
+        driver: DriverT,
+        canonicalState: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        provider: string,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, false, getOpenAIChatDriverProvider(driver));
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, false, provider, canonicalState.tool_definitions);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (options.include_original_response) {
+                throw new Error(
+                    'An idempotently recovered Chat Completions response cannot reconstruct original_response',
+                );
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, options);
+        }
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+        await publishCanonicalPreparedRequest(prepared, options, measured);
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1003,35 +1922,125 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             throw new Error('Chat Completions response is not valid: no data');
         }
 
-        const assistantMessage: OpenAIChatCompletionsMessage = {
-            role: 'assistant',
-            content: message.content ?? null,
-            reasoning_content: message.reasoning_content,
-            reasoning: message.reasoning,
-        };
+        const rawDecoded = await decodeOpenAIChatCanonicalResponse(
+            result,
+            prepared,
+            typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+        );
+        const normalized =
+            !tool_use?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        let decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIChatCanonicalResponse(
+                      result,
+                      prepared,
+                      typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+                      normalized.structured_output,
+                  )
+                : rawDecoded;
+        if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+        const canonicalConversation = await appendOpenAIChatCanonicalResponseWithProcessing(prepared, decoded);
 
-        if (tool_use && tool_use.length > 0 && message.tool_calls) {
-            assistantMessage.tool_calls = message.tool_calls.filter(
-                (toolCall): toolCall is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
-                    toolCall.type === 'function',
-            );
-        }
-
-        conversation = updateOpenAIChatCompletionsConversation(conversation, {
-            messages: [assistantMessage],
+        return createCanonicalExecutionResponse(canonicalConversation, prepared.runtime.response_operation_id, {
+            ...(result.service_tier == null ? {} : { service_tier: result.service_tier }),
+            ...(options.include_original_response
+                ? {
+                      original_response:
+                          (result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result,
+                  }
+                : {}),
         });
-        conversation = finalizeOpenAIChatCompletionsConversation(conversation, options);
+    }
 
+    async requestTextCompletion(
+        driver: DriverT,
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider,
+        });
+        const includeThoughts =
+            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, false, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverOpenAICompletion(canonicalState, options, includeThoughts);
+        }
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+        await publishCanonicalPreparedRequest(prepared, options, measured);
+        const result = await this.postChatCompletion(driver, payload, options, signal);
+        const choice = result?.choices?.[0];
+        const message = choice?.message;
+        const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
+        const toolUse = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
+        if (
+            !message ||
+            (completionResults.length === 0 && !extractOpenAIChatCompletionsReasoningText(message) && !toolUse?.length)
+        ) {
+            throw new Error('Chat Completions response is not valid: no data');
+        }
+        const rawDecoded = await decodeOpenAIChatCanonicalResponse(
+            result,
+            prepared,
+            typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+        );
+        const normalized =
+            !toolUse?.length && options.result_schema
+                ? normalizeDecodedStructuredOutputForSchema(rawDecoded, options.result_schema)
+                : undefined;
+        const decoded =
+            normalized?.status === 'valid'
+                ? await decodeOpenAIChatCanonicalResponse(
+                      result,
+                      prepared,
+                      typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+                      normalized.structured_output,
+                  )
+                : rawDecoded;
+        const canonicalConversation = await appendOpenAIChatCanonicalResponseWithProcessing(prepared, decoded);
         return {
             result: completionResults,
-            tool_use,
+            tool_use: toolUse,
             token_usage: mapOpenAIChatCompletionsUsage(result.usage),
             service_tier: result.service_tier ?? undefined,
-            finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
+            finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!toolUse?.length),
             original_response: options.include_original_response
                 ? ((result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result)
                 : undefined,
-            conversation,
+            conversation: canonicalConversation,
         };
     }
 
@@ -1041,20 +2050,65 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        let conversation = updateOpenAIChatCompletionsConversation(
-            options.conversation as OpenAIChatCompletionsPrompt,
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
             prompt,
-        );
-        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
+            options,
+            provider,
+        });
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, true, getOpenAIChatDriverProvider(driver));
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, true, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            const canonical = await recoverCanonicalExecutionResponse(canonicalState, options);
+            return recoveredOpenAIStream(
+                legacyCompletionFromCanonicalExecution(canonical, { include_reasoning: includeThoughts }),
+            );
+        }
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+        await publishCanonicalPreparedRequest(prepared, options, measured);
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
         let nativeContent = '';
         let nativeReasoningContent: string | undefined;
         let nativeReasoning: string | undefined;
+        let nativeProviderReplay: OpenAIChatProviderReplay | undefined;
+        let responseId: string | undefined;
+        let responseObject: string | undefined;
+        let responseCreated: number | undefined;
+        let responseModel: string | undefined;
+        let responseServiceTier: OpenAIChatServiceTier | undefined;
+        let responseSystemFingerprint: string | undefined;
+        let responseUsage: OpenAIChatCompletionsUsage | undefined;
+        let responseFinishReason: string | undefined;
         const nativeToolCalls = new Map<
             number,
             { id: string; type: 'function'; function: { name: string; arguments: string } }
@@ -1064,6 +2118,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
+            responseId = json.id;
+            responseObject = json.object;
+            responseCreated = json.created;
+            responseModel = json.model;
+            responseServiceTier = json.service_tier;
+            if (typeof json.system_fingerprint === 'string') responseSystemFingerprint = json.system_fingerprint;
+            if (json.usage != null) responseUsage = json.usage;
+            if (typeof choice?.finish_reason === 'string') responseFinishReason = choice.finish_reason;
             const chunkResults: CompletionResult[] = [];
             const content = extractOpenAIChatCompletionsContentText(delta?.content);
             if (content) {
@@ -1072,6 +2134,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             } else if (choice?.finish_reason) {
                 chunkResults.push(...projector.push('', true));
             }
+
+            if (delta?.provider_replay !== undefined) nativeProviderReplay = structuredClone(delta.provider_replay);
 
             if (typeof delta?.reasoning_content === 'string') {
                 nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
@@ -1123,25 +2187,546 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             } satisfies CompletionChunkObject;
         });
 
-        return Object.assign(stream, {
-            finalizeConversation: () => {
-                const assistantMessage: OpenAIChatCompletionsMessage = {
-                    role: 'assistant',
+        let finalizedConversation: Promise<unknown> | undefined;
+        const finalizeConversation = () => {
+            finalizedConversation ??= (async () => {
+                const assistantMessage = {
+                    role: 'assistant' as const,
                     content: nativeContent || null,
                     ...(nativeReasoningContent !== undefined && { reasoning_content: nativeReasoningContent }),
                     ...(nativeReasoning !== undefined && { reasoning: nativeReasoning }),
+                    ...(nativeProviderReplay !== undefined && { provider_replay: nativeProviderReplay }),
                     ...(nativeToolCalls.size > 0 && {
                         tool_calls: [...nativeToolCalls.entries()]
                             .sort(([left], [right]) => left - right)
                             .map(([, toolCall]) => toolCall),
                     }),
                 };
-                return finalizeOpenAIChatCompletionsConversation(
-                    updateOpenAIChatCompletionsConversation(conversation, { messages: [assistantMessage] }),
-                    options,
-                );
-            },
+                if (
+                    responseId === undefined ||
+                    responseObject === undefined ||
+                    responseCreated === undefined ||
+                    responseModel === undefined
+                ) {
+                    throw new Error('Chat Completions stream ended without a complete native response identity');
+                }
+                if (responseFinishReason === undefined) {
+                    throw new Error('Chat Completions stream ended without a terminal finish reason');
+                }
+                const response: OpenAIChatCompletionsResponse = {
+                    id: responseId,
+                    object: responseObject as OpenAI.Chat.ChatCompletion['object'],
+                    created: responseCreated,
+                    model: responseModel,
+                    choices: [
+                        {
+                            index: 0,
+                            message: assistantMessage,
+                            finish_reason: responseFinishReason,
+                        },
+                    ],
+                    ...(responseServiceTier === undefined ? {} : { service_tier: responseServiceTier }),
+                    ...(responseSystemFingerprint === undefined
+                        ? {}
+                        : { system_fingerprint: responseSystemFingerprint }),
+                    ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+                };
+                return (
+                    await finalizeOpenAIChatStreamResponse({
+                        response,
+                        prepared,
+                        finish_reason: responseFinishReason,
+                        options,
+                    })
+                ).response.conversation;
+            })();
+            return finalizedConversation;
+        };
+        return Object.assign(stream, { finalizeConversation });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        driver: DriverT,
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
         });
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            options,
+            provider,
+            signal,
+            open,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        driver: DriverT,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalContext({
+            options,
+            provider,
+            signal,
+            resolve_asset: hostCapabilities?.resolve_canonical_asset,
+        });
+        return this.requestPreparedCanonicalTextCompletionEventStream(
+            driver,
+            canonicalState,
+            options,
+            provider,
+            signal,
+            open,
+        );
+    }
+
+    private async requestPreparedCanonicalTextCompletionEventStream(
+        driver: DriverT,
+        canonicalState: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        options: ExecutionOptions,
+        provider: string,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, true, provider, canonicalState.tool_definitions);
+        const requestBinding = this.requestBinding(payload, options, provider);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
+            requestBinding.payload,
+        );
+        const acceptedResponse = canonicalState.accepted_response;
+        const identity = {
+            request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: acceptedResponse?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: acceptedResponse?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: acceptedResponse?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (canonicalState.accepted_response !== undefined) {
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () => recoverCanonicalExecutionResponse(canonicalState, options),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+        validateCanonicalNativeStreamOpen(identity, open);
+        const measured = await this.projectCanonicalMeasurement(
+            canonicalState,
+            payload,
+            requestBinding,
+            options,
+            provider,
+            signal,
+        );
+        const finalized = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+            requestBinding,
+        );
+        const prepared =
+            measured === undefined
+                ? finalized
+                : {
+                      ...finalized,
+                      receipt: { ...finalized.receipt, measurement: measured.measurement },
+                  };
+
+        await publishCanonicalPreparedRequest(prepared, options, measured);
+        return this.streamPreparedTextEvents(
+            driver,
+            prepared,
+            payload,
+            options,
+            signal,
+            open,
+            (response, finishReason) =>
+                finalizeOpenAIChatStreamResponse({ response, prepared, finish_reason: finishReason, options }),
+        );
+    }
+
+    private async streamPreparedTextEvents(
+        driver: DriverT,
+        prepared: OpenAIChatResponseDecodeEvidence,
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        finalizeNative: (
+            response: OpenAIChatCompletionsResponse,
+            finishReason: string,
+        ) => Promise<Awaited<ReturnType<typeof decodeOpenAIChatStreamResponse>> & CanonicalNativeStreamFinalization>,
+        beforeTransport?: () => Promise<void>,
+    ): Promise<CanonicalExecutionEventStream> {
+        const identity = {
+            request_id: prepared.runtime.request_id,
+            attempt_id: prepared.runtime.attempt_id,
+            response_operation_id: prepared.runtime.response_operation_id,
+            generation_id: prepared.generation_id,
+            draft_turn_id: prepared.response_turn_id,
+        };
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        let nativeContent = '';
+        let contentDraft: OpenAIChatCanonicalDraft | undefined;
+        let nativeReasoningContent: string | undefined;
+        let reasoningContentDraft: OpenAIChatCanonicalDraft | undefined;
+        let nativeReasoning: string | undefined;
+        let nativeProviderReplay: OpenAIChatProviderReplay | undefined;
+        let reasoningDraft: OpenAIChatCanonicalDraft | undefined;
+        let responseId: string | undefined;
+        let responseObject: string | undefined;
+        let responseCreated: number | undefined;
+        let responseModel: string | undefined;
+        let responseServiceTier: OpenAIChatServiceTier | undefined;
+        let responseSystemFingerprint: string | undefined;
+        let responseUsage: OpenAIChatCompletionsUsage | undefined;
+        let responseFinishReason: string | undefined;
+        const nativeToolCalls = new Map<
+            number,
+            {
+                id: string;
+                type: 'function';
+                function: { name: string; arguments: string };
+                draft: OpenAIChatCanonicalDraft;
+            }
+        >();
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            ...(beforeTransport === undefined
+                ? {}
+                : {
+                      beforeTransport: async () => {
+                          signal?.throwIfAborted();
+                          await beforeTransport();
+                          signal?.throwIfAborted();
+                      },
+                  }),
+            openSource: async () => {
+                signal?.throwIfAborted();
+                const stream = await this.postChatCompletionStream(driver, payload, options, abortController.signal);
+                return openAIChatNativeSSE(stream);
+            },
+            map: async (json, writer) => {
+                const choice = json.choices?.[0];
+                const delta = choice?.delta;
+                responseId = json.id;
+                responseObject = json.object;
+                responseCreated = json.created;
+                responseModel = json.model;
+                responseServiceTier = json.service_tier;
+                if (typeof json.system_fingerprint === 'string') responseSystemFingerprint = json.system_fingerprint;
+                if (json.usage != null) responseUsage = json.usage;
+                if (typeof choice?.finish_reason === 'string') responseFinishReason = choice.finish_reason;
+
+                const content = extractOpenAIChatCompletionsContentText(delta?.content);
+                if (content) {
+                    contentDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:text`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'content']),
+                        kind: 'text',
+                    };
+                    if (nativeContent.length === 0) {
+                        await writer.startBlock({
+                            draft_block_id: contentDraft.draft_block_id,
+                            native_position: contentDraft.native_position,
+                            block: { type: 'text' },
+                        });
+                    }
+                    nativeContent += content;
+                    await writer.text({
+                        draft_block_id: contentDraft.draft_block_id,
+                        native_position: contentDraft.native_position,
+                        text: content,
+                    });
+                }
+
+                if (delta?.provider_replay !== undefined) {
+                    nativeProviderReplay = structuredClone(delta.provider_replay);
+                }
+
+                if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+                    reasoningContentDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:reasoning-content`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'reasoning_content']),
+                        kind: 'reasoning',
+                    };
+                    if (nativeReasoningContent === undefined) {
+                        await writer.startBlock({
+                            draft_block_id: reasoningContentDraft.draft_block_id,
+                            native_position: reasoningContentDraft.native_position,
+                            block: { type: 'reasoning', visibility: 'display' },
+                        });
+                    }
+                    nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
+                    await writer.reasoning({
+                        draft_block_id: reasoningContentDraft.draft_block_id,
+                        native_position: reasoningContentDraft.native_position,
+                        text: delta.reasoning_content,
+                    });
+                }
+                if (typeof delta?.reasoning === 'string' && delta.reasoning.length > 0) {
+                    reasoningDraft ??= {
+                        draft_block_id: `${prepared.response_turn_id}:chat:reasoning`,
+                        native_position: openAIChatStreamPosition(['choices', 0, 'message', 'reasoning']),
+                        kind: 'reasoning',
+                    };
+                    if (nativeReasoning === undefined) {
+                        await writer.startBlock({
+                            draft_block_id: reasoningDraft.draft_block_id,
+                            native_position: reasoningDraft.native_position,
+                            block: { type: 'reasoning', visibility: 'display' },
+                        });
+                    }
+                    nativeReasoning = (nativeReasoning ?? '') + delta.reasoning;
+                    await writer.reasoning({
+                        draft_block_id: reasoningDraft.draft_block_id,
+                        native_position: reasoningDraft.native_position,
+                        text: delta.reasoning,
+                    });
+                }
+
+                for (const toolCall of delta?.tool_calls ?? []) {
+                    const index = toolCall.index ?? 0;
+                    let native = nativeToolCalls.get(index);
+                    if (native === undefined) {
+                        const draft: OpenAIChatCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:chat:tool:${index}`,
+                            native_position: openAIChatStreamPosition(['choices', 0, 'message', 'tool_calls', index]),
+                            kind: 'tool_call',
+                            tool_index: index,
+                        };
+                        native = {
+                            id: toolCall.id ?? '',
+                            type: 'function',
+                            function: {
+                                name: toolCall.function?.name ?? '',
+                                arguments: '',
+                            },
+                            draft,
+                        };
+                        nativeToolCalls.set(index, native);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: draft.native_position,
+                            block: {
+                                type: 'tool_call',
+                                executor: 'application',
+                                ...(native.id.length === 0 ? {} : { call_id: native.id }),
+                                ...(native.function.name.length === 0 ? {} : { tool_name: native.function.name }),
+                            },
+                        });
+                    } else {
+                        const priorId = native.id;
+                        const priorName = native.function.name;
+                        if (toolCall.id) native.id = toolCall.id;
+                        if (toolCall.function?.name) native.function.name += toolCall.function.name;
+                        if (native.id !== priorId || native.function.name !== priorName) {
+                            await writer.toolIdentity({
+                                draft_block_id: native.draft.draft_block_id,
+                                native_position: native.draft.native_position,
+                                ...(native.id === priorId ? {} : { call_id: native.id }),
+                                ...(native.function.name === priorName ? {} : { tool_name: native.function.name }),
+                            });
+                        }
+                    }
+                    const argumentsFragment = toolCall.function?.arguments;
+                    if (typeof argumentsFragment === 'string' && argumentsFragment.length > 0) {
+                        native.function.arguments += argumentsFragment;
+                        await writer.toolArgumentsFragment({
+                            draft_block_id: native.draft.draft_block_id,
+                            native_position: native.draft.native_position,
+                            fragment: argumentsFragment,
+                        });
+                    }
+                }
+            },
+            finalize: async () => {
+                if (
+                    responseId === undefined ||
+                    responseObject === undefined ||
+                    responseCreated === undefined ||
+                    responseModel === undefined
+                ) {
+                    throw new Error('Chat Completions stream ended without a complete native response identity');
+                }
+                if (responseFinishReason === undefined) {
+                    throw new Error('Chat Completions stream ended without a terminal finish reason');
+                }
+                const assistantMessage = {
+                    role: 'assistant' as const,
+                    content: nativeContent || null,
+                    ...(nativeReasoningContent === undefined ? {} : { reasoning_content: nativeReasoningContent }),
+                    ...(nativeReasoning === undefined ? {} : { reasoning: nativeReasoning }),
+                    ...(nativeProviderReplay === undefined ? {} : { provider_replay: nativeProviderReplay }),
+                    ...(nativeToolCalls.size === 0
+                        ? {}
+                        : {
+                              tool_calls: [...nativeToolCalls.entries()]
+                                  .sort(([left], [right]) => left - right)
+                                  .map(([, toolCall]) => ({
+                                      id: toolCall.id,
+                                      type: toolCall.type,
+                                      function: toolCall.function,
+                                  })),
+                          }),
+                };
+                const response: OpenAIChatCompletionsResponse = {
+                    id: responseId,
+                    object: responseObject as OpenAI.Chat.ChatCompletion['object'],
+                    created: responseCreated,
+                    model: responseModel,
+                    choices: [{ index: 0, message: assistantMessage, finish_reason: responseFinishReason }],
+                    ...(responseServiceTier === undefined ? {} : { service_tier: responseServiceTier }),
+                    ...(responseSystemFingerprint === undefined
+                        ? {}
+                        : { system_fingerprint: responseSystemFingerprint }),
+                    ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+                };
+                const finalized = await finalizeNative(response, responseFinishReason);
+                return {
+                    decoded: finalized.decoded,
+                    ...(finalized.response !== undefined
+                        ? { response: finalized.response }
+                        : { accept_output: finalized.accept_output }),
+                    prepare_reconciliation: async () => {
+                        const { raw_decoded: rawDecoded, normalized } = finalized;
+                        let { decoded } = finalized;
+                        const drafts = [
+                            ...(contentDraft === undefined ? [] : [contentDraft]),
+                            ...(reasoningContentDraft === undefined ? [] : [reasoningContentDraft]),
+                            ...(reasoningDraft === undefined ? [] : [reasoningDraft]),
+                            ...[...nativeToolCalls.values()]
+                                .sort((left, right) => (left.draft.tool_index ?? 0) - (right.draft.tool_index ?? 0))
+                                .map((toolCall) => toolCall.draft),
+                        ];
+                        const rawBlocks = openAIChatSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== drafts.length) {
+                            throw new Error('OpenAI Chat stream drafts do not match its terminal native response');
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const draft = drafts[index];
+                            if (draft === undefined) return [];
+                            return [
+                                {
+                                    canonical_id: block.id,
+                                    native_position: draft.native_position,
+                                    kind: 'block' as const,
+                                },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: draft.native_position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = openAIChatSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error(
+                                    'OpenAI Chat structured stream decode is missing source or result blocks',
+                                );
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && drafts[index] !== undefined ? [drafts[index]] : [],
+                            );
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                                native_positions: sourceDrafts.map((draft) => draft.native_position),
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            const draft = drafts[index];
+                            if (draft === undefined || (normalized?.status === 'valid' && block.type === 'text')) {
+                                continue;
+                            }
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        decoded = { ...decoded, stream_evidence: { item_mappings: itemMappings, transformations } };
+                        return {
+                            decoded,
+                            reconciliations,
+                            deliver_final_events: async (finalWriter) => {
+                                if (decoded.generation.usage !== undefined) {
+                                    await finalWriter.usage(decoded.generation.usage);
+                                }
+                                for (const [index, block] of rawBlocks.entries()) {
+                                    const draft = drafts[index];
+                                    if (draft === undefined) continue;
+                                    await finalWriter.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : responseFinishReason === 'length'
+                                                  ? 'interrupted'
+                                                  : 'native_complete',
+                                    });
+                                }
+                                await finalWriter.finish({
+                                    outcome: responseFinishReason === 'length' ? 'interrupted' : 'completed',
+                                    finish_reason: responseFinishReason,
+                                    ...(typeof responseServiceTier === 'string'
+                                        ? { service_tier: responseServiceTier }
+                                        : {}),
+                                });
+                            },
+                        };
+                    },
+                    ...(finalized.normalized?.status === 'valid' && options.result_schema !== undefined
+                        ? { result_schema: options.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
+        });
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
     }
 
     protected buildPayload(
@@ -1149,75 +2734,153 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         stream: boolean,
         provider: string = Providers.openai_compatible,
+        tools:
+            | readonly Pick<CanonicalToolDefinition, 'name' | 'description' | 'input_schema'>[]
+            | ToolDefinition[]
+            | undefined = options.tools,
     ): OpenAIChatCompletionsPayload {
-        const modelOptions = options.model_options as TextFallbackOptions & {
-            effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-            reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-            seed?: number;
-            service_tier?: string;
-            tool_choice?: 'auto' | 'none' | 'any' | 'required';
-            /** Internal execution hint supplied after public model-option validation. */
-            required_tool_name?: string;
-            /** Internal execution hint used with a required named tool. */
-            parallel_tool_calls?: boolean;
-        };
-        const payload: OpenAIChatCompletionsPayload = {
-            model: this.getModelName(options),
-            messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
-            // Some OpenAI-compatible providers return empty/truncated completions unless a
-            // documented or runtime-validated token budget is supplied. Caller options still win.
-            max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
-            temperature: modelOptions?.temperature,
-            top_p: modelOptions?.top_p,
-            presence_penalty: modelOptions?.presence_penalty,
-            frequency_penalty: modelOptions?.frequency_penalty,
-            n: 1,
-            stop: modelOptions?.stop_sequence,
-            seed: modelOptions?.seed,
-            reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
-            service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
+        return buildOpenAIChatCompletionsPayload(
+            conversation,
+            options,
+            this.options,
+            this.getModelName(options),
             stream,
-        };
-
-        const executionExtraBody = getOpenAIExtraBody(modelOptions);
-        if (this.options.extraBody || executionExtraBody) {
-            payload.extra_body = { ...this.options.extraBody, ...executionExtraBody };
-        }
-
-        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
-        const forcedToolChoice =
-            typeof modelOptions?.required_tool_name === 'string' ||
-            modelOptions?.tool_choice === 'required' ||
-            modelOptions?.tool_choice === 'any';
-        if (forcedToolChoice && (!toolsPayload || toolsPayload.length === 0)) {
-            throw createToolChoiceConfigurationError(
-                '[OpenAI Chat Completions API] A required tool choice was requested, but no tools are available.',
-                { provider, model: options.model, operation: stream ? 'stream' : 'execute' },
-            );
-        }
-        if (toolsPayload && toolsPayload.length > 0) {
-            payload.tools = toolsPayload;
-            payload.tool_choice = modelOptions?.required_tool_name
-                ? { type: 'function', function: { name: modelOptions.required_tool_name } }
-                : modelOptions?.tool_choice === 'any'
-                  ? 'required'
-                  : modelOptions?.tool_choice;
-            payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
-        }
-
-        if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
-            const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
-            payload.response_format = {
-                type: 'json_schema',
-                json_schema: { name: 'output', strict: formattedSchema.strict, schema: formattedSchema.schema },
-            };
-        }
-
-        return payload;
+            provider,
+            tools,
+        );
     }
 
     protected getModelName(options: ExecutionOptions): string {
         return this.options.modelName ?? options.model;
+    }
+
+    /** Concrete SDK protocols must expose their actual serialized body, not intermediate receipt binding. */
+    protected canonicalTransportBody(_payload: OpenAIChatCompletionsPayload): JsonValue {
+        throw new Error('Canonical actual transport projection is unavailable for this protocol');
+    }
+
+    private async projectCanonicalMeasurement(
+        state: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+        payload: OpenAIChatCompletionsPayload,
+        binding: OpenAIChatRequestBinding,
+        options: ExecutionOptions,
+        provider: string,
+        signal?: AbortSignal,
+    ): Promise<CanonicalProjectedRequestMeasurement | undefined> {
+        const callback = options.on_canonical_request_projected;
+        if (!callback) {
+            if (state.document.processing.enabled && state.document.processing.budget)
+                throw new Error('Required processing measurement is unavailable');
+            return undefined;
+        }
+        const capturedOptions: ExecutionOptions = {
+            model: options.model,
+            ...(options.model_options === undefined ? {} : { model_options: structuredClone(options.model_options) }),
+            ...(options.result_schema === undefined ? {} : { result_schema: structuredClone(options.result_schema) }),
+        };
+        const actualModel = this.getModelName(options);
+        const protocolOptions: OpenAIChatCompletionsProtocolOptions = {
+            modelName: actualModel,
+            defaultMaxTokens: this.options.defaultMaxTokens,
+            extraBody: structuredClone(this.options.extraBody),
+            resultSchemaMode: this.options.resultSchemaMode,
+            toolSchemaMode: this.options.toolSchemaMode,
+        };
+        const capturedDocument = parseConversationDocument(state.document);
+        const runtime = structuredClone(state.runtime);
+        const tools = structuredClone(state.tool_definitions);
+        const targetOptions = canonicalToolSelectionTargetOptions(
+            binding.target_options,
+            state.response_selection_policy,
+        );
+        const target = {
+            provider,
+            protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            model: state.requested_model,
+            adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+            ...(targetOptions === undefined ? {} : { options: structuredClone(targetOptions) }),
+        };
+        const nativeRequest = structuredClone(this.canonicalTransportBody(payload));
+        const stream = payload.stream === true;
+        const build = (conversation: OpenAIChatCompletionsPrompt): JsonValue => {
+            const projected = projectOpenAIChatCompletionsHistory(
+                conversation,
+                capturedOptions,
+                canonicalConversationTurnNumber(capturedDocument),
+            );
+            const prepared = prepareOpenAIChatCompletionsConversation(projected, {
+                model: capturedOptions.model,
+                tools,
+            });
+            return this.canonicalTransportBody(
+                buildOpenAIChatCompletionsPayload(
+                    prepared,
+                    capturedOptions,
+                    protocolOptions,
+                    actualModel,
+                    stream,
+                    provider,
+                    tools,
+                ),
+            );
+        };
+        const compiler: CanonicalRequestProjectionCompiler = {
+            compileDocument: (document: ConversationDocument, compileSignal?: AbortSignal) => {
+                const owned = parseConversationDocument(document);
+                return boundedCanonicalProjectionOperation(async (boundedSignal) => {
+                    boundedSignal.throwIfAborted();
+                    const compiled = await compileOpenAIChatPreparedDocumentWithHostAssets(
+                        state.native_conversation,
+                        owned,
+                        target,
+                        boundedSignal,
+                    );
+                    const request = build(compiled.conversation);
+                    boundedSignal.throwIfAborted();
+                    return request;
+                }, compileSignal);
+            },
+            compileProspective: (input, compileSignal) => {
+                const owned = structuredClone(input);
+                return boundedCanonicalProjectionOperation(async (boundedSignal) => {
+                    const compiled = await compileOpenAIChatProspectiveJsonMinification(
+                        owned,
+                        target,
+                        boundedSignal,
+                        state.native_conversation,
+                    );
+                    return {
+                        status: 'compiled',
+                        source_request: build(compiled.original.conversation),
+                        replacement_request: build(compiled.replacement.conversation),
+                    };
+                }, compileSignal);
+            },
+        };
+        // Unsupported historical projections must not be silently replaced by a dry compiler.
+        const replayed = await compiler.compileDocument(capturedDocument, signal);
+        if ((await fingerprintJson(replayed)) !== (await fingerprintJson(nativeRequest)))
+            throw new Error('Canonical dry compiler cannot reproduce the actual native request');
+        const measured = await projectCanonicalRequestMeasurement(
+            {
+                document: capturedDocument,
+                runtime,
+                target,
+                native_request: nativeRequest,
+            },
+            compiler,
+            callback,
+            signal,
+        );
+        return measured;
+    }
+
+    protected requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: providerJsonValue(payload) };
     }
 
     protected abstract postChatCompletion(
@@ -1287,6 +2950,31 @@ export function openAIChatCompletionsStreamToSSE(
 }
 
 class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsTransportDriver> {
+    constructor(
+        options: OpenAIChatCompletionsProtocolOptions,
+        private readonly resolveModelName: (options: ExecutionOptions) => string,
+        private readonly projectTransportBody: (payload: OpenAIChatCompletionsPayload) => JsonValue,
+        private readonly bindRequestBody: (payload: OpenAIChatCompletionsPayload) => JsonValue,
+    ) {
+        super(options);
+    }
+
+    protected override getModelName(options: ExecutionOptions): string {
+        return this.resolveModelName(options);
+    }
+
+    protected override canonicalTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return this.projectTransportBody(payload);
+    }
+
+    protected override requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: this.bindRequestBody(payload) };
+    }
+
     protected async postChatCompletion(
         driver: OpenAIChatCompletionsTransportDriver,
         payload: OpenAIChatCompletionsPayload,
@@ -1306,7 +2994,10 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
     }
 }
 
-function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenAI.Chat.ChatCompletionMessageParam {
+/** @internal Convert only portable OpenAI fields; provider-scoped replay is intentionally omitted. */
+export function toOpenAISDKMessage(
+    message: OpenAIChatCompletionsRequestMessage,
+): OpenAI.Chat.ChatCompletionMessageParam {
     const textParts = Array.isArray(message.content)
         ? message.content.filter((part): part is OpenAIChatCompletionsTextPart => part.type === 'text')
         : undefined;
@@ -1377,6 +3068,20 @@ export function toOpenAIStreamingPayload(
 }
 
 export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAISDKChatCompletionsDriver> {
+    protected canonicalTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return providerJsonValue(
+            payload.stream ? toOpenAIStreamingPayload(payload) : toOpenAINonStreamingPayload(payload),
+        );
+    }
+
+    protected override requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: this.canonicalTransportBody(payload) };
+    }
+
     protected async postChatCompletion(
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
@@ -1418,14 +3123,41 @@ export abstract class OpenAIChatCompletionsDriverBase<
 
     constructor(options: OptionsT) {
         super(options);
-        this.chatCompletionsProtocol = new DriverChatCompletionsProtocol({
-            defaultMaxTokens: options.defaultMaxTokens,
-            extraBody: options.extraBody,
-            resultSchemaMode: options.resultSchemaMode,
-            includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
-            includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
-            toolSchemaMode: options.toolSchemaMode,
-        });
+        this.chatCompletionsProtocol = new DriverChatCompletionsProtocol(
+            {
+                defaultMaxTokens: options.defaultMaxTokens,
+                extraBody: options.extraBody,
+                resultSchemaMode: options.resultSchemaMode,
+                includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
+                includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
+                toolSchemaMode: options.toolSchemaMode,
+            },
+            (executionOptions) => this.resolveChatCompletionsRequestModel(executionOptions),
+            (payload) => this.projectChatCompletionsTransportBody(payload),
+            (payload) => this.bindChatCompletionsRequestBody(payload),
+        );
+    }
+
+    protected projectChatCompletionsTransportBody(_payload: OpenAIChatCompletionsPayload): JsonValue {
+        throw new Error('Actual native body projection is unavailable for this provider transport');
+    }
+
+    /** Existing compatible transports retain their historical receipt binding until an exact serializer is available. */
+    protected bindChatCompletionsRequestBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return providerJsonValue(payload);
+    }
+
+    /** Resolve the transport body model without changing canonical requested-model identity. */
+    protected resolveChatCompletionsRequestModel(options: ExecutionOptions): string {
+        return options.model;
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        return !openAIAudioTask(options.model);
     }
 
     /** @internal Provider SDK transport boundary. */
@@ -1455,12 +3187,127 @@ export abstract class OpenAIChatCompletionsDriverBase<
         return this.chatCompletionsProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
+    requestCanonicalTextCompletion(
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.chatCompletionsProtocol.requestCanonicalTextCompletion(
+            this,
+            prompt,
+            options,
+            signal,
+            hostCapabilities,
+        );
+    }
+
+    /** @internal Compile through this configured driver before the host stages indexed evidence. */
+    prepareIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            runtime: ResolvedConversationRuntimeContext;
+            options: ExecutionOptions;
+            stream: boolean;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ) {
+        return this.chatCompletionsProtocol.prepareIndexedTextRequest(
+            { ...input, provider: this.provider },
+            hostCapabilities,
+        );
+    }
+
+    /** @internal The host must supply a durable current-owner assertion before native dispatch. */
+    executeCommittedIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            assert_committed: () => Promise<void>;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<DecodedConversationResponse> {
+        return this.chatCompletionsProtocol.executeCommittedIndexedTextRequest(
+            this,
+            {
+                ...input,
+                provider: this.provider,
+            },
+            hostCapabilities,
+        );
+    }
+
+    streamCommittedIndexedTextRequest(
+        input: {
+            selection: IndexedConversationSelectedContext;
+            record: ConversationPreparedRequestRecord;
+            options: ExecutionOptions;
+            assert_committed: () => Promise<void>;
+            accept_output: (decoded: DecodedConversationResponse) => Promise<ConversationAcceptedOutputFragment>;
+            open: CanonicalStreamOpenOptions;
+            signal?: AbortSignal;
+        },
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.streamCommittedIndexedTextRequest(
+            this,
+            {
+                ...input,
+                provider: this.provider,
+            },
+            hostCapabilities,
+        );
+    }
+
+    requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.chatCompletionsProtocol.requestCanonicalContextCompletion(this, options, signal, hostCapabilities);
+    }
+
     requestTextCompletionStream(
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options, signal);
+    }
+
+    requestCanonicalTextCompletionEventStream(
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.requestCanonicalTextCompletionEventStream(
+            this,
+            prompt,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
+    }
+
+    requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        return this.chatCompletionsProtocol.requestCanonicalContextCompletionEventStream(
+            this,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
     }
 
     buildStreamingConversation(
@@ -1481,6 +3328,61 @@ export interface OpenAIChatCompletionsDriverConfig extends OpenAIChatCompletions
 
 /** Generic driver for services implementing the OpenAI Chat Completions protocol. */
 export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase<OpenAIChatCompletionsDriverConfig> {
+    override async resolveCanonicalModelSwitchTarget(
+        model: string,
+        options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined> {
+        return ModelTargetSchema.parse({
+            provider: this.provider,
+            protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            model,
+            adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+            ...(options === undefined ? {} : { options: structuredClone(options) }),
+        });
+    }
+
+    override async projectCanonicalModelSwitchRequest(
+        document: ConversationDocument,
+        target: ModelTarget,
+        operation: 'execute' | 'stream',
+        controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection> {
+        if (controls && Object.values(controls).some((value) => value !== undefined)) {
+            return { status: 'unsupported', reason: 'Chat switch requires an explicit request-control policy' };
+        }
+        if (target.provider !== this.provider) {
+            return { status: 'unsupported', reason: 'Model switch target provider differs from configured driver' };
+        }
+        const protocolOptions: OpenAIChatCompletionsProtocolOptions = {
+            modelName: this.resolveChatCompletionsRequestModel({ model: target.model }),
+            defaultMaxTokens: this.options.defaultMaxTokens,
+            extraBody: this.options.extraBody,
+            resultSchemaMode: this.options.resultSchemaMode,
+            includeResultSchemaInPrompt: this.options.includeResultSchemaInPrompt,
+            includeResultSchemaInPromptForModel: this.options.includeResultSchemaInPromptForModel,
+            toolSchemaMode: this.options.toolSchemaMode,
+        };
+        return {
+            status: 'compiled',
+            native_request: await compileOpenAIChatModelSwitchRequest({
+                document,
+                target,
+                protocol_options: protocolOptions,
+                stream: operation === 'stream',
+            }),
+        };
+    }
+
+    protected override projectChatCompletionsTransportBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return providerJsonValue(
+            payload.stream ? toOpenAIStreamingPayload(payload) : toOpenAINonStreamingPayload(payload),
+        );
+    }
+
+    protected override bindChatCompletionsRequestBody(payload: OpenAIChatCompletionsPayload): JsonValue {
+        return this.projectChatCompletionsTransportBody(payload);
+    }
+
     readonly provider = Providers.openai_compatible;
     service: OpenAI;
 
@@ -1502,6 +3404,22 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         );
     }
 
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        if (!openAIAudioTask(options.model)) return super.executeCanonical(segments, options, signal, hostCapabilities);
+        return executeOpenAIAudioCanonical({
+            service: this.service,
+            segments,
+            options,
+            provider: this.provider,
+            request_options: this.getDriverRequestOptions(options, signal),
+        });
+    }
+
     override async stream(
         segments: PromptSegment[],
         options: ExecutionOptions,
@@ -1515,6 +3433,25 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             (streamSignal) =>
                 this.execute(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
         );
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (!openAIAudioTask(options.model)) {
+            return super.streamCanonicalEvents(segments, options, signal, open, hostCapabilities);
+        }
+        return streamOpenAIAudioCanonicalEvents({
+            segments,
+            options,
+            signal,
+            open,
+            execute: (streamSignal) => this.executeCanonical(segments, options, streamSignal),
+        });
     }
 
     constructor(options: OpenAIChatCompletionsDriverConfig) {
@@ -1618,4 +3555,96 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                 : undefined,
         };
     }
+}
+
+/**
+ * Compile a new target through the same adapter, history policy, payload builder and SDK body
+ * converter used by transport. This compatible-only path rejects implicit history rewriting.
+ */
+export async function compileOpenAIChatModelSwitchRequest(input: {
+    document: ConversationDocument;
+    target: ModelTarget;
+    protocol_options: OpenAIChatCompletionsProtocolOptions;
+    stream: boolean;
+}) {
+    const document = parseConversationDocument(input.document);
+    const target = ModelTargetSchema.parse(structuredClone(input.target));
+    const { includeResultSchemaInPromptForModel, ...serializableProtocolOptions } = input.protocol_options;
+    // A configured model policy callback is intentionally shared by identity. All serializable
+    // options are owned before the first await, including nested extra-body values.
+    const protocolOptions: OpenAIChatCompletionsProtocolOptions = {
+        ...structuredClone(serializableProtocolOptions),
+        ...(includeResultSchemaInPromptForModel ? { includeResultSchemaInPromptForModel } : {}),
+    };
+    const stream = input.stream;
+    // Deployment aliases belong to the trusted host protocol configuration. Extra body may
+    // extend provider-specific parameters, but may not replace the request we attest below.
+    const protectedBodyFields = new Set([
+        'model',
+        'messages',
+        'tools',
+        'tool_choice',
+        'stream',
+        'stream_options',
+        'response_format',
+    ]);
+    for (const field of Object.keys(protocolOptions.extraBody ?? {})) {
+        if (protectedBodyFields.has(field))
+            throw new Error(`OpenAI Chat model switch extraBody cannot override ${field}`);
+    }
+    if (
+        target.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+        target.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION
+    ) {
+        throw new Error('OpenAI Chat model switch target has an unsupported protocol or adapter version');
+    }
+    const tools = document.context.active_tool_definition_ids.map((id) => {
+        const definition = document.tool_definitions[id];
+        if (!definition) throw new Error(`OpenAI Chat model switch tool ${id} is unavailable`);
+        return definition;
+    });
+    const selected = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
+    const unsupportedMedia = new Set(['image', 'document', 'audio', 'video', 'extension']);
+    for (const turn of selected) {
+        for (const block of turn.blocks) {
+            if (unsupportedMedia.has(block.type))
+                throw new Error(`OpenAI Chat model switch requires an explicit ${block.type} media policy`);
+            if (block.type === 'tool_result' && block.content.some((item) => unsupportedMedia.has(item.type)))
+                throw new Error('OpenAI Chat model switch requires an explicit nested tool-result media policy');
+        }
+    }
+    const modelOptions = target.options === undefined ? undefined : ModelOptionsSchema.parse(target.options);
+    if (
+        target.options !== undefined &&
+        (await fingerprintJson(modelOptions)) !== (await fingerprintJson(target.options))
+    ) {
+        throw new Error('OpenAI Chat model switch target contains unsupported model options');
+    }
+    const options: ExecutionOptions = {
+        model: target.model,
+        ...(modelOptions === undefined ? {} : { model_options: modelOptions }),
+    };
+    const compiled = compileOpenAIChatCompletionsConversation(document, target);
+    const projected = projectOpenAIChatCompletionsHistory(
+        compiled.conversation,
+        options,
+        canonicalConversationTurnNumber(document),
+    );
+    if ((await fingerprintJson(projected.messages)) !== (await fingerprintJson(compiled.conversation.messages))) {
+        throw new Error('OpenAI Chat model switch requires an explicit history or media transformation');
+    }
+    const prepared = prepareOpenAIChatCompletionsConversation(projected, { model: target.model, tools });
+    if ((await fingerprintJson(prepared.messages)) !== (await fingerprintJson(projected.messages))) {
+        throw new Error('OpenAI Chat model switch requires an explicit tool or replay transformation');
+    }
+    const payload = buildOpenAIChatCompletionsPayload(
+        prepared,
+        options,
+        protocolOptions,
+        protocolOptions.modelName ?? target.model,
+        stream,
+        target.provider,
+        tools,
+    );
+    return providerJsonValue(stream ? toOpenAIStreamingPayload(payload) : toOpenAINonStreamingPayload(payload));
 }

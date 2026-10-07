@@ -3,6 +3,11 @@ import { type Content, GoogleGenAI, type Model } from '@google/genai';
 import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
     type DriverCompletionStream,
@@ -36,10 +41,16 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 
 export * from './embeddings/batch.js';
 
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
+import { NON_GLOBAL_ANTHROPIC_MODELS, resolveVertexAIAnthropicRegion } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
-import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import {
+    executeImagenCanonical,
+    formatImagenDebugPrompt,
+    ImagenModelDefinition,
+    type ImagenPrompt,
+    validateImagenCanonicalInput,
+} from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
@@ -49,6 +60,23 @@ export type {
     GeminiContextCacheCoordinator,
     GeminiContextCacheEntry,
 } from './models/gemini-context-cache.js';
+export type {
+    LegacyGeminiConversation,
+    PreparedGeminiConversation,
+} from './models/gemini-conversation-adapter.js';
+export {
+    appendGeminiCanonicalResponse,
+    compileGeminiConversation,
+    decodeGeminiCanonicalResponse,
+    exportLegacyGeminiConversation,
+    finalizeGeminiPreparedRequest,
+    GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
+    GEMINI_GENERATE_CONTENT_PROTOCOL,
+    geminiGenerationUsage,
+    geminiToolUsesFromContent,
+    isGeminiGenerateContentHistory,
+    prepareGeminiCanonicalState,
+} from './models/gemini-conversation-adapter.js';
 
 import type { VertexAIDriverOptions } from '../driver-options.js';
 
@@ -90,6 +118,27 @@ export { trimModelName };
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
     static readonly PROVIDER = Providers.vertexai;
     provider = VertexAIDriver.PROVIDER;
+
+    protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
+        if (this.isImageModel(options.model)) return this.supportsCanonicalImageGeneration(options);
+        return getModelDefinition(options.model).canonical_conversation_supported === true;
+    }
+
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        const definition = getModelDefinition(options.model);
+        return (
+            definition.requestCanonicalContextCompletion !== undefined &&
+            definition.requestCanonicalContextCompletionEventStream !== undefined
+        );
+    }
+
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
+        validateImagenCanonicalInput(segments, options);
+    }
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
@@ -302,13 +351,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         region: string = this.options.region,
         httpTimeout?: HttpTimeoutOptions,
     ): Promise<AnthropicVertex> {
-        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const getRegionPrefix = (r: string) => r.split('-')[0];
-        const regionPrefix = getRegionPrefix(region);
-        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
-
-        const defaultRegionPrefix = getRegionPrefix(this.options.region);
-        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
+        const mappedRegion = resolveVertexAIAnthropicRegion(region);
+        const defaultMappedRegion = resolveVertexAIAnthropicRegion(this.options.region);
 
         // Get auth client to avoid version mismatch with GoogleAuth generic types
         const authClient = await this.getAuthClient();
@@ -437,6 +481,65 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options, signal);
+    }
+
+    async requestCanonicalTextCompletion(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalTextCompletion === undefined) {
+            throw new Error(`Vertex AI model ${options.model} does not support direct canonical execution`);
+        }
+        return definition.requestCanonicalTextCompletion(this, prompt, options, signal, hostCapabilities);
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalTextCompletionEventStream === undefined) {
+            throw new Error(`Vertex AI model ${options.model} does not support canonical typed streaming`);
+        }
+        return definition.requestCanonicalTextCompletionEventStream(
+            this,
+            prompt,
+            options,
+            signal,
+            open,
+            hostCapabilities,
+        );
+    }
+
+    async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalContextCompletion === undefined) {
+            throw new Error('Vertex AI model does not support canonical context execution');
+        }
+        return definition.requestCanonicalContextCompletion(this, options, signal, hostCapabilities);
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalContextCompletionEventStream === undefined) {
+            throw new Error('Vertex AI model does not support canonical context typed streaming');
+        }
+        return definition.requestCanonicalContextCompletionEventStream(this, options, signal, open, hostCapabilities);
     }
 
     /**
@@ -680,6 +783,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const splits = _options.model.split('/');
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options, signal);
+    }
+
+    override async requestCanonicalImageGeneration(
+        prompt: ImagenPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeImagenCanonical({ driver: this, prompt, options, signal });
     }
 
     async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {

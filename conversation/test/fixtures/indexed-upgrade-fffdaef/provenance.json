@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/vertesia/llumiverse",
+  "commit": "fffdaef7f2be1d50461a8891c3c0e29706dfb443",
+  "encoder_path": "conversation/src/indexed-conversation.ts",
+  "encoder_sha256": "0121afcc2372ea1936ad070150e199fdbfe6428e1b56c029f4aedf75bc6dcb7b",
+  "execution": "Executed fixture-local historical capture; no provider or network execution"
+}

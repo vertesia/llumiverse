@@ -55,6 +55,23 @@ function response() {
     } as unknown as OpenAI.Responses.Response;
 }
 
+function toolResponse(name: string): OpenAI.Responses.Response {
+    return {
+        ...response(),
+        output: [
+            {
+                type: 'function_call',
+                id: 'item-tool-call',
+                call_id: 'call-tool-call',
+                name,
+                arguments: '{}',
+                status: 'completed',
+            },
+        ],
+        output_text: '',
+    } as OpenAI.Responses.Response;
+}
+
 describe('OpenAI Responses reasoning', () => {
     it('uses prompt-schema fallback for GLM 5.3 on OpenAI-compatible Responses', async () => {
         const create = vi.fn(async () => ({
@@ -89,7 +106,7 @@ describe('OpenAI Responses reasoning', () => {
         ['required', 'required'],
         ['any', 'required'],
     ] as const)('forwards explicit %s tool choice as %s', async (configured, expected) => {
-        const create = vi.fn(async (_request: unknown) => response());
+        const create = vi.fn(async (_request: unknown) => toolResponse('think'));
         const driver = new TestResponsesDriver(create);
 
         await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
@@ -102,7 +119,7 @@ describe('OpenAI Responses reasoning', () => {
     });
 
     it('forces one named tool without changing the visible tool definitions', async () => {
-        const create = vi.fn(async (_request: unknown) => response());
+        const create = vi.fn(async (_request: unknown) => toolResponse('write_artifact'));
         const driver = new TestResponsesDriver(create);
 
         await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
@@ -423,15 +440,22 @@ describe('OpenAI Responses reasoning', () => {
 
         const serialized = JSON.stringify(completion.conversation);
         expect(serialized).toContain('encrypted-replay-state');
-        expect(serialized).toContain('[Content truncated - exceeded token limit]');
+        expect(serialized).toContain('old tool output that should be truncated');
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'next text request' }], {
+            model: 'gpt-5',
+            conversation: completion.conversation,
+            model_options: { _option_id: 'openai-thinking' },
+            stripTextMaxTokens: 1,
+        });
+        expect(JSON.stringify(create.mock.calls[1]?.[0])).toContain('[Content truncated - exceeded token limit]');
 
         const imageCompletion = await driver.requestTextCompletion(
             [
                 {
                     type: 'message',
                     role: 'user',
-                    content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } }],
-                } as unknown as OpenAI.Responses.ResponseInputItem,
+                    content: [{ type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=', detail: 'auto' }],
+                },
             ],
             {
                 model: 'gpt-5',
@@ -439,7 +463,14 @@ describe('OpenAI Responses reasoning', () => {
                 stripImagesAfterTurns: 0,
             },
         );
-        expect(JSON.stringify(imageCompletion.conversation)).toContain('[Image removed from conversation history]');
+        expect(JSON.stringify(imageCompletion.conversation)).toContain('aW1hZ2U=');
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'next image request' }], {
+            model: 'gpt-5',
+            conversation: imageCompletion.conversation,
+            model_options: { _option_id: 'openai-thinking' },
+            stripImagesAfterTurns: 0,
+        });
+        expect(JSON.stringify(create.mock.calls[3]?.[0])).toContain('[Image removed from conversation history]');
 
         const heartbeatCompletion = await driver.requestTextCompletion(
             [{ type: 'message', role: 'user', content: '<heartbeat>old status</heartbeat>' }],
@@ -449,9 +480,14 @@ describe('OpenAI Responses reasoning', () => {
                 stripHeartbeatsAfterTurns: 0,
             },
         );
-        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain(
-            '[Heartbeat removed from conversation history]',
-        );
+        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain('<heartbeat>old status</heartbeat>');
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'next heartbeat request' }], {
+            model: 'gpt-5',
+            conversation: heartbeatCompletion.conversation,
+            model_options: { _option_id: 'openai-thinking' },
+            stripHeartbeatsAfterTurns: 0,
+        });
+        expect(JSON.stringify(create.mock.calls[5]?.[0])).toContain('[Heartbeat removed from conversation history]');
     });
 
     it.each([false, true])('forwards OpenAI prompt cache controls when stream=%s', async (streaming) => {
@@ -623,14 +659,33 @@ describe('Responses image generation', () => {
         output_format: 'webp' as const,
     };
     it('combines native image and function tools and retains follow-up state and file IDs', async () => {
-        const create = vi.fn(async (_request: unknown) => ({
-            ...response(),
-            output: [
-                messageItem,
-                image,
-                { type: 'function_call', id: 'fn-1', call_id: 'call-1', name: 'lookup', arguments: '{}' },
-            ],
-        }));
+        let responseCount = 0;
+        const create = vi.fn(async (_request: unknown) => {
+            responseCount += 1;
+            return responseCount === 1
+                ? {
+                      ...response(),
+                      output: [
+                          messageItem,
+                          image,
+                          { type: 'function_call', id: 'fn-1', call_id: 'call-1', name: 'lookup', arguments: '{}' },
+                      ],
+                  }
+                : {
+                      ...response(),
+                      id: 'response-2',
+                      output: [
+                          {
+                              ...messageItem,
+                              id: 'msg-2',
+                              content: [
+                                  { type: 'output_text' as const, text: 'blue answer', annotations: [], logprobs: [] },
+                              ],
+                          },
+                      ],
+                      output_text: 'blue answer',
+                  };
+        });
         const driver = new TestResponsesDriver(create);
         const config = {
             _option_id: 'openai-thinking' as const,
@@ -679,8 +734,15 @@ describe('Responses image generation', () => {
             stripImagesAfterTurns: 0,
             model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
         });
-        expect(JSON.stringify(completion.conversation)).toContain('item_reference');
-        expect(JSON.stringify(completion.conversation)).not.toContain('YWJj');
+        expect(JSON.stringify(completion.conversation)).toContain('YWJj');
+        await driver.requestTextCompletion([{ role: 'user', content: 'Make it blue' }], {
+            model: 'gpt-5',
+            conversation: completion.conversation,
+            stripImagesAfterTurns: 0,
+            model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
+        });
+        expect(JSON.stringify(create.mock.calls[1][0])).toContain('item_reference');
+        expect(JSON.stringify(create.mock.calls[1][0])).not.toContain('YWJj');
     });
     it.each([Providers.openai, Providers.azure_openai, Providers.openai_compatible] as const)(
         'does not add image headers or tool choice to ordinary text requests for %s',

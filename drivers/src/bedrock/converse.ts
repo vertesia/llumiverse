@@ -54,6 +54,24 @@ export function shouldIncludeSchemaInConversePrompt(model: string): boolean {
     return !supportsConverseOutputConfig(normalized) || normalized.includes('minimax.minimax-m2.5');
 }
 
+/** Add request-local schema guidance without mutating the retained canonical Converse context. */
+export function projectConverseContextResultSchema(
+    prompt: ConverseRequest,
+    options: Pick<ExecutionOptions, 'model' | 'prompt_cache_key' | 'result_schema'>,
+    hasTools: boolean,
+): ConverseRequest {
+    if (options.result_schema === undefined || !shouldIncludeSchemaInConversePrompt(options.model)) return prompt;
+
+    const schemaText = hasTools
+        ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema, undefined, 2)}`
+        : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema, undefined, 2)}`;
+    const schemaInstruction = `IMPORTANT: ${schemaText}`;
+    return {
+        ...prompt,
+        system: [...(prompt.system ?? []), { text: schemaInstruction }],
+    };
+}
+
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
 }
@@ -470,8 +488,11 @@ export async function formatConversePrompt(
                         toolResult: {
                             toolUseId: segment.tool_use_id,
                             content: toolContentBlocks,
+                            ...(segment.tool_result_status === undefined
+                                ? {}
+                                : { _llumiverse_tool_result_status: segment.tool_result_status }),
                         },
-                    },
+                    } as ContentBlock,
                 ],
                 role: ConversationRole.USER,
             });

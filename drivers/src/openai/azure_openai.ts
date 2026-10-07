@@ -66,6 +66,10 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
         return resolveModelProfile(this.getImageSourceModel(model), this.provider).family === 'image';
     }
 
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
     protected canStream(options: ExecutionOptions): Promise<boolean> {
         if ((options.model_options as { image_generation?: unknown } | undefined)?.image_generation)
             return Promise.resolve(false);

@@ -1,4 +1,13 @@
 import {
+    type ConversationPreparedRequest,
+    createConversationDocument,
+    createProgramTurn,
+    createTextBlock,
+    createUserTurn,
+    hashContentBytes,
+    parseConversationDocument,
+} from '@llumiverse/conversation';
+import {
     type DataSource,
     type ExecutionOptions,
     type ExecutionResponse,
@@ -9,6 +18,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { boundedAudioStream } from './audio.js';
 import { OpenAIDriver } from './openai.js';
+import type { ChatCompletionsUsage } from './usage.js';
 
 const bytes = new Uint8Array([82, 73, 70, 70, 1, 2, 3]);
 function source(): DataSource {
@@ -20,10 +30,60 @@ function source(): DataSource {
         getStream: vi.fn(async () => new Blob([bytes]).stream()),
     };
 }
-function speechOptions(store_audio?: ExecutionOptions['store_audio']): ExecutionOptions {
+function speechOptions(store_audio?: ExecutionOptions['store_audio']) {
     return { model: 'gpt-4o-mini-tts', store_audio };
 }
+function canonicalRuntime(flow: string) {
+    return {
+        conversation_id: `conversation:openai-audio:${flow}`,
+        request_id: `request:openai-audio:${flow}`,
+        attempt_id: `attempt:openai-audio:${flow}`,
+        input_operation_id: `input:openai-audio:${flow}`,
+        response_operation_id: `response:openai-audio:${flow}`,
+        recorded_at: '2026-09-30T00:00:00.000Z',
+    };
+}
 const prompt = [{ role: PromptRole.user, content: 'Hello from a file.' }];
+
+async function retainedAudioDocument(
+    flow: string,
+    storage:
+        | { type: 'inline_base64'; data: string }
+        | { type: 'external'; resolver: string; locator: { uri: string } } = {
+        type: 'inline_base64',
+        data: Buffer.from(bytes).toString('base64'),
+    },
+) {
+    const runtime = canonicalRuntime(flow);
+    const document = createConversationDocument({ id: runtime.conversation_id, created_at: runtime.recorded_at });
+    const assetId = `asset:openai-audio:${flow}`;
+    const blockId = `block:openai-audio:${flow}`;
+    const turn = createUserTurn({
+        id: `turn:openai-audio:${flow}`,
+        authority: 'ordinary',
+        blocks: [
+            createTextBlock({ id: `block:prompt:${flow}`, text: 'Transcribe exactly.', format: 'plain' }),
+            { id: blockId, type: 'audio', asset_id: assetId },
+        ],
+        status: 'completed',
+        timestamps: { recorded_at: runtime.recorded_at },
+        provenance: { type: 'received' },
+        model_visibility: 'include',
+    });
+    const integrity = storage.type === 'inline_base64' ? await hashContentBytes(bytes) : undefined;
+    document.turns.push(turn);
+    document.assets[assetId] = {
+        id: assetId,
+        kind: 'audio',
+        mime_type: 'audio/wav',
+        storage,
+        provenance: { type: 'received', source_turn_id: turn.id },
+        created_at: runtime.recorded_at,
+        ...(integrity === undefined ? {} : integrity),
+    };
+    document.context.entries.push({ id: `context:openai-audio:${flow}`, type: 'source_turn', turn_id: turn.id });
+    return { document, runtime };
+}
 
 describe('OpenAI file audio', () => {
     it('uses the installed SDK multipart encoder and returns a transcript without audio history', async () => {
@@ -52,6 +112,260 @@ describe('OpenAI file audio', () => {
         expect(result.prompt).toEqual([]);
         expect(result.conversation).toBeUndefined();
         expect(file.getURL).not.toHaveBeenCalled();
+    });
+
+    it('records installed SDK transcription output and usage as canonical evidence', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        let multipart = '';
+        driver.service = driver.service.withOptions({
+            fetch: async (url, init) => {
+                expect(String(url)).toContain('/audio/transcriptions');
+                multipart = await new Response(init?.body).text();
+                return Response.json({
+                    text: 'Canonical transcript.',
+                    usage: {
+                        type: 'tokens',
+                        input_tokens: 8,
+                        output_tokens: 2,
+                        total_tokens: 10,
+                        input_token_details: { audio_tokens: 7, text_tokens: 1 },
+                    },
+                });
+            },
+        });
+
+        const result = await driver.executeCanonical([{ role: PromptRole.user, content: '', files: [source()] }], {
+            model: 'gpt-transcribe',
+            model_options: { _option_id: 'openai-transcription', language: 'en' },
+            conversation_runtime: canonicalRuntime('transcription-evidence'),
+        });
+
+        expect(multipart).toContain('filename="recording.wav"');
+        expect(result).not.toHaveProperty('result');
+        expect(result.accepted_output.turn.blocks).toEqual([
+            expect.objectContaining({ type: 'text', text: 'Canonical transcript.', format: 'plain' }),
+        ]);
+        expect(result.accepted_output.generation.usage).toEqual({
+            input_tokens: 8,
+            output_tokens: 2,
+            total_tokens: 10,
+            accounting_provenance: {
+                input_tokens: { method: 'reported', accounting_basis: 'openai_transcription_tokens' },
+                output_tokens: { method: 'reported', accounting_basis: 'openai_transcription_tokens' },
+                total_tokens: { method: 'reported', accounting_basis: 'openai_transcription_tokens' },
+            },
+        });
+        const retainedGeneration = parseConversationDocument(result.conversation).generations[
+            result.accepted_output.generation.id
+        ];
+        expect(retainedGeneration?.usage?.reported_usage).toEqual([
+            {
+                source: 'provider',
+                protocol: 'openai.audio.transcription',
+                accounting_basis: 'openai_transcription_tokens',
+                payload: {
+                    type: 'tokens',
+                    input_tokens: 8,
+                    output_tokens: 2,
+                    total_tokens: 10,
+                    input_token_details: { audio_tokens: 7, text_tokens: 1 },
+                },
+            },
+        ]);
+    });
+
+    it('executes retained inline audio context and exact-recovers without another provider request', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        let requests = 0;
+        let multipart = '';
+        driver.service = driver.service.withOptions({
+            fetch: async (url, init) => {
+                requests += 1;
+                expect(String(url)).toContain('/audio/transcriptions');
+                multipart = await new Response(init?.body).text();
+                return Response.json({
+                    text: 'Retained transcript.',
+                    usage: { type: 'tokens', input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+                });
+            },
+        });
+        const { document, runtime } = await retainedAudioDocument('retained-transcription');
+        const program = createProgramTurn({
+            id: 'turn:openai-audio:retained-transcription:program',
+            authority: 'ordinary',
+            blocks: [
+                createTextBlock({
+                    id: 'block:openai-audio:retained-transcription:program',
+                    text: 'Use the retained recording.',
+                    format: 'plain',
+                }),
+            ],
+            status: 'completed',
+            timestamps: { recorded_at: runtime.recorded_at },
+            provenance: { type: 'received' },
+            model_visibility: 'include',
+        });
+        document.turns.unshift(program);
+        document.context.entries.unshift({
+            id: 'context:openai-audio:retained-transcription:program',
+            type: 'source_turn',
+            turn_id: program.id,
+        });
+        const prepared = vi.fn(async (_request: ConversationPreparedRequest) => undefined);
+        const options = {
+            model: 'gpt-transcribe',
+            conversation: document,
+            conversation_runtime: runtime,
+            on_canonical_request_prepared: prepared,
+        };
+
+        expect(await driver.supportsCanonicalContextExecution(options)).toBe(true);
+        const first = await driver.executeCanonicalContext(options);
+        expect(multipart).toContain('audio/wav');
+        expect(multipart).toContain('Use the retained recording.\nTranscribe exactly.');
+        expect(multipart).toContain('Transcribe exactly.');
+        expect(first.accepted_output.turn.blocks).toEqual([
+            expect.objectContaining({ type: 'text', text: 'Retained transcript.' }),
+        ]);
+        expect(prepared).toHaveBeenCalledOnce();
+        expect(requests).toBe(1);
+
+        const recovered = await driver.executeCanonicalContext({ ...options, conversation: first.conversation });
+        expect(recovered.accepted_output.receipt).toEqual(first.accepted_output.receipt);
+        expect(recovered.accepted_output.generation).toEqual(first.accepted_output.generation);
+        expect(requests).toBe(1);
+    });
+
+    it('rejects unresolved retained audio before publication or provider transport', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.audio.transcriptions, 'create');
+        const prepared = vi.fn(async (_request: ConversationPreparedRequest) => undefined);
+        const { document, runtime } = await retainedAudioDocument('external-transcription', {
+            type: 'external',
+            resolver: 'url',
+            locator: { uri: 'gs://bucket/input.wav' },
+        });
+
+        await expect(
+            driver.executeCanonicalContext({
+                model: 'gpt-transcribe',
+                conversation: document,
+                conversation_runtime: runtime,
+                on_canonical_request_prepared: prepared,
+            }),
+        ).rejects.toThrow('must use inline_base64 storage');
+        expect(prepared).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        {
+            name: 'caption',
+            mutate(document: Awaited<ReturnType<typeof retainedAudioDocument>>['document']) {
+                const block = document.turns[0]?.blocks.find((candidate) => candidate.type === 'audio');
+                if (block?.type !== 'audio') throw new Error('Missing retained audio block');
+                block.caption = 'Do not discard this caption';
+            },
+            expected: /cannot preserve audio block .* caption/,
+        },
+        {
+            name: 'selection',
+            mutate(document: Awaited<ReturnType<typeof retainedAudioDocument>>['document']) {
+                const block = document.turns[0]?.blocks.find((candidate) => candidate.type === 'audio');
+                if (block?.type !== 'audio') throw new Error('Missing retained audio block');
+                block.selection = { type: 'time_range', start_seconds: 1, end_seconds: 2 };
+            },
+            expected: /cannot preserve audio block .* selection/,
+        },
+        {
+            name: 'elevated user authority',
+            mutate(document: Awaited<ReturnType<typeof retainedAudioDocument>>['document']) {
+                const turn = document.turns[0];
+                if (turn?.kind !== 'user') throw new Error('Missing retained audio user turn');
+                turn.authority = 'system';
+            },
+            expected: /cannot preserve user turn .* authority system/,
+        },
+        {
+            name: 'system program authority',
+            mutate(document: Awaited<ReturnType<typeof retainedAudioDocument>>['document']) {
+                const program = createProgramTurn({
+                    id: 'turn:openai-audio:system-program',
+                    authority: 'system',
+                    blocks: [
+                        createTextBlock({
+                            id: 'block:openai-audio:system-program',
+                            text: 'System instruction',
+                            format: 'plain',
+                        }),
+                    ],
+                    status: 'completed',
+                    timestamps: { recorded_at: '2026-09-30T00:00:00.000Z' },
+                    provenance: { type: 'received' },
+                    model_visibility: 'include',
+                });
+                document.turns.unshift(program);
+                document.context.entries.unshift({
+                    id: 'context:openai-audio:system-program',
+                    type: 'source_turn',
+                    turn_id: program.id,
+                });
+            },
+            expected: /cannot preserve program turn .* authority system/,
+        },
+    ])('rejects retained $name before publication or provider transport', async ({ name, mutate, expected }) => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.audio.transcriptions, 'create');
+        const prepared = vi.fn(async (_request: ConversationPreparedRequest) => undefined);
+        const { document, runtime } = await retainedAudioDocument(`projection-${name.replaceAll(' ', '-')}`);
+        mutate(document);
+        const parsed = parseConversationDocument(document);
+
+        await expect(
+            driver.executeCanonicalContext({
+                model: 'gpt-transcribe',
+                conversation: parsed,
+                conversation_runtime: runtime,
+                on_canonical_request_prepared: prepared,
+            }),
+        ).rejects.toThrow(expected);
+        expect(prepared).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('retains duration-billed provider usage without inventing token accounting', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        driver.service = driver.service.withOptions({
+            fetch: async () =>
+                Response.json({
+                    text: 'Duration transcript.',
+                    usage: { type: 'duration', seconds: 1.25 },
+                }),
+        });
+        const legacy = await driver.execute([{ role: PromptRole.user, content: '', files: [source()] }], {
+            model: 'gpt-transcribe',
+        });
+        expect(legacy.result).toEqual([{ type: 'text', value: 'Duration transcript.' }]);
+        expect(legacy.token_usage).toBeUndefined();
+
+        const canonical = await driver.executeCanonical([{ role: PromptRole.user, content: '', files: [source()] }], {
+            model: 'gpt-transcribe',
+            conversation_runtime: canonicalRuntime('transcription-duration-evidence'),
+        });
+        expect(canonical.accepted_output.generation.usage).toBeUndefined();
+        const retainedGeneration = parseConversationDocument(canonical.conversation).generations[
+            canonical.accepted_output.generation.id
+        ];
+        expect(retainedGeneration?.usage).toEqual({
+            reported_usage: [
+                {
+                    source: 'provider',
+                    protocol: 'openai.audio.transcription',
+                    accounting_basis: 'openai_transcription_duration',
+                    payload: { type: 'duration', seconds: 1.25 },
+                },
+            ],
+        });
     });
 
     it.each(['mp3', 'wav'] as const)(
@@ -136,6 +450,14 @@ describe('OpenAI file audio', () => {
 
     it.each(['blocking', 'fallback'] as const)('preserves PCM format and usage in %s audio results', async (mode) => {
         const driver = new OpenAIDriver({ apiKey: 'test' });
+        const usage = {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 4, cache_write_tokens: 1 },
+            cost: 0.125,
+            is_byok: false,
+        } satisfies ChatCompletionsUsage;
         vi.spyOn(driver.service.chat.completions, 'create').mockResolvedValue({
             id: 'completion',
             object: 'chat.completion',
@@ -159,7 +481,7 @@ describe('OpenAI file audio', () => {
                     },
                 },
             ],
-            usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+            usage,
         });
         const options: ExecutionOptions = {
             model: 'gpt-audio',
@@ -184,8 +506,10 @@ describe('OpenAI file audio', () => {
             prompt: 10,
             result: 20,
             total: 30,
-            prompt_cached: undefined,
-            prompt_new: 10,
+            prompt_cached: 4,
+            prompt_cache_write: 1,
+            prompt_new: 5,
+            provider_cost_usd: 0.125,
         });
         expect(result?.result).toContainEqual({
             type: 'audio',
@@ -305,6 +629,79 @@ describe('OpenAI file audio', () => {
                 model_options: { _option_id: 'openai-speech', instructions: 'Whisper' },
             }),
         ).rejects.toThrow('do not support speech instructions');
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('validates file count, role, and MIME before reading canonical audio sources', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const chatCreate = vi.spyOn(driver.service.chat.completions, 'create');
+        const transcriptionCreate = vi.spyOn(driver.service.audio.transcriptions, 'create');
+        const speechCreate = vi.spyOn(driver.service.audio.speech, 'create');
+        const first = source();
+        const second = source();
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.user, content: 'Describe', files: [first, second] }], {
+                model: 'gpt-audio',
+                store_audio: async () => 'gs://bucket/output.wav',
+                conversation_runtime: canonicalRuntime('file-count'),
+            }),
+        ).rejects.toThrow('at most one');
+        expect(first.getStream).not.toHaveBeenCalled();
+        expect(second.getStream).not.toHaveBeenCalled();
+
+        const assistantFile = source();
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.assistant, content: '', files: [assistantFile] }], {
+                model: 'gpt-transcribe',
+                conversation_runtime: canonicalRuntime('file-role'),
+            }),
+        ).rejects.toThrow('only user and system');
+        expect(assistantFile.getStream).not.toHaveBeenCalled();
+
+        const unsupported = source();
+        unsupported.mime_type = 'application/pdf';
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.user, content: '', files: [unsupported] }], {
+                model: 'gpt-transcribe',
+                conversation_runtime: canonicalRuntime('file-mime'),
+            }),
+        ).rejects.toThrow('does not support application/pdf');
+        expect(unsupported.getStream).not.toHaveBeenCalled();
+
+        const speechFile = source();
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.user, content: 'Speak', files: [speechFile] }], {
+                model: 'gpt-4o-mini-tts',
+                store_audio: async () => 'gs://bucket/output.mp3',
+                conversation_runtime: canonicalRuntime('speech-file'),
+            }),
+        ).rejects.toThrow('text only');
+        expect(speechFile.getStream).not.toHaveBeenCalled();
+        expect(chatCreate).not.toHaveBeenCalled();
+        expect(transcriptionCreate).not.toHaveBeenCalled();
+        expect(speechCreate).not.toHaveBeenCalled();
+    });
+
+    it('awaits canonical request publication and does not call the provider when publication fails', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.audio.speech, 'create');
+        const publish = vi.fn(async (prepared: ConversationPreparedRequest) => {
+            expect(prepared.record.request_receipt.target).toMatchObject({
+                provider: Providers.openai,
+                protocol: 'openai.audio.speech',
+                model: 'gpt-4o-mini-tts',
+            });
+            throw new Error('durable publication failed');
+        });
+
+        await expect(
+            driver.executeCanonical(prompt, {
+                ...speechOptions(async () => 'gs://bucket/output.mp3'),
+                conversation_runtime: canonicalRuntime('publication'),
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('durable publication failed');
+        expect(publish).toHaveBeenCalledOnce();
         expect(create).not.toHaveBeenCalled();
     });
 

@@ -1,5 +1,10 @@
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
     type ExecutionOptions,
@@ -11,10 +16,14 @@ import {
 } from '@llumiverse/core';
 import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import {
+    executeCanonicalClaudeCompletion,
+    executeCanonicalClaudeContext,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
     isClaudeErrorRetryable,
+    streamCanonicalClaudeContextEvents,
+    streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../../shared/claude-messages.js';
 
@@ -27,6 +36,10 @@ export const ANTHROPIC_REGIONS: Record<string, string> = {
     global: 'global',
 };
 
+export function resolveVertexAIAnthropicRegion(region: string): string {
+    return ANTHROPIC_REGIONS[region.split('-')[0]] ?? region;
+}
+
 export const NON_GLOBAL_ANTHROPIC_MODELS = ['claude-3-5', 'claude-3'];
 
 /**
@@ -36,19 +49,31 @@ export const NON_GLOBAL_ANTHROPIC_MODELS = ['claude-3-5', 'claude-3'];
 function resolveVertexAIModelPath(options: ExecutionOptions): {
     modelName: string;
     region: string | undefined;
-    options: ExecutionOptions;
 } {
     const splits = options.model.split('/');
     let region: string | undefined;
     if (splits[0] === 'locations' && splits.length >= 2) {
         region = splits[1];
+    } else if (splits[0] === 'global') {
+        region = 'global';
     }
     const modelName = splits[splits.length - 1];
-    return { modelName, region, options: { ...options, model: modelName } };
+    return { modelName, region };
+}
+
+function vertexClaudeTransport(driver: VertexAIDriver, options: ExecutionOptions) {
+    const resolved = resolveVertexAIModelPath(options);
+    const region = resolveVertexAIAnthropicRegion(resolved.region ?? driver.getVertexRegion());
+    return {
+        ...resolved,
+        region,
+        identity: { model: resolved.modelName, target_options: { region } },
+    };
 }
 
 export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     model: AIModel;
+    readonly canonical_conversation_supported = true;
 
     constructor(modelId: string) {
         this.model = {
@@ -74,23 +99,64 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
-        const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        const model_options = options.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&
             model_options?._option_id !== 'vertexai-claude' &&
             model_options?._option_id !== 'text-fallback'
         ) {
-            driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return executeClaudeCompletion(
             client,
             prompt,
-            resolvedOptions,
+            options,
             driver.logger,
             driver.provider,
             signal ? { signal } : undefined,
+            transport.identity,
+        );
+    }
+
+    async requestCanonicalTextCompletion(
+        driver: VertexAIDriver,
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        return executeCanonicalClaudeCompletion(
+            client,
+            prompt,
+            options,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+            transport.identity,
+            hostCapabilities,
+        );
+    }
+
+    async requestCanonicalContextCompletion(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        return executeCanonicalClaudeContext(
+            client,
+            options,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+            transport.identity,
+            hostCapabilities,
         );
     }
 
@@ -100,23 +166,68 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
-        const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        const model_options = options.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&
             model_options?._option_id !== 'vertexai-claude' &&
             model_options?._option_id !== 'text-fallback'
         ) {
-            driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return streamClaudeCompletion(
             client,
             prompt,
-            resolvedOptions,
+            options,
             driver.logger,
             driver.provider,
             signal ? { signal } : undefined,
+            transport.identity,
+        );
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        driver: VertexAIDriver,
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        return streamCanonicalClaudeEvents(
+            client,
+            prompt,
+            options,
+            open,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+            transport.identity,
+            hostCapabilities,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const transport = vertexClaudeTransport(driver, options);
+        const client = await driver.getAnthropicClient(transport.region, options.httpTimeout);
+        return streamCanonicalClaudeContextEvents(
+            client,
+            options,
+            open,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+            transport.identity,
+            hostCapabilities,
         );
     }
 

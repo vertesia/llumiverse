@@ -1,4 +1,47 @@
+import type {
+    AssetKind,
+    AssetMediaMetadata,
+    AssetStorage,
+    ConversationAcceptedOutputFragment,
+    ConversationDocument,
+    ConversationPreparedRequest,
+    ConversationPreparedRequestRecord,
+    ConversationRuntimeContext,
+    JsonMinificationProspectiveInput,
+    JsonValue,
+    ModelTarget,
+    ResolvedConversationRuntimeContext,
+} from '@llumiverse/conversation';
 import type { z } from 'zod';
+
+export type { ConversationRuntimeContext } from '@llumiverse/conversation';
+
+/** A prepared barrier may publish an adopted durable record or retain its original no-return behavior. */
+export type CanonicalPreparedRequestPublication = ConversationPreparedRequestRecord | void;
+
+export type CanonicalProjectedRequestMeasurement = z.infer<
+    typeof import('./schemas/canonical-projection.js').CanonicalProjectedRequestMeasurementSchema
+>;
+
+/** Runtime-only owned request projection, not a caller-supplied wire authority. */
+export interface CanonicalRequestProjection {
+    document: ConversationDocument;
+    runtime: ResolvedConversationRuntimeContext;
+    target: ModelTarget;
+    native_request: JsonValue;
+}
+
+/** Pure adapter ports. No compiler callback is persisted in a conversation or receipt. */
+export interface CanonicalRequestProjectionCompiler {
+    compileDocument(document: ConversationDocument, signal?: AbortSignal): Promise<JsonValue>;
+    compileProspective(
+        input: JsonMinificationProspectiveInput,
+        signal?: AbortSignal,
+    ): Promise<
+        { status: 'unavailable' } | { status: 'compiled'; source_request: JsonValue; replacement_request: JsonValue }
+    >;
+}
+
 import type {
     ExecutionTokenUsageSchema,
     PromptCacheDiagnosticSchema,
@@ -700,6 +743,16 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
         signal?: AbortSignal,
     ) => Promise<string>;
     /**
+     * Runtime-only durable sink for generated canonical assets. The sink must consume the complete stream and return
+     * storage metadata for those exact bytes before resolving. Drivers verify the returned hash and length before
+     * accepting the provider response.
+     */
+    store_generated_asset?: (
+        stream: ReadableStream<Uint8Array>,
+        metadata: { kind: AssetKind; mime_type: string; media?: AssetMediaMetadata },
+        signal?: AbortSignal,
+    ) => Promise<{ storage: AssetStorage; byte_length: number; content_hash: string }>;
+    /**
      * Available tools for the request
      */
     tools?: ToolDefinition[];
@@ -709,6 +762,49 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      * that can be passed here to restore the context when a new prompt is sent to the model.
      */
     conversation?: unknown | null;
+    /**
+     * Stable canonical request identity for adapters that have adopted `@llumiverse/conversation`.
+     * Remaining legacy-native drivers ignore this field until their adapter migration.
+     */
+    conversation_runtime?: ConversationRuntimeContext;
+    /**
+     * Runtime-only trusted host boundary for an idempotent response retry. The host must return only an exact
+     * output fragment read from verified durable storage. The driver binds it to the retained response receipt
+     * before use. This callback is intentionally absent from wire option schemas.
+     */
+    load_recovered_canonical_output?: (identity: {
+        conversation_id: string;
+        response_operation_id: string;
+        /** Exact finalized provider request. Present only at the pre-transport recovery boundary. */
+        prepared_request?: ConversationPreparedRequestRecord;
+    }) => Promise<
+        | ConversationAcceptedOutputFragment
+        | {
+              accepted_output: ConversationAcceptedOutputFragment;
+              /** Available only when the host retained and verified complete DEBUG history. */
+              conversation?: ConversationDocument;
+          }
+        | undefined
+    >;
+    /**
+     * Runtime-only source/job ACK and measurement boundary before prepared publication/transport.
+     * Processing executes separately after a typed pending result, never inside this callback.
+     */
+    on_canonical_request_projected?: (
+        projection: CanonicalRequestProjection,
+        compiler: CanonicalRequestProjectionCompiler,
+        signal?: AbortSignal,
+    ) => Promise<CanonicalProjectedRequestMeasurement | undefined>;
+    /**
+     * Runtime-only durability barrier invoked after an adopted adapter has finalized its exact native
+     * request and before provider transport begins. The callback must not resolve until the prepared
+     * canonical request is durably recorded. It is intentionally absent from wire option schemas.
+     */
+    on_canonical_request_prepared?: (
+        prepared: ConversationPreparedRequest,
+        /** Validated actual-body count evidence, retained privately by the host. */
+        projection?: CanonicalProjectedRequestMeasurement,
+    ) => Promise<CanonicalPreparedRequestPublication>;
     /**
      * Labels for billing attribution and cost tracking.
      * Passed through to provider APIs that support request-level labels (e.g. Vertex AI).
@@ -875,6 +971,8 @@ export interface PromptSegment {
      * The tool use id if the segment is a tool response
      */
     tool_use_id?: string;
+    /** Terminal status of a tool response supplied by the application. */
+    tool_result_status?: 'success' | 'error' | 'cancelled' | 'denied';
     /**
      * Gemini thinking models require thought_signature to be passed back with tool results.
      * This should be copied from the ToolUse.thought_signature when sending tool responses.

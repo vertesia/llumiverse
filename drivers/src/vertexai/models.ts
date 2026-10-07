@@ -1,5 +1,10 @@
 import type {
     AIModel,
+    CanonicalExecutionContextOptions,
+    CanonicalExecutionEventStream,
+    CanonicalExecutionResponse,
+    CanonicalHostCapabilities,
+    CanonicalStreamOpenOptions,
     Completion,
     DriverCompletionStream,
     ExecutionOptions,
@@ -21,6 +26,7 @@ export function trimModelName(model: string): string {
 
 export interface ModelDefinition<PromptT = VertexAIPrompt> {
     model: AIModel;
+    canonical_conversation_supported?: boolean;
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt(driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<PromptT>;
     requestTextCompletion(
@@ -35,6 +41,34 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream>;
+    requestCanonicalTextCompletion?(
+        driver: VertexAIDriver,
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse>;
+    requestCanonicalTextCompletionEventStream?(
+        driver: VertexAIDriver,
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream>;
+    requestCanonicalContextCompletion?(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse>;
+    requestCanonicalContextCompletionEventStream?(
+        driver: VertexAIDriver,
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream>;
     preValidationProcessing?(
         result: Completion,
         options: ExecutionOptions,

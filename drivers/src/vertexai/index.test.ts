@@ -1,9 +1,12 @@
 import type { GoogleGenAI, Model } from '@google/genai';
-import { describe, expect, it } from 'vitest';
+import { createConversationDocument } from '@llumiverse/conversation';
+import { type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from './index.js';
 
 type AIPlatformClient = Awaited<ReturnType<VertexAIDriver['getAIPlatformClient']>>;
 type ModelGardenClient = Awaited<ReturnType<VertexAIDriver['getModelGardenClient']>>;
+type AnthropicClient = Awaited<ReturnType<VertexAIDriver['getAnthropicClient']>>;
 
 class TestVertexAIDriver extends VertexAIDriver {
     constructor(private readonly googleModels: Model[] = []) {
@@ -47,6 +50,40 @@ class TestVertexAIDriver extends VertexAIDriver {
     override async getGenAIModelsArray(_client: GoogleGenAI): Promise<Model[]> {
         return this.googleModels;
     }
+}
+
+class HostBarrierVertexAIDriver extends VertexAIDriver {
+    readonly nativeRequest = vi.fn(() => {
+        throw new Error('Native Vertex Claude transport must not open before host acceptance');
+    });
+
+    constructor() {
+        super({ project: 'test-project', region: 'us-central1' });
+    }
+
+    override async getAnthropicClient(): Promise<AnthropicClient> {
+        return { messages: { stream: this.nativeRequest } } as unknown as AnthropicClient;
+    }
+}
+
+function canonicalClaudeOptions(attempt: string): CanonicalExecutionInputOptions {
+    const conversation = createConversationDocument({
+        id: `conversation:${attempt}`,
+        created_at: '2026-10-02T00:00:00.000Z',
+    });
+    return {
+        model: 'locations/global/publishers/anthropic/models/claude-sonnet-4-5',
+        conversation,
+        conversation_runtime: {
+            conversation_id: conversation.id,
+            request_id: `request:${attempt}`,
+            attempt_id: `attempt:${attempt}`,
+            input_operation_id: `input:${attempt}`,
+            response_operation_id: `response:${attempt}`,
+            recorded_at: '2026-10-02T00:00:00.000Z',
+            purpose: 'conversation',
+        },
+    };
 }
 
 describe('VertexAIDriver listModels', () => {
@@ -125,5 +162,45 @@ describe('VertexAIDriver storage permission errors', () => {
             { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
         );
         expect(error.message).not.toContain('bucket permissions');
+    });
+});
+
+describe('VertexAIDriver canonical host callback failures', () => {
+    it.each([403, 409, 413, 422, 500])(
+        'preserves exact host status %i before Vertex Claude transport',
+        async (status) => {
+            const driver = new HostBarrierVertexAIDriver();
+            const hostError = Object.freeze(Object.assign(new Error('host barrier rejected'), { status }));
+            const options = {
+                ...canonicalClaudeOptions(`barrier-${status}`),
+                on_canonical_request_prepared: async () => {
+                    throw hostError;
+                },
+            };
+
+            await expect(
+                driver.executeCanonical([{ role: PromptRole.user, content: 'Answer.' }], options),
+            ).rejects.toBe(hostError);
+            expect(driver.nativeRequest).not.toHaveBeenCalled();
+        },
+    );
+
+    it('preserves exact recovery lookup failure through typed Vertex Claude stream creation', async () => {
+        const driver = new HostBarrierVertexAIDriver();
+        const hostError = Object.freeze(Object.assign(new Error('accepted recovery lookup rejected'), { status: 409 }));
+        const options = {
+            ...canonicalClaudeOptions('typed-recovery-barrier'),
+            on_canonical_request_prepared: async () => undefined,
+            load_recovered_canonical_output: async () => {
+                throw hostError;
+            },
+        };
+
+        await expect(
+            driver.streamCanonicalEvents([{ role: PromptRole.user, content: 'Answer.' }], options, undefined, {
+                stream_id: 'stream:typed-recovery-barrier',
+            }),
+        ).rejects.toBe(hostError);
+        expect(driver.nativeRequest).not.toHaveBeenCalled();
     });
 });

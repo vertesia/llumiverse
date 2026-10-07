@@ -1,4 +1,5 @@
 import type { ExecutionResponse } from '@llumiverse/common';
+import { isConversationDocumentFormat } from '@llumiverse/conversation';
 
 /**
  * Utilities for cleaning up conversation objects before storage.
@@ -267,6 +268,14 @@ function base64ToUint8Array(base64: string): Uint8Array {
  * Get metadata from a conversation object, or return defaults.
  */
 export function getConversationMeta(conversation: unknown): ConversationMeta {
+    if (isConversationDocumentFormat(conversation)) {
+        const generations = Object.getOwnPropertyDescriptor(conversation, 'generations');
+        const value = generations && 'value' in generations ? generations.value : undefined;
+        return {
+            turnNumber:
+                typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value).length : 0,
+        };
+    }
     if (typeof conversation === 'object' && conversation !== null) {
         const meta = (conversation as Record<string, unknown>)[META_KEY];
         if (meta && typeof meta === 'object') {
@@ -284,6 +293,7 @@ const ARRAY_WRAPPER_KEY = '_arrayConversation';
  * Arrays are wrapped in an object to preserve their type through JSON serialization.
  */
 export function setConversationMeta(conversation: unknown, meta: ConversationMeta): unknown {
+    if (isConversationDocumentFormat(conversation)) return conversation;
     if (Array.isArray(conversation)) {
         // Wrap arrays in an object to preserve their array nature through JSON serialization
         return { [ARRAY_WRAPPER_KEY]: conversation, [META_KEY]: meta };
@@ -313,6 +323,7 @@ export function unwrapConversationArray<T = unknown>(conversation: unknown): T[]
  * Increment the turn number in a conversation and return the updated conversation.
  */
 export function incrementConversationTurn(conversation: unknown): unknown {
+    if (isConversationDocumentFormat(conversation)) return conversation;
     const meta = getConversationMeta(conversation);
     return setConversationMeta(conversation, { ...meta, turnNumber: meta.turnNumber + 1 });
 }
@@ -334,6 +345,7 @@ export function incrementConversationTurn(conversation: unknown): unknown {
  * @returns A new object with binary content handled appropriately
  */
 export function stripBinaryFromConversation(obj: unknown, options?: StripOptions): unknown {
+    if (isConversationDocumentFormat(obj)) return obj;
     const { keepForTurns = Infinity } = options ?? {};
     const currentTurn = options?.currentTurn ?? getConversationMeta(obj).turnNumber;
 
@@ -377,6 +389,7 @@ function serializeBinaryForStorage(obj: unknown): unknown {
  * Call this before sending conversation to API if images were preserved.
  */
 export function deserializeBinaryFromStorage(obj: unknown): unknown {
+    if (isConversationDocumentFormat(obj)) return obj;
     if (obj === null || obj === undefined) return obj;
 
     // Check for our serialized format
@@ -468,6 +481,7 @@ function stripBinaryFromConversationInternal(obj: unknown): unknown {
  * @returns A new object with image blocks replaced with text placeholders
  */
 export function stripBase64ImagesFromConversation(obj: unknown, options?: StripOptions): unknown {
+    if (isConversationDocumentFormat(obj)) return obj;
     const { keepForTurns = Infinity } = options ?? {};
     const currentTurn = options?.currentTurn ?? getConversationMeta(obj).turnNumber;
 
@@ -556,6 +570,7 @@ const CHARS_PER_TOKEN = 4;
  * @returns A new object with large text content truncated
  */
 export function truncateLargeTextInConversation(obj: unknown, options?: StripOptions): unknown {
+    if (isConversationDocumentFormat(obj)) return obj;
     const maxTokens = options?.textMaxTokens;
 
     // If no max tokens specified or 0, don't truncate
@@ -745,6 +760,7 @@ const HEARTBEAT_PLACEHOLDER = '[Heartbeat removed from conversation history]';
  * @returns A new object with old heartbeat messages replaced
  */
 export function stripHeartbeatsFromConversation(obj: unknown, options?: StripOptions): unknown {
+    if (isConversationDocumentFormat(obj)) return obj;
     const { keepForTurns = 1 } = options ?? {};
     const currentTurn = options?.currentTurn ?? getConversationMeta(obj).turnNumber;
 

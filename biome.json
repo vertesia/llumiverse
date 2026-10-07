@@ -15,7 +15,8 @@
             "!**/node_modules/**",
             "!**/build/**",
             "!**/bin/**",
-            ".github/bin/ci-approve*.mjs"
+            ".github/bin/ci-approve*.mjs",
+            ".github/bin/verify-package-release*.mjs"
         ]
     },
     "formatter": {

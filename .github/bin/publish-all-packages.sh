@@ -13,6 +13,7 @@ source "${SCRIPT_DIR}/lib-package-channel.sh"
 
 # Packages to publish (in dependency order)
 PACKAGES=(
+  conversation
   common
   core
   drivers
@@ -92,92 +93,22 @@ publish_packages() {
 
 verify_published_packages() {
   echo "=== Verifying package tarballs ==="
-
-  # Array to track failed packages
-  failed_packages=()
-
-  # Get the expected version from root package.json
-  expected_version=$(npm pkg get version | tr -d '"')
-
+  local expected_version pack_dir pkg tarball
+  expected_version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+  pack_dir=$(mktemp -d)
   for pkg in "${PACKAGES[@]}"; do
-    if [ -d "$pkg" ]; then
-      cd "$pkg"
-      pkg_name="@llumiverse/${pkg}"
-
-      echo "Packing ${pkg_name}..."
-      pnpm pack --pack-destination . > /dev/null 2>&1
-      tarball=$(ls -t *.tgz 2>/dev/null | head -1)
-
-      if [ -n "$tarball" ] && [ -f "$tarball" ]; then
-        echo "Checking ${pkg_name}:"
-        packed_json=$(tar -xzOf "$tarball" package/package.json)
-
-        # Check version
-        packed_version=$(echo "$packed_json" | grep '"version":' | head -1 | sed 's/.*: "\(.*\)".*/\1/')
-        has_issues=false
-
-        if [ "$packed_version" = "${expected_version}" ]; then
-          echo "  ✓ Version: ${packed_version}"
-        else
-          echo "  ✗ WARNING: Version mismatch (expected: ${expected_version}, got: ${packed_version})"
-          has_issues=true
-        fi
-
-        # Extract dependencies section
-        deps_section=$(echo "$packed_json" | sed -n '/"dependencies":/,/^  [}]/p')
-
-        # Check for @llumiverse dependencies
-        llumiverse_deps=$(echo "$deps_section" | grep '"@llumiverse/' || true)
-        if [ -n "$llumiverse_deps" ]; then
-          echo "$llumiverse_deps"
-          if echo "$llumiverse_deps" | grep -q "${expected_version}"; then
-            echo "  ✓ llumiverse dependencies: ${expected_version}"
-          else
-            echo "  ✗ WARNING: llumiverse dependencies version mismatch"
-            has_issues=true
-          fi
-        fi
-
-        # Verify build output (lib/esm and lib/cjs folders)
-        has_esm=$(tar -tzf "$tarball" | grep -c '^package/lib/esm/' || true)
-        has_cjs=$(tar -tzf "$tarball" | grep -c '^package/lib/cjs/' || true)
-        if [ "$has_esm" -gt 0 ]; then
-          echo "  ✓ lib/esm: ${has_esm} files"
-        else
-          echo "  ✗ WARNING: lib/esm folder missing from tarball"
-          has_issues=true
-        fi
-        if [ "$has_cjs" -gt 0 ]; then
-          echo "  ✓ lib/cjs: ${has_cjs} files"
-        else
-          echo "  ✗ WARNING: lib/cjs folder missing from tarball"
-          has_issues=true
-        fi
-
-        # Add to failed packages if there were issues
-        if [ "$has_issues" = true ]; then
-          failed_packages+=("${pkg_name}")
-        fi
-
-        # Clean up tarball
-        rm -f "$tarball"
-      fi
-
-      cd ..
+    if ! pnpm --dir "$pkg" pack --pack-destination "$pack_dir"; then
+      rm -rf "$pack_dir"
+      return 1
+    fi
+    tarball="$pack_dir/llumiverse-${pkg}-${expected_version}.tgz"
+    if ! node "${SCRIPT_DIR}/verify-package-release.mjs" tarball "$tarball" "@llumiverse/${pkg}" "$expected_version"; then
+      rm -rf "$pack_dir"
+      return 1
     fi
   done
-
-  # Print summary
-  echo ""
-  echo "=== Verification Summary ==="
-  if [ ${#failed_packages[@]} -eq 0 ]; then
-    echo "✓ All packages passed verification"
-  else
-    echo "✗ ${#failed_packages[@]} package(s) failed verification:"
-    for pkg in "${failed_packages[@]}"; do
-      echo "  - ${pkg}"
-    done
-  fi
+  rm -rf "$pack_dir"
+  echo "All package versions, dependencies and exported entry points passed verification"
 }
 
 commit_and_push() {
@@ -340,6 +271,10 @@ else
   DRY_RUN_FLAG=""
 fi
 
+# The experimental conversation package must pass its adoption/release gate before any consumer is published.
+# This also rejects missing packages and an incomplete dependency order before changing package versions.
+node "${SCRIPT_DIR}/verify-package-release.mjs" preflight "$PWD" "${PACKAGES[@]}"
+
 source_sha=$(git rev-parse HEAD)
 npm_tag=$(resolve_package_channel "$REF" "$RELEASE_TYPE" "$source_sha")
 
@@ -357,15 +292,13 @@ update_package_versions
 echo "=== Building all packages ==="
 pnpm build
 
+verify_published_packages
+
 if [ "$DRY_RUN" = "false" ]; then
   commit_and_push
 fi
 
 publish_packages
-
-if [ "$DRY_RUN" = "true" ]; then
-  verify_published_packages
-fi
 
 write_github_summary
 

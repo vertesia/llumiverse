@@ -2,6 +2,11 @@ import { AnthropicBedrockMantle, type BedrockMantleClientOptions } from '@anthro
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -30,10 +35,14 @@ import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
+    executeCanonicalClaudeCompletion,
+    executeCanonicalClaudeContext,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    streamCanonicalClaudeContextEvents,
+    streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
@@ -102,6 +111,16 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     private readonly alignedChatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
     private readonly anthropicService: AnthropicBedrockMantle;
     readonly provider = Providers.bedrock_mantle;
+
+    protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
+        const protocol = getBedrockMantleProtocol(options.model);
+        return protocol === 'responses' || protocol === 'chat_completions' || protocol === 'messages';
+    }
+
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        const protocol = getBedrockMantleProtocol(options.model);
+        return protocol === 'responses' || protocol === 'chat_completions' || protocol === 'messages';
+    }
 
     constructor(opts: BedrockMantleDriverOptions) {
         super(opts);
@@ -213,6 +232,72 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         }
     }
 
+    requestCanonicalTextCompletion(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalTextCompletion(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                    hostCapabilities,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletion(
+                    this,
+                    requireChatCompletionsPrompt(prompt),
+                    options,
+                    signal,
+                );
+            case 'messages':
+                return executeCanonicalClaudeCompletion(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    undefined,
+                    this.provider,
+                    this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
+                );
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalContextCompletion(options, signal, hostCapabilities);
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalContextCompletion(
+                    this,
+                    options,
+                    signal,
+                );
+            case 'messages':
+                return executeCanonicalClaudeContext(
+                    this.anthropicService,
+                    options,
+                    undefined,
+                    this.provider,
+                    this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
+                );
+            default:
+                throw new Error('Unsupported Bedrock Mantle model for canonical context execution');
+        }
+    }
+
     requestTextCompletionStream(
         prompt: BedrockMantlePrompt,
         options: ExecutionOptions,
@@ -243,6 +328,84 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                 );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    requestCanonicalTextCompletionEventStream(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalTextCompletionEventStream(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                    open,
+                    hostCapabilities,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletionEventStream(
+                    this,
+                    requireChatCompletionsPrompt(prompt),
+                    options,
+                    signal,
+                    open,
+                );
+            case 'messages':
+                return streamCanonicalClaudeEvents(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    open,
+                    undefined,
+                    this.provider,
+                    this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
+                );
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalContextCompletionEventStream(
+                    options,
+                    signal,
+                    open,
+                    hostCapabilities,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalContextCompletionEventStream(
+                    this,
+                    options,
+                    signal,
+                    open,
+                );
+            case 'messages':
+                return streamCanonicalClaudeContextEvents(
+                    this.anthropicService,
+                    options,
+                    open,
+                    undefined,
+                    this.provider,
+                    this.getDriverRequestOptions(options, signal),
+                    undefined,
+                    hostCapabilities,
+                );
+            default:
+                throw new Error('Unsupported Bedrock Mantle model for canonical context typed streaming');
         }
     }
 

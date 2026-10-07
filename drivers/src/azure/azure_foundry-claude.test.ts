@@ -1,10 +1,11 @@
 import type { AnthropicFoundry } from '@anthropic-ai/foundry-sdk';
 import type { Message } from '@anthropic-ai/sdk/resources/messages.js';
 import type { TokenCredential } from '@azure/identity';
-import { Base64DataSource, PromptRole } from '@llumiverse/core';
+import { type ConversationDocument, parseConversationDocument } from '@llumiverse/conversation';
+import { Base64DataSource, type CanonicalExecutionInputOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
-import type { ClaudePrompt } from '../shared/claude-messages.js';
+import type { ClaudeBaseOptions, ClaudePrompt } from '../shared/claude-messages.js';
 import { AzureFoundryDriver } from './azure_foundry.js';
 
 type Internals = {
@@ -103,7 +104,107 @@ function setup(sourceModel?: string) {
 
 const segments = [{ role: PromptRole.user, content: 'What color is grass?' }];
 
+function canonicalOptions(operation: string, conversation?: ConversationDocument) {
+    const modelOptions = {
+        _option_id: 'anthropic-claude',
+        max_tokens: 32,
+    } satisfies CanonicalExecutionInputOptions['model_options'];
+    return {
+        model: 'deployment::claude-opus-5-5',
+        model_options: modelOptions,
+        conversation_runtime: {
+            conversation_id: 'conversation:foundry-claude',
+            request_id: `request:${operation}`,
+            attempt_id: `attempt:${operation}`,
+            input_operation_id: `input:${operation}`,
+            response_operation_id: `response:${operation}`,
+            recorded_at: '2026-10-04T00:00:00.000Z',
+        },
+        ...(conversation === undefined ? {} : { conversation }),
+    };
+}
+
 describe('Foundry Claude Messages', () => {
+    it('uses the Claude source for thinking, sampling and prefill policy while sending the deployment alias', async () => {
+        const { driver, requests, metadata, respond } = setup();
+        respond.mockImplementationOnce(() =>
+            response([{ type: 'tool_use', caller: { type: 'direct' }, id: 'call-lookup', name: 'lookup', input: {} }]),
+        );
+        try {
+            const modelOptions = {
+                _option_id: 'anthropic-claude',
+                effort: 'medium',
+                temperature: 0.7,
+                tool_choice: 'required',
+                required_tool_name: 'lookup',
+            } as const satisfies ClaudeBaseOptions;
+            await driver.execute([{ role: PromptRole.assistant, content: 'unfinished' }], {
+                model: 'gpt-replacement::claude-sonnet-4-7',
+                tools: [{ name: 'lookup', input_schema: { type: 'object', properties: {} } }],
+                model_options: modelOptions,
+            });
+            expect(metadata).not.toHaveBeenCalled();
+            expect(requests[0].body).toMatchObject({
+                model: 'gpt-replacement',
+                thinking: { type: 'adaptive', display: 'omitted' },
+                output_config: { effort: 'medium' },
+                tool_choice: { type: 'tool', name: 'lookup' },
+            });
+            expect(requests[0].body).not.toHaveProperty('temperature');
+            expect((requests[0].body.messages as { role: string }[]).at(-1)?.role).toBe('user');
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('commits and recovers native canonical Messages, then streams a retained-context successor', async () => {
+        const { driver, requests, fetch, metadata } = setup();
+        try {
+            const initial = canonicalOptions('initial');
+            const first = await driver.executeCanonical(segments, initial);
+            expect(first.accepted_output.generation).toMatchObject({
+                provider: 'azure_foundry',
+                protocol: 'anthropic.messages',
+                requested_model: initial.model,
+            });
+            expect(first.accepted_output.turn.blocks).toContainEqual(
+                expect.objectContaining({ type: 'text', text: 'Green' }),
+            );
+            expect(requests).toHaveLength(1);
+            expect(requests[0].body).toMatchObject({ model: 'deployment', stream: true });
+            expect(requests[0].url).toContain('/anthropic/v1/messages');
+            const document = parseConversationDocument(first.conversation);
+            const retry = await driver.executeCanonical(segments, { ...initial, conversation: document });
+            expect(retry.conversation).toEqual(first.conversation);
+            expect(fetch).toHaveBeenCalledOnce();
+            await expect(
+                driver.executeCanonical(segments, {
+                    ...initial,
+                    conversation: document,
+                    model_options: { _option_id: 'anthropic-claude', max_tokens: 64 },
+                }),
+            ).rejects.toThrow();
+            expect(fetch).toHaveBeenCalledOnce();
+
+            const next = canonicalOptions('next', document);
+            const stream = await driver.streamCanonicalContextEvents({ ...next, conversation: document }, undefined, {
+                stream_id: 'stream:foundry:claude:next',
+            });
+            const events = [];
+            for await (const event of stream) events.push(event);
+            expect(events.at(-1)).toMatchObject({ type: 'response_accepted' });
+            expect(stream.completion?.accepted_output.generation).toMatchObject({
+                provider: 'azure_foundry',
+                protocol: 'anthropic.messages',
+                requested_model: initial.model,
+            });
+            expect(requests).toHaveLength(2);
+            expect(requests[1].body).toMatchObject({ model: 'deployment', stream: true });
+            expect(metadata).not.toHaveBeenCalled();
+        } finally {
+            driver.destroy();
+        }
+    });
     it.each(['deployment::claude-opus-5-5', 'deployment::claude-sonnet-5-5-20260901', 'deployment::claude-opus-6'])(
         'uses deployment names, native transport and source model rules for %s',
         async (model) => {
@@ -310,6 +411,72 @@ describe('Foundry Claude Messages', () => {
         }
     });
 
+    it.each([
+        {
+            label: 'server caller',
+            caller: { type: 'code_execution_20260120' as const, tool_id: 'server-tool' },
+            message: 'server tool caller',
+        },
+        {
+            label: 'direct caller with an extra key',
+            caller: { type: 'direct' as const, injected: true },
+            message: 'unsupported field injected',
+        },
+    ])('rejects $label without accepting a tool result', async ({ caller, message }) => {
+        const { driver, respond, fetch } = setup();
+        respond.mockImplementationOnce(() =>
+            response([{ type: 'tool_use', caller, id: 'call-1', name: 'lookup', input: {} }]),
+        );
+        try {
+            await expect(driver.execute(segments, { model: 'deployment::claude-opus-5-5' })).rejects.toThrow(message);
+            expect(fetch).toHaveBeenCalledOnce();
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('rejects a direct caller attached to a non-tool canonical replay entry', async () => {
+        const { driver, fetch, respond } = setup();
+        respond.mockImplementationOnce(() =>
+            response([
+                { type: 'thinking', thinking: 'retained thought', signature: 'signed-thought' },
+                { type: 'text', text: 'Green', citations: null },
+            ]),
+        );
+        try {
+            const first = await driver.execute(segments, { model: 'deployment::claude-opus-5-5' });
+            const document = parseConversationDocument(first.conversation);
+            const answer = document.turns.find((turn) => turn.kind === 'agent' && turn.provenance.type === 'generated');
+            const replay = answer?.blocks.find((block) => block.type === 'native_replay');
+            if (
+                !replay ||
+                typeof replay.payload !== 'object' ||
+                replay.payload === null ||
+                Array.isArray(replay.payload)
+            )
+                throw new Error('Expected retained Claude native replay');
+            const entries = replay.payload.entries;
+            if (!Array.isArray(entries)) throw new Error('Expected ordered Claude native replay entries');
+            const index = entries.findIndex(
+                (entry) =>
+                    typeof entry === 'object' && entry !== null && !Array.isArray(entry) && entry.kind === 'canonical',
+            );
+            if (index < 0) throw new Error('Expected retained Claude text replay entry');
+            const entry = entries[index];
+            if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error('Invalid entry');
+            entries[index] = { ...entry, caller: { type: 'direct' } };
+            await expect(
+                driver.requestTextCompletion(
+                    { messages: [{ role: 'user', content: 'Again' }] },
+                    { model: 'deployment::claude-opus-5-5', conversation: document },
+                ),
+            ).rejects.toThrow('does not reference a tool call');
+            expect(fetch).toHaveBeenCalledOnce();
+        } finally {
+            driver.destroy();
+        }
+    });
+
     it('preserves signed thinking and tool results across turns', async () => {
         const { driver, respond, requests } = setup();
         respond.mockImplementationOnce(() =>
@@ -346,6 +513,7 @@ describe('Foundry Claude Messages', () => {
             };
             await driver.requestTextCompletion(continuation, { ...options, conversation: first.conversation });
             expect(JSON.stringify(requests[1].body)).toContain('signed-reasoning');
+            expect(JSON.stringify(requests[1].body)).toContain('"caller":{"type":"direct"}');
             expect(JSON.stringify(requests[1].body)).toContain('tool_result');
             expect(JSON.stringify(requests[1].body)).toContain('cache_control');
         } finally {
@@ -363,7 +531,8 @@ describe('Foundry Claude Messages', () => {
             for await (const chunk of stream) chunks.push(chunk);
             expect(chunks.some((chunk) => chunk.result.length > 0)).toBe(true);
             expect(await stream.finalizeConversation?.()).toMatchObject({
-                messages: expect.arrayContaining([expect.objectContaining({ role: 'assistant' })]),
+                format: 'llumiverse.conversation',
+                turns: expect.arrayContaining([expect.objectContaining({ kind: 'agent' })]),
             });
             expect(driver.formatDebugPrompt(prompt)).toHaveProperty('messages');
         } finally {

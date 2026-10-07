@@ -1,0 +1,475 @@
+{
+  "provenance": {
+    "source_commit": "44a77a0119dc87d4f8fc757ec5b0ac3dae7cda41",
+    "source_sha256": "9f1ac5284e5ee7ad87d1e98389bf2194f6ae6f9c0f23ea6b70b2fe186a04fabb",
+    "built_lib_sha256": "28831dfffd78560f06c0cbe6287fbb53dc18f7e2df02e5c79d7c80f75160430e",
+    "openai_version": "7.23.0"
+  },
+  "capturedNativePayload": {
+    "model": "gpt-image-1",
+    "prompt": "Create a compact icon.\nDraw a published v2 icon.",
+    "size": "1024x1024",
+    "n": 1,
+    "quality": "high",
+    "output_format": "png"
+  },
+  "segments": [
+    {
+      "role": "system",
+      "content": "Create a compact icon."
+    },
+    {
+      "role": "user",
+      "content": "Draw a published v2 icon."
+    }
+  ],
+  "options": {
+    "model": "gpt-image-1",
+    "model_options": {
+      "_option_id": "openai-gpt-image",
+      "width": 1024,
+      "height": 1024,
+      "image_quality": "high",
+      "output_format": "png",
+      "n": 1
+    },
+    "conversation_runtime": {
+      "conversation_id": "conversation:published-v2-upgrade",
+      "request_id": "request:published-v2-upgrade",
+      "attempt_id": "attempt:published-v2-upgrade",
+      "input_operation_id": "input:published-v2-upgrade",
+      "response_operation_id": "response:published-v2-upgrade",
+      "recorded_at": "2026-09-30T03:00:00.000Z"
+    }
+  },
+  "conversation": {
+    "format": "llumiverse.conversation",
+    "schema_version": 0,
+    "experimental_revision": "2026-09-30.adoption.1",
+    "id": "conversation:published-v2-upgrade",
+    "revision": 2,
+    "created_at": "2026-09-30T03:00:00.000Z",
+    "updated_at": "2026-09-30T03:00:00.000Z",
+    "turns": [
+      {
+        "id": "turn_9fa0a986e70309429f85b423fdcf47f5",
+        "status": "completed",
+        "timestamps": {
+          "recorded_at": "2026-09-30T03:00:00.000Z"
+        },
+        "model_visibility": "include",
+        "kind": "program",
+        "authority": "system",
+        "blocks": [
+          {
+            "id": "block_839068e9a18d7830ecc0ea80d269e67c",
+            "type": "text",
+            "text": "Create a compact icon.",
+            "format": "plain"
+          }
+        ],
+        "provenance": {
+          "type": "received"
+        }
+      },
+      {
+        "id": "turn_8c6fe401f873d1b261d7c42bf715aec0",
+        "status": "completed",
+        "timestamps": {
+          "recorded_at": "2026-09-30T03:00:00.000Z"
+        },
+        "model_visibility": "include",
+        "kind": "user",
+        "authority": "ordinary",
+        "blocks": [
+          {
+            "id": "block_20f3360d5d267c3e802af90a8fbcbf60",
+            "type": "text",
+            "text": "Draw a published v2 icon.",
+            "format": "plain"
+          }
+        ],
+        "provenance": {
+          "type": "received"
+        }
+      },
+      {
+        "id": "turn_1c8af6124841f9c4c2814cbe031ee0be",
+        "status": "completed",
+        "timestamps": {
+          "recorded_at": "2026-09-30T03:00:00.000Z",
+          "completed_at": "2026-09-30T03:00:00.000Z"
+        },
+        "model_visibility": "include",
+        "kind": "agent",
+        "authority": "ordinary",
+        "blocks": [
+          {
+            "id": "block_c407422f33822d5df8c13c3156027534",
+            "type": "image",
+            "asset_id": "asset_84b715646c83cae4a9fcccc8651ca70a",
+            "caption": "Published v2 revised prompt"
+          }
+        ],
+        "provenance": {
+          "type": "generated"
+        },
+        "generation_id": "generation_ec8670f805af9bd3e8bcef9c51efc99b"
+      }
+    ],
+    "generations": {
+      "generation_ec8670f805af9bd3e8bcef9c51efc99b": {
+        "id": "generation_ec8670f805af9bd3e8bcef9c51efc99b",
+        "request_id": "request:published-v2-upgrade",
+        "attempt_id": "attempt:published-v2-upgrade",
+        "purpose": "conversation",
+        "requested_model": "gpt-image-1",
+        "resolved_model": "gpt-image-1",
+        "provider": "openai",
+        "protocol": "openai.images.generate",
+        "adapter_version": "2026-09-30.canonical.2",
+        "status": "completed",
+        "finish_reason": "stop",
+        "timestamps": {
+          "recorded_at": "2026-09-30T03:00:00.000Z",
+          "completed_at": "2026-09-30T03:00:00.000Z"
+        },
+        "source": {
+          "conversation_id": "conversation:published-v2-upgrade",
+          "revision": 1
+        },
+        "context_fingerprint": "sha256:f23f3fd59f6b77c55c9d27e5c4cfd428df3b7ddd6e7acfa6a8ee7322cf125a50",
+        "tool_set_fingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 7,
+          "total_tokens": 12,
+          "cache_read_tokens": 0,
+          "input_new_tokens": 5,
+          "accounting_provenance": {
+            "input_tokens": {
+              "method": "reported",
+              "accounting_basis": "openai_images_tokens"
+            },
+            "output_tokens": {
+              "method": "reported",
+              "accounting_basis": "openai_images_tokens"
+            },
+            "total_tokens": {
+              "method": "reported",
+              "accounting_basis": "openai_images_tokens"
+            },
+            "cache_read_tokens": {
+              "method": "derived",
+              "accounting_basis": "openai_images_tokens"
+            },
+            "input_new_tokens": {
+              "method": "derived",
+              "accounting_basis": "openai_images_tokens"
+            }
+          },
+          "input_partition": {
+            "type": "complete_disjoint",
+            "cache_write_bucket": "inapplicable"
+          },
+          "reported_usage": [
+            {
+              "source": "provider",
+              "protocol": "openai.images.generate",
+              "accounting_basis": "openai_images_tokens",
+              "payload": {
+                "input_tokens": 5,
+                "input_tokens_details": {
+                  "image_tokens": 0,
+                  "text_tokens": 5
+                },
+                "output_tokens": 7,
+                "total_tokens": 12
+              }
+            }
+          ]
+        },
+        "record_source": "executed",
+        "request_receipt": {
+          "id": "request_receipt_b3f247fc0055f54e25a2cd5c6197753c",
+          "request_id": "request:published-v2-upgrade",
+          "attempt_id": "attempt:published-v2-upgrade",
+          "source": {
+            "conversation_id": "conversation:published-v2-upgrade",
+            "revision": 1
+          },
+          "source_tail_turn_id": "turn_8c6fe401f873d1b261d7c42bf715aec0",
+          "context_fingerprint": "sha256:f23f3fd59f6b77c55c9d27e5c4cfd428df3b7ddd6e7acfa6a8ee7322cf125a50",
+          "tool_set_fingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "request_fingerprint": "sha256:0de19fb4a42535f9ee130208b27f49a734219b38e4a40d8b09d94ae36d1cfff2",
+          "target": {
+            "provider": "openai",
+            "protocol": "openai.images.generate",
+            "model": "gpt-image-1",
+            "adapter_version": "2026-09-30.canonical.2",
+            "options": {
+              "size": "1024x1024",
+              "n": 1,
+              "quality": "high",
+              "output_format": "png"
+            }
+          },
+          "tool_definition_ids": [],
+          "asset_versions": [],
+          "item_mappings": [
+            {
+              "canonical_id": "block_839068e9a18d7830ecc0ea80d269e67c",
+              "native_id": "prompt/parts/0",
+              "kind": "block"
+            },
+            {
+              "canonical_id": "turn_9fa0a986e70309429f85b423fdcf47f5",
+              "native_id": "source/items/0",
+              "kind": "turn"
+            },
+            {
+              "canonical_id": "block_20f3360d5d267c3e802af90a8fbcbf60",
+              "native_id": "prompt/parts/1",
+              "kind": "block"
+            },
+            {
+              "canonical_id": "turn_8c6fe401f873d1b261d7c42bf715aec0",
+              "native_id": "source/items/1",
+              "kind": "turn"
+            }
+          ],
+          "recorded_at": "2026-09-30T03:00:00.000Z"
+        }
+      }
+    },
+    "operation_receipts": {
+      "input:published-v2-upgrade": {
+        "id": "input:published-v2-upgrade",
+        "conversation_id": "conversation:published-v2-upgrade",
+        "payload_fingerprint": "sha256:08de3f6b9a501da23e963c6f016dcec548ebdde5841dc6b900cfc13d24b9f5ed",
+        "base_revision": 0,
+        "result_revision": 1,
+        "recorded_at": "2026-09-30T03:00:00.000Z",
+        "accepted_turn_ids": [
+          "turn_9fa0a986e70309429f85b423fdcf47f5",
+          "turn_8c6fe401f873d1b261d7c42bf715aec0"
+        ],
+        "accepted_generation_ids": [],
+        "accepted_asset_ids": [],
+        "accepted_tool_definition_ids": [],
+        "accepted_execution_receipt_ids": [],
+        "accepted_context_entry_ids": [
+          "context_1aef06861ed6faf7c213d3cf23929285",
+          "context_823a24b87c782280b9f99025808d5860"
+        ]
+      },
+      "response:published-v2-upgrade": {
+        "id": "response:published-v2-upgrade",
+        "conversation_id": "conversation:published-v2-upgrade",
+        "payload_fingerprint": "sha256:509c81b040006d9c3d0b3abe1087717a146a6a18e2a452304592971080ba2ec7",
+        "base_revision": 1,
+        "result_revision": 2,
+        "recorded_at": "2026-09-30T03:00:00.000Z",
+        "accepted_turn_ids": [
+          "turn_1c8af6124841f9c4c2814cbe031ee0be"
+        ],
+        "accepted_generation_ids": [
+          "generation_ec8670f805af9bd3e8bcef9c51efc99b"
+        ],
+        "accepted_asset_ids": [
+          "asset_84b715646c83cae4a9fcccc8651ca70a"
+        ],
+        "accepted_tool_definition_ids": [],
+        "accepted_execution_receipt_ids": [],
+        "accepted_context_entry_ids": [
+          "response:published-v2-upgrade:context:0"
+        ]
+      }
+    },
+    "execution_receipts": {},
+    "assets": {
+      "asset_84b715646c83cae4a9fcccc8651ca70a": {
+        "id": "asset_84b715646c83cae4a9fcccc8651ca70a",
+        "kind": "image",
+        "mime_type": "image/png",
+        "storage": {
+          "type": "inline_base64",
+          "data": "iVBORw0KGgpwdWJsaXNoZWQgcHJvdmlkZXI0NCBieXRlcw=="
+        },
+        "provenance": {
+          "type": "generated",
+          "generation_id": "generation_ec8670f805af9bd3e8bcef9c51efc99b",
+          "source_turn_id": "turn_1c8af6124841f9c4c2814cbe031ee0be"
+        },
+        "byte_length": 34,
+        "content_hash": "sha256:36fd427114c91ed757e8b4ddf31d208eaa487093e1854318488f47686040763f",
+        "created_at": "2026-09-30T03:00:00.000Z",
+        "metadata": {
+          "openai_image": {
+            "revised_prompt": "Published v2 revised prompt"
+          }
+        }
+      }
+    },
+    "tool_definitions": {},
+    "context": {
+      "revision": 2,
+      "entries": [
+        {
+          "id": "context_1aef06861ed6faf7c213d3cf23929285",
+          "type": "source_turn",
+          "turn_id": "turn_9fa0a986e70309429f85b423fdcf47f5"
+        },
+        {
+          "id": "context_823a24b87c782280b9f99025808d5860",
+          "type": "source_turn",
+          "turn_id": "turn_8c6fe401f873d1b261d7c42bf715aec0"
+        },
+        {
+          "id": "response:published-v2-upgrade:context:0",
+          "type": "source_turn",
+          "turn_id": "turn_1c8af6124841f9c4c2814cbe031ee0be"
+        }
+      ],
+      "active_tool_definition_ids": [],
+      "protected_entry_ids": [],
+      "retrieval_requirements": []
+    },
+    "compactions": {},
+    "processing": {
+      "enabled": false,
+      "policy_revision": 0,
+      "processors": []
+    }
+  },
+  "accepted_output": {
+    "format": "llumiverse.conversation-output",
+    "schema_version": 0,
+    "experimental_revision": "2026-09-30.adoption.1",
+    "source": {
+      "conversation_id": "conversation:published-v2-upgrade",
+      "revision": 2
+    },
+    "receipt": {
+      "id": "response:published-v2-upgrade",
+      "conversation_id": "conversation:published-v2-upgrade",
+      "base_revision": 1,
+      "result_revision": 2,
+      "recorded_at": "2026-09-30T03:00:00.000Z",
+      "accepted_turn_ids": [
+        "turn_1c8af6124841f9c4c2814cbe031ee0be"
+      ],
+      "accepted_generation_ids": [
+        "generation_ec8670f805af9bd3e8bcef9c51efc99b"
+      ],
+      "accepted_asset_ids": [
+        "asset_84b715646c83cae4a9fcccc8651ca70a"
+      ]
+    },
+    "turn": {
+      "id": "turn_1c8af6124841f9c4c2814cbe031ee0be",
+      "status": "completed",
+      "timestamps": {
+        "recorded_at": "2026-09-30T03:00:00.000Z",
+        "completed_at": "2026-09-30T03:00:00.000Z"
+      },
+      "model_visibility": "include",
+      "kind": "agent",
+      "authority": "ordinary",
+      "blocks": [
+        {
+          "id": "block_c407422f33822d5df8c13c3156027534",
+          "type": "image",
+          "asset_id": "asset_84b715646c83cae4a9fcccc8651ca70a",
+          "caption": "Published v2 revised prompt"
+        }
+      ],
+      "provenance": {
+        "type": "generated"
+      },
+      "generation_id": "generation_ec8670f805af9bd3e8bcef9c51efc99b"
+    },
+    "generation": {
+      "id": "generation_ec8670f805af9bd3e8bcef9c51efc99b",
+      "record_source": "executed",
+      "request_id": "request:published-v2-upgrade",
+      "attempt_id": "attempt:published-v2-upgrade",
+      "purpose": "conversation",
+      "requested_model": "gpt-image-1",
+      "resolved_model": "gpt-image-1",
+      "provider": "openai",
+      "protocol": "openai.images.generate",
+      "adapter_version": "2026-09-30.canonical.2",
+      "status": "completed",
+      "finish_reason": "stop",
+      "timestamps": {
+        "recorded_at": "2026-09-30T03:00:00.000Z",
+        "completed_at": "2026-09-30T03:00:00.000Z"
+      },
+      "source": {
+        "conversation_id": "conversation:published-v2-upgrade",
+        "revision": 1
+      },
+      "usage": {
+        "input_tokens": 5,
+        "output_tokens": 7,
+        "total_tokens": 12,
+        "cache_read_tokens": 0,
+        "input_new_tokens": 5,
+        "accounting_provenance": {
+          "input_tokens": {
+            "method": "reported",
+            "accounting_basis": "openai_images_tokens"
+          },
+          "output_tokens": {
+            "method": "reported",
+            "accounting_basis": "openai_images_tokens"
+          },
+          "total_tokens": {
+            "method": "reported",
+            "accounting_basis": "openai_images_tokens"
+          },
+          "cache_read_tokens": {
+            "method": "derived",
+            "accounting_basis": "openai_images_tokens"
+          },
+          "input_new_tokens": {
+            "method": "derived",
+            "accounting_basis": "openai_images_tokens"
+          }
+        },
+        "input_partition": {
+          "type": "complete_disjoint",
+          "cache_write_bucket": "inapplicable"
+        }
+      }
+    },
+    "assets": {
+      "asset_84b715646c83cae4a9fcccc8651ca70a": {
+        "id": "asset_84b715646c83cae4a9fcccc8651ca70a",
+        "kind": "image",
+        "mime_type": "image/png",
+        "storage": {
+          "type": "inline_base64",
+          "data": "iVBORw0KGgpwdWJsaXNoZWQgcHJvdmlkZXI0NCBieXRlcw=="
+        },
+        "byte_length": 34,
+        "content_hash": "sha256:36fd427114c91ed757e8b4ddf31d208eaa487093e1854318488f47686040763f",
+        "created_at": "2026-09-30T03:00:00.000Z",
+        "provenance": {
+          "type": "generated",
+          "generation_id": "generation_ec8670f805af9bd3e8bcef9c51efc99b",
+          "source_turn_id": "turn_1c8af6124841f9c4c2814cbe031ee0be"
+        }
+      }
+    },
+    "completeness": {
+      "history": "omitted",
+      "native_replay": "omitted",
+      "metadata": "omitted",
+      "semantic_content": "complete",
+      "omitted_block_ids": [],
+      "omitted_asset_ids": []
+    }
+  }
+}

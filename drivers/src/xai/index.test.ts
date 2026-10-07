@@ -4,6 +4,28 @@ import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { xAIDriver } from './index.js';
 
+describe('xAI endpoint configuration', () => {
+    it.each([
+        ['nested path', 'https://xai.test/prefix//v1', 'https://xai.test/prefix//v1'],
+        ['short suffix', 'https://xai.test/prefix//v1///', 'https://xai.test/prefix//v1'],
+        ['long suffix', `https://xai.test/prefix//v1${'/'.repeat(65536)}`, 'https://xai.test/prefix//v1'],
+        ['long interior', `https://xai.test/${'/'.repeat(65536)}v1`, `https://xai.test/${'/'.repeat(65536)}v1`],
+        ['empty endpoint', '', ''],
+        ['slash-only endpoint', '////', ''],
+    ])('removes only the trailing slash suffix: %s', (_name, endpoint, expected) => {
+        const driver = new xAIDriver({ apiKey: 'test-key', endpoint });
+        // The OpenAI SDK retains its existing default when configured with an empty endpoint.
+        expect(driver.service.baseURL).toBe(expected || 'https://api.openai.com/v1');
+        expect(driver.xai_service.baseUrl).toBe(expected);
+    });
+
+    it('retains the default endpoint when no endpoint is configured', () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        expect(driver.service.baseURL).toBe('https://api.x.ai/v1');
+        expect(driver.xai_service.baseUrl).toBe('https://api.x.ai/v1');
+    });
+});
+
 describe('xAI model listing', () => {
     it('uses verified catalog capabilities instead of runtime modality claims', async () => {
         const driver = new xAIDriver({ apiKey: 'test-key' });
@@ -148,7 +170,9 @@ describe('xAI image generation', () => {
 
     it('falls back from streaming to the image generation endpoint for Image 2.0', async () => {
         const driver = new xAIDriver({ apiKey: 'test-key' });
-        const post = vi.fn(async () => ({ data: [{ url: 'https://example.com/image.jpeg' }] }));
+        const post = vi.fn(async () => ({
+            data: [{ b64_json: 'iVBORw0KGgo=', mime_type: 'image/png' }],
+        }));
         driver.xai_service = { post } as unknown as FetchClient;
         const options: ExecutionOptions = {
             model: 'grok-imagine-image-2.0',
@@ -166,8 +190,8 @@ describe('xAI image generation', () => {
         const chunks: string[] = [];
         for await (const chunk of stream) chunks.push(chunk);
 
-        expect(chunks).toEqual(['[Image: https://ex...]']);
-        expect(stream.completion?.result).toEqual([{ type: 'image', value: 'https://example.com/image.jpeg' }]);
+        expect(chunks).toEqual(['[Image: data:image...]']);
+        expect(stream.completion?.result).toEqual([{ type: 'image', value: 'data:image/png;base64,iVBORw0KGgo=' }]);
         expect(post).toHaveBeenCalledWith('/images/generations', {
             payload: {
                 model: 'grok-imagine-image-2.0',
@@ -178,6 +202,7 @@ describe('xAI image generation', () => {
                 response_format: 'url',
                 n: 1,
             },
+            signal: expect.any(AbortSignal),
         });
     });
 

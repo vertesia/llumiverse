@@ -1,10 +1,31 @@
-import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
+import {
+    type ContentBlock,
+    type ConversationDocument,
+    type ConversationStreamEvent,
+    createConversationDocument,
+    externalizeToolCallArguments,
+    parseConversationDocument,
+    prepareToolArgumentExternalization,
+} from '@llumiverse/conversation';
+import {
+    type AIModel,
+    type CanonicalExecutionInputOptions,
+    type CompletionChunkObject,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    isCanonicalAcceptedRecovery,
+    legacyCompletionFromCanonicalExecution,
+    type ModelSearchPayload,
+    PromptRole,
+} from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import {
     normalizeOpenAIChatCompletionsResponse,
     normalizeOpenAIChatCompletionsStream,
+    OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsProtocol,
@@ -14,6 +35,12 @@ import {
     parseOpenAIChatCompletionsToolCalls,
     prepareOpenAIChatCompletionsConversation,
 } from './openai_chat_completions.js';
+import {
+    compileOpenAIChatCompletionsConversation,
+    exportLegacyOpenAIChatCompletionsConversation,
+    importOpenAIChatCompletionsHistory,
+    prepareOpenAIChatCanonicalState,
+} from './openai-chat-conversation-adapter.js';
 
 const streamChunk = {
     id: 'chatcmpl-stream',
@@ -99,6 +126,45 @@ async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Prom
     return chunks;
 }
 
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
+
+function acceptedOutputWithoutProviderTimestamps(value: unknown): unknown {
+    return JSON.parse(JSON.stringify(value), (key, item) =>
+        key === 'recorded_at' || key === 'completed_at' ? '<provider-completed-at>' : item,
+    );
+}
+
+function latestGeneratedText(value: unknown): string | undefined {
+    const document = parseConversationDocument(value);
+    for (let index = document.turns.length - 1; index >= 0; index -= 1) {
+        const turn = document.turns[index];
+        if (turn.kind !== 'agent' || turn.provenance.type !== 'generated') continue;
+        return turn.blocks.find((block) => block.type === 'text')?.text;
+    }
+    return undefined;
+}
+
+function latestGeneratedJson(value: unknown): unknown {
+    const document = parseConversationDocument(value);
+    for (let index = document.turns.length - 1; index >= 0; index -= 1) {
+        const turn = document.turns[index];
+        if (turn.kind !== 'agent' || turn.provenance.type !== 'generated') continue;
+        return turn.blocks.find((block) => block.type === 'json')?.value;
+    }
+    return undefined;
+}
+
+function latestExecutedGeneration(value: unknown) {
+    const document = parseConversationDocument(value);
+    return Object.values(document.generations).find((generation) => generation.record_source === 'executed');
+}
+
 class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<undefined> {
     payloads: OpenAIChatCompletionsPayload[] = [];
 
@@ -133,6 +199,46 @@ class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<un
     }
 }
 
+class TestOpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase {
+    readonly provider = 'openai_compatible';
+    readonly payloads: OpenAIChatCompletionsPayload[] = [];
+
+    constructor(
+        private readonly response?: OpenAIChatCompletionsResponse,
+        private readonly responseStream?: ReadableStream,
+    ) {
+        super({});
+    }
+
+    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
+        this.payloads.push(payload);
+        if (this.response === undefined) throw new Error('Missing test response');
+        return this.response;
+    }
+
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        _options?: ExecutionOptions,
+        _signal?: AbortSignal,
+    ): Promise<ReadableStream> {
+        this.payloads.push(payload);
+        if (this.responseStream === undefined) throw new Error('Missing test stream');
+        return this.responseStream;
+    }
+
+    async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
+        return [];
+    }
+
+    async validateConnection(): Promise<boolean> {
+        return true;
+    }
+
+    async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        return { model: 'test/model', results: [] };
+    }
+}
+
 const prompt: OpenAIChatCompletionsPrompt = {
     _is_openai_chat_completions: true,
     messages: [{ role: 'user', content: 'Hello' }],
@@ -143,7 +249,276 @@ const options: ExecutionOptions = {
     model_options: { _option_id: 'text-fallback' },
 };
 
+function legacyConversation(value: unknown): OpenAIChatCompletionsPrompt {
+    return exportLegacyOpenAIChatCompletionsConversation(value as ConversationDocument);
+}
+
+function canonicalOptions(
+    attempt: string,
+    recordedAt: string,
+    conversation?: ConversationDocument,
+): CanonicalExecutionInputOptions {
+    return {
+        model: 'test/model',
+        ...(conversation === undefined ? {} : { conversation }),
+        conversation_runtime: {
+            conversation_id: 'conversation:structured-output',
+            request_id: 'request:structured-output',
+            attempt_id: attempt,
+            input_operation_id: 'input:structured-output',
+            response_operation_id: 'response:structured-output',
+            recorded_at: recordedAt,
+            started_at: recordedAt,
+        },
+    };
+}
+
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('emits native-positioned canonical events with the same accepted output as the legacy stream boundary', async () => {
+        const nativeEvents: ServerSentEvent[] = [
+            {
+                type: 'event',
+                data: JSON.stringify({
+                    id: 'chatcmpl-typed-parity',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'test/model',
+                    choices: [{ index: 0, delta: { content: 'Hel' }, finish_reason: null }],
+                }),
+            },
+            {
+                type: 'event',
+                data: JSON.stringify({
+                    id: 'chatcmpl-typed-parity',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'test/model',
+                    service_tier: 'priority',
+                    choices: [{ index: 0, delta: { content: 'lo' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+                }),
+            },
+        ];
+        const executionOptions = canonicalOptions('attempt:typed-parity', '2026-09-11T00:00:00.000Z');
+        const typedDriver = new TestOpenAIChatCompletionsDriver(undefined, createSSEStream(nativeEvents));
+        const typed = await typedDriver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Say hello.' }],
+            executionOptions,
+            undefined,
+            { stream_id: 'stream:chat:typed-parity' },
+        );
+        const events = await collectCanonicalEvents(typed);
+
+        expect(events.map((event) => event.type)).toEqual([
+            'draft_started',
+            'draft_block_started',
+            'draft_text_delta',
+            'draft_text_delta',
+            'usage_snapshot',
+            'draft_block_finished',
+            'draft_finished',
+            'response_accepted',
+        ]);
+        expect(events.filter((event) => event.type === 'draft_text_delta')).toMatchObject([
+            {
+                text: 'Hel',
+                native_position: { protocol: 'openai.chat.completions', path: ['choices', 0, 'message', 'content'] },
+            },
+            {
+                text: 'lo',
+                native_position: { protocol: 'openai.chat.completions', path: ['choices', 0, 'message', 'content'] },
+            },
+        ]);
+        expect(typed.completion?.service_tier).toBe('priority');
+
+        const legacyDriver = new TestOpenAIChatCompletionsDriver(undefined, createSSEStream(nativeEvents));
+        const legacy = await legacyDriver.streamCanonical(
+            [{ role: PromptRole.user, content: 'Say hello.' }],
+            executionOptions,
+        );
+        for await (const _chunk of legacy) {
+            // Drain the explicit legacy string projection.
+        }
+        expect(acceptedOutputWithoutProviderTimestamps(typed.completion?.accepted_output)).toEqual(
+            acceptedOutputWithoutProviderTimestamps(legacy.completion?.accepted_output),
+        );
+    });
+
+    it('keeps parallel same-name calls distinct and reconciles malformed retained arguments as non-executable', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-typed-tools',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: 'call-a',
+                                            type: 'function',
+                                            function: { name: 'lookup', arguments: '{"city":' },
+                                        },
+                                        {
+                                            index: 1,
+                                            id: 'call-b',
+                                            type: 'function',
+                                            function: { name: 'lookup', arguments: '{"city":' },
+                                        },
+                                    ],
+                                },
+                                finish_reason: null,
+                            },
+                        ],
+                    }),
+                },
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-typed-tools',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { tool_calls: [{ index: 0, function: { arguments: '"Tokyo"}' } }] },
+                                finish_reason: 'tool_calls',
+                            },
+                        ],
+                    }),
+                },
+            ]),
+        );
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Look up both cities.' }],
+            {
+                ...canonicalOptions('attempt:typed-tools', '2026-09-11T00:00:00.000Z'),
+                tools: [
+                    {
+                        name: 'lookup',
+                        input_schema: {
+                            type: 'object',
+                            properties: { city: { type: 'string' } },
+                            required: ['city'],
+                        },
+                    },
+                ],
+            },
+            undefined,
+            { stream_id: 'stream:chat:typed-tools' },
+        );
+        const events = await collectCanonicalEvents(stream);
+        const accepted = stream.completion?.accepted_output.turn.blocks.filter((block) => block.type === 'tool_call');
+
+        expect(accepted).toMatchObject([
+            { call_id: 'call-a', tool_name: 'lookup', arguments: { type: 'json', value: { city: 'Tokyo' } } },
+            { call_id: 'call-b', tool_name: 'lookup', arguments: { type: 'invalid', raw: '{"city":' } },
+        ]);
+        expect(events.filter((event) => event.type === 'draft_tool_call_identity')).toEqual([]);
+        const acceptedEvent = events.find((event) => event.type === 'response_accepted');
+        expect(acceptedEvent).toMatchObject({
+            reconciliations: [
+                { disposition: 'direct', committed_block_ids: [accepted?.[0]?.id] },
+                { disposition: 'direct', committed_block_ids: [accepted?.[1]?.id] },
+            ],
+        });
+        expect(events).toContainEqual(expect.objectContaining({ type: 'draft_block_finished', outcome: 'malformed' }));
+    });
+
+    it('aborts the pending native Chat read before delivering one cancellation terminal', async () => {
+        let nativeController: ReadableStreamDefaultController<ServerSentEvent> | undefined;
+        const observedAbort = vi.fn();
+        const native = new ReadableStream<ServerSentEvent>({
+            start(controller) {
+                nativeController = controller;
+                controller.enqueue({
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-typed-cancel',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: 'started' }, finish_reason: null }],
+                    }),
+                });
+            },
+        });
+        class CancellingChatDriver extends TestOpenAIChatCompletionsDriver {
+            override async _postChatCompletionStream(
+                _payload: OpenAIChatCompletionsPayload,
+                _options?: ExecutionOptions,
+                signal?: AbortSignal,
+            ): Promise<ReadableStream> {
+                signal?.addEventListener(
+                    'abort',
+                    () => {
+                        observedAbort();
+                        nativeController?.close();
+                    },
+                    { once: true },
+                );
+                return native;
+            }
+        }
+        const driver = new CancellingChatDriver();
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Start.' }],
+            canonicalOptions('attempt:typed-cancel', '2026-09-11T00:00:00.000Z'),
+            undefined,
+            { stream_id: 'stream:chat:typed-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_block_started' }, done: false });
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_text_delta' }, done: false });
+
+        const terminal = await stream.cancel();
+
+        expect(observedAbort).toHaveBeenCalledOnce();
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(iterator.next()).resolves.toMatchObject({ value: terminal, done: false });
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+        expect(stream.completion).toBeUndefined();
+    });
+    it('stores Chat input audio as a durable canonical asset and replays exact bytes after JSON persistence', async () => {
+        const audio = { type: 'input_audio' as const, input_audio: { data: 'UklGRg==', format: 'wav' as const } };
+        const state = await prepareOpenAIChatCanonicalState({
+            conversation: undefined,
+            prompt: {
+                _is_openai_chat_completions: true,
+                messages: [{ role: 'user', content: [{ type: 'text', text: 'Transcribe.' }, audio] }],
+            },
+            options: canonicalOptions('attempt:audio', '2026-09-11T00:00:00.000Z'),
+            provider: 'openai',
+        });
+        const persisted = parseConversationDocument(JSON.parse(JSON.stringify(state.document)));
+        let audioBlock: Extract<ContentBlock, { type: 'audio' }> | undefined;
+        for (const turn of persisted.turns) {
+            for (const block of turn.blocks as readonly ContentBlock[]) {
+                if (block.type === 'audio') audioBlock = block;
+            }
+        }
+        expect(audioBlock).toBeDefined();
+        if (audioBlock?.type !== 'audio') throw new Error('Expected canonical audio block');
+        expect(persisted.assets[audioBlock.asset_id]).toMatchObject({
+            kind: 'audio',
+            mime_type: 'audio/wav',
+            storage: { type: 'inline_base64', data: 'UklGRg==' },
+        });
+        expect(exportLegacyOpenAIChatCompletionsConversation(persisted).messages[0]?.content).toEqual([
+            { type: 'text', text: 'Transcribe.' },
+            audio,
+        ]);
+    });
+
     it('preserves compatible-provider prompt cache usage', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-cache',
@@ -180,6 +555,17 @@ describe('OpenAIChatCompletionsProtocol', () => {
             prompt_new: 200,
             result: 20,
             total: 1_020,
+        });
+        expect(latestExecutedGeneration(completion.conversation)?.usage).toMatchObject({
+            input_tokens: 1_000,
+            output_tokens: 20,
+            reasoning_tokens: 0,
+            total_tokens: 1_020,
+            cache_read_tokens: 800,
+            input_new_tokens: 200,
+            accounting_provenance: {
+                reasoning_tokens: { method: 'reported', accounting_basis: 'openai_chat_tokens' },
+            },
         });
     });
 
@@ -349,8 +735,14 @@ describe('OpenAIChatCompletionsProtocol', () => {
             choices: [
                 {
                     index: 0,
-                    message: { role: 'assistant', content: 'ok' },
-                    finish_reason: 'stop',
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            { id: 'call-think', type: 'function', function: { name: 'think', arguments: '{}' } },
+                        ],
+                    },
+                    finish_reason: 'tool_calls',
                     logprobs: null,
                 },
             ],
@@ -371,7 +763,23 @@ describe('OpenAIChatCompletionsProtocol', () => {
             object: 'chat.completion',
             created: 1,
             model: 'test/model',
-            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call-write',
+                                type: 'function',
+                                function: { name: 'write_artifact', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    finish_reason: 'tool_calls',
+                },
+            ],
         });
 
         await model.requestTextCompletion(undefined, prompt, {
@@ -461,14 +869,14 @@ describe('OpenAIChatCompletionsProtocol', () => {
             model_options: { _option_id: 'text-fallback', include_thoughts: false },
         });
         expect(hidden.result).toEqual([{ type: 'text', value: 'answer' }]);
-        expect(hidden.conversation).toMatchObject({
+        expect(legacyConversation(hidden.conversation)).toMatchObject({
             messages: expect.arrayContaining([
                 expect.objectContaining({ reasoning_content: 'signed-or-native-reasoning' }),
             ]),
         });
     });
 
-    it('removes DeepSeek R1 reasoning from replay while still projecting it as thoughts', async () => {
+    it('keeps exact DeepSeek R1 reasoning in canonical source while excluding it from the next request', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-r1',
             object: 'chat.completion',
@@ -493,7 +901,13 @@ describe('OpenAIChatCompletionsProtocol', () => {
             { type: 'thoughts', value: 'visible reasoning' },
             { type: 'text', value: 'answer' },
         ]);
-        expect(JSON.stringify(completion.conversation)).not.toContain('visible reasoning');
+        expect(JSON.stringify(completion.conversation)).toContain('visible reasoning');
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model: 'deepseek-ai/deepseek-r1-0528-maas',
+            conversation: completion.conversation,
+        });
+        expect(JSON.stringify(model.payloads[1].messages)).not.toContain('visible reasoning');
     });
 
     it('replays DeepSeek V3.2 reasoning only within the current user tool turn', () => {
@@ -577,7 +991,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
             stripImagesAfterTurns: 0,
         });
-        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
+        const conversation = legacyConversation(completion.conversation);
 
         expect(conversation.messages[0]).toEqual(imagePrompt.messages[0]);
         expect(conversation.messages[1].reasoning_content).toBe('tool reasoning');
@@ -677,7 +1091,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             { type: 'thoughts', value: 'hidden reasoning' },
             { type: 'text', value: '{"answer":"Paris"}' },
         ]);
-        expect(completion.conversation).toMatchObject({
+        expect(legacyConversation(completion.conversation)).toMatchObject({
             messages: expect.arrayContaining([
                 expect.objectContaining({
                     role: 'assistant',
@@ -687,7 +1101,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         });
     });
 
-    it('applies conversation stripping and turn metadata to non-streaming completions', async () => {
+    it('applies stripping to the request projection while preserving canonical source media', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
             object: 'chat.completion',
@@ -722,12 +1136,74 @@ describe('OpenAIChatCompletionsProtocol', () => {
             ...options,
             stripImagesAfterTurns: 0,
         });
-        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
+        expect(JSON.stringify(legacyConversation(completion.conversation).messages[0].content)).toContain('aW1hZ2U=');
 
-        expect(getConversationMeta(conversation).turnNumber).toBe(1);
-        expect(conversation.messages[0].content).toEqual([
-            { type: 'text', text: 'What is this?' },
-            { type: 'text', text: '[Image removed from conversation history]' },
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: completion.conversation,
+            stripImagesAfterTurns: 0,
+        });
+        expect(model.payloads[1].messages[0].content).toBe('What is this?\n[Image removed from conversation history]');
+    });
+
+    it('preserves imported history age when applying the host retention projection', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-aged-history',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        const oldText = 'x'.repeat(32_001);
+        const agedHistory = {
+            _is_openai_chat_completions: true as const,
+            _llumiverse_meta: { turnNumber: 20 },
+            messages: [
+                {
+                    role: 'user' as const,
+                    content: [
+                        { type: 'text' as const, text: 'old image' },
+                        {
+                            type: 'image_url' as const,
+                            image_url: { url: 'data:image/png;base64,b2xkLWltYWdl', detail: 'auto' as const },
+                        },
+                    ],
+                },
+                { role: 'assistant' as const, content: oldText },
+                { role: 'user' as const, content: '<heartbeat>old status</heartbeat>' },
+            ],
+        };
+
+        await model.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'current request' }] },
+            {
+                ...canonicalOptions('attempt:aged', '2026-09-11T00:00:00.000Z'),
+                conversation: agedHistory,
+                stripImagesAfterTurns: 5,
+                stripTextMaxTokens: 8_000,
+                stripHeartbeatsAfterTurns: 1,
+            },
+        );
+
+        expect(model.payloads[0].messages).toEqual([
+            {
+                role: 'user',
+                content: 'old image\n[Image removed from conversation history]',
+            },
+            {
+                role: 'assistant',
+                content: `${oldText.slice(0, 32_000)}\n\n[Content truncated - exceeded token limit]`,
+            },
+            { role: 'user', content: '[Heartbeat removed from conversation history]' },
+            { role: 'user', content: 'current request' },
         ]);
     });
 
@@ -763,11 +1239,16 @@ describe('OpenAIChatCompletionsProtocol', () => {
             stripImagesAfterTurns: 0,
             stripTextMaxTokens: 1,
         });
-        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
-
-        expect(JSON.stringify(conversation.messages[0].content)).not.toContain('aW1hZ2U=');
-        expect(JSON.stringify(conversation.messages[0].content)).toContain('Content truncated');
-        expect(conversation.messages[1].reasoning_content).toContain('Content truncated');
+        expect(JSON.stringify(completion.conversation)).toContain('aW1hZ2U=');
+        expect(JSON.stringify(completion.conversation)).toContain('reasoning projection');
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: completion.conversation,
+            stripImagesAfterTurns: 0,
+            stripTextMaxTokens: 1,
+        });
+        expect(JSON.stringify(model.payloads[1].messages)).not.toContain('aW1hZ2U=');
+        expect(JSON.stringify(model.payloads[1].messages)).toContain('Content truncated');
     });
 
     it('reads streaming content arrays', async () => {
@@ -883,7 +1364,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         for await (const chunk of stream) results.push(...chunk.result);
         const conversation = await stream.finalizeConversation?.();
 
-        expect(conversation).toMatchObject({
+        expect(legacyConversation(conversation)).toMatchObject({
             messages: expect.arrayContaining([
                 expect.objectContaining({
                     role: 'assistant',
@@ -1232,9 +1713,13 @@ describe('OpenAIChatCompletionsProtocol', () => {
             ]),
         );
 
-        const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
+        const stream = await model.requestTextCompletionStream(undefined, prompt, options);
+        const chunks = await collectChunks(stream);
         expect(chunks.flatMap((chunk) => chunk.tool_use ?? []).map((tool) => tool.tool_input)).toEqual(['{"name"', '']);
         expect(chunks.at(-1)?.finish_reason).toBe('length');
+        const document = parseConversationDocument(await stream.finalizeConversation?.());
+        expect(document.turns.at(-1)?.status).toBe('interrupted');
+        expect(Object.values(document.generations).at(-1)?.status).toBe('cancelled');
     });
 
     it('normalizes tool schemas and structured-output schemas for Chat Completions payloads', async () => {
@@ -1304,5 +1789,693 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 additionalProperties: false,
             },
         });
+    });
+
+    it('rejects a truncated stream before persisting a completed canonical response', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-truncated',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: 'partial' } }],
+                    }),
+                },
+            ]),
+        );
+
+        const stream = await model.requestTextCompletionStream(undefined, prompt, options);
+        await collectChunks(stream);
+        if (stream.finalizeConversation === undefined) throw new Error('Expected canonical stream finalizer');
+        await expect(stream.finalizeConversation()).rejects.toThrow(
+            'Chat Completions stream ended without a terminal finish reason',
+        );
+    });
+
+    it('validates structured output through the full driver and recovers it without a second provider call', async () => {
+        const rawText = '{ "answer" : "Tokyo" }';
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-structured',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: rawText },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+            usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                prompt_tokens_details: { cached_tokens: 25, cache_write_tokens: 5 },
+                cost: 0.0012,
+                is_byok: false,
+            },
+        });
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const segments = [{ role: PromptRole.user, content: 'Return the city.' }];
+        const first = await driver.execute(segments, {
+            ...canonicalOptions('attempt:first', '2026-09-11T00:00:00.000Z'),
+            result_schema: resultSchema,
+        });
+
+        expect(first.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(first.token_usage).toEqual({
+            prompt: 100,
+            prompt_cached: 25,
+            prompt_cache_write: 5,
+            prompt_new: 70,
+            provider_cost_usd: 0.0012,
+            result: 20,
+            total: 120,
+        });
+        expect(latestGeneratedJson(first.conversation)).toEqual({ answer: 'Tokyo' });
+        expect(legacyConversation(first.conversation).messages.at(-1)?.content).toBe(rawText);
+
+        const retried = await driver.execute(segments, {
+            ...canonicalOptions(
+                'attempt:retry',
+                '2026-09-11T00:01:00.000Z',
+                parseConversationDocument(first.conversation),
+            ),
+            result_schema: resultSchema,
+        });
+        expect(retried.result).toEqual(first.result);
+        expect(retried.token_usage).toEqual(first.token_usage);
+        expect(retried.conversation).toEqual(first.conversation);
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it('normalizes exact canonical text when legacy presentation splits think tags', async () => {
+        const rawText = '<think>Check the requested shape.</think>\n{"answer":"Tokyo"}';
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-structured-think-tag',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: rawText },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        const completion = await driver.execute([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions('attempt:think-tag', '2026-09-11T00:02:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'Check the requested shape.' },
+            { type: 'json', value: { answer: 'Tokyo' } },
+        ]);
+        expect(latestGeneratedJson(completion.conversation)).toEqual({ answer: 'Tokyo' });
+        expect(legacyConversation(completion.conversation).messages.at(-1)?.content).toBe(rawText);
+    });
+
+    it('executes directly into canonical JSON and recovers without a second provider call', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-canonical-direct',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            service_tier: 'priority',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: '{"answer":"Tokyo"}' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        });
+        const segments = [{ role: PromptRole.user, content: 'Return JSON.' }];
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const first = await driver.executeCanonical(segments, {
+            ...canonicalOptions('attempt:canonical:first', '2026-09-11T00:00:00.000Z'),
+            result_schema: resultSchema,
+        });
+
+        expect(first.accepted_output.turn.blocks).toEqual(
+            expect.arrayContaining([expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } })]),
+        );
+        expect(first.accepted_output.generation.usage).toMatchObject({ input_tokens: 4, output_tokens: 2 });
+        expect(first.service_tier).toBe('priority');
+
+        const retry = await driver.executeCanonical(segments, {
+            ...canonicalOptions(
+                'attempt:canonical:retry',
+                '2026-09-11T00:01:00.000Z',
+                JSON.parse(JSON.stringify(first.conversation)),
+            ),
+            result_schema: resultSchema,
+        });
+        expect(retry.accepted_output).toEqual(first.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it('recovers an accepted tool call from a later externalized head without another provider call', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-canonical-tool',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call-write',
+                                type: 'function',
+                                function: {
+                                    name: 'write_artifact',
+                                    arguments: '{ "path" : "notes.txt", "content" : "exact retained content" }',
+                                },
+                            },
+                        ],
+                    },
+                    finish_reason: 'tool_calls',
+                    logprobs: null,
+                },
+            ],
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        });
+        const seed = createConversationDocument({
+            id: 'conversation:structured-output',
+            created_at: '2026-09-11T00:00:00.000Z',
+        });
+        const segments = [{ role: PromptRole.user, content: 'Write the artifact.' }];
+        const executionOptions = {
+            ...canonicalOptions(
+                'attempt:externalized:first',
+                '2026-09-11T00:00:00.000Z',
+                parseConversationDocument(seed),
+            ),
+            tools: [
+                {
+                    name: 'write_artifact',
+                    input_schema: {
+                        type: 'object' as const,
+                        properties: { path: { type: 'string' }, content: { type: 'string' } },
+                        required: ['path', 'content'],
+                        additionalProperties: false,
+                    },
+                },
+            ],
+        } satisfies CanonicalExecutionInputOptions;
+        const first = await driver.executeCanonical(segments, executionOptions);
+        const prepared = await prepareToolArgumentExternalization(first.conversation, 'call-write', ['content']);
+        const replayArchives = prepared.replay_archives.map((archive, index) => ({
+            replay_block_id: archive.replay_block_id,
+            asset: {
+                id: `asset:call-write:replay:${index}`,
+                kind: 'document' as const,
+                mime_type: 'application/json',
+                storage: {
+                    type: 'external' as const,
+                    resolver: 'test.artifact',
+                    locator: { artifact_path: `tool-inputs/call-write-replay-${index}.json` },
+                },
+                provenance: { type: 'imported' as const, source: 'test' },
+                byte_length: archive.byte_length,
+                content_hash: archive.content_hash,
+                created_at: '2026-09-11T00:01:00.000Z',
+            },
+        }));
+        expect(replayArchives).toHaveLength(1);
+        const externalized = await externalizeToolCallArguments(first.conversation, {
+            operation_id: 'externalize:call-write',
+            expected_revision: first.conversation.revision,
+            recorded_at: '2026-09-11T00:01:00.000Z',
+            call_id: 'call-write',
+            input_path: ['content'],
+            model_value: { path: 'notes.txt', content: '[stored externally]' },
+            exact_arguments_hash: prepared.exact_arguments_hash,
+            asset: {
+                id: 'asset:call-write',
+                kind: 'text',
+                mime_type: 'text/plain',
+                storage: {
+                    type: 'external',
+                    resolver: 'test.artifact',
+                    locator: { artifact_path: 'tool-inputs/call-write.txt' },
+                },
+                provenance: { type: 'imported', source: 'test' },
+                byte_length: prepared.byte_length,
+                content_hash: prepared.content_hash,
+                created_at: '2026-09-11T00:01:00.000Z',
+            },
+            replay_archives: replayArchives,
+        });
+
+        const retry = await driver.executeCanonical(segments, {
+            ...executionOptions,
+            conversation: JSON.parse(JSON.stringify(externalized.document)),
+            conversation_runtime: {
+                ...executionOptions.conversation_runtime,
+                attempt_id: 'attempt:externalized:delivery-2',
+                recorded_at: '2026-09-11T00:02:00.000Z',
+                started_at: '2026-09-11T00:02:00.000Z',
+            } as NonNullable<ExecutionOptions['conversation_runtime']>,
+            load_recovered_canonical_output: async (request) => {
+                expect(request).not.toHaveProperty('prepared_request');
+                return first.accepted_output;
+            },
+        });
+
+        expect(retry.conversation).toEqual(externalized.document);
+        expect(retry.accepted_output).toEqual(first.accepted_output);
+        expect(retry.accepted_output.turn.blocks).toEqual(
+            expect.arrayContaining([expect.objectContaining({ type: 'tool_call', call_id: 'call-write' })]),
+        );
+        expect(legacyCompletionFromCanonicalExecution(retry).result).toEqual([]);
+        let externalizedCall: ContentBlock | undefined;
+        for (const turn of retry.conversation.turns) {
+            externalizedCall = (turn.blocks as ContentBlock[]).find(
+                (block) => block.type === 'tool_call' && block.call_id === 'call-write',
+            );
+            if (externalizedCall !== undefined) break;
+        }
+        expect(externalizedCall).toMatchObject({
+            type: 'tool_call',
+            call_id: 'call-write',
+            arguments: { type: 'externalized_json', exact_arguments_hash: prepared.exact_arguments_hash },
+        });
+
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it('streams invalid required JSON into an explicit failed canonical outcome', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-canonical-invalid-stream',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        service_tier: 'priority',
+                        choices: [{ index: 0, delta: { content: '{"wrong":true}' }, finish_reason: 'stop' }],
+                        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+                    }),
+                },
+            ]),
+        );
+        const stream = await driver.streamCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...canonicalOptions('attempt:canonical:invalid-stream', '2026-09-11T00:00:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+        for await (const _chunk of stream) {
+            // Drain through canonical finalization.
+        }
+
+        expect(stream.completion?.accepted_output.generation.status).toBe('failed');
+        expect(stream.completion?.accepted_output.turn.status).toBe('failed');
+        expect(stream.completion?.service_tier).toBe('priority');
+    });
+
+    it('continues an interrupted turn with a complete call while keeping a malformed trailing call non-executable', async () => {
+        const tools: NonNullable<ExecutionOptions['tools']> = [
+            {
+                name: 'lookup_weather',
+                input_schema: {
+                    type: 'object',
+                    properties: { city: { type: 'string' } },
+                    required: ['city'],
+                    additionalProperties: false,
+                },
+            },
+        ];
+        const firstDriver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-cutoff-calls',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call-complete',
+                                type: 'function',
+                                function: { name: 'lookup_weather', arguments: '{"city":"Tokyo"}' },
+                            },
+                            {
+                                id: 'call-truncated',
+                                type: 'function',
+                                function: { name: 'lookup_weather', arguments: '{"city":' },
+                            },
+                        ],
+                    },
+                    finish_reason: 'length',
+                    logprobs: null,
+                },
+            ],
+        });
+        const first = await firstDriver.executeCanonical([{ role: PromptRole.user, content: 'Check Tokyo.' }], {
+            ...canonicalOptions('attempt:cutoff:first', '2026-09-11T00:02:00.000Z'),
+            tools,
+        });
+
+        expect(first.accepted_output.generation).toMatchObject({ status: 'cancelled', finish_reason: 'length' });
+        const firstDocument = parseConversationDocument(first.conversation);
+        expect(firstDocument.turns.at(-1)?.status).toBe('interrupted');
+        expect(
+            first.accepted_output.turn.blocks.find(
+                (block) => block.type === 'tool_call' && block.call_id === 'call-complete',
+            ),
+        ).toMatchObject({ arguments: { type: 'json', value: { city: 'Tokyo' } } });
+        expect(
+            firstDocument.turns
+                .at(-1)
+                ?.blocks.find((block) => block.type === 'tool_call' && block.call_id === 'call-truncated'),
+        ).toMatchObject({ arguments: { type: 'invalid', raw: '{"city":' } });
+
+        const secondDriver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-after-cutoff-tool',
+            object: 'chat.completion',
+            created: 2,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'It is sunny.' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        await secondDriver.execute(
+            [
+                {
+                    role: PromptRole.tool,
+                    content: '{"condition":"sunny"}',
+                    tool_use_id: 'call-complete',
+                },
+            ],
+            {
+                model: 'test/model',
+                conversation: first.conversation,
+                tools,
+                conversation_runtime: {
+                    conversation_id: firstDocument.id,
+                    request_id: 'request:cutoff:continue',
+                    attempt_id: 'attempt:cutoff:continue',
+                    input_operation_id: 'input:cutoff:continue',
+                    response_operation_id: 'response:cutoff:continue',
+                    recorded_at: '2026-09-11T00:03:00.000Z',
+                    started_at: '2026-09-11T00:03:00.000Z',
+                },
+            },
+        );
+
+        expect(secondDriver.payloads[0]?.messages).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    role: 'assistant',
+                    tool_calls: expect.arrayContaining([
+                        expect.objectContaining({ id: 'call-complete' }),
+                        expect.objectContaining({ id: 'call-truncated' }),
+                    ]),
+                }),
+                { role: 'tool', tool_call_id: 'call-complete', content: '{"condition":"sunny"}' },
+            ]),
+        );
+
+        const invalidResultDriver = new TestOpenAIChatCompletionsDriver();
+        await expect(
+            invalidResultDriver.execute(
+                [
+                    {
+                        role: PromptRole.tool,
+                        content: 'must not execute',
+                        tool_use_id: 'call-truncated',
+                    },
+                ],
+                {
+                    model: 'test/model',
+                    conversation: first.conversation,
+                    tools,
+                    conversation_runtime: {
+                        conversation_id: firstDocument.id,
+                        request_id: 'request:cutoff:invalid-result',
+                        attempt_id: 'attempt:cutoff:invalid-result',
+                        input_operation_id: 'input:cutoff:invalid-result',
+                        response_operation_id: 'response:cutoff:invalid-result',
+                        recorded_at: '2026-09-11T00:04:00.000Z',
+                    },
+                },
+            ),
+        ).rejects.toThrow('Conversation document validation failed');
+        expect(invalidResultDriver.payloads).toHaveLength(0);
+    });
+
+    it.each([
+        ['omitted cache details', undefined],
+        ['reported zero cache counts', { cached_tokens: 0, cache_write_tokens: 0 }],
+    ] as const)('preserves %s across accepted-response recovery', async (_label, promptTokensDetails) => {
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-usage-parity',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'done' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+            usage: {
+                prompt_tokens: 10,
+                completion_tokens: 2,
+                total_tokens: 12,
+                ...(promptTokensDetails === undefined ? {} : { prompt_tokens_details: promptTokensDetails }),
+            },
+        });
+        const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+        const first = await driver.execute(
+            segments,
+            canonicalOptions('attempt:usage:first', '2026-09-11T01:00:00.000Z'),
+        );
+        const retried = await driver.execute(
+            segments,
+            canonicalOptions(
+                'attempt:usage:retry',
+                '2026-09-11T01:01:00.000Z',
+                parseConversationDocument(first.conversation),
+            ),
+        );
+
+        expect(first.token_usage).toMatchObject({ prompt: 10, prompt_new: 10, result: 2, total: 12 });
+        expect(retried.token_usage).toEqual(first.token_usage);
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it('persists streamed structured output as canonical JSON and recovers without another provider call', async () => {
+        const rawText = '{"answer":"Tokyo"}';
+        const driver = new TestOpenAIChatCompletionsDriver(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-stream-structured',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: rawText }, finish_reason: 'stop' }],
+                    }),
+                },
+            ]),
+        );
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions('attempt:stream', '2026-09-11T00:00:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        for await (const _chunk of stream) {
+            // Consume the public stream so core finalization and schema validation run.
+        }
+        expect(stream.completion?.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(latestGeneratedJson(stream.completion?.conversation)).toEqual({ answer: 'Tokyo' });
+        expect(legacyConversation(stream.completion?.conversation).messages.at(-1)?.content).toBe(rawText);
+
+        const recovered = await driver.stream([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions(
+                'attempt:stream:retry',
+                '2026-09-11T00:01:00.000Z',
+                JSON.parse(JSON.stringify(stream.completion?.conversation)),
+            ),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+        for await (const _chunk of recovered) {
+            // Consume the recovered public stream so finalization runs.
+        }
+        expect(recovered.completion?.result).toEqual(stream.completion?.result);
+        expect(recovered.completion?.conversation).toEqual(stream.completion?.conversation);
+        expect(isCanonicalAcceptedRecovery(recovered.completion)).toBe(true);
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it('keeps invalid structured output as canonical source and reports the full-driver validation error', async () => {
+        const rawText = '{"answer":{}}';
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-invalid-structured',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: rawText },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const segments = [{ role: PromptRole.user, content: 'Return the city.' }];
+        const completion = await driver.execute(segments, {
+            ...canonicalOptions('attempt:invalid', '2026-09-11T00:00:00.000Z'),
+            result_schema: resultSchema,
+        });
+
+        expect(completion.error).toMatchObject({ code: 'validation_error' });
+        expect(latestGeneratedText(completion.conversation)).toBe(rawText);
+        const recovered = await driver.execute(segments, {
+            ...canonicalOptions(
+                'attempt:invalid:retry',
+                '2026-09-11T00:01:00.000Z',
+                parseConversationDocument(completion.conversation),
+            ),
+            result_schema: resultSchema,
+        });
+        expect(recovered.error).toEqual(completion.error);
+        expect(recovered.conversation).toEqual(completion.conversation);
+        expect(driver.payloads).toHaveLength(1);
+    });
+});
+
+describe('protected Chat replay origin at the provider boundary', () => {
+    const recordedAt = '2026-09-11T00:00:00.000Z';
+    const segments = [{ role: PromptRole.user, content: 'continue' }];
+    const history: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: [{ role: 'assistant', content: 'answer', reasoning_content: 'protected reasoning' }],
+    };
+    const response: OpenAIChatCompletionsResponse = {
+        id: 'response:origin',
+        object: 'chat.completion',
+        created: 1,
+        model: 'provider-resolved-version',
+        choices: [
+            {
+                index: 0,
+                message: { role: 'assistant', content: 'answer', reasoning_content: 'new protected reasoning' },
+                finish_reason: 'stop',
+                logprobs: null,
+            },
+        ],
+    };
+
+    it('rejects unknown and changed origins before sending a provider request, retaining exact known origins', async () => {
+        const driver = new TestOpenAIChatCompletionsDriver(response);
+        await expect(
+            driver.execute(segments, { ...canonicalOptions('unknown', recordedAt), conversation: history }),
+        ).rejects.toThrow(/unknown recorded model origin/);
+        expect(driver.payloads).toHaveLength(0);
+        const imported = await importOpenAIChatCompletionsHistory(history, {
+            conversation_id: 'conversation:structured-output',
+            recorded_at: recordedAt,
+            provider: driver.provider,
+            model: 'test/model',
+        });
+        await expect(
+            driver.execute(segments, {
+                ...canonicalOptions('changed', recordedAt, imported.document),
+                model: 'different/model',
+            }),
+        ).rejects.toThrow(/compatibility scope/);
+        expect(driver.payloads).toHaveLength(0);
+        const result = await driver.execute(segments, canonicalOptions('known', recordedAt, imported.document));
+        expect(driver.payloads).toHaveLength(1);
+        expect(driver.payloads[0].messages[0]).toMatchObject({ reasoning_content: 'protected reasoning' });
+        const document = parseConversationDocument(result.conversation);
+        const generation = Object.values(document.generations).find((entry) => entry.record_source === 'executed');
+        expect(generation).toMatchObject({
+            requested_model: 'test/model',
+            resolved_model: 'provider-resolved-version',
+        });
+        const generated = document.turns.find((turn) => turn.kind === 'agent' && turn.provenance.type === 'generated');
+        const replay = generated?.blocks.find((block) => block.type === 'native_replay');
+        expect(replay).toMatchObject({ compatibility_scope: { model: 'test/model' } });
+        // Existing generated archives can establish origin from their exact executed receipt.
+        if (replay?.type !== 'native_replay') throw new Error('Expected generated protected replay');
+        delete replay.compatibility_scope.model;
+        expect(() =>
+            compileOpenAIChatCompletionsConversation(document, { provider: driver.provider, model: 'test/model' }),
+        ).not.toThrow();
+        replay.dependencies.request_ids = [];
+        expect(() =>
+            compileOpenAIChatCompletionsConversation(document, { provider: driver.provider, model: 'test/model' }),
+        ).toThrow(/unknown recorded model origin/);
     });
 });

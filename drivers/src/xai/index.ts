@@ -1,5 +1,6 @@
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
     type Completion,
     type CompletionResult,
     type ExecutionOptions,
@@ -11,13 +12,20 @@ import {
     type PromptOptions,
     type PromptSegment,
     Providers,
-    type XAIGrokImageOptions,
 } from '@llumiverse/core';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
 import type { xAiDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
+import {
+    executeXAIImageCanonical,
+    validateXAICanonicalImageInput,
+    type XAIImageRequest,
+    type XAIImageResponse,
+    xAIImageEndpoint,
+    xAIImageRequest,
+} from './image-canonical.js';
 
 export type { xAiDriverOptions } from '../driver-options.js';
 
@@ -28,6 +36,7 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
     readonly provider = Providers.xai;
     xai_service: FetchClient;
     DEFAULT_ENDPOINT = 'https://api.x.ai/v1';
+    private readonly imageEndpoint: string;
 
     constructor(opts: xAiDriverOptions) {
         super(opts);
@@ -35,18 +44,21 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
         if (!opts.apiKey) {
             throw new Error('apiKey is required');
         }
+        const endpoint = opts.endpoint ?? this.DEFAULT_ENDPOINT;
+        let endpointEnd = endpoint.length;
+        while (endpointEnd > 0 && endpoint[endpointEnd - 1] === '/') endpointEnd--;
+        this.imageEndpoint = endpoint.slice(0, endpointEnd);
 
         this.service = new OpenAI({
             apiKey: opts.apiKey,
-            baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
+            baseURL: this.imageEndpoint,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
             timeout: this.getDriverRequestTimeoutMs(),
         });
-        this.xai_service = new FetchClient(
-            opts.endpoint ?? this.DEFAULT_ENDPOINT,
-            this.getDriverFetch(),
-        ).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
+        this.xai_service = new FetchClient(this.imageEndpoint, this.getDriverFetch()).withAuthCallback(
+            async () => `Bearer ${opts.apiKey}`,
+        );
         //this.formatPrompt = this._formatPrompt; //TODO: fix xai prompt formatting
     }
 
@@ -76,30 +88,54 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
         return isXAIGrokImageModel(model);
     }
 
-    async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
+        validateXAICanonicalImageInput(segments, options);
+    }
+
+    private invokeImage(
+        request: XAIImageRequest,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<XAIImageResponse> {
+        return this.xai_service.post<XAIImageResponse>(xAIImageEndpoint(request), {
+            payload: request,
+            ...(signal === undefined ? {} : { signal }),
+            ...(options.httpTimeout === undefined
+                ? {}
+                : { timeoutMs: this.getDriverRequestTimeoutMs(options.httpTimeout) }),
+        });
+    }
+
+    override requestCanonicalImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeXAIImageCanonical({
+            endpoint: this.imageEndpoint,
+            fetch_image: this.getDriverFetch(),
+            invoke: (request, invokeSignal) => this.invokeImage(request, options, invokeSignal),
+            options,
+            prompt,
+            provider: this.provider,
+            signal,
+        });
+    }
+
+    async requestImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
-
-        const { promptText, images } = extractImageRequest(prompt);
-        const modelOptions = options.model_options as XAIGrokImageOptions | undefined;
-        const payload: XAIImageRequest = {
-            model: options.model,
-            prompt: promptText,
-            ...(modelOptions?.aspect_ratio && { aspect_ratio: modelOptions.aspect_ratio }),
-            ...(modelOptions?.resolution && { resolution: modelOptions.resolution }),
-            ...(modelOptions?.quality && { quality: modelOptions.quality }),
-            ...(modelOptions?.response_format && { response_format: modelOptions.response_format }),
-            ...(modelOptions?.n && { n: modelOptions.n }),
-        };
-
-        if (images.length === 1) {
-            payload.image = images[0];
-        } else if (images.length > 1) {
-            payload.images = images;
-        }
+        const payload = xAIImageRequest(prompt, options);
 
         try {
-            const endpoint = images.length > 0 ? '/images/edits' : '/images/generations';
-            const response = await this.xai_service.post<XAIImageResponse>(endpoint, { payload });
+            const response = await this.invokeImage(payload, options, signal);
             const results: CompletionResult[] = [];
 
             for (const image of response.data ?? []) {
@@ -210,34 +246,6 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
     }
 }
 
-function extractImageRequest(prompt: ResponseInputItem[]): { promptText: string; images: XAIImageInput[] } {
-    const text: string[] = [];
-    const images: XAIImageInput[] = [];
-
-    for (const item of prompt) {
-        if (!('content' in item)) continue;
-        if (typeof item.content === 'string') {
-            text.push(item.content);
-            continue;
-        }
-        if (!Array.isArray(item.content)) continue;
-
-        for (const part of item.content) {
-            if (part.type === 'input_text') {
-                text.push(part.text);
-            } else if (part.type === 'input_image') {
-                if (part.image_url) {
-                    images.push({ type: 'image_url', url: part.image_url });
-                } else if (part.file_id) {
-                    images.push({ file_id: part.file_id });
-                }
-            }
-        }
-    }
-
-    return { promptText: text.join('\n').trim(), images };
-}
-
 interface xAILanguageModelResponse {
     models: xAILanguageModel[];
 }
@@ -257,29 +265,5 @@ interface xAIImageModel {
     version: string;
 }
 
-type XAIImageInput = { file_id: string } | { type: 'image_url'; url: string };
-
-interface XAIImageRequest {
-    aspect_ratio?: XAIGrokImageOptions['aspect_ratio'];
-    image?: XAIImageInput;
-    images?: XAIImageInput[];
-    model: string;
-    n?: number;
-    prompt: string;
-    quality?: XAIGrokImageOptions['quality'];
-    resolution?: XAIGrokImageOptions['resolution'];
-    response_format?: XAIGrokImageOptions['response_format'];
-}
-
 /** xAI reports what a request cost in ticks of 10^-10 USD. */
 const XAI_USD_TICKS = 1e10;
-
-interface XAIImageResponse {
-    data?: Array<{
-        b64_json?: string;
-        mime_type?: string;
-        url?: string;
-    }>;
-    /** Images are billed per image, so xAI reports the cost rather than token counts. */
-    usage?: { cost_in_usd_ticks?: number };
-}

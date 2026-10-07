@@ -16,6 +16,9 @@ type Internals = {
     };
 };
 
+const pngImage = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]).toString('base64');
+const webpImage = Buffer.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x01]).toString('base64');
+
 function setup(apiVersion?: string, sourceModel?: string) {
     const getToken = vi.fn<TokenCredential['getToken']>(async () => ({
         token: 'test-token',
@@ -67,9 +70,10 @@ describe('Foundry OpenAI v1 transport', () => {
             capabilities: { chat_completion: 'false' },
         });
         vi.spyOn(internals.getOpenAIProtocolDriver(), 'getDriverFetch').mockReturnValue(fetch);
+        const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==';
         respond.mockImplementation(
             () =>
-                new Response(JSON.stringify({ data: [{ b64_json: 'YQ==' }] }), {
+                new Response(JSON.stringify({ created: 1, data: [{ b64_json: png }] }), {
                     headers: { 'content-type': 'application/json' },
                 }),
         );
@@ -79,7 +83,7 @@ describe('Foundry OpenAI v1 transport', () => {
             });
             expect(requests[0].url).toBe('https://foundry.example.test/openai/v1/images/generations');
             expect(requests[0].body.model).toBe('gpt-replacement');
-            expect(result.result).toEqual([{ type: 'image', value: 'data:image/png;base64,YQ==' }]);
+            expect(result.result).toEqual([{ type: 'image', value: `data:image/png;base64,${png}` }]);
             expect(metadata).toHaveBeenCalledTimes(source ? 0 : 1);
         } finally {
             driver.destroy();
@@ -130,7 +134,11 @@ describe('Foundry OpenAI v1 transport', () => {
         respond.mockImplementation(
             ({ input }) =>
                 new Response(
-                    JSON.stringify(input ? { data: [{ index: 0, embedding: [1] }] } : { data: [{ b64_json: 'YQ==' }] }),
+                    JSON.stringify(
+                        input
+                            ? { data: [{ index: 0, embedding: [1] }] }
+                            : { created: 1, data: [{ b64_json: pngImage }] },
+                    ),
                     {
                         headers: { 'content-type': 'application/json' },
                     },
@@ -274,9 +282,10 @@ describe('Foundry OpenAI v1 transport', () => {
             const { driver, internals, fetch, respond, requests } = setup(apiVersion);
             vi.spyOn(internals.getOpenAIProtocolDriver(), 'getDriverFetch').mockReturnValue(fetch);
             respond.mockImplementation(() => {
-                return new Response(JSON.stringify({ data: [{ b64_json: 'YQ==' }], output_format: 'webp' }), {
-                    headers: { 'content-type': 'application/json' },
-                });
+                return new Response(
+                    JSON.stringify({ created: 1, data: [{ b64_json: webpImage }], output_format: 'webp' }),
+                    { headers: { 'content-type': 'application/json' } },
+                );
             });
             try {
                 const result = await driver.execute([{ role: PromptRole.user, content: 'A garden' }], {
@@ -295,7 +304,7 @@ describe('Foundry OpenAI v1 transport', () => {
                 );
                 expect(requests[0].body).toMatchObject({ model: 'garden', size: '2048x1024', quality: 'max' });
                 expect(requests[0].headers.get('authorization')).toBe('Bearer test-token');
-                expect(result.result).toEqual([{ type: 'image', value: 'data:image/webp;base64,YQ==' }]);
+                expect(result.result).toEqual([{ type: 'image', value: `data:image/webp;base64,${webpImage}` }]);
             } finally {
                 driver.destroy();
             }

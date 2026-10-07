@@ -1,5 +1,8 @@
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -14,6 +17,7 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import type { WatsonxDriverOptions } from '../driver-options.js';
+import { executeWatsonxCanonical, streamWatsonxCanonicalEvents } from './canonical.js';
 import type {
     GenerateEmbeddingPayload,
     GenerateEmbeddingResponse,
@@ -46,6 +50,27 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         this.fetchClient = new FetchClient(this.endpoint_url, this.getDriverFetch()).withAuthCallback(async () =>
             this.getAuthToken().then((token) => `Bearer ${token}`),
         );
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    async requestCanonicalTextCompletion(
+        prompt: string,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeWatsonxCanonical({ driver: this, prompt, options, signal });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: string,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return streamWatsonxCanonicalEvents({ driver: this, prompt, options, signal, open });
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {

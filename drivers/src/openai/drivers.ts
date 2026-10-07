@@ -8,3 +8,4 @@ export { AzureOpenAIDriver, type AzureOpenAIDriverOptions } from './azure_openai
 export { OpenAIDriver, type OpenAIDriverOptions } from './openai.js';
 export * from './openai_chat_completions.js';
 export { OpenAIResponsesDriver, type OpenAIResponsesDriverOptions } from './openai_responses.js';
+export * from './openai-chat-model-switch.js';

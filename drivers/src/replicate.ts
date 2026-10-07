@@ -1,13 +1,17 @@
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type DataSource,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
     type ModelSearchPayload,
+    type PromptSegment,
     type TextFallbackOptions,
     type TrainingJob,
     TrainingJobStatus,
@@ -18,6 +22,11 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { EventSource } from 'eventsource';
 import Replicate, { type Model, type Prediction, type Training } from 'replicate';
 import type { ReplicateDriverOptions } from './driver-options.js';
+import {
+    executeReplicateCanonical,
+    streamReplicateCanonicalEvents,
+    validateReplicateCanonicalInput,
+} from './replicate-canonical.js';
 
 export type { ReplicateDriverOptions } from './driver-options.js';
 
@@ -65,7 +74,7 @@ function waitForPollingInterval(signal?: AbortSignal): Promise<void> {
     });
 }
 
-export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
+export class ReplicateDriver extends AbstractDriver<ReplicateDriverOptions, string> {
     static PROVIDER = 'replicate';
     provider = ReplicateDriver.PROVIDER;
     service: Replicate;
@@ -91,7 +100,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         });
     }
 
-    private async cancelPrediction(prediction: Prediction): Promise<void> {
+    async cancelPrediction(prediction: Prediction): Promise<void> {
         if (!prediction.id) return;
         try {
             await this.service.predictions.cancel(prediction.id);
@@ -100,11 +109,55 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         }
     }
 
+    async fetchGeneratedAsset(url: URL, signal?: AbortSignal): Promise<Response> {
+        const hostname = url.hostname.toLowerCase();
+        if (
+            url.protocol !== 'https:' ||
+            (hostname !== 'replicate.delivery' && !hostname.endsWith('.replicate.delivery'))
+        ) {
+            throw new Error('Replicate generated asset URL is not a trusted delivery host');
+        }
+        return this.getDriverFetch()(url, {
+            headers: { Authorization: `Bearer ${this.options.apiKey}` },
+            redirect: 'error',
+            ...(signal === undefined ? {} : { signal }),
+        });
+    }
+
     extractDataFromResponse(response: Prediction): Completion {
         const text = response.output.join('');
         return {
             result: text,
         };
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        validateReplicateCanonicalInput(segments, options);
+        signal?.throwIfAborted();
+        const prompt = await this.createPrompt(segments, options);
+        signal?.throwIfAborted();
+        return executeReplicateCanonical({ driver: this, segments, prompt, options, signal });
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        validateReplicateCanonicalInput(segments, options);
+        signal?.throwIfAborted();
+        const prompt = await this.createPrompt(segments, options);
+        signal?.throwIfAborted();
+        return streamReplicateCanonicalEvents({ driver: this, segments, prompt, options, signal, open });
     }
 
     async requestTextCompletionStream(

@@ -1,266 +1,80 @@
-# NPM Package Publishing Scripts
+# NPM package publication
 
-The file `publish-all-packages.sh` contains logic for publishing llumiverse packages to NPM with different versioning strategies.
+Run `.github/bin/publish-all-packages.sh` from the Llumiverse repository root. It publishes this
+coordinated dependency set in order:
 
-## Overview
+1. `@llumiverse/conversation`
+2. `@llumiverse/common`
+3. `@llumiverse/core`
+4. `@llumiverse/drivers`
 
-The `publish-all-packages.sh` script handles publishing the following packages in dependency order:
-- `@llumiverse/common`
-- `@llumiverse/core`
-- `@llumiverse/drivers`
+The conversation package is currently private and experimental. Publication of this cohort is
+blocked until its adoption and release gate is complete. The script checks this before modifying
+versions, building, committing, or publishing. It also rejects a missing workspace dependency or an
+incorrect publication order. Do not remove the private flag just to make a release command pass.
 
-## Usage
+## Workflow
 
-```bash
-./publish-all-packages.sh \
-    --ref <ref> \
-    --release-type <type> \
-    --bump-type <type> \
-    --dry-run <value>
-```
-
-### Parameters
-
-- `--ref` (required): Git reference - `main` for dev builds, a `release/X.Y` branch (e.g. `release/1.4`) for releases. Publishing releases outside of a `release/*` branch is forbidden.
-- `--release-type` (required): The type of the version, either "release" or "snapshot". A "release" means this is a stable version. A "snapshot" means this is a development version.
-  - "release" creates a stable version respecting semantic versioning, such as `1.0.0`. Release can only be performed from a `release/*` branch (e.g. `release/1.4`).
-  - "snapshot" creates a new development version in format `{base}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200Z`. Note that the time part contains 'Z', which means that the time is in UTC; it also allows NPM to use leading zeros, as it turns the segment into alphanumeric.
-- `--bump-type` (required): The strategy for changing the version (`minor`, `patch`, `keep`)
-  - `minor` increases the minor version in the package version
-  - `patch` increases the patch version in the package version
-  - `keep` keeps using the current base version.
-- `--dry-run` (optional): Flag to enable dry run mode. The value can be `true`, `false` or no value (which means `true`). If not specified, it means that it is not a dry-run.
-
-### Examples
+Use `.github/workflows/publish-npm.yaml` on the intended source branch. Run first with
+`dry_run=true`, inspect its results, then use `dry_run=false` for the authorized publication.
 
 ```bash
-# Dry run for main branch
-./publish-all-packages.sh \
+./.github/bin/publish-all-packages.sh \
     --ref main \
     --release-type snapshot \
     --bump-type keep \
-    --dry-run true
-
-# Publish snapshot without bump from main
-# (ex: 1.0.0-dev.20260203.000000Z -> 1.0.0-dev.20260204.000000Z)
-./publish-all-packages.sh \
-    --ref release/1.4 \
-    --release-type release \
-    --bump-type minor
-
-# Publish release with 'patch' bump from a release branch
-# (ex: 0.24.0-dev.20260203.164053Z -> 0.24.1)
-# (ex: 0.24.0 -> 0.24.1)
-./publish-all-packages.sh \
-    --ref release/1.4 \
-    --release-type release \
-    --bump-type patch
-
-# Publish release with minor bump from a release branch
-# (ex: 0.24.0-dev.20260203.164053Z -> 0.25.0)
-# (ex: 0.24.0 -> 0.25.0)
-./publish-all-packages.sh \
-    --ref release/1.4 \
-    --release-type release \
-    --bump-type minor
+    --dry-run
 ```
 
-### NPM Tags
+| Argument | Values |
+| --- | --- |
+| `--ref` | Source branch/ref; required. |
+| `--release-type` | `snapshot` or `release`; required. Releases require a `release/*` branch. |
+| `--bump-type` | `keep`, `patch`, or `minor`; required. |
+| `--dry-run` | Optional `true`/`false`; omitting its value means `true`. Omitting the flag means a real publication. The GitHub workflow defaults to `true`. |
 
-* `dev` tag is used when using the changing a snapshot version on main.
-* `latest` tag is used when changing a release version (minor, patch)
+Both modes update local package versions, build all packages, and pack and validate all tarballs.
+Validation checks every package version, resolved dependency range, and declared JavaScript/type
+entry point. Missing artifacts or mismatched dependencies stop the script before a Git push or npm
+publication. ESM output uses `lib/`; no obsolete `lib/esm` or `lib/cjs` directory is required.
 
-## Scenarios
+A dry run then calls `pnpm publish --dry-run` without committing or pushing. **It changes local
+package versions and build outputs**, so use a disposable clean checkout. A real run commits and
+pushes the version changes before publishing each package. The script never removes `private`.
 
-### Scenario 1: Publishing from `main` branch
+## Versions and channels
 
-**Purpose**: Publish snapshot versions for testing
+The root version determines the coordinated package version. `patch`/`minor` updates that base;
+`snapshot` adds `-dev.YYYYMMDD.HHMMSSZ`. `workspace:*` dependencies are resolved by pnpm to the
+corresponding exact package version when packed.
 
-**Steps**:
-1. Updates all package versions to dev format
-   - Version format: `{base}-dev.{date}.{time}` (e.g., `0.23.0-dev.20251218.131500`)
-2. Publishes all packages in dependency order
-   - NPM tag: `dev`
-3. Commit and push changes back to the branch (only if dry-run is false), but do not create Git tag
+| Source and release type | npm tag |
+| --- | --- |
+| `main`, snapshot | `dev` |
+| `release/X.Y`, snapshot | `dev-X.Y` |
+| Other ref, snapshot | `snapshot-<source SHA prefix>` |
+| `release/*`, release | `latest` |
 
-**Result**:
-- All packages published with `dev` tag
-- Consumers can install with: `npm install @llumiverse/core@dev`
-
-**Example**:
+For a release-line dry run, for example:
 
 ```bash
-# ==========
-# Example 1: we had a release version
-# -----
-# params: ref=main, release_type=snapshot, bump_type=minor
-# ==========
-#
-# Before (package.json):
-# @llumiverse/common: 1.0.0
-# @llumiverse/core: 1.0.0
-# @llumiverse/drivers: 1.0.0
-
-# After publishing (on npm):
-# @llumiverse/common@1.1.0-dev.20251218.131500Z (tag: dev)
-# @llumiverse/core@1.1.0-dev.20251218.131500Z (tag: dev)
-# @llumiverse/drivers@1.1.0-dev.20251218.131500Z (tag: dev)
-
-
-# ==========
-# Example 2: we had a snapshot version
-# -----
-# params: ref=main, release_type=snapshot, bump_type=keep
-# ==========
-#
-# Before (package.json):
-# @llumiverse/common: 1.1.0-dev.20251218.131500Z
-# @llumiverse/core: 1.1.0-dev.20251218.131500Z
-# @llumiverse/drivers: 1.1.0-dev.20251218.131500Z
-
-# After publishing (on npm):
-# @llumiverse/common@1.1.0-dev.20260204.000000Z (tag: dev)
-# @llumiverse/core@1.1.0-dev.20260204.000000Z (tag: dev)
-# @llumiverse/drivers@1.1.0-dev.20260204.000000Z (tag: dev)
+./.github/bin/publish-all-packages.sh \
+    --ref release/1.6 \
+    --release-type release \
+    --bump-type keep \
+    --dry-run
 ```
 
-### Scenario 2: Publishing official releases
+The workflow requires Node 24, pnpm from `packageManager`, and npm 11.5.1 or later for trusted
+publication. Its real publication step needs the configured npm trust and Git push credentials.
 
-**Purpose**: Publish official releases from a `release/*` branch (e.g. `release/1.4`)
+## Local contract checks
 
-**Steps**:
-1. Bumps root `package.json` version using semantic versioning
-   - Bump type: specified by `bump-type` parameter (patch/minor)
-   - Verify that the release type is "release" and is not "snapshot".
-2. Updates all package versions to match
-   - Version format: standard semver (e.g., `0.23.0` → `0.23.1` for patch)
-3. Publishes all packages in dependency order
-   - NPM tag: `latest`
-4. **Commits and pushes** version changes back to the branch (only if dry-run is false)
-
-**Result**:
-- All packages published with `latest` tag
-- Consumers can install with: `npm install @llumiverse/core` (gets latest)
-- Git repository updated with new versions
-
-**Example (patch bump)**:
+These checks use isolated fixtures and do not publish or change package versions:
 
 ```bash
-# ==========
-# Example 1: we had a snapshot version
-# -----
-# params: ref=release/1.4, release_type=release, bump_type=keep
-# ==========
-
-# Before (package.json):
-# @llumiverse/common: 0.23.0-dev.20260204.000000Z
-
-# After publishing (on npm):
-# @llumiverse/common@0.23.0 (tag: latest)
-
-# Git commit:
-# "chore: release 0.23.0"
-
-
-# ==========
-# Example 2: we had a release version
-# -----
-# params: ref=release/1.4, release_type=release, bump_type=patch
-# ==========
-
-# Before (package.json):
-# @llumiverse/common: 0.23.0
-
-# After publishing (on npm):
-# @llumiverse/common@0.23.1 (tag: latest)
-
-# Git commit:
-# "chore: release 0.23.1"
+node --test .github/bin/verify-package-release.test.mjs
+bash .github/bin/lib-package-channel.test.sh
 ```
 
-### Scenario 3: Dry Run Mode
-
-**Purpose**: Test the publishing process without actually publishing
-
-**Steps**:
-- All version updates happen normally
-- `npm publish` commands run with `--dry-run` flag
-- Package tarballs are created and verified
-- No actual packages are published to NPM
-- No git commits are made
-
-**Usage**:
-
-```bash
-# Test publishing logic on main
-./publish-all-packages.sh --ref main --dry-run --release-type snapshot --bump-type keep
-
-# Test publishing logic on a release branch
-./publish-all-packages.sh --ref release/1.4 --dry-run --release-type release --bump-type minor
-./publish-all-packages.sh --ref release/1.4 --dry-run --release-type release --bump-type patch
-./publish-all-packages.sh --ref release/1.4 --dry-run --release-type snapshot --bump-type keep
-```
-
-**Result**:
-- Shows what would be published
-- Validates package versions and dependencies
-- Safe to run multiple times
-- No side effects
-
-## GitHub Actions Workflow
-
-The script is designed to be run from the `publish-npm.yaml` GitHub Actions workflow:
-
-```yaml
-- name: Publish all packages
-  run: |
-    ./.github/bin/publish-all-packages.sh \
-        --ref "${{ inputs.ref }}" \
-        --release-type "${{ inputs.release_type }}" \
-        --bump-type "${{ inputs.bump_type }}" \
-        --dry-run "${{ inputs.dry_run }}" 
-```
-
-### Workflow Inputs
-
-- `ref`: Text input for git reference (inferred from the Git event) → maps to `--ref`
-- "Release Type" (`release_type`): Dropdown for `release` and `snapshot`.
-- "Version Bump" (`bump_type`): Dropdown for `patch`, `minor`, or `keep` → maps to `--bump-type`
-- "Dry Run" (`dry_run`): Checkbox (default: true for safety) → maps to `--dry-run true` or `--dry-run false`
-
-## Key Features
-
-### Dependency Order
-
-Packages are published in dependency order to ensure dependencies are available:
-1. `@llumiverse/common` (no internal dependencies)
-2. `@llumiverse/core` (depends on common)
-3. `@llumiverse/drivers` (depends on common and core)
-
-### Version Resolution
-
-pnpm automatically resolves `workspace:*` dependencies during publish:
-- When `@llumiverse/drivers` references `"@llumiverse/core": "workspace:*"`
-- pnpm reads the actual version from `core/package.json`
-- The published package will contain the exact version
-
-### Verification (Dry Run)
-
-In dry run mode, the script:
-- Packs each package into a tarball
-- Extracts and verifies the version matches expected
-- Checks that internal dependencies point to correct versions
-- Reports any mismatches
-
-### Safety
-
-- Dry run enabled by default in GitHub Actions
-- All version updates happen before any publishing
-- Changes push to GitHub before publishing to prevent Git conflicts
-- Restrict publishing to `release/*` branches
-- Portable shell syntax (works on macOS and Linux)
-
-### Requirements
-
-- pnpm workspace setup
-- npm 11.5.1 or later
+The publication contract tests run in the repository lint workflow.

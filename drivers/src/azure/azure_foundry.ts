@@ -3,6 +3,12 @@ import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@az
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionInputOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionStream,
     type DriverCompletionStream,
@@ -18,6 +24,7 @@ import {
     type LlumiverseErrorContext,
     ModelType,
     normalizeEmbeddingsOptions,
+    type PromptOptions,
     type PromptSegment,
     Providers,
     resolveModelProfile,
@@ -27,6 +34,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
+import { validateOpenAICanonicalImageInput } from '../openai/image.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     normalizeOpenAIChatCompletionsResponse,
@@ -50,10 +58,14 @@ import {
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
+    executeCanonicalClaudeCompletion,
+    executeCanonicalClaudeContext,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    streamCanonicalClaudeContextEvents,
+    streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
@@ -114,6 +126,10 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         this.service = service;
     }
 
+    protected override resolveChatCompletionsRequestModel(options: ExecutionOptions): string {
+        return parseAzureFoundryModelId(options.model).deploymentName;
+    }
+
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
         _options: ExecutionOptions,
@@ -171,6 +187,15 @@ export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenA
 type FoundryExecutionPrompt = ResponseInputItem[] | ClaudePrompt;
 type FoundryProtocol = 'responses' | 'chat_completions' | 'messages';
 
+function withCanonicalAssetResolver(
+    options: CanonicalExecutionContextOptions,
+    hostCapabilities?: CanonicalHostCapabilities,
+): CanonicalExecutionContextOptions {
+    return hostCapabilities?.resolve_canonical_asset
+        ? { ...options, resolve_canonical_asset: hostCapabilities.resolve_canonical_asset }
+        : options;
+}
+
 function requireOpenAIPrompt(prompt: FoundryExecutionPrompt): ResponseInputItem[] {
     if (!Array.isArray(prompt)) throw new TypeError('Foundry OpenAI transport requires an OpenAI prompt');
     return prompt;
@@ -192,6 +217,14 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private anthropicClient?: AnthropicFoundry;
     private readonly endpoint: string;
     readonly provider = Providers.azure_foundry;
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected supportsCanonicalContextConversation(options: CanonicalExecutionContextOptions): boolean {
+        return !openAIAudioTask(options.model) && !openAIAudioTask(this.getSourceModel(options.model));
+    }
 
     override async execute(
         segments: PromptSegment[],
@@ -219,6 +252,47 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().stream(segments, options, signal);
         }
         return super.stream(segments, options, signal);
+    }
+
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().executeCanonical(segments, options, signal, hostCapabilities);
+        }
+        return super.executeCanonical(segments, options, signal, hostCapabilities);
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: CanonicalExecutionInputOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (options.conversation_runtime === undefined) {
+            throw new Error('Canonical typed streaming requires conversation_runtime');
+        }
+        signal?.throwIfAborted();
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().streamCanonicalEvents(
+                segments,
+                options,
+                signal,
+                open,
+                hostCapabilities,
+            );
+        }
+        return super.streamCanonicalEvents(segments, options, signal, open, hostCapabilities);
     }
 
     OPENAI_API_VERSION = '2025-01-01-preview';
@@ -316,7 +390,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
         return formatOpenAILikeMultimodalPrompt(segments, {
             ...options,
-            imageGeneration: this.isImageModel(options.model),
+            imageGeneration:
+                this.isImageModel(options.model) &&
+                (options as PromptOptions & { conversation_runtime?: unknown }).conversation_runtime === undefined,
             result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
         });
     }
@@ -407,12 +483,161 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return resolveModelProfile(this.getSourceModel(model), this.provider).family === 'image';
     }
 
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
+        validateOpenAICanonicalImageInput(segments, options);
+    }
+
     requestImageGeneration(
         prompt: FoundryExecutionPrompt,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
         return this.getOpenAIProtocolDriver().requestImageGeneration(requireOpenAIPrompt(prompt), options, signal);
+    }
+
+    override requestCanonicalImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return this.getOpenAIProtocolDriver().requestCanonicalImageGeneration(prompt, options, signal);
+    }
+
+    override async requestCanonicalTextCompletion(
+        prompt: FoundryExecutionPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const protocol = await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
+        if (protocol === 'messages') {
+            const { deploymentName } = parseAzureFoundryModelId(options.model);
+            return executeCanonicalClaudeCompletion(
+                this.getAnthropicClient(),
+                requireClaudePrompt(prompt),
+                options,
+                this.logger,
+                this.provider,
+                this.getDriverRequestOptions(options, signal),
+                { model: this.getSourceModel(options.model), request_model: deploymentName },
+                hostCapabilities,
+            );
+        }
+        if (protocol === 'responses') {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletion(
+                requireOpenAIPrompt(prompt),
+                options,
+                signal,
+                hostCapabilities,
+            );
+        }
+        return this.getInferenceProtocolDriver().requestCanonicalTextCompletion(
+            toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt)),
+            toAzureFoundryChatOptions(options),
+            signal,
+        );
+    }
+
+    override async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        const protocol = await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
+        const ownedOptions = withCanonicalAssetResolver(options, hostCapabilities);
+        if (protocol === 'messages') {
+            const { deploymentName } = parseAzureFoundryModelId(options.model);
+            return executeCanonicalClaudeContext(
+                this.getAnthropicClient(),
+                options,
+                this.logger,
+                this.provider,
+                this.getDriverRequestOptions(options, signal),
+                { model: this.getSourceModel(options.model), request_model: deploymentName },
+                hostCapabilities,
+            );
+        }
+        if (protocol === 'responses')
+            return this.getOpenAIProtocolDriver().requestCanonicalContextCompletion(options, signal, hostCapabilities);
+        return this.getInferenceProtocolDriver().requestCanonicalContextCompletion(ownedOptions, signal);
+    }
+
+    override async requestCanonicalTextCompletionEventStream(
+        prompt: FoundryExecutionPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const protocol = await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
+        if (protocol === 'messages') {
+            const { deploymentName } = parseAzureFoundryModelId(options.model);
+            return streamCanonicalClaudeEvents(
+                this.getAnthropicClient(),
+                requireClaudePrompt(prompt),
+                options,
+                open,
+                this.logger,
+                this.provider,
+                this.getDriverRequestOptions(options, signal),
+                { model: this.getSourceModel(options.model), request_model: deploymentName },
+                hostCapabilities,
+            );
+        }
+        if (protocol === 'responses') {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletionEventStream(
+                requireOpenAIPrompt(prompt),
+                options,
+                signal,
+                open,
+                hostCapabilities,
+            );
+        }
+        return this.getInferenceProtocolDriver().requestCanonicalTextCompletionEventStream(
+            toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt)),
+            toAzureFoundryChatOptions(options),
+            signal,
+            open,
+        );
+    }
+
+    override async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        const protocol = await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
+        const ownedOptions = withCanonicalAssetResolver(options, hostCapabilities);
+        if (protocol === 'messages') {
+            const { deploymentName } = parseAzureFoundryModelId(options.model);
+            return streamCanonicalClaudeContextEvents(
+                this.getAnthropicClient(),
+                options,
+                open,
+                this.logger,
+                this.provider,
+                this.getDriverRequestOptions(options, signal),
+                { model: this.getSourceModel(options.model), request_model: deploymentName },
+                hostCapabilities,
+            );
+        }
+        if (protocol === 'responses')
+            return this.getOpenAIProtocolDriver().requestCanonicalContextCompletionEventStream(
+                options,
+                signal,
+                open,
+                hostCapabilities,
+            );
+        return this.getInferenceProtocolDriver().requestCanonicalContextCompletionEventStream(
+            ownedOptions,
+            signal,
+            open,
+        );
     }
 
     async requestTextCompletion(
@@ -433,7 +658,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 this.logger,
                 this.provider,
                 this.getDriverRequestOptions(options, signal),
-                deploymentName,
+                { model: this.getSourceModel(options.model), request_model: deploymentName },
             );
         }
         if (protocol === 'responses') {
@@ -466,7 +691,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 this.logger,
                 this.provider,
                 this.getDriverRequestOptions(options, signal),
-                deploymentName,
+                { model: this.getSourceModel(options.model), request_model: deploymentName },
             );
         }
         if (protocol === 'responses') {
@@ -709,6 +934,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 }
 
 function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatCompletionsPrompt {
+    const toolResultStatuses = new Map<string, 'success' | 'error' | 'cancelled' | 'denied'>();
+    for (const item of items) {
+        if (item.type !== 'function_call_output') continue;
+        if (typeof item.call_id !== 'string' || item.call_id.length === 0) {
+            throw new Error('Cannot convert a function_call_output without call_id to Azure Foundry Chat Completions.');
+        }
+        const status = (item as typeof item & { _llumiverse_tool_result_status?: unknown })
+            ._llumiverse_tool_result_status;
+        if (status === 'success' || status === 'error' || status === 'cancelled' || status === 'denied') {
+            toolResultStatuses.set(item.call_id, status);
+        }
+    }
     const messages = convertResponseItemsToChatMessages(items).map((message) => {
         switch (message.role) {
             case 'assistant':
@@ -728,6 +965,9 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
                     role: message.role,
                     content: typeof message.content === 'string' ? message.content : '',
                     tool_call_id: message.tool_call_id,
+                    ...(message.tool_call_id === undefined || !toolResultStatuses.has(message.tool_call_id)
+                        ? {}
+                        : { tool_result_status: toolResultStatuses.get(message.tool_call_id) }),
                 };
             case 'user':
                 return {
@@ -755,7 +995,7 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
     return { _is_openai_chat_completions: true, messages };
 }
 
-function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: string): ExecutionOptions {
+function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName = options.model): ExecutionOptions {
     return {
         ...options,
         model: deploymentName,

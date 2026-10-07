@@ -1,7 +1,17 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { AnthropicClaudeOptions } from '@llumiverse/common';
+import type { ConversationDocument, ConversationModelSwitchProjection, ModelTarget } from '@llumiverse/conversation';
+import { parseConversationDocument } from '@llumiverse/conversation';
+import { ModelTargetSchema } from '@llumiverse/conversation/schemas';
 import {
     type AIModel,
+    type CanonicalExecutionContextOptions,
+    type CanonicalExecutionEventStream,
+    type CanonicalExecutionResponse,
+    type CanonicalHostCapabilities,
+    type CanonicalModelSwitchCountResult,
+    type CanonicalModelSwitchProjectionControls,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -21,18 +31,129 @@ import type { AnthropicDriverOptions } from '../driver-options.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
+    executeCanonicalClaudeCompletion,
+    executeCanonicalClaudeContext,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    streamCanonicalClaudeContextEvents,
+    streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
+import {
+    CLAUDE_MESSAGES_ADAPTER_VERSION,
+    CLAUDE_MESSAGES_PROTOCOL,
+} from '../shared/claude-messages-conversation-adapter.js';
+import { countAnthropicModelSwitchRequest } from './canonical-model-switch-count.js';
+import { countAnthropicIndexedRequest } from './indexed-count.js';
+import {
+    executeAnthropicIndexedRequest,
+    prepareAnthropicIndexedRequest,
+    streamAnthropicIndexedRequest,
+} from './indexed-request.js';
 
 export type { AnthropicDriverOptions } from '../driver-options.js';
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
     provider = Providers.anthropic;
     client: Anthropic;
+
+    /** @internal Native indexed compiler and transport retain the normal configured client. */
+    prepareIndexedTextRequest(...args: Parameters<typeof prepareAnthropicIndexedRequest>) {
+        return prepareAnthropicIndexedRequest(...args);
+    }
+
+    executeCommittedIndexedTextRequest(
+        ...args: [input: Parameters<typeof executeAnthropicIndexedRequest>[1], host?: CanonicalHostCapabilities]
+    ) {
+        return executeAnthropicIndexedRequest(
+            this.client,
+            args[0],
+            args[1],
+            this.getDriverRequestOptions(args[0].options, args[0].signal),
+        );
+    }
+
+    streamCommittedIndexedTextRequest(
+        input: Parameters<typeof streamAnthropicIndexedRequest>[1],
+        host?: CanonicalHostCapabilities,
+    ) {
+        return streamAnthropicIndexedRequest(
+            this.client,
+            input,
+            host,
+            this.getDriverRequestOptions(input.options, input.signal),
+        );
+    }
+
+    countIndexedNativeRequest(nativeRequest: unknown, target: ModelTarget, signal?: AbortSignal) {
+        return countAnthropicIndexedRequest(this.client, nativeRequest, target, signal);
+    }
+
+    override async resolveCanonicalModelSwitchTarget(
+        model: string,
+        options?: ModelTarget['options'],
+    ): Promise<ModelTarget | undefined> {
+        return ModelTargetSchema.parse({
+            provider: this.provider,
+            protocol: CLAUDE_MESSAGES_PROTOCOL,
+            model,
+            adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
+            ...(options === undefined ? {} : { options: structuredClone(options) }),
+        });
+    }
+
+    override async countCanonicalModelSwitchNativeRequest(
+        nativeRequest: unknown,
+        target: ModelTarget,
+        signal?: AbortSignal,
+    ): Promise<CanonicalModelSwitchCountResult> {
+        return countAnthropicModelSwitchRequest(this.client, nativeRequest, target, signal);
+    }
+
+    override async projectCanonicalModelSwitchRequest(
+        document: ConversationDocument,
+        target: ModelTarget,
+        operation: 'execute' | 'stream',
+        controls?: CanonicalModelSwitchProjectionControls,
+    ): Promise<ConversationModelSwitchProjection> {
+        if (controls && Object.values(controls).some((value) => value !== undefined)) {
+            return { status: 'unsupported', reason: 'Claude switch requires an explicit request-control policy' };
+        }
+        const ownedDocument = parseConversationDocument(document);
+        const ownedTarget = ModelTargetSchema.parse(structuredClone(target));
+        const ownedOperation = operation;
+        if (ownedTarget.provider !== this.provider) {
+            return { status: 'unsupported', reason: 'Model switch target provider differs from configured driver' };
+        }
+        const { compileClaudeModelSwitchRequest, ClaudeModelSwitchUnsupportedError } = await import(
+            '../shared/claude-model-switch.js'
+        );
+        try {
+            return {
+                status: 'compiled',
+                native_request: await compileClaudeModelSwitchRequest({
+                    document: ownedDocument,
+                    target: ownedTarget,
+                    operation: ownedOperation,
+                }),
+            };
+        } catch (error: unknown) {
+            if (error instanceof ClaudeModelSwitchUnsupportedError) {
+                return { status: 'unsupported', reason: error.message };
+            }
+            throw error;
+        }
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected supportsCanonicalContextConversation(_options: CanonicalExecutionContextOptions): boolean {
+        return true;
+    }
 
     constructor(opts: AnthropicDriverOptions) {
         super(opts);
@@ -71,6 +192,40 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         );
     }
 
+    async requestCanonicalTextCompletion(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeCanonicalClaudeCompletion(
+            this.client,
+            prompt,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
+        );
+    }
+
+    async requestCanonicalContextCompletion(
+        options: CanonicalExecutionContextOptions,
+        signal?: AbortSignal,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeCanonicalClaudeContext(
+            this.client,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
+        );
+    }
+
     async requestTextCompletionStream(
         prompt: ClaudePrompt,
         options: ExecutionOptions,
@@ -87,6 +242,44 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger,
             this.provider,
             this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        return streamCanonicalClaudeEvents(
+            this.client,
+            prompt,
+            options,
+            open,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
+        );
+    }
+
+    async requestCanonicalContextCompletionEventStream(
+        options: CanonicalExecutionContextOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+        hostCapabilities?: CanonicalHostCapabilities,
+    ): Promise<CanonicalExecutionEventStream> {
+        return streamCanonicalClaudeContextEvents(
+            this.client,
+            options,
+            open,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+            undefined,
+            hostCapabilities,
         );
     }
 
