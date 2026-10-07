@@ -58,6 +58,26 @@ describe('AbstractDriver Error Formatting', () => {
         driver = new TestDriver({});
     });
 
+    it.each(['stop', 'length', undefined])('logs the finish reason for validation failures: %s', (finish_reason) => {
+        const log = vi.spyOn(driver.logger, 'error').mockImplementation(() => {});
+        for (const [value, code] of [
+            ['not JSON', 'json_error'],
+            ['{}', 'validation_error'],
+        ]) {
+            const completion: Completion = { result: [{ type: 'text', value }], finish_reason };
+            driver.validateResult(completion, {
+                model: 'test-model',
+                result_schema: { type: 'object', required: ['a'] },
+                jsonRepair: false,
+            });
+            expect(completion.error?.code).toBe(code);
+            expect(log).toHaveBeenLastCalledWith(
+                expect.objectContaining({ finish_reason, err: expect.any(Error) }),
+                expect.any(String),
+            );
+        }
+    });
+
     it('preserves raw text and reports an error when repair is disabled', () => {
         const raw = [{ type: 'text' as const, value: '{"a":1,}' }];
         const completion: Completion = { result: raw, finish_reason: 'stop' };

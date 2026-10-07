@@ -320,7 +320,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 const rawCode = getObjectProperty(error, 'code');
                 const code = rawCode === 'json_error' || rawCode === 'validation_error' ? rawCode : undefined;
                 const errorMessage = `[${this.provider}] [${options.model}] ${code ? `[${code}] ` : ''}Result validation error: ${validationError.message}`;
-                this.logger.error({ err: error, data: result.result }, errorMessage);
+                this.logger.error(
+                    { err: error, data: result.result, finish_reason: result.finish_reason },
+                    errorMessage,
+                );
                 result.error = {
                     code: code || 'validation_error',
                     message: validationError.message,
