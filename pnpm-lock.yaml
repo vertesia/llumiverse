@@ -168,8 +168,8 @@ catalogs:
       specifier: 7.0.2
       version: 7.0.2
     vitest:
-      specifier: 5.0.2
-      version: 5.0.2
+      specifier: 5.0.3
+      version: 5.0.3
     zod:
       specifier: 4.6.5
       version: 4.6.5
@@ -201,7 +201,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   common:
     dependencies:
@@ -220,7 +220,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   core:
     dependencies:
@@ -254,7 +254,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   drivers:
     dependencies:
@@ -319,7 +319,7 @@ importers:
         specifier: ^2.7.0
         version: 2.7.0(@opentelemetry/api@1.9.1)
       '@openrouter/sdk':
-        specifier: ^1.4.7
+        specifier: ^1.4.10
         version: 1.4.21
       '@vertesia/api-fetch-client':
         specifier: ^1.5.0
@@ -360,7 +360,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   examples:
     dependencies:
@@ -1290,8 +1290,8 @@ packages:
   '@vertesia/api-fetch-client@1.5.0':
     resolution: {integrity: sha512-JYAJiO5pl2DwSxp2ckKp8lQqRAAmbKFb5Ruji42i+ivb87MXqlxqOosqjl2LSRcTpv7i1DMDdurhoDBfEzAzew==}
 
-  '@vitest/mocker@5.0.2':
-    resolution: {integrity: sha512-Z5FS00Q1SJHkB35xATsmWGdQ5WA1/0MV3CDjqyv7GavHv1OfOj145MNfHOlHk7QLes21dKFDHr8EO2zvL+9WGA==}
+  '@vitest/mocker@5.0.3':
+    resolution: {integrity: sha512-T8sWAIbkSyAjkwTcaEc3Iu0o9A27X1/kdXrizhZkGuSKScRQtRzclfAMpOTcGdXCsqxeWlpGy3XjqaW8CpLORg==}
     peerDependencies:
       msw: ^2.4.9
       vite: ^8.0.16
@@ -1301,8 +1301,8 @@ packages:
       vite:
         optional: true
 
-  '@vitest/spy@5.0.2':
-    resolution: {integrity: sha512-Ijc7T1nT9efNb5LxvjaBrEqw3f/QwUv5EE0nKqZxgqsaV/FxAAZ8baGylA8X/Z2oS4Lp+K74Jr6dTJsDKxJDeg==}
+  '@vitest/spy@5.0.3':
+    resolution: {integrity: sha512-XhFysQTB8AZ+P4gMi+Lpo99vg2AZi0qKpaB9yXQl37+CaMEAPO3iH/wGVnSyL5MPERiLezpqTVtrR6UZH5GCXg==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -2005,20 +2005,20 @@ packages:
       yaml:
         optional: true
 
-  vitest@5.0.2:
-    resolution: {integrity: sha512-7MQrx9pDv5aHiUcovIb/70Ys3tgtkUVgCtledvKdCmEO+/1Dicq5ZqoSxOW034m03oqC+oHOKui2dM6qtMLoJg==}
+  vitest@5.0.3:
+    resolution: {integrity: sha512-xMw97S3rjdtj5dkVat7jCsqWBpvchs3RlpQctUqwJD0KkERk40vz2fJ77lDwW/Vzh/pk18eItYAzkodhSes3jQ==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^24.19.0
-      '@vitest/browser-playwright': 5.0.2
-      '@vitest/browser-preview': 5.0.2
+      '@vitest/browser-playwright': 5.0.3
+      '@vitest/browser-preview': 5.0.3
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
-      '@vitest/coverage-istanbul': 5.0.2
-      '@vitest/coverage-v8': 5.0.2
-      '@vitest/ui': 5.0.2
+      '@vitest/coverage-istanbul': 5.0.3
+      '@vitest/coverage-v8': 5.0.3
+      '@vitest/ui': 5.0.3
       happy-dom: '*'
       jsdom: '*'
       vite: ^8.0.16
@@ -2050,8 +2050,8 @@ packages:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
 
-  why-is-node-running@3.2.2:
-    resolution: {integrity: sha512-NKUzAelcoCXhXL4dJzKIwXeR8iEVqsA0Lq6Vnd0UXvgaKbzVo4ZTHROF2Jidrv+SgxOQ03fMinnNhzZATxOD3A==}
+  why-is-node-running@3.2.1:
+    resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
     engines: {node: '>=20.11'}
     hasBin: true
 
@@ -3253,16 +3253,16 @@ snapshots:
     dependencies:
       eventsource-parser: 4.1.0
 
-  '@vitest/mocker@5.0.2(vite@8.0.16(@types/node@24.19.1))':
+  '@vitest/mocker@5.0.3(vite@8.0.16(@types/node@24.19.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.2
+      '@vitest/spy': 5.0.3
       estree-walker: 3.0.3
       magic-string: 1.3.1
     optionalDependencies:
       vite: 8.0.16(@types/node@24.19.1)
 
-  '@vitest/spy@5.0.2': {}
+  '@vitest/spy@5.0.3': {}
 
   abort-controller@3.0.0:
     dependencies:
@@ -3909,10 +3909,10 @@ snapshots:
       '@types/node': 24.19.1
       fsevents: 2.3.3
 
-  vitest@5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1)):
+  vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1)):
     dependencies:
       '@types/chai': 5.2.2
-      '@vitest/mocker': 5.0.2(vite@8.0.16(@types/node@24.19.1))
+      '@vitest/mocker': 5.0.3(vite@8.0.16(@types/node@24.19.1))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -3924,7 +3924,7 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       vite: 8.0.16(@types/node@24.19.1)
-      why-is-node-running: 3.2.2
+      why-is-node-running: 3.2.1
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@types/node': 24.19.1
@@ -3933,7 +3933,7 @@ snapshots:
 
   web-streams-polyfill@3.3.3: {}
 
-  why-is-node-running@3.2.2: {}
+  why-is-node-running@3.2.1: {}
 
   wrap-ansi@7.0.0:
     dependencies:
