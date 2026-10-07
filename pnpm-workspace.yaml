@@ -38,6 +38,8 @@ catalog:
   "@types/node": "^24.19.0"
   google-auth-library: "^11.1.0"
 overrides:
+  # GHSA-68fv-2mgg-jv7q: validate indexed source-map section offsets.
+  "source-map-js@<1.2.2": 1.2.2
   # ============================
   # Special Overrides
   # ============================

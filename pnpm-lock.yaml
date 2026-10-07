@@ -175,6 +175,7 @@ catalogs:
       version: 4.6.5
 
 overrides:
+  source-map-js@<1.2.2: 1.2.2
   google-auth-library: ^11.1.0
   '@types/node': ^24.19.0
   vite: ^8.0.16
@@ -1873,8 +1874,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  source-map-js@1.2.1:
-    resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
   standardwebhooks@1.0.0:
@@ -3705,7 +3706,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.18
       picocolors: 1.1.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   process@0.11.10:
     optional: true
@@ -3792,7 +3793,7 @@ snapshots:
 
   semver@7.7.3: {}
 
-  source-map-js@1.2.1: {}
+  source-map-js@1.2.2: {}
 
   standardwebhooks@1.0.0:
     dependencies:
