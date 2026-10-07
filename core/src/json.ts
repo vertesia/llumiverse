@@ -48,6 +48,11 @@ function extractCandidates(text: string): string[] {
     return candidates;
 }
 
+// An array starting with an unquoted word is ambiguous prose; preserve extraction precedence there.
+function isJSONRoot(text: string): boolean {
+    return /^[{"']/.test(text) || /^\[\s*(?:[[{"'\]\d-]|true\b|false\b|null\b|$)/.test(text);
+}
+
 /** Strict parsing first, then optional jsonrepair recovery. Callers validate the recovered value against their schema. */
 export function parseJSONOutput(text: string, options: JSONOutputParseOptions = {}): JSONValue {
     let lastError: unknown;
@@ -58,25 +63,14 @@ export function parseJSONOutput(text: string, options: JSONOutputParseOptions = 
     }
 
     const normalized = text.trim();
-    const candidates = extractCandidates(normalized);
-    const isRoot = /^[{["']/.test(normalized);
-    // Prefer a complete answer to repairing surrounding prose or formatting into unrelated values.
-    if (!isRoot) {
-        for (const source of new Set(candidates)) {
-            let value: JSONValue;
-            try {
-                value = JSON.parse(source);
-            } catch (error: unknown) {
-                lastError = error;
-                continue;
-            }
-            options.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
-            return value;
-        }
-    }
-    // Repair a root JSON value before extracting from it: braces inside unfinished strings are content.
-    const sources = isRoot ? [normalized, ...candidates] : [...candidates, normalized];
-    for (const source of new Set(sources)) {
+    const candidates = [...new Set(extractCandidates(normalized))].filter((source) => source !== normalized);
+    // Preserve unfinished root content, then prefer strict extraction, then the historical object repair fallback.
+    const attempts = [
+        ...(isJSONRoot(normalized) ? [{ source: normalized, repair: true }] : []),
+        ...candidates.map((source) => ({ source, repair: false })),
+        ...[...candidates].reverse().map((source) => ({ source, repair: true })),
+    ];
+    for (const { source, repair } of attempts) {
         let value: JSONValue;
         let repaired = false;
         let parseError: unknown;
@@ -85,7 +79,7 @@ export function parseJSONOutput(text: string, options: JSONOutputParseOptions = 
         } catch (error: unknown) {
             parseError = error;
             lastError = error;
-            if (options.allowRepair === false) continue;
+            if (!repair || options.allowRepair === false || !isJSONRoot(source)) continue;
             try {
                 value = repairJSON(source, parseError);
                 repaired = true;

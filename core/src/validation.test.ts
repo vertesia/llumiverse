@@ -40,6 +40,37 @@ describe('validateResult', () => {
         ).toEqual([{ type: 'json', value: 42 }]);
     });
 
+    it.each([
+        ['{"items":[', '{"id":"2","extra":true}', ']}'],
+        ['[', '{"id":"2","extra":true}', ']'],
+        ['{"item":', '{"id":"2","extra":true}', '}'],
+    ])('prefers the complete joined answer to its inner container: %j', (...texts) => {
+        const parts: CompletionResult[] = texts.map((value) => ({ type: 'text', value }));
+        const itemSchema = {
+            type: 'object',
+            properties: { id: { type: 'number' }, label: { type: 'string', default: 'default' } },
+            required: ['id'],
+            additionalProperties: false,
+        };
+        const schema =
+            texts[0] === '['
+                ? { type: 'array', items: itemSchema }
+                : {
+                      type: 'object',
+                      properties: texts[0].includes('items')
+                          ? { items: { type: 'array', items: itemSchema } }
+                          : { item: itemSchema },
+                  };
+        const item = { id: 2, label: 'default' };
+        const expected = texts[0] === '[' ? [item] : texts[0].includes('items') ? { items: [item] } : { item };
+        for (const allowRepair of [true, false]) {
+            expect(validateResult(parts, {}, allowRepair)).toEqual([
+                { type: 'json', value: JSON.parse(texts.join('')) },
+            ]);
+            expect(validateResult(parts, schema, allowRepair)).toEqual([{ type: 'json', value: expected }]);
+        }
+    });
+
     it('retains a complete first text answer before interpreting later independent text', () => {
         expect(
             validateResult(
@@ -55,6 +86,8 @@ describe('validateResult', () => {
     it.each([
         ['```json\n{"a":"2"}\n``` [done]'],
         ['Answer [note {"a":"2"}]'],
+        ['[note {"a":"2"}]'],
+        ['"Answer" {"a":"2"}\nextra [brackets]'],
         ['```json\n{"a":"1","extra":true}\n```', '{"a":"2"}'],
         ['Answer: {"a":"1","extra":true}', '{"a":"2"}'],
     ])('preserves the complete answer through extraction and schema validation: %j', (...texts) => {

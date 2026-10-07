@@ -79,8 +79,15 @@ export function validateResult(
         if (!text.trim()) {
             throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
         }
+        // A complete joined answer outranks containers that are merely nested fragments of it.
+        let joined: JSONValue | undefined;
+        try {
+            joined = JSON.parse(text);
+        } catch {
+            // Preserve independent complete answers before attempting repair of joined text.
+        }
         // Preserve complete independent containers. Scalars can still be fragments (for example, 1 followed by 2).
-        if (textParts.length > 1) {
+        if (joined === undefined && textParts.length > 1) {
             for (const part of textParts) {
                 try {
                     const complete = parseJSONOutput(part.value, { allowRepair: false });
@@ -93,7 +100,9 @@ export function validateResult(
                 }
             }
         }
-        if (json !== undefined) {
+        if (joined !== undefined) {
+            json = joined;
+        } else if (json !== undefined) {
             parseOptions.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
         } else {
             try {

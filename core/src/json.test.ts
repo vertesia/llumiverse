@@ -23,6 +23,7 @@ describe('parseJSONOutput', () => {
         ["{a:'x'}", { a: 'x' }],
         ['{"a":1,}', { a: 1 }],
         ['[1 2]', [1, 2]],
+        ['[{"a":1}', [{ a: 1 }]],
         ['{"a" 1}', { a: 1 }],
         ['{"a":1 /* don\'t treat } ] as syntax */,"b":2}', { a: 1, b: 2 }],
         ['{"a":1 // a comment containing " [ }\n}', { a: 1 }],
@@ -71,6 +72,10 @@ describe('parseJSONOutput', () => {
         expect(onDiagnostic).toHaveBeenCalledWith({ extracted: true, repaired: false, original_text: text });
     });
 
+    it('does not turn arbitrary prose into a JSON string', () => {
+        expect(() => parseJSONOutput('hello')).toThrow();
+    });
+
     it('uses jsonrepair for malformed fenced output and honors the opt-out', () => {
         const text = '```json\n{"a":1,}\n```';
         const onDiagnostic = vi.fn();
@@ -81,6 +86,9 @@ describe('parseJSONOutput', () => {
 
     it.each([
         ['Answer: {"name":Alice Smith} done.', { name: 'Alice Smith' }],
+        ['[note {name:Alice Smith}]', { name: 'Alice Smith' }],
+        ['Answer: {a:1}\nextra [brackets]', { a: 1 }],
+        ['"Answer" {a:1}\nextra [brackets]', { a: 1 }],
         ['{"a":1,}\n```\nExtra explanation', { a: 1 }],
     ])('retains the historical fallback for malformed JSON in prose: %s', (text, expected) => {
         const onDiagnostic = vi.fn();

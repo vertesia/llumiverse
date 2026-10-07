@@ -230,18 +230,20 @@ console.log(data.sentiment); // "positive"
 
 Structured output is parsed strictly first. Recovery can unwrap JSON formatting or extract an object/array from
 surrounding prose, preserving the historical extraction behavior. Syntax repair uses normal `jsonrepair` behavior,
-including quoting strings, escaping newlines and completing truncated documents. Recovered output must still pass
-the supplied result schema. Text response parts are joined; a single typed JSON result takes precedence over auxiliary
+including quoting strings, escaping newlines and completing truncated documents. Repair is attempted for recognizable
+JSON containers or quoted strings; arbitrary prose is not converted into a JSON scalar. Bracket-led annotations retain
+complete-object extraction precedence. Recovered output must still pass the supplied result schema. Text response parts are joined; a single typed JSON result takes precedence over auxiliary
 content, preserving the previous first-JSON-result precedence. An independently complete text answer retains its
-precedence; otherwise text parts are joined before repair, avoiding repair of isolated fragments into partial answers.
+precedence when the joined text is not itself complete JSON; otherwise the complete joined value takes precedence.
+Unresolved text parts are joined before repair, avoiding repair of isolated fragments into partial answers.
 
 Recovery sets `response.json_output_diagnostic`, with independent `extracted` and `repaired` flags, the original text,
 and the strict parser error when repaired. Original text may contain sensitive output; treat this diagnostic like
 response content. Diagnostics remain available when recovered JSON subsequently fails schema validation. To disable
 syntax repair for one execution, pass `{ jsonRepair: false }` in execution options. Repair defaults to enabled
 when omitted. Explicit wrapper extraction remains available.
-The finish reason does not determine validation success: usable JSON is accepted even when generation reached its
-token limit. Successful repair and schema validation do not establish that the model generated all intended information.
+Validation-error logs include the provider finish reason when available. The finish reason does not determine
+validation success: usable JSON is accepted even when generation reached its token limit. Successful repair and schema validation do not establish that the model generated all intended information.
 
 The exported `parseJSON` utility uses the same repair package. `parseJSONOutput` (and the compatible
 `extractAndParseJSON`) additionally support prose/formatting extraction and recovery diagnostics.
