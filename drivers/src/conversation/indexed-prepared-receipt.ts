@@ -2,6 +2,7 @@ import {
     type ConversationPreparedRequestRecord,
     fingerprintJson,
     INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE,
+    INDEXED_MEASURED_OUTPUT_PREPARED_VALIDATOR_PROFILE,
     INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE,
     type IndexedConversationSelectedContext,
     indexedProcessingContextFingerprint,
@@ -26,18 +27,38 @@ export async function indexedPreparedReceiptMatches(
     const witness =
         indexed?.validator_profile === INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE
             ? indexed.processing_input
-            : indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE
+            : indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE ||
+                indexed?.validator_profile === INDEXED_MEASURED_OUTPUT_PREPARED_VALIDATOR_PROFILE
               ? indexed.native_measurement
               : undefined;
     if (
         indexed?.validator_profile !== INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE &&
-        indexed?.validator_profile !== INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE
+        indexed?.validator_profile !== INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE &&
+        indexed?.validator_profile !== INDEXED_MEASURED_OUTPUT_PREPARED_VALIDATOR_PROFILE
     )
         return (await fingerprintJson(record.request_receipt)) === (await fingerprintJson(compiled));
-    if (indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE) {
+    if (indexed?.validator_profile === INDEXED_MEASURED_OUTPUT_PREPARED_VALIDATOR_PROFILE) {
+        const accepted = indexed.native_measurement;
+        const output = accepted?.retained_output;
+        if (
+            !accepted ||
+            !output ||
+            record.runtime.materialized_input !== undefined ||
+            accepted.runtime_input_operation_id !== record.runtime.input_operation_id ||
+            output.id !== accepted.accepted_operation_id ||
+            output.conversation_id !== accepted.accepted_source.conversation_id ||
+            output.conversation_id !== record.source.conversation_id ||
+            output.result_revision > accepted.accepted_source.revision ||
+            accepted.accepted_source.revision > accepted.settled_source.revision ||
+            output.recorded_at !== record.runtime.recorded_at ||
+            (await fingerprintJson(output)) !== accepted.accepted_receipt_fingerprint
+        )
+            return false;
+    } else if (indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE) {
         const accepted = indexed.native_measurement;
         if (
             !accepted ||
+            accepted.retained_output !== undefined ||
             accepted.runtime_input_operation_id !== record.runtime.input_operation_id ||
             accepted.accepted_operation_id !== record.runtime.materialized_input?.operation_id ||
             accepted.accepted_source.revision !== record.runtime.materialized_input.result_revision ||
@@ -54,7 +75,17 @@ export async function indexedPreparedReceiptMatches(
         witness.coverage.expected_revision !== witness.settled_source.revision ||
         witness.coverage.recorded_at !== record.runtime.recorded_at ||
         measurement.measured_at !== record.runtime.recorded_at ||
-        measurement.method !== 'estimated' ||
+        !(
+            (measurement.method === 'estimated' && compiled.target.provider !== 'anthropic') ||
+            (measurement.method === 'provider_counted' &&
+                (indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE ||
+                    indexed?.validator_profile === INDEXED_MEASURED_OUTPUT_PREPARED_VALIDATOR_PROFILE ||
+                    indexed?.validator_profile === INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE) &&
+                compiled.target.provider === 'anthropic' &&
+                compiled.target.protocol === 'anthropic.messages' &&
+                measurement.tokenizer === 'anthropic.messages.count_tokens:v1' &&
+                measurement.tokenizer_version === 'anthropic.messages.count_tokens:projection-2026-10-05.v1')
+        ) ||
         !measurement.tokenizer_version ||
         measurement.adapter !== compiled.target.protocol ||
         measurement.adapter_version !== compiled.target.adapter_version ||

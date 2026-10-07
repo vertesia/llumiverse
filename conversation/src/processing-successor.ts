@@ -22,6 +22,7 @@ import {
     canonicalTextExternalizationArchiveInputs,
     isToolResultTextProcessor,
 } from './tool-result-text-externalization.js';
+import { supportsToolResultTextProcessingScope } from './tool-result-text-strategy.js';
 import type { ConversationDocument, OperationReceipt, ProcessingJob, ProcessingOutputReceipt } from './types.js';
 import { parseConversationDocument } from './validation.js';
 
@@ -68,7 +69,7 @@ function builtinJob(job: ProcessingJob | undefined): ProcessingJob {
     if (!job)
         throw new ProcessingSuccessorError('MISSING_EVIDENCE', 'Processing job is not retained at input acceptance');
     if (
-        (isToolResultTextProcessor(job) && job.scope !== 'on_append') ||
+        (isToolResultTextProcessor(job) && !supportsToolResultTextProcessingScope(job)) ||
         (!isToolResultTextProcessor(job) &&
             (job.processor_id !== TEXT_EXTERNALIZATION_PROCESSOR_ID ||
                 job.processor_version !== TEXT_EXTERNALIZATION_PROCESSOR_VERSION))

@@ -23,8 +23,8 @@ import {
     ContextChangeRequestSchema,
 } from './schemas/context-change.js';
 import { ContextSelectionRequestSchema } from './schemas/context-selection.js';
-import { ProcessingBudgetSchema, ProcessingRunResultSchema, ProcessorConfigurationSchema } from './schemas/document.js';
-import { GenerationUsageSchema } from './schemas/execution.js';
+import { ProcessingRunResultSchema } from './schemas/document.js';
+import { GenerationUsageSchema, OperationReceiptSchema } from './schemas/execution.js';
 import type { JsonMinificationCandidateSchema, JsonMinificationNoOpReasonSchema } from './schemas/json-minification.js';
 import {
     ContentHashSchema,
@@ -41,6 +41,9 @@ import {
     ProcessingResolvedInputSchema,
 } from './schemas/processing.js';
 import { ProcessingChangeSchema } from './schemas/processing-change.js';
+import { ProcessingPolicyCommandSchema, ProcessingPolicyGenesisSchema } from './schemas/processing-policy.js';
+import { ProcessorConfigurationSchema } from './schemas/processing-policy-foundation.js';
+import { type ProcessingQueueAcceptanceInput, ProcessingQueueCommandSchema } from './schemas/processing-queue.js';
 import { verifyDerivedBlockLineage } from './source-slice-lineage.js';
 import {
     createTextExternalizationProcessor,
@@ -53,10 +56,9 @@ import {
     createToolResultTextExternalizationProcessor,
     eligibleToolResultTextEntries,
     isToolResultTextProcessor,
-    TOOL_RESULT_TEXT_PROCESSOR_ID,
-    TOOL_RESULT_TEXT_PROCESSOR_VERSION,
     toolResultTextSelection,
 } from './tool-result-text-externalization.js';
+import { supportsToolResultTextProcessingScope } from './tool-result-text-strategy.js';
 import type {
     ContextChangeProposal,
     ContextEntry,
@@ -79,27 +81,7 @@ export { MAX_PROCESSING_OUTPUT_BYTES, MAX_PROCESSOR_CONFIGURATION_BYTES } from '
 
 const MAX_PROCESSING_JOBS = 256;
 
-const ProcessingPolicyCommandSchema = z.strictObject({
-    operation_id: IdentifierSchema,
-    expected_revision: NonnegativeSafeIntegerSchema,
-    recorded_at: TimestampSchema,
-    enabled: z.boolean(),
-    processors: z.array(ProcessorConfigurationSchema).max(MAX_PROCESSING_STAGES_PER_OPERATION),
-    budget: ProcessingBudgetSchema.optional(),
-    supersede_job_ids: z.array(IdentifierSchema).optional(),
-    supersession_reason: IdentifierSchema.optional(),
-});
-
 export type ProcessingPolicyCommand = z.infer<typeof ProcessingPolicyCommandSchema>;
-
-const ProcessingQueueCommandSchema = z.strictObject({
-    operation_id: IdentifierSchema,
-    expected_revision: NonnegativeSafeIntegerSchema,
-    recorded_at: TimestampSchema,
-    processor_id: IdentifierSchema,
-    scope: z.enum(['manual', 'on_budget']),
-    target_fingerprint: ContentHashSchema.optional(),
-});
 
 export type ProcessingQueueCommand = z.infer<typeof ProcessingQueueCommandSchema>;
 
@@ -191,6 +173,9 @@ function processingReceipt(
     phase: NonNullable<OperationReceipt['processing_operation']>['phase'],
     jobId?: string,
     supersededJobIds?: readonly string[],
+    queueCommand?: ProcessingQueueAcceptanceInput,
+    policyCommand?: ProcessingPolicyCommand,
+    policyGenesis?: z.infer<typeof ProcessingPolicyGenesisSchema>,
 ): OperationReceipt {
     return createProcessingTransitionReceipt({
         source: { conversation_id: document.id, revision: document.revision },
@@ -202,6 +187,9 @@ function processingReceipt(
             policy_revision: document.processing.policy_revision,
             ...(jobId === undefined ? {} : { job_id: jobId }),
             ...(supersededJobIds === undefined ? {} : { superseded_job_ids: [...supersededJobIds] }),
+            ...(policyCommand === undefined ? {} : { policy_command: policyCommand }),
+            ...(policyGenesis === undefined ? {} : { policy_genesis: policyGenesis }),
+            ...(queueCommand === undefined ? {} : { queue_command: queueCommand }),
         },
     });
 }
@@ -332,6 +320,19 @@ export async function setProcessingPolicy(
         'policy',
         undefined,
         [...supersede],
+        undefined,
+        command,
+        source.processing.policy_revision === 0
+            ? ProcessingPolicyGenesisSchema.parse({
+                  source: { conversation_id: source.id, revision: source.revision },
+                  policy: {
+                      enabled: source.processing.enabled,
+                      policy_revision: 0,
+                      processors: source.processing.processors,
+                      ...(source.processing.budget === undefined ? {} : { budget: source.processing.budget }),
+                  },
+              })
+            : undefined,
     );
     const { budget: _budget, coverage: _coverage, ...processing } = source.processing;
     const document = advanceProcessing(source, receipt, {
@@ -446,6 +447,9 @@ export async function stageProcessingAppend(
         return accepted;
     }
     const selection = eligibleAppendSelection(accepted, acceptedEntryIds);
+    const toolResultProcessor = processors.find((processor) =>
+        isToolResultTextProcessor({ processor_id: processor.id, processor_version: processor.version }),
+    );
     const jobs = await createJobs(
         accepted,
         sourceOperationId,
@@ -454,12 +458,12 @@ export async function stageProcessingAppend(
         processorIndices,
         undefined,
         selection.selectedEntries,
-        processors.some(
-            (processor) =>
-                processor.id === TOOL_RESULT_TEXT_PROCESSOR_ID &&
-                processor.version === TOOL_RESULT_TEXT_PROCESSOR_VERSION,
-        )
-            ? await eligibleToolResultTextEntries(accepted, acceptedEntryIds)
+        toolResultProcessor
+            ? await eligibleToolResultTextEntries(accepted, acceptedEntryIds, {
+                  processor_id: toolResultProcessor.id,
+                  processor_version: toolResultProcessor.version,
+                  configuration: toolResultProcessor.config,
+              })
             : undefined,
     );
     const existing = accepted.processing.jobs ?? {};
@@ -505,6 +509,10 @@ export function processingAppendAcceptance(
     });
 }
 
+function sameManualToolResultIds(first: readonly string[], second: readonly string[]): boolean {
+    return canonicalJsonContentString(first) === canonicalJsonContentString(second);
+}
+
 export async function queueProcessingForExisting(
     sourceInput: ConversationDocument,
     selectionInput: ContextSelectionRequest,
@@ -531,32 +539,99 @@ export async function queueProcessingForExisting(
         };
     }
     assertExpected(source, command.expected_revision);
-    const selection = await resolveContextSelection(source, selectionRequest);
-    if (selection.kind === 'rejected') throw new Error('Processing selection was rejected');
     if (!source.processing.enabled) throw new Error('Processing policy is disabled');
     const processorIndex = source.processing.processors.findIndex(
         (item) => item.id === command.processor_id && item.scope === command.scope,
     );
     if (processorIndex < 0) throw new Error('Configured processor is unavailable for this scope');
-    const receipt = processingReceipt(source, command.operation_id, fingerprint, command.recorded_at, 'queue');
+    const processor = source.processing.processors[processorIndex];
+    const toolResult = isToolResultTextProcessor({ processor_id: processor.id, processor_version: processor.version });
+    let toolResultEntryIds: string[] | undefined;
+    if (toolResult) {
+        if (
+            !supportsToolResultTextProcessingScope({
+                processor_id: processor.id,
+                processor_version: processor.version,
+                scope: processor.scope,
+            }) ||
+            command.target_fingerprint !== undefined ||
+            selectionRequest.selector.source.kind !== 'turn_ids' ||
+            selectionRequest.selector.filters !== undefined ||
+            selectionRequest.conversation.conversation_id !== source.id ||
+            selectionRequest.conversation.revision !== source.revision ||
+            selectionRequest.expected_context_revision !== source.context.revision
+        )
+            throw new Error('Manual tool-result selection requires exact current original turn identities');
+        const turnIds = selectionRequest.selector.source.turn_ids;
+        const entries = source.context.entries.filter((entry) => turnIds.includes(entry.turn_id));
+        if (
+            new Set(turnIds).size !== turnIds.length ||
+            !sameManualToolResultIds(
+                entries.map((entry) => entry.turn_id),
+                turnIds,
+            )
+        )
+            throw new Error('Manual tool-result selection changed its exact active turn order');
+        const selected = await toolResultTextSelection(
+            source,
+            entries.map((entry) => entry.id),
+            {
+                processor_id: processor.id,
+                processor_version: processor.version,
+                configuration: processor.config,
+            },
+        );
+        toolResultEntryIds = selected.records.map((record) => record.entry.id);
+        if (
+            !selected.texts.length ||
+            !sameManualToolResultIds(
+                toolResultEntryIds,
+                entries.map((entry) => entry.id),
+            )
+        )
+            throw new Error('Manual tool-result selection must name exactly its eligible text-bearing results');
+    }
+    const selection =
+        toolResultEntryIds === undefined ? await resolveContextSelection(source, selectionRequest) : undefined;
+    if (selection?.kind === 'rejected') throw new Error('Processing selection was rejected');
+    const receipt = processingReceipt(
+        source,
+        command.operation_id,
+        fingerprint,
+        command.recorded_at,
+        'queue',
+        undefined,
+        undefined,
+        { command, selection: selectionRequest },
+    );
     const staged = { ...source, revision: receipt.result_revision };
     const jobs = await createJobs(
         staged,
         command.operation_id,
-        selection.kind === 'selected' ? selection.plan.entry_ids : [],
-        selection.kind === 'selected' ? selection.plan.selected_block_ids : undefined,
+        toolResultEntryIds ?? (selection?.kind === 'selected' ? selection.plan.entry_ids : []),
+        selection?.kind === 'selected' ? selection.plan.selected_block_ids : undefined,
         [processorIndex],
         command.target_fingerprint,
-        selection.kind === 'selected' ? selection.plan.selected_entries : undefined,
+        selection?.kind === 'selected' ? selection.plan.selected_entries : undefined,
     );
     const job = jobs[0];
     if (Object.hasOwn(source.processing.jobs ?? {}, job.id)) throw new Error(`Processing job ${job.id} collides`);
     const { coverage: _coverage, ...processing } = source.processing;
-    const document = advanceProcessing(source, receipt, {
+    const acceptedReceipt = OperationReceiptSchema.parse({
+        ...receipt,
+        processing_operation: {
+            ...receipt.processing_operation,
+            job_id: job.id,
+            queue_selected_entries: source.context.entries.filter(
+                (entry) => job.selection.kind === 'entries' && job.selection.entry_ids.includes(entry.id),
+            ),
+        },
+    });
+    const document = advanceProcessing(source, acceptedReceipt, {
         ...processing,
         jobs: { ...source.processing.jobs, [job.id]: job },
     });
-    return { document, change: processingChangeFromReceipt(receipt), applied: true, job_id: job.id };
+    return { document, change: processingChangeFromReceipt(acceptedReceipt), applied: true, job_id: job.id };
 }
 
 export async function processingContextFingerprint(documentInput: ConversationDocument): Promise<string> {
@@ -821,7 +896,7 @@ export async function resolveProcessingJobInput(
     if (isToolResultTextProcessor(job)) {
         if (selectedBlockIds !== undefined)
             throw new Error('Tool-result text processing cannot select partial executable blocks');
-        const selected = await toolResultTextSelection(document, entryIds);
+        const selected = await toolResultTextSelection(document, entryIds, job);
         return ProcessingResolvedInputSchema.parse({
             job_id: job.id,
             source_revision: document.revision,

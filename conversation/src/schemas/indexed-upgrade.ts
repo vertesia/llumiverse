@@ -40,6 +40,8 @@ export const IndexedConversationUpgradeProgressSchema = z.strictObject({
         'processing',
         'audit',
         'active_window',
+        'tool_result_validations',
+        'tool_result_terminal_validations',
         'complete',
     ]),
     cursor: z.string().min(1).max(2048).optional(),
@@ -58,6 +60,7 @@ export const IndexedConversationUpgradeProgressSchema = z.strictObject({
         execution_acceptances: PagedRecordRefSchema.optional(),
         response_revisions: PagedRecordRefSchema.optional(),
         input_revisions: PagedRecordRefSchema.optional(),
+        missing_tool_result_validations: PagedRecordRefSchema.optional(),
     }),
     counts: z.strictObject({
         live_turns: NonnegativeSafeIntegerSchema,

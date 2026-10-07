@@ -22,10 +22,12 @@ import { createIndexedProcessingScratchStore } from './indexed-processing-scratc
 import {
     activeIndexedContextWorkingSet,
     applyIndexedTextExternalizationOutput,
+    indexedCompletedJobEntrySelection,
     indexedPredecessorEntrySelection,
     indexedProcessingContextFingerprint,
     resolveIndexedProcessingTextInput,
 } from './indexed-processing-working-set.js';
+import { indexedToolResultTextFrame } from './indexed-tool-result-text.js';
 import { DEFAULT_JSON_INPUT_LIMITS, preflightJsonInput } from './json-preflight.js';
 import { createAcceptedOutputFragmentFromRecords } from './output.js';
 import {
@@ -47,11 +49,13 @@ import {
 import { eligibleProcessingAppendRecords } from './processing-append-selection.js';
 import { constructProcessingJobs, MAX_PROCESSING_STAGES_PER_OPERATION } from './processing-job-construction.js';
 import { countUnresolvedProcessingJobs } from './processing-job-status.js';
+import { recoverAcceptedProcessingPolicyCommand } from './processing-policy-recovery.js';
 import { createProcessingTransitionReceipt } from './processing-transition-receipt.js';
 import { renderContentBlockText } from './rendering.js';
 import { MAX_PROCESSOR_CONFIGURATION_BYTES } from './runtime-constants.js';
 import { ConversationDeleteChangeSchema } from './schemas/change.js';
 import {
+    ApplicationToolCallBlockSchema,
     AssetSchema,
     ContentBlockSchema,
     ConversationTurnSchema,
@@ -115,10 +119,30 @@ import {
 } from './schemas/indexed-processing-closure.js';
 import { IndexedRecordBatchCommandSchema } from './schemas/ingestion.js';
 import { ConversationOutputReceiptSchema } from './schemas/output.js';
+import { ProcessingPolicyCommandSchema } from './schemas/processing-policy.js';
+import { ProcessingQueueAcceptanceInputSchema } from './schemas/processing-queue.js';
+import {
+    buildToolResultTextWorkingProposal,
+    eligibleToolResultTextWorkingEntries,
+    isToolResultTextProcessor,
+    type ToolResultTextSelectionFrame,
+    toolResultTextArchiveRetrievals,
+    toolResultTextWorkingSelection,
+} from './tool-result-text-externalization.js';
+import {
+    isToolResultTextStrategy,
+    parseToolResultTextStrategy,
+    supportsToolResultTextProcessingScope,
+} from './tool-result-text-strategy.js';
 
 export { IndexedRecordBatchCommandSchema } from './schemas/ingestion.js';
 
-import { ContentHashSchema, IdentifierSchema, NonnegativeSafeIntegerSchema } from './schemas/primitives.js';
+import {
+    ContentHashSchema,
+    ConversationRefSchema,
+    IdentifierSchema,
+    NonnegativeSafeIntegerSchema,
+} from './schemas/primitives.js';
 import {
     ProcessingAttemptReceiptSchema,
     ProcessingCompletionReceiptSchema,
@@ -137,6 +161,7 @@ import type {
     AppendConversationRecordsOptions,
     Asset,
     CompactionRecord,
+    ContextEntry,
     ConversationContext,
     ConversationDocument,
     ConversationRecordBatch,
@@ -145,8 +170,12 @@ import type {
     ExecutionReceipt,
     OperationReceipt,
     PendingApplicationToolCall,
+    ProcessingCompletionReceipt,
     ProcessingJob,
+    ProcessingOutputReceipt,
+    ProcessingResolvedInput,
     ProcessorConfiguration,
+    ToolDefinition,
     ToolResultBlock,
 } from './types.js';
 import { parseConversationDocument } from './validation.js';
@@ -219,6 +248,915 @@ export interface StagedIndexedConversationRoot {
 
 type RecordValue = Extract<PagedRecordValue, { storage: 'record' }>;
 type Entry = { key: string; value: PagedRecordValue };
+
+/** Private indexed commit attestation. It is produced only after deterministic processing
+ * verification, never through the caller-controlled processing phase command. Original records
+ * remain independently authenticated point descriptors, without reading their cold bodies. */
+export const IndexedToolResultOriginalSourceSchema = z.strictObject({
+    version: z.literal(1),
+    job_id: IdentifierSchema,
+    job_fingerprint: ContentHashSchema,
+    resolved_input_fingerprint: ContentHashSchema,
+    source: z.discriminatedUnion('kind', [
+        z.strictObject({ kind: z.literal('indexed_root'), root: PagedRecordRefSchema }),
+        z.strictObject({ kind: z.literal('materialized_context'), context: ConversationContextSchema }),
+    ]),
+});
+
+export const IndexedMaterializedProcessingQueueSchema = ProcessingQueueAcceptanceInputSchema.extend({
+    version: z.literal(1),
+    selected_entries: z.array(ContextEntrySchema).max(INDEXED_PROCESSING_SELECTED_MAX_BLOCKS),
+    legacy_reconstructed: z.boolean(),
+});
+
+export const IndexedToolResultTerminalValidationSchema = z.strictObject({
+    version: z.literal(1),
+    terminal_execution_id: IdentifierSchema,
+    result_turn_id: IdentifierSchema,
+    job_id: IdentifierSchema,
+    validation_record_fingerprint: ContentHashSchema,
+});
+
+const IndexedToolResultValidationSchema = z.strictObject({
+    version: z.literal(1),
+    job_id: IdentifierSchema,
+    job_fingerprint: ContentHashSchema,
+    original_source_record_fingerprint: ContentHashSchema,
+    attempt_fingerprint: ContentHashSchema,
+    output_fingerprint: ContentHashSchema,
+    output_record_fingerprint: ContentHashSchema,
+    proposal_fingerprint: ContentHashSchema,
+    compaction_id: IdentifierSchema,
+    replacement_turn_fingerprints: z.record(IdentifierSchema, ContentHashSchema),
+    resolved_input_fingerprint: ContentHashSchema,
+    completion_fingerprint: ContentHashSchema,
+    compaction_fingerprint: ContentHashSchema,
+    acceptance_fingerprint: ContentHashSchema,
+    /** Only v3: current projection identity is separate from the immutable terminal original. */
+    original_result_bindings: z
+        .record(
+            IdentifierSchema,
+            z.strictObject({
+                turn_id: IdentifierSchema,
+                block_id: IdentifierSchema,
+            }),
+        )
+        .optional(),
+    dependencies: z.array(
+        z.strictObject({
+            family: z.enum([
+                'turns',
+                'blocks',
+                'context_entries',
+                'execution_receipts',
+                'operation_receipts',
+                'assets',
+                'tool_definitions',
+                'compactions',
+            ]),
+            descriptor: z.strictObject({
+                storage: z.literal('record'),
+                kind: z.string(),
+                id: IdentifierSchema,
+                content_hash: ContentHashSchema,
+                size_bytes: NonnegativeSafeIntegerSchema,
+            }),
+        }),
+    ),
+});
+
+/** Call only after validating the exact deterministic proposal against these complete originals. */
+async function stageIndexedToolResultValidation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    directories: IndexedConversationDirectories,
+    frame: ToolResultTextSelectionFrame,
+    job: ProcessingJob,
+    resolution: ProcessingResolvedInput,
+    output: ProcessingOutputReceipt,
+    completion: ProcessingCompletionReceipt,
+    compaction: CompactionRecord,
+    acceptance: OperationReceipt,
+    deferTerminalRelations = false,
+): Promise<void> {
+    const dependencies: z.infer<typeof IndexedToolResultValidationSchema>['dependencies'] = [];
+    const seen = new Set<string>();
+    const bind = async (
+        family: z.infer<typeof IndexedToolResultValidationSchema>['dependencies'][number]['family'],
+        id: string,
+        expected?: unknown,
+    ) => {
+        const key = tupleKey(family, id);
+        if (seen.has(key)) return;
+        seen.add(key);
+        const descriptor = await getPagedRecord(store, root.directories[family], id);
+        if (
+            descriptor?.storage !== 'record' ||
+            descriptor.id !== id ||
+            descriptor.kind !== family ||
+            (expected !== undefined && descriptor.content_hash !== (await fingerprintJson(expected)))
+        )
+            throw new Error('Indexed tool-result validation lost its exact original record binding');
+        dependencies.push({ family, descriptor });
+    };
+    const selectedRecords =
+        job.processor_version === '3'
+            ? (await toolResultTextWorkingSelection(frame, resolution.entry_ids, job)).records
+            : undefined;
+    const originalResultBindings: Record<string, { turn_id: string; block_id: string }> = {};
+    for (const [turnIndex, turnId] of resolution.source_turn_ids.entries()) {
+        const turn = frame.turns.get(turnId);
+        if (turn?.kind !== 'tool' || !turn.execution_id)
+            throw new Error('Indexed tool-result validation lacks a complete original result');
+        const receipt = frame.execution_receipts[turn.execution_id];
+        if (!receipt?.call_source) throw new Error('Indexed tool-result validation lacks its original call source');
+        await bind('execution_receipts', receipt.id, receipt);
+        const selectedRecord = selectedRecords?.[turnIndex];
+        const predecessor = selectedRecord?.projection_witness;
+        if (selectedRecords) {
+            const result = turn.blocks[0];
+            if (result?.type !== 'tool_result' || !receipt.result_turn_id || selectedRecord?.turn.id !== turn.id)
+                throw new Error('Indexed chained validation lost its current selected result');
+            originalResultBindings[
+                output.kind === 'proposal' && output.proposal.kind === 'replace_with_compaction'
+                    ? output.proposal.replacement_turns[turnIndex].id
+                    : ''
+            ] = {
+                turn_id: predecessor?.original_result_turn_id ?? turn.id,
+                block_id: predecessor?.original_result_block_id ?? result.id,
+            };
+        }
+        if (predecessor) {
+            const prior = await indexedRecordById(
+                store,
+                root,
+                'compactions',
+                predecessor.compaction_id,
+                IndexedConversationCompactionHeaderSchema,
+            );
+            if (
+                !prior ||
+                (await fingerprintJson(prior)) !== predecessor.compaction_fingerprint ||
+                !prior.operation_id.startsWith('processing:apply:')
+            )
+                throw new Error('Indexed chained validation changed its accepted predecessor compaction');
+            const priorAcceptance = await indexedRecordById(
+                store,
+                root,
+                'operation_receipts',
+                prior.operation_id,
+                OperationReceiptSchema,
+            );
+            if (!priorAcceptance || priorAcceptance.result_revision > resolution.source_revision)
+                throw new Error('Indexed chained validation predecessor is newer than its selected source');
+            const priorJobId = prior.operation_id.slice('processing:apply:'.length);
+            await auditIndexedToolResultValidation(store, root, priorJobId);
+            const priorValidation = await indexedProcessingRecord(
+                store,
+                root,
+                'tool_result_validations',
+                priorJobId,
+                IndexedToolResultValidationSchema,
+            );
+            if (
+                !priorValidation ||
+                priorValidation.replacement_turn_fingerprints[turn.id] !== predecessor.projection_fingerprint
+            )
+                throw new Error('Indexed chained validation lost its accepted predecessor projection');
+            await bind('compactions', prior.id, prior);
+            for (const [family, id] of [
+                ['turns', predecessor.original_result_turn_id],
+                ['blocks', predecessor.original_result_block_id],
+            ] as const) {
+                const bound = priorValidation.dependencies.find(
+                    (item) => item.family === family && item.descriptor.id === id,
+                );
+                const actual = await getPagedRecord(store, root.directories[family], id);
+                if (!bound || !sameIndexedRecord(actual, bound.descriptor))
+                    throw new Error('Indexed chained validation lost its immutable original terminal descriptors');
+                await bind(family, id);
+            }
+        }
+        for (const id of [turn.id, receipt.call_source.turn_id]) {
+            const original = frame.turns.get(id);
+            if (!original) throw new Error('Indexed tool-result validation lacks a complete original turn');
+            const { blocks, ...header } = original;
+            const blockIds = blocks.map((block) => block.id);
+            await bind('turns', id, {
+                turn: header,
+                source: id === turn.id && predecessor ? 'replacement' : 'ordinary',
+                ...(id === turn.id && predecessor ? { compaction_id: predecessor.compaction_id } : {}),
+                block_ids: blockIds,
+                block_ids_hash: await fingerprintJson(blockIds),
+            });
+            for (const block of blocks) await bind('blocks', block.id, block);
+            for (const assetId of collectAssetIds(blocks)) await bind('assets', assetId);
+        }
+    }
+    for (const entryId of resolution.entry_ids) {
+        const entry = frame.context.entries.find((item) => item.id === entryId);
+        if (!entry) throw new Error('Indexed tool-result validation lacks its original context entry');
+        await bind('context_entries', entryId, entry);
+    }
+    const archiveId = `processing:archive:${job.id}`;
+    const archive = await indexedRecordById(store, root, 'operation_receipts', archiveId, OperationReceiptSchema);
+    if (!archive) throw new Error('Indexed tool-result validation lacks its archive acceptance');
+    await bind('operation_receipts', archiveId, archive);
+    for (const assetId of archive.accepted_asset_ids ?? []) await bind('assets', assetId);
+    for (const definitionId of frame.context.active_tool_definition_ids) await bind('tool_definitions', definitionId);
+    if (output.kind !== 'proposal' || output.proposal.kind !== 'replace_with_compaction')
+        throw new Error('Indexed tool-result validation lacks its verified deterministic output');
+    const replacementTurnFingerprints = Object.fromEntries(
+        await Promise.all(
+            output.proposal.replacement_turns.map(async (turn) => [turn.id, await fingerprintJson(turn)] as const),
+        ),
+    );
+    const { replacement_turns: _turns, original_context: _originalContext, ...compactionHeader } = compaction;
+    const originalSource = await getPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('tool_result_sources', job.id),
+    );
+    if (
+        originalSource?.storage !== 'record' ||
+        originalSource.kind !== 'processing_records' ||
+        originalSource.id !== job.id
+    )
+        throw new Error('Indexed tool-result validation lacks its authenticated original source descriptor');
+    const validation = IndexedToolResultValidationSchema.parse({
+        version: 1,
+        job_id: job.id,
+        job_fingerprint: await fingerprintJson(job),
+        original_source_record_fingerprint: originalSource.content_hash,
+        attempt_fingerprint: await fingerprintJson(
+            await indexedProcessingRecord(store, root, 'attempts', job.id, ProcessingAttemptReceiptSchema),
+        ),
+        output_fingerprint: output.output_fingerprint,
+        output_record_fingerprint: await fingerprintJson(output),
+        proposal_fingerprint: await fingerprintJson(output.proposal),
+        compaction_id: compaction.id,
+        replacement_turn_fingerprints: replacementTurnFingerprints,
+        resolved_input_fingerprint: await fingerprintJson(resolution),
+        completion_fingerprint: await fingerprintJson(completion),
+        compaction_fingerprint: await fingerprintJson(compactionHeader),
+        acceptance_fingerprint: await fingerprintJson(acceptance),
+        ...(job.processor_version === '3' ? { original_result_bindings: originalResultBindings } : {}),
+        dependencies,
+    });
+    const key = tupleKey('tool_result_validations', job.id);
+    const existing = await getPagedRecord(store, directories.processing_records, key);
+    if (existing) {
+        const prior = await loadRecord(store, existing, IndexedToolResultValidationSchema);
+        if (canonicalJsonContentString(prior) !== canonicalJsonContentString(validation))
+            throw new Error('Indexed tool-result validation differs from verified original records');
+        if (!deferTerminalRelations)
+            await stageIndexedToolResultTerminalValidation(store, { ...root, directories }, directories, job.id);
+        return;
+    }
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        key,
+        await stageRecord(store, 'processing_records', job.id, validation),
+    );
+    if (!deferTerminalRelations)
+        await stageIndexedToolResultTerminalValidation(store, { ...root, directories }, directories, job.id);
+}
+
+/** Terminal identity chooses only an accepted deterministic witness, never a different execution result. */
+export async function auditIndexedToolResultTerminalValidation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    terminalId: string,
+): Promise<string | undefined> {
+    const marker = await indexedProcessingRecord(
+        store,
+        root,
+        'tool_result_validation_by_terminal',
+        terminalId,
+        IndexedToolResultTerminalValidationSchema,
+    );
+    if (!marker) return undefined;
+    const descriptor = await getPagedRecord(
+        store,
+        root.directories.processing_records,
+        tupleKey('tool_result_validations', marker.job_id),
+    );
+    const validation = await indexedProcessingRecord(
+        store,
+        root,
+        'tool_result_validations',
+        marker.job_id,
+        IndexedToolResultValidationSchema,
+    );
+    const terminal = await indexedRecordById(store, root, 'execution_receipts', terminalId, ExecutionReceiptSchema);
+    if (
+        marker.terminal_execution_id !== terminalId ||
+        terminal?.id !== terminalId ||
+        terminal.result_turn_id !== marker.result_turn_id ||
+        descriptor?.storage !== 'record' ||
+        descriptor.content_hash !== marker.validation_record_fingerprint ||
+        validation?.job_id !== marker.job_id ||
+        !validation.dependencies.some(
+            (dependency) => dependency.family === 'execution_receipts' && dependency.descriptor.id === terminalId,
+        ) ||
+        !validation.dependencies.some(
+            (dependency) => dependency.family === 'turns' && dependency.descriptor.id === marker.result_turn_id,
+        )
+    )
+        throw new Error('Indexed terminal validation relation changed its exact accepted execution/source');
+    await auditIndexedToolResultValidation(store, root, marker.job_id);
+    return marker.job_id;
+}
+
+async function stageIndexedToolResultTerminalValidation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    directories: IndexedConversationDirectories,
+    jobId: string,
+): Promise<void> {
+    const descriptor = await getPagedRecord(
+        store,
+        directories.processing_records,
+        tupleKey('tool_result_validations', jobId),
+    );
+    if (descriptor?.storage !== 'record') throw new Error('Indexed terminal mapping lacks its accepted validation');
+    const validation = await loadRecord(store, descriptor, IndexedToolResultValidationSchema);
+    for (const dependency of validation.dependencies) {
+        if (dependency.family !== 'execution_receipts') continue;
+        const receipt = await indexedRecordById(
+            store,
+            root,
+            'execution_receipts',
+            dependency.descriptor.id,
+            ExecutionReceiptSchema,
+        );
+        if (
+            !receipt?.result_turn_id ||
+            !validation.dependencies.some(
+                (item) => item.family === 'turns' && item.descriptor.id === receipt.result_turn_id,
+            )
+        )
+            throw new Error('Indexed terminal mapping lost its exact original execution/result');
+        const key = tupleKey('tool_result_validation_by_terminal', receipt.id);
+        const existing = await getPagedRecord(store, directories.processing_records, key);
+        if (existing) {
+            await auditIndexedToolResultTerminalValidation(store, { ...root, directories }, receipt.id);
+            continue;
+        }
+        const marker = IndexedToolResultTerminalValidationSchema.parse({
+            version: 1,
+            terminal_execution_id: receipt.id,
+            result_turn_id: receipt.result_turn_id,
+            job_id: jobId,
+            validation_record_fingerprint: descriptor.content_hash,
+        });
+        directories.processing_records = await putPagedRecord(
+            store,
+            directories.processing_records,
+            key,
+            await stageRecord(store, 'processing_records', receipt.id, marker),
+        );
+    }
+}
+
+async function stageIndexedToolResultOriginalSource(
+    store: IndexedConversationRecordStore,
+    directories: IndexedConversationDirectories,
+    job: ProcessingJob,
+    resolution: ProcessingResolvedInput,
+    source: z.infer<typeof IndexedToolResultOriginalSourceSchema>['source'],
+): Promise<void> {
+    const original = IndexedToolResultOriginalSourceSchema.parse({
+        version: 1,
+        job_id: job.id,
+        job_fingerprint: await fingerprintJson(job),
+        resolved_input_fingerprint: await fingerprintJson(resolution),
+        source,
+    });
+    const key = tupleKey('tool_result_sources', job.id);
+    const existing = await getPagedRecord(store, directories.processing_records, key);
+    if (existing) {
+        if (!sameIndexedRecord(await loadRecord(store, existing, IndexedToolResultOriginalSourceSchema), original))
+            throw new Error('Indexed original tool-result source changed its immutable accepted binding');
+        return;
+    }
+    directories.processing_records = await putPagedRecord(
+        store,
+        directories.processing_records,
+        key,
+        await stageRecord(store, 'processing_records', job.id, original),
+    );
+}
+
+/** Historical source evidence is never replaced by today's active selection. */
+export class IndexedToolResultOriginalSourceUnavailableError extends Error {
+    constructor(jobId: string) {
+        super(`Tool-result compaction ${jobId} requires its authenticated original context for migration/recovery`);
+        this.name = 'IndexedToolResultOriginalSourceUnavailableError';
+    }
+}
+
+export type ToolResultOriginalDocumentResolver = (source: {
+    conversation_id: string;
+    revision: number;
+}) => Promise<ConversationDocument>;
+
+/** Audit an existing immutable commit witness without original-body replay. Used by the
+ * explicit historical upgrade, which independently audits canonical record/operation coverage. */
+export async function auditIndexedToolResultValidation(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    jobId: string,
+): Promise<void> {
+    const validation = await indexedProcessingRecord(
+        store,
+        root,
+        'tool_result_validations',
+        jobId,
+        IndexedToolResultValidationSchema,
+    );
+    const job = await indexedProcessingRecord(store, root, 'jobs', jobId, ProcessingJobSchema);
+    const resolution = await indexedProcessingRecord(
+        store,
+        root,
+        'resolved_inputs',
+        jobId,
+        ProcessingResolvedInputSchema,
+    );
+    const attempt = await indexedProcessingRecord(store, root, 'attempts', jobId, ProcessingAttemptReceiptSchema);
+    const output = await getPagedRecord(store, root.directories.processing_records, tupleKey('outputs', jobId));
+    const originalSource = await getPagedRecord(
+        store,
+        root.directories.processing_records,
+        tupleKey('tool_result_sources', jobId),
+    );
+    const completion = await indexedProcessingRecord(
+        store,
+        root,
+        'completions',
+        jobId,
+        ProcessingCompletionReceiptSchema,
+    );
+    if (
+        !validation ||
+        originalSource?.storage !== 'record' ||
+        originalSource.kind !== 'processing_records' ||
+        originalSource.id !== jobId ||
+        !job ||
+        !isToolResultTextProcessor(job) ||
+        !resolution ||
+        !attempt ||
+        output?.storage !== 'record' ||
+        output.kind !== 'processing_records' ||
+        output.id !== jobId ||
+        completion?.status !== 'applied' ||
+        !completion.context_change_operation_id
+    )
+        throw new Error('Indexed validation audit lacks its exact complete processing lineage');
+    const acceptance = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        completion.context_change_operation_id,
+        OperationReceiptSchema,
+    );
+    const compaction = await indexedRecordById(
+        store,
+        root,
+        'compactions',
+        validation.compaction_id,
+        IndexedConversationCompactionHeaderSchema,
+    );
+    if (
+        !acceptance ||
+        !compaction ||
+        validation.job_id !== jobId ||
+        validation.original_source_record_fingerprint !== originalSource.content_hash ||
+        validation.job_fingerprint !== (await fingerprintJson(job)) ||
+        validation.attempt_fingerprint !== (await fingerprintJson(attempt)) ||
+        validation.output_record_fingerprint !== output.content_hash ||
+        validation.output_fingerprint !== completion.output_fingerprint ||
+        validation.proposal_fingerprint !== acceptance.payload_fingerprint ||
+        validation.resolved_input_fingerprint !== (await fingerprintJson(resolution)) ||
+        validation.completion_fingerprint !== (await fingerprintJson(completion)) ||
+        validation.compaction_fingerprint !== (await fingerprintJson(compaction)) ||
+        validation.acceptance_fingerprint !== (await fingerprintJson(acceptance))
+    )
+        throw new Error('Indexed validation audit changed its exact committed processing witness');
+    if (job.processor_version === '3') {
+        const bindings = validation.original_result_bindings;
+        if (
+            !bindings ||
+            !sameIndexedRecord(
+                Object.keys(bindings).sort(),
+                Object.keys(validation.replacement_turn_fingerprints).sort(),
+            ) ||
+            Object.values(bindings).some(
+                (binding) =>
+                    !validation.dependencies.some(
+                        (dependency) => dependency.family === 'turns' && dependency.descriptor.id === binding.turn_id,
+                    ) ||
+                    !validation.dependencies.some(
+                        (dependency) => dependency.family === 'blocks' && dependency.descriptor.id === binding.block_id,
+                    ),
+            )
+        )
+            throw new Error('Indexed chained validation lost its distinct immutable original result bindings');
+    } else if (validation.original_result_bindings !== undefined)
+        throw new Error('Indexed original tool-result validation has unexpected chained bindings');
+    for (const dependency of validation.dependencies) {
+        const actual = await getPagedRecord(store, root.directories[dependency.family], dependency.descriptor.id);
+        if (
+            actual === undefined ||
+            canonicalJsonContentString(actual) !== canonicalJsonContentString(dependency.descriptor)
+        )
+            throw new Error('Indexed validation audit changed its immutable original record descriptor');
+    }
+}
+
+/** One accepted predecessor projection. It never resolves the original result/output body. */
+async function indexedToolResultProjectionWitness(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    compactionId: string,
+    turnId: string,
+    terminal: ExecutionReceipt,
+) {
+    const compaction = await indexedRecordById(
+        store,
+        root,
+        'compactions',
+        compactionId,
+        IndexedConversationCompactionHeaderSchema,
+    );
+    if (!compaction?.operation_id.startsWith('processing:apply:') || !terminal.result_turn_id)
+        throw new Error('Indexed chained source lacks its registered predecessor and terminal');
+    const jobId = compaction.operation_id.slice('processing:apply:'.length);
+    await auditIndexedToolResultValidation(store, root, jobId);
+    const validation = await indexedProcessingRecord(
+        store,
+        root,
+        'tool_result_validations',
+        jobId,
+        IndexedToolResultValidationSchema,
+    );
+    const binding = validation?.original_result_bindings?.[turnId];
+    const originalBlock =
+        binding?.block_id ??
+        validation?.dependencies.find(
+            (item) => item.family === 'blocks' && item.descriptor.content_hash === terminal.result_fingerprint,
+        )?.descriptor.id;
+    if (
+        !validation?.replacement_turn_fingerprints[turnId] ||
+        !originalBlock ||
+        !validation.dependencies.some(
+            (dependency) => dependency.family === 'turns' && dependency.descriptor.id === terminal.result_turn_id,
+        ) ||
+        (binding && binding.turn_id !== terminal.result_turn_id)
+    )
+        throw new Error('Indexed chained source changed its immutable original terminal identity');
+    return {
+        compaction_id: compaction.id,
+        compaction_fingerprint: await fingerprintJson(compaction),
+        projection_fingerprint: validation.replacement_turn_fingerprints[turnId],
+        terminal_execution_id: terminal.id,
+        original_result_turn_id: terminal.result_turn_id,
+        original_result_block_id: originalBlock,
+    };
+}
+
+/** Explicit upgrade only: repair/audit one job's point terminal relations after all retained
+ * missing validations have been regenerated. No original result/output bodies are read here.
+ */
+export async function recoverIndexedToolResultTerminalRelations(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    jobId: string,
+): Promise<IndexedConversationDirectories> {
+    const directories = { ...root.directories };
+    await auditIndexedToolResultValidation(store, root, jobId);
+    await stageIndexedToolResultTerminalValidation(store, { ...root, directories }, directories, jobId);
+    return directories;
+}
+
+/** Explicit upgrade/recovery only. Rebuild active tool-result validation from complete
+ * retained originals under the caller's recovery IO budget; ordinary preparation never does this. */
+export async function recoverIndexedToolResultValidations(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    resolveOriginalRoot?: (source: { conversation_id: string; revision: number }) => Promise<PagedRecordRef>,
+    retainedCompactionIds?: readonly string[],
+    stagingOptions: { defer_terminal_relations?: boolean } = {},
+): Promise<IndexedConversationDirectories> {
+    const directories = { ...root.directories };
+    const context = retainedCompactionIds === undefined ? await loadIndexedActiveContext(store, root) : undefined;
+    // Explicit upgrade obligations may include inactive retained compactions. Their IDs only
+    // nominate work: the exact accepted source, job, output and replacement are still verified.
+    const ids = retainedCompactionIds ?? [
+        ...new Set(
+            (context?.entries ?? []).flatMap((entry) =>
+                entry.type === 'replacement_turn' ? [entry.compaction_id] : [],
+            ),
+        ),
+    ];
+    for (const compactionId of ids) {
+        const header = await indexedRecordById(
+            store,
+            root,
+            'compactions',
+            compactionId,
+            IndexedConversationCompactionHeaderSchema,
+        );
+        if (!header || !isToolResultTextStrategy(header.strategy.id, header.strategy.version)) continue;
+        // The genuine accepted replacement header carries its exact operation witness.
+        const acceptance = await indexedRecordById(
+            store,
+            root,
+            'operation_receipts',
+            header.operation_id,
+            OperationReceiptSchema,
+        );
+        if (!acceptance?.id.startsWith('processing:apply:'))
+            throw new Error('Indexed recovery compaction lacks registered processing acceptance');
+        const jobId = acceptance.id.slice('processing:apply:'.length);
+        if (await getPagedRecord(store, directories.processing_records, tupleKey('tool_result_validations', jobId))) {
+            await auditIndexedToolResultValidation(store, { ...root, directories }, jobId);
+            if (stagingOptions.defer_terminal_relations !== true)
+                await stageIndexedToolResultTerminalValidation(store, { ...root, directories }, directories, jobId);
+            continue;
+        }
+        const job = await indexedProcessingRecord(store, root, 'jobs', jobId, ProcessingJobSchema);
+        const resolution = await indexedProcessingRecord(
+            store,
+            root,
+            'resolved_inputs',
+            jobId,
+            ProcessingResolvedInputSchema,
+        );
+        const output = await indexedProcessingRecord(store, root, 'outputs', jobId, ProcessingOutputReceiptSchema);
+        const completion = await indexedProcessingRecord(
+            store,
+            root,
+            'completions',
+            jobId,
+            ProcessingCompletionReceiptSchema,
+        );
+        const archive = await indexedRecordById(
+            store,
+            root,
+            'operation_receipts',
+            `processing:archive:${jobId}`,
+            OperationReceiptSchema,
+        );
+        if (
+            !job ||
+            !isToolResultTextProcessor(job) ||
+            !resolution ||
+            output?.kind !== 'proposal' ||
+            output.proposal.kind !== 'replace_with_compaction' ||
+            completion?.status !== 'applied' ||
+            !archive ||
+            output.proposal.compaction_id !== compactionId ||
+            completion.context_change_operation_id !== acceptance.id
+        )
+            throw new Error('Indexed recovery lacks its complete original processing lineage');
+        const attempt = await indexedProcessingRecord(store, root, 'attempts', jobId, ProcessingAttemptReceiptSchema);
+        if (
+            job.id !== jobId ||
+            job.processor_version !== header.strategy.version ||
+            job.configuration_fingerprint !== header.strategy.configuration_fingerprint ||
+            (await fingerprintJson(job.configuration)) !== job.configuration_fingerprint ||
+            (await fingerprintJson(job.selection)) !== job.selection_fingerprint ||
+            resolution.job_id !== jobId ||
+            resolution.source_fingerprint !== header.source.source_fingerprint ||
+            !attempt ||
+            attempt.job_id !== jobId ||
+            attempt.resolved_input_fingerprint !== (await fingerprintJson(resolution)) ||
+            output.job_id !== jobId ||
+            output.attempt_token !== attempt.attempt_token ||
+            output.resolved_input_fingerprint !== attempt.resolved_input_fingerprint ||
+            output.output_fingerprint !==
+                (await fingerprintJson((({ output_fingerprint: _hash, ...payload }) => payload)(output))) ||
+            acceptance.operation_kind !== 'context_change' ||
+            acceptance.conversation_id !== root.source.conversation_id ||
+            acceptance.result_revision > root.source.revision ||
+            acceptance.payload_fingerprint !== (await fingerprintJson(output.proposal)) ||
+            completion.job_id !== jobId ||
+            completion.output_fingerprint !== output.output_fingerprint ||
+            completion.result_revision !== acceptance.result_revision ||
+            canonicalJsonContentString(completion.inserted_entry_ids) !==
+                canonicalJsonContentString(acceptance.accepted_context_entry_ids ?? []) ||
+            canonicalJsonContentString(resolution.entry_ids) !==
+                canonicalJsonContentString(acceptance.context_change?.removed_entry_ids)
+        )
+            throw new Error('Indexed recovery changed its original immutable processing evidence');
+        let originalSource = await indexedProcessingRecord(
+            store,
+            root,
+            'tool_result_sources',
+            jobId,
+            IndexedToolResultOriginalSourceSchema,
+        );
+        if (!originalSource) {
+            if (!resolveOriginalRoot) throw new IndexedToolResultOriginalSourceUnavailableError(jobId);
+            const originalLocator = PagedRecordRefSchema.parse(
+                await resolveOriginalRoot({
+                    conversation_id: root.source.conversation_id,
+                    revision: resolution.source_revision,
+                }),
+            );
+            originalSource = IndexedToolResultOriginalSourceSchema.parse({
+                version: 1,
+                job_id: jobId,
+                job_fingerprint: await fingerprintJson(job),
+                resolved_input_fingerprint: await fingerprintJson(resolution),
+                source: { kind: 'indexed_root', root: originalLocator },
+            });
+        }
+        if (
+            originalSource.job_id !== jobId ||
+            originalSource.job_fingerprint !== (await fingerprintJson(job)) ||
+            originalSource.resolved_input_fingerprint !== (await fingerprintJson(resolution))
+        )
+            throw new Error('Indexed recovery changed its authenticated original source binding');
+        let frame: ToolResultTextSelectionFrame;
+        let definitions: Record<string, ToolDefinition>;
+        if (originalSource.source.kind === 'indexed_root') {
+            const originalLocator = originalSource.source.root;
+            const originalRoot = await loadRecord(
+                store,
+                {
+                    storage: 'record',
+                    kind: 'root',
+                    id: root.source.conversation_id,
+                    ...originalLocator,
+                },
+                IndexedConversationRootSchema,
+            );
+            const originalJob = await indexedProcessingRecord(store, originalRoot, 'jobs', jobId, ProcessingJobSchema);
+            if (
+                originalRoot.source.conversation_id !== root.source.conversation_id ||
+                originalRoot.source.revision < resolution.source_revision ||
+                originalRoot.source.revision > acceptance.base_revision ||
+                !sameIndexedRecord(originalJob, job)
+            )
+                throw new Error('Indexed recovery original root is foreign to its accepted job');
+            const originalSelected = await loadIndexedProcessingToolResultSelectedContext(
+                store,
+                originalRoot,
+                originalLocator,
+            );
+            if (
+                originalSelected.context.revision !== resolution.context_revision ||
+                (await indexedProcessingContextFingerprint(originalSelected)) !== resolution.context_fingerprint
+            )
+                throw new Error('Indexed recovery original root changed its accepted context closure');
+            frame = await indexedToolResultTextFrame(
+                originalSelected,
+                activeIndexedContextWorkingSet(originalSelected),
+            );
+            definitions = originalSelected.tool_definitions;
+        } else {
+            const originalContext = originalSource.source.context;
+            const turns = new Map<string, ConversationTurn>();
+            for (const item of originalContext.entries) {
+                const projected = await loadIndexedProjectedTurn(store, root, item.turn_id);
+                if (projected.completeness !== 'full_turn')
+                    throw new Error('Indexed migration recovery lacks its complete original active turn');
+                turns.set(
+                    item.turn_id,
+                    ConversationTurnSchema.parse({
+                        ...projected.header,
+                        blocks: projected.selected_blocks,
+                    }),
+                );
+            }
+            if (
+                originalContext.revision !== resolution.context_revision ||
+                (await fingerprintJson({
+                    context: originalContext,
+                    entries: originalContext.entries.map((item) => ({ entry: item, turn: turns.get(item.turn_id) })),
+                })) !== resolution.context_fingerprint
+            )
+                throw new Error('Indexed migration recovery changed its accepted original context closure');
+            const receipts: Record<string, ExecutionReceipt> = {};
+            for (const id of resolution.source_turn_ids) {
+                const turn = turns.get(id);
+                if (turn?.kind !== 'tool' || !turn.execution_id)
+                    throw new Error('Indexed recovery original result is unavailable');
+                const receipt = await indexedRecordById(
+                    store,
+                    root,
+                    'execution_receipts',
+                    turn.execution_id,
+                    ExecutionReceiptSchema,
+                );
+                if (!receipt?.call_source) throw new Error('Indexed recovery lacks its exact original call source');
+                receipts[receipt.id] = receipt;
+            }
+            const projectionWitnesses: Record<
+                string,
+                Awaited<ReturnType<typeof indexedToolResultProjectionWitness>>
+            > = {};
+            for (const entry of originalContext.entries) {
+                if (entry.type !== 'replacement_turn' || !resolution.entry_ids.includes(entry.id)) continue;
+                const turn = turns.get(entry.turn_id);
+                const terminal = turn?.execution_id ? receipts[turn.execution_id] : undefined;
+                if (!terminal) throw new Error('Indexed chained recovery lacks its immutable terminal receipt');
+                projectionWitnesses[entry.turn_id] = await indexedToolResultProjectionWitness(
+                    store,
+                    root,
+                    entry.compaction_id,
+                    entry.turn_id,
+                    terminal,
+                );
+            }
+            frame = {
+                source: { conversation_id: root.source.conversation_id, revision: acceptance.base_revision },
+                projection_witnesses: projectionWitnesses,
+                context: originalContext,
+                turns,
+                active_blocks: new Map(
+                    originalContext.entries.map((item) => [item.id, resolveContextEntry(turns, item).blocks]),
+                ),
+                execution_receipts: receipts,
+            };
+            definitions = {};
+            for (const id of originalContext.active_tool_definition_ids) {
+                const definition = await indexedRecordById(store, root, 'tool_definitions', id, ToolDefinitionSchema);
+                if (!definition) throw new Error('Indexed recovery lost its original active tool definition');
+                definitions[id] = definition;
+            }
+        }
+        // Older indexes omitted removed entries. Restore only the authenticated historical
+        // entries held by the exact source closure, never values nominated by today's context.
+        for (const id of resolution.entry_ids) {
+            const original = frame.context.entries.find((item) => item.id === id);
+            if (!original) throw new Error('Indexed recovery lost its accepted original entry');
+            const existing = await getPagedRecord(store, directories.context_entries, id);
+            if (existing) {
+                if (!sameIndexedRecord(await loadRecord(store, existing, ContextEntrySchema), original))
+                    throw new Error('Indexed recovery changed its retained original entry');
+            } else
+                directories.context_entries = await putPagedRecord(
+                    store,
+                    directories.context_entries,
+                    id,
+                    await stageRecord(store, 'context_entries', id, original),
+                );
+        }
+        const assets: Record<string, Asset> = {};
+        for (const id of new Set([
+            ...(archive.accepted_asset_ids ?? []),
+            ...[...frame.turns.values()].flatMap((turn) => [...collectAssetIds(turn.blocks)]),
+        ])) {
+            const asset = await indexedRecordById(store, root, 'assets', id, AssetSchema);
+            if (!asset) throw new Error('Indexed recovery original asset is absent');
+            assets[id] = asset;
+        }
+        const indexedArchive = await fingerprintJson((archive.accepted_asset_ids ?? []).map((id) => assets[id]));
+        const rebuilt = await buildToolResultTextWorkingProposal(
+            frame,
+            assets,
+            definitions,
+            archive,
+            archive.payload_fingerprint === indexedArchive ? 'indexed_assets' : 'tool_result_text',
+            job,
+            resolution,
+            toolResultTextArchiveRetrievals(output.proposal, archive),
+        );
+        if (canonicalJsonContentString(rebuilt.proposal) !== canonicalJsonContentString(output.proposal))
+            throw new Error('Indexed recovery changed its deterministic original tool-result transformation');
+        const replacementTurns = await Promise.all(
+            output.proposal.replacement_turns.map(async (turn) => {
+                const projected = await loadIndexedProjectedTurn(store, root, turn.id);
+                return ConversationTurnSchema.parse({ ...projected.header, blocks: projected.selected_blocks });
+            }),
+        );
+        const compaction = { ...header, replacement_turns: replacementTurns };
+        if (
+            canonicalJsonContentString(replacementTurns) !==
+            canonicalJsonContentString(output.proposal.replacement_turns)
+        )
+            throw new Error('Indexed recovery changed its accepted context projection');
+        await stageIndexedToolResultOriginalSource(store, directories, job, resolution, originalSource.source);
+        await stageIndexedToolResultValidation(
+            store,
+            { ...root, directories },
+            directories,
+            frame,
+            job,
+            resolution,
+            output,
+            completion,
+            compaction,
+            acceptance,
+            stagingOptions.defer_terminal_relations === true,
+        );
+    }
+    return directories;
+}
 
 /** One-time legacy import is bounded independently of ordinary 250k-node document operations. */
 const INDEXED_MIGRATION_JSON_LIMITS = Object.freeze({
@@ -675,10 +1613,124 @@ export async function stageIndexedConversationSnapshot(
     source: ConversationDocument,
     acceptedOperationId: string | undefined,
     store: IndexedConversationRecordStore,
+    resolveOriginalDocument?: ToolResultOriginalDocumentResolver,
 ): Promise<StagedIndexedConversationRoot> {
     // Parse and own the complete bounded source before writing any indexed record. This one-time
     // profile admits 100k compact turns while keeping the ordinary append/import limit unchanged.
     const document = parseConversationDocument(source, { json_input_limits: INDEXED_MIGRATION_JSON_LIMITS });
+    // The explicit snapshot owns full original receipts. Authenticate historical policy commands
+    // before writing any new indexed bytes, independently of jobs' remembered configurations.
+    const snapshotPolicies = new Map<
+        number,
+        { command: z.infer<typeof ProcessingPolicyCommandSchema>; receipt: OperationReceipt }
+    >();
+    for (const receipt of Object.values(document.operation_receipts)) {
+        if (receipt.operation_kind !== 'processing' || receipt.processing_operation?.phase !== 'policy') continue;
+        const epoch = receipt.processing_operation.policy_revision + 1;
+        let command = receipt.processing_operation.policy_command;
+        if (command === undefined) {
+            let original = document.processing.policy_revision === epoch ? document : undefined;
+            if (original === undefined && resolveOriginalDocument !== undefined) {
+                const source = { conversation_id: document.id, revision: receipt.result_revision };
+                const recovered = parseConversationDocument(await resolveOriginalDocument(source), {
+                    json_input_limits: INDEXED_MIGRATION_JSON_LIMITS,
+                });
+                if (
+                    recovered.id !== source.conversation_id ||
+                    recovered.revision !== source.revision ||
+                    recovered.processing.policy_revision !== epoch ||
+                    !sameIndexedRecord(recovered.operation_receipts[receipt.id], receipt)
+                )
+                    throw new Error(
+                        'Indexed historical policy resolver changed its exact authenticated original source',
+                    );
+                original = recovered;
+            }
+            if (original !== undefined) {
+                const reasons = (receipt.processing_operation.superseded_job_ids ?? []).map(
+                    (id) => original.processing.supersessions?.[id],
+                );
+                const reason = reasons[0]?.reason;
+                if (
+                    reasons.some(
+                        (item) =>
+                            item === undefined || item.policy_operation_id !== receipt.id || item.reason !== reason,
+                    )
+                )
+                    throw new Error('Indexed policy original supersession reason has no exact accepted source');
+                command = await recoverAcceptedProcessingPolicyCommand(receipt, original.processing, reason);
+            }
+        }
+        if (command === undefined) continue;
+        await assertIndexedProcessingPolicyAcceptance(
+            { conversation_id: document.id, revision: document.revision },
+            command,
+            receipt,
+        );
+        if (
+            epoch === document.processing.policy_revision &&
+            (command.enabled !== document.processing.enabled ||
+                !sameIndexedRecord(command.processors, document.processing.processors) ||
+                !sameIndexedRecord(command.budget ?? null, document.processing.budget ?? null))
+        )
+            throw new Error('Indexed snapshot current policy differs from its retained accepted command');
+        if (epoch > document.processing.policy_revision || snapshotPolicies.has(epoch))
+            throw new Error('Indexed snapshot policy epoch is impossible or ambiguous');
+        snapshotPolicies.set(epoch, { command, receipt });
+    }
+    const firstPolicy = snapshotPolicies.get(1);
+    const capturedGenesis = firstPolicy?.receipt.processing_operation?.policy_genesis;
+    let originalGenesis: ConversationDocument | undefined;
+    if (
+        document.processing.policy_revision > 0 &&
+        Object.values(document.processing.jobs ?? {}).some((job) => job.policy_revision === 0)
+    ) {
+        if (firstPolicy?.receipt.processing_operation?.policy_revision !== 0)
+            throw new Error('Indexed materialized genesis requires its genuine first accepted policy command');
+        if (capturedGenesis === undefined && resolveOriginalDocument !== undefined) {
+            const source = { conversation_id: document.id, revision: firstPolicy.receipt.base_revision };
+            originalGenesis = parseConversationDocument(await resolveOriginalDocument(source), {
+                json_input_limits: INDEXED_MIGRATION_JSON_LIMITS,
+            });
+            if (
+                originalGenesis.id !== source.conversation_id ||
+                originalGenesis.revision !== source.revision ||
+                originalGenesis.processing.policy_revision !== 0 ||
+                originalGenesis.operation_receipts[firstPolicy.receipt.id] !== undefined
+            )
+                throw new Error('Indexed materialized genesis resolver changed its exact predecessor source');
+        }
+        if (capturedGenesis === undefined && originalGenesis === undefined)
+            throw new Error('Indexed materialized genesis requires an authenticated original predecessor policy');
+    }
+    for (const job of Object.values(document.processing.jobs ?? {})) {
+        const accepted = snapshotPolicies.get(job.policy_revision);
+        const policy =
+            job.policy_revision === 0
+                ? document.processing.policy_revision === 0
+                    ? document.processing
+                    : (capturedGenesis?.policy ?? originalGenesis?.processing)
+                : accepted?.command;
+        const configuration = policy?.processors[job.processor_index];
+        if (
+            !policy?.enabled ||
+            !configuration ||
+            (job.policy_revision === 0 &&
+                firstPolicy !== undefined &&
+                job.enqueue_revision > firstPolicy.receipt.base_revision) ||
+            (job.policy_revision === 0 &&
+                originalGenesis !== undefined &&
+                !sameIndexedRecord(originalGenesis.processing.jobs?.[job.id], job)) ||
+            (accepted !== undefined && accepted.receipt.result_revision > job.enqueue_revision) ||
+            configuration.id !== job.processor_id ||
+            configuration.version !== job.processor_version ||
+            configuration.scope !== job.scope ||
+            configuration.required !== job.required ||
+            configuration.failure_behavior !== job.failure_behavior ||
+            (await fingerprintJson(configuration.config)) !== job.configuration_fingerprint
+        )
+            throw new Error('Indexed snapshot historical job requires authenticated original policy evidence');
+    }
     if (Object.keys(document.deleted_turns ?? {}).length > 0) {
         throw new Error('Indexed migration cannot retain logical-delete tombstone witnesses yet');
     }
@@ -834,7 +1886,7 @@ export async function stageIndexedConversationSnapshot(
         }
     }
     for (const [id, compaction] of Object.entries(document.compactions)) {
-        const { replacement_turns: replacementTurns, ...header } = compaction;
+        const { replacement_turns: replacementTurns, original_context: _originalContext, ...header } = compaction;
         await stageFamily('compactions', id, header);
         for (const turn of replacementTurns) await stageTurn(turn, 'replacement', id);
     }
@@ -882,11 +1934,146 @@ export async function stageIndexedConversationSnapshot(
         for (const [id, record] of Object.entries(records))
             await stageFamily('processing_records', id, record, tupleKey(family, id));
     }
+    let selectedPolicyOperationId: string | undefined;
+    for (const [epoch, { command, receipt }] of snapshotPolicies) {
+        await stageFamily('processing_records', receipt.id, command, tupleKey('selected_policy_commands', receipt.id));
+        await stageFamily(
+            'processing_records',
+            String(epoch),
+            IndexedProcessingPolicyEpochSchema.parse({
+                version: 1,
+                kind: 'accepted_command',
+                policy_revision: epoch,
+                operation_id: receipt.id,
+                receipt_fingerprint: await fingerprintJson(receipt),
+            }),
+            tupleKey('policy_epochs', String(epoch)),
+        );
+        if (epoch === document.processing.policy_revision) selectedPolicyOperationId = receipt.id;
+    }
+    if (capturedGenesis !== undefined && firstPolicy !== undefined)
+        await stageFamily(
+            'processing_records',
+            '0',
+            IndexedProcessingPolicyEpochSchema.parse({
+                version: 1,
+                kind: 'materialized_genesis',
+                policy_revision: 0,
+                operation_id: firstPolicy.receipt.id,
+                receipt_fingerprint: await fingerprintJson(firstPolicy.receipt),
+            }),
+            tupleKey('policy_epochs', '0'),
+        );
+    else if (originalGenesis !== undefined && firstPolicy !== undefined) {
+        const {
+            jobs: _genesisJobs,
+            resolved_inputs: _genesisInputs,
+            attempts: _genesisAttempts,
+            outputs: _genesisOutputs,
+            completions: _genesisCompletions,
+            supersessions: _genesisSupersessions,
+            coverage_receipts: _genesisCoverageReceipts,
+            ...originalHeader
+        } = originalGenesis.processing;
+        const descriptor = await stageRecord(
+            store,
+            'processing_header',
+            document.id,
+            IndexedConversationProcessingHeaderSchema.parse(originalHeader),
+        );
+        await stageFamily(
+            'processing_records',
+            '0',
+            IndexedProcessingPolicyEpochSchema.parse({
+                version: 1,
+                kind: 'genesis',
+                policy_revision: 0,
+                source: { conversation_id: originalGenesis.id, revision: originalGenesis.revision },
+                processing_header: { content_hash: descriptor.content_hash, size_bytes: descriptor.size_bytes },
+                successor_policy_operation_id: firstPolicy.receipt.id,
+                successor_policy_receipt_fingerprint: await fingerprintJson(firstPolicy.receipt),
+            }),
+            tupleKey('policy_epochs', '0'),
+        );
+    }
     const operationJobs = new Map<string, ProcessingJob[]>();
     for (const job of Object.values(document.processing.jobs ?? {})) {
         const jobs = operationJobs.get(job.source_operation_id) ?? [];
         jobs.push(job);
         operationJobs.set(job.source_operation_id, jobs);
+        const queueReceipt = document.operation_receipts[job.source_operation_id];
+        if (queueReceipt?.processing_operation?.phase === 'queue') {
+            const captured = queueReceipt.processing_operation.queue_command;
+            const knownLegacy =
+                isToolResultTextProcessor(job) &&
+                supportsToolResultTextProcessingScope(job) &&
+                job.scope === 'manual' &&
+                job.stage_index === 0 &&
+                job.selection.kind === 'entries' &&
+                job.selection.selected_block_ids === undefined;
+            // Preserve old generic snapshot support. Unknown legacy queue commands are not
+            // invented; their later explicit native processing/upgrade audit remains unsupported.
+            if (captured || knownLegacy) {
+                if (job.selection.kind !== 'entries')
+                    throw new Error('Indexed migration materialized queue lacks its accepted entry selection');
+                const output = document.processing.outputs?.[job.id];
+                const originalContext =
+                    output?.kind === 'proposal' && output.proposal.kind === 'replace_with_compaction'
+                        ? document.compactions[output.proposal.compaction_id]?.original_context
+                        : undefined;
+                const context = originalContext ?? document.context;
+                const candidates = queueReceipt.processing_operation.queue_selected_entries ?? context.entries;
+                const selectedEntries = job.selection.entry_ids.map((id) =>
+                    candidates.find((entry) => entry.id === id),
+                );
+                if (selectedEntries.some((entry) => entry === undefined))
+                    throw new Error('Indexed migration materialized queue lacks its exact retained selection closure');
+                const entries = selectedEntries.filter((entry): entry is ContextEntry => entry !== undefined);
+                const input = ProcessingQueueAcceptanceInputSchema.parse(
+                    captured ?? {
+                        command: {
+                            operation_id: queueReceipt.id,
+                            expected_revision: queueReceipt.base_revision,
+                            recorded_at: queueReceipt.recorded_at,
+                            processor_id: job.processor_id,
+                            scope: job.scope,
+                            ...(job.target_fingerprint === undefined
+                                ? {}
+                                : { target_fingerprint: job.target_fingerprint }),
+                        },
+                        selection: {
+                            conversation: { conversation_id: document.id, revision: queueReceipt.base_revision },
+                            expected_context_revision: context.revision,
+                            selector: { source: { kind: 'turn_ids', turn_ids: entries.map((entry) => entry.turn_id) } },
+                        },
+                    },
+                );
+                if (
+                    queueReceipt.payload_fingerprint !== (await fingerprintJson(input)) ||
+                    (!captured &&
+                        (input.selection.selector.source.kind !== 'turn_ids' ||
+                            input.selection.selector.filters !== undefined ||
+                            !sameIndexedRecord(
+                                input.selection.selector.source.turn_ids,
+                                entries.map((entry) => entry.turn_id),
+                            )))
+                )
+                    throw new Error(
+                        'Indexed migration materialized queue cannot reconstruct its exact accepted command',
+                    );
+                await stageFamily(
+                    'processing_records',
+                    queueReceipt.id,
+                    IndexedMaterializedProcessingQueueSchema.parse({
+                        version: 1,
+                        ...input,
+                        selected_entries: entries,
+                        legacy_reconstructed: captured === undefined,
+                    }),
+                    tupleKey('materialized_queue_commands', queueReceipt.id),
+                );
+            }
+        }
         if (job.required && !document.processing.supersessions?.[job.id])
             families.processing_required.push({
                 key: job.id,
@@ -943,6 +2130,14 @@ export async function stageIndexedConversationSnapshot(
             value: { storage: 'marker', kind: 'context_order', id: entry.id },
         });
     }
+    // Removed source entries remain point-addressable proof inputs for recovery attestations.
+    const retainedEntryIds = new Set(document.context.entries.map((entry) => entry.id));
+    for (const receipt of Object.values(document.operation_receipts))
+        for (const entry of receipt.accepted_context_entries ?? []) {
+            if (retainedEntryIds.has(entry.id)) continue;
+            retainedEntryIds.add(entry.id);
+            await stageFamily('context_entries', entry.id, entry);
+        }
     const completedCalls = new Set<string>();
     for (const turn of document.turns) {
         for (const block of turn.blocks) if (block.type === 'tool_result') completedCalls.add(block.call_id);
@@ -1018,6 +2213,9 @@ export async function stageIndexedConversationSnapshot(
         document.id,
         IndexedConversationProcessingHeaderSchema.parse({
             ...processingHeader,
+            ...(selectedPolicyOperationId === undefined
+                ? {}
+                : { selected_policy_operation_id: selectedPolicyOperationId, selected_policy_origin: 'materialized' }),
             unresolved_job_count: countUnresolvedProcessingJobs(document.processing),
             job_count: Object.keys(document.processing.jobs ?? {}).length,
             required_job_count: Object.values(document.processing.jobs ?? {}).filter(
@@ -1034,6 +2232,22 @@ export async function stageIndexedConversationSnapshot(
             ).length,
         }),
     );
+    if (document.processing.policy_revision === 0)
+        await stageFamily(
+            'processing_records',
+            '0',
+            IndexedProcessingPolicyEpochSchema.parse({
+                version: 1,
+                kind: 'genesis',
+                policy_revision: 0,
+                source: { conversation_id: document.id, revision: document.revision },
+                processing_header: {
+                    content_hash: processingHeaderValue.content_hash,
+                    size_bytes: processingHeaderValue.size_bytes,
+                },
+            }),
+            tupleKey('policy_epochs', '0'),
+        );
     const builtDirectories = await Promise.all(
         (Object.keys(families) as (keyof typeof families)[]).map(async (family) => ({
             family,
@@ -1073,6 +2287,128 @@ export async function stageIndexedConversationSnapshot(
             ? {}
             : { accepted_response: acceptedResponse(document, acceptedOperationId) }),
     });
+    let originalSourceDocumentBytes = 0;
+    // Migration is a one-time recovery boundary. Verify the deterministic transform here,
+    // while complete originals are already held, then retain the same body-free commit witness.
+    const migratedJobs = Object.values(document.processing.jobs ?? {}).sort((a, b) => {
+        const first = document.processing.completions?.[a.id]?.result_revision ?? Number.MAX_SAFE_INTEGER;
+        const second = document.processing.completions?.[b.id]?.result_revision ?? Number.MAX_SAFE_INTEGER;
+        return first - second || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    });
+    for (const job of migratedJobs) {
+        const completion = document.processing.completions?.[job.id];
+        // Retained applied jobs remain historical upgrade obligations after their replacement
+        // leaves the active context. The owned migration document already bounds this pass.
+        if (!isToolResultTextProcessor(job) || completion?.status !== 'applied') continue;
+        const resolution = document.processing.resolved_inputs?.[job.id];
+        const output = document.processing.outputs?.[job.id];
+        const acceptance = document.operation_receipts[completion.context_change_operation_id ?? ''];
+        const archive = document.operation_receipts[`processing:archive:${job.id}`];
+        if (
+            !resolution ||
+            output?.kind !== 'proposal' ||
+            output.proposal.kind !== 'replace_with_compaction' ||
+            !acceptance ||
+            !archive
+        )
+            throw new Error('Indexed tool-result migration lacks its complete processing lineage');
+        const compaction = document.compactions[output.proposal.compaction_id];
+        if (!compaction) throw new Error('Indexed tool-result migration lacks its accepted compaction');
+        const entryIndex = new Map(
+            Object.values(document.operation_receipts).flatMap((receipt) =>
+                (receipt.accepted_context_entries ?? []).map((entry) => [entry.id, entry] as const),
+            ),
+        );
+        const originalByReplacement = new Map(
+            completion.inserted_entry_ids.map(
+                (id, index) => [id, entryIndex.get(resolution.entry_ids[index])] as const,
+            ),
+        );
+        // Historical immediate compactions can be inverted only when the entire resulting
+        // context and every original active turn reproduce the accepted resolution fingerprint.
+        const candidateContext = compaction.original_context ?? {
+            ...document.context,
+            revision: resolution.context_revision,
+            entries: document.context.entries.map((entry) => originalByReplacement.get(entry.id) ?? entry),
+            retrieval_requirements: document.context.retrieval_requirements.filter(
+                (item) => item.accepted_asset_operation_id !== archive.id,
+            ),
+        };
+        let originalDocument = document;
+        let originalContext = candidateContext;
+        const sourceContextFingerprint = (sourceDocument: ConversationDocument, sourceContext: ConversationContext) => {
+            const originalTurns = createContextTurnIndex(sourceDocument);
+            return fingerprintJson({
+                context: sourceContext,
+                entries: sourceContext.entries.map((entry) => ({ entry, turn: originalTurns.get(entry.turn_id) })),
+            });
+        };
+        if (
+            candidateContext.revision !== resolution.context_revision ||
+            (await sourceContextFingerprint(originalDocument, originalContext)) !== resolution.context_fingerprint
+        ) {
+            if (compaction.original_context !== undefined)
+                throw new Error('Tool-result migration changed its retained original context');
+            if (!resolveOriginalDocument) throw new IndexedToolResultOriginalSourceUnavailableError(job.id);
+            originalDocument = parseConversationDocument(
+                await resolveOriginalDocument({ conversation_id: document.id, revision: resolution.source_revision }),
+                { json_input_limits: INDEXED_MIGRATION_JSON_LIMITS },
+            );
+            originalSourceDocumentBytes += canonicalJsonContentBytes(originalDocument).byteLength;
+            if (originalSourceDocumentBytes > INDEXED_PROCESSING_MAX_IO_BYTES)
+                throw new RangeError(
+                    'Tool-result migration historical documents exceed the finite recovery byte budget',
+                );
+            originalContext = originalDocument.context;
+            if (
+                originalDocument.id !== document.id ||
+                originalDocument.revision !== resolution.source_revision ||
+                originalDocument.context.revision !== resolution.context_revision ||
+                !sameIndexedRecord(originalDocument.processing.jobs?.[job.id], job) ||
+                (await sourceContextFingerprint(originalDocument, originalContext)) !== resolution.context_fingerprint
+            )
+                throw new Error('Tool-result migration resolver returned a foreign original context');
+        }
+        const turns = createContextTurnIndex(originalDocument);
+        const frame: ToolResultTextSelectionFrame = {
+            source: { conversation_id: document.id, revision: acceptance.base_revision },
+            context: originalContext,
+            turns,
+            active_blocks: new Map(
+                originalContext.entries.map((entry) => [entry.id, resolveContextEntry(turns, entry).blocks]),
+            ),
+            execution_receipts: originalDocument.execution_receipts,
+            projection_records: originalDocument,
+        };
+        const rebuilt = await buildToolResultTextWorkingProposal(
+            frame,
+            document.assets,
+            document.tool_definitions,
+            archive,
+            'tool_result_text',
+            job,
+            resolution,
+            toolResultTextArchiveRetrievals(output.proposal, archive),
+        );
+        if (canonicalJsonContentString(rebuilt.proposal) !== canonicalJsonContentString(output.proposal))
+            throw new Error('Indexed tool-result migration changed its deterministic original transformation');
+        await stageIndexedToolResultOriginalSource(store, root.directories, job, resolution, {
+            kind: 'materialized_context',
+            context: originalContext,
+        });
+        await stageIndexedToolResultValidation(
+            store,
+            root,
+            root.directories,
+            frame,
+            job,
+            resolution,
+            output,
+            completion,
+            compaction,
+            acceptance,
+        );
+    }
     const rootValue = await stageRecord(store, 'root', document.id, root);
     if (rootValue.size_bytes > INDEXED_CONVERSATION_ROOT_MAX_BYTES) {
         throw new RangeError('Indexed conversation root exceeds its manifest bound');
@@ -1503,7 +2839,7 @@ async function loadIndexedSelectedContext(
             else for (const id of entry.block_ids) prior.add(id);
         }
     }
-    const turns = [];
+    const turns: z.infer<typeof IndexedConversationSelectedContextSchema>['turns'] = [];
     const compactionWitnesses = new Map<
         string,
         {
@@ -1671,6 +3007,7 @@ async function loadIndexedSelectedContext(
     }
     const assets = new Map<string, z.infer<typeof AssetSchema>>();
     const executionWitnesses = new Map<string, z.infer<typeof ExecutionReceiptSchema>>();
+    const projectionWitnesses: Record<string, Awaited<ReturnType<typeof indexedToolResultProjectionWitness>>> = {};
     if (includeDependencies) {
         if (!root.tool_call_state_complete)
             throw new Error('Indexed dependency projection has incomplete call indexes');
@@ -1707,6 +3044,194 @@ async function loadIndexedSelectedContext(
             const descriptor = await getPagedRecord(store, root.directories[family], id);
             if (descriptor?.storage === 'record') reserve(descriptor.size_bytes, descriptor.content_hash);
             return loadRecord(store, descriptor, schema);
+        };
+        // Derived tool results are context projections only. Their sole terminal authority remains
+        // the immutable original accepted result and execution receipt, never the derived IDs.
+        // A committed processing witness shares descriptor checks within this root-pinned read.
+        const readToolResultLineage = async (jobId: string) => {
+            const job = await readDependency('processing_records', tupleKey('jobs', jobId), ProcessingJobSchema);
+            const resolution = await readDependency(
+                'processing_records',
+                tupleKey('resolved_inputs', jobId),
+                ProcessingResolvedInputSchema,
+            );
+            const attempt = await readDependency(
+                'processing_records',
+                tupleKey('attempts', jobId),
+                ProcessingAttemptReceiptSchema,
+            );
+            const completion = await readDependency(
+                'processing_records',
+                tupleKey('completions', jobId),
+                ProcessingCompletionReceiptSchema,
+            );
+            const validation = await readDependency(
+                'processing_records',
+                tupleKey('tool_result_validations', jobId),
+                IndexedToolResultValidationSchema,
+            );
+            const output = await getPagedRecord(store, root.directories.processing_records, tupleKey('outputs', jobId));
+            const originalSource = await getPagedRecord(
+                store,
+                root.directories.processing_records,
+                tupleKey('tool_result_sources', jobId),
+            );
+            return { job, resolution, attempt, completion, validation, output, originalSource };
+        };
+        const toolResultLineages = new Map<string, ReturnType<typeof readToolResultLineage>>();
+        const toolResultValidations = new Map<string, Promise<void>>();
+        const readDerivedToolResultOriginal = async (
+            result: NonNullable<ReturnType<typeof selectedResults.get>>,
+            state: z.infer<typeof IndexedCallStateSchema>,
+        ) => {
+            const id = replacementIds.get(result.turn.header.id);
+            const witness = id === undefined ? undefined : compactionWitnesses.get(id);
+            if (
+                !witness ||
+                !isToolResultTextStrategy(witness.compaction.strategy.id, witness.compaction.strategy.version) ||
+                !witness.acceptance.id.startsWith('processing:apply:') ||
+                !state.result_block_id ||
+                !state.terminal_receipt_id ||
+                result.turn.completeness !== 'full_turn' ||
+                result.turn.header.provenance.type !== 'derived'
+            )
+                throw new Error('Indexed derived tool result lacks its exact registered compaction lineage');
+            const jobId = witness.acceptance.id.slice('processing:apply:'.length);
+            let lineage = toolResultLineages.get(jobId);
+            if (!lineage) {
+                lineage = readToolResultLineage(jobId);
+                toolResultLineages.set(jobId, lineage);
+            }
+            const { job, resolution, attempt, completion, validation, output, originalSource } = await lineage;
+            const terminal = await readDependency(
+                'execution_receipts',
+                state.terminal_receipt_id,
+                ExecutionReceiptSchema,
+            );
+            const terminalResultTurnId = terminal.result_turn_id;
+            if (!terminalResultTurnId)
+                throw new Error('Indexed derived tool result lacks its original terminal result turn');
+            if (
+                job.id !== jobId ||
+                !isToolResultTextProcessor(job) ||
+                job.processor_version !== witness.compaction.strategy.version ||
+                job.configuration_fingerprint !== witness.compaction.strategy.configuration_fingerprint ||
+                (await fingerprintJson(job.configuration)) !== job.configuration_fingerprint ||
+                (await fingerprintJson(job.selection)) !== job.selection_fingerprint ||
+                resolution.job_id !== jobId ||
+                resolution.source_fingerprint !== witness.compaction.source.source_fingerprint ||
+                attempt.job_id !== jobId ||
+                attempt.resolved_input_fingerprint !== (await fingerprintJson(resolution)) ||
+                output?.storage !== 'record' ||
+                originalSource?.storage !== 'record' ||
+                originalSource.kind !== 'processing_records' ||
+                originalSource.id !== jobId ||
+                validation.original_source_record_fingerprint !== originalSource.content_hash ||
+                output.kind !== 'processing_records' ||
+                output.id !== jobId ||
+                output.content_hash !== validation.output_record_fingerprint ||
+                validation.compaction_id !== witness.compaction.id ||
+                witness.acceptance.payload_fingerprint !== validation.proposal_fingerprint ||
+                completion.job_id !== jobId ||
+                completion.status !== 'applied' ||
+                completion.output_fingerprint !== validation.output_fingerprint ||
+                completion.context_change_operation_id !== witness.acceptance.id ||
+                completion.result_revision !== witness.acceptance.result_revision ||
+                canonicalJsonContentString(completion.inserted_entry_ids) !==
+                    canonicalJsonContentString(witness.acceptance.accepted_context_entry_ids ?? []) ||
+                canonicalJsonContentString(resolution.entry_ids) !==
+                    canonicalJsonContentString(witness.acceptance.context_change?.removed_entry_ids) ||
+                witness.acceptance.context_change?.source_fingerprint !== resolution.source_fingerprint ||
+                (job.processor_version === '3'
+                    ? validation.original_result_bindings?.[result.turn.header.id]?.turn_id !== terminalResultTurnId ||
+                      validation.original_result_bindings?.[result.turn.header.id]?.block_id !== state.result_block_id
+                    : !resolution.source_turn_ids.includes(terminalResultTurnId) ||
+                      !witness.compaction.source.turn_ids.includes(terminalResultTurnId) ||
+                      !witness.compaction.source.block_ids?.includes(state.result_block_id)) ||
+                result.turn.header.execution_id !== terminal.id ||
+                terminal.call_id !== state.call_id
+            )
+                throw new Error(
+                    'Indexed derived tool result changed its immutable output/completion/original terminal evidence',
+                );
+            if (
+                validation.replacement_turn_fingerprints[result.turn.header.id] !==
+                (await fingerprintJson(
+                    ConversationTurnSchema.parse({ ...result.turn.header, blocks: result.turn.selected_blocks }),
+                ))
+            )
+                throw new Error('Indexed derived tool result differs from its exact accepted context projection');
+            if (
+                validation.job_id !== jobId ||
+                validation.job_fingerprint !== (await fingerprintJson(job)) ||
+                validation.attempt_fingerprint !== (await fingerprintJson(attempt)) ||
+                validation.resolved_input_fingerprint !== attempt.resolved_input_fingerprint ||
+                validation.completion_fingerprint !== (await fingerprintJson(completion)) ||
+                validation.compaction_fingerprint !== (await fingerprintJson(witness.compaction)) ||
+                validation.acceptance_fingerprint !== (await fingerprintJson(witness.acceptance))
+            )
+                throw new Error('Indexed tool-result validation differs from its committed processing lineage');
+            let validated = toolResultValidations.get(jobId);
+            if (!validated) {
+                validated = (async () => {
+                    for (const dependency of validation.dependencies) {
+                        const actual = await getPagedRecord(
+                            store,
+                            root.directories[dependency.family],
+                            dependency.descriptor.id,
+                        );
+                        if (
+                            actual === undefined ||
+                            canonicalJsonContentString(actual) !== canonicalJsonContentString(dependency.descriptor)
+                        )
+                            throw new Error('Indexed tool-result validation changed its original record descriptor');
+                    }
+                })();
+                toolResultValidations.set(jobId, validated);
+            }
+            await validated;
+            const originalHeader = await readDependency(
+                'turns',
+                terminalResultTurnId,
+                IndexedConversationTurnHeaderSchema,
+            );
+            const originalDescriptor = await getPagedRecord(store, root.directories.blocks, state.result_block_id);
+            const bound = (family: 'turns' | 'blocks' | 'execution_receipts', recordId: string) =>
+                validation.dependencies.find((item) => item.family === family && item.descriptor.id === recordId);
+            if (
+                originalHeader.source !== 'ordinary' ||
+                originalHeader.turn.kind !== 'tool' ||
+                originalHeader.turn.provenance.type === 'derived' ||
+                originalHeader.turn.execution_id !== terminal.id ||
+                originalHeader.block_ids.length !== 1 ||
+                originalHeader.block_ids[0] !== state.result_block_id ||
+                !bound('turns', terminalResultTurnId) ||
+                !bound('blocks', state.result_block_id) ||
+                !bound('execution_receipts', terminal.id) ||
+                originalDescriptor?.storage !== 'record' ||
+                originalDescriptor.content_hash !== terminal.result_fingerprint ||
+                terminal.status !== result.block.status
+            )
+                throw new Error('Indexed derived tool result lost its accepted original result binding');
+            if (purpose === 'processing')
+                projectionWitnesses[result.turn.header.id] = {
+                    compaction_id: witness.compaction.id,
+                    compaction_fingerprint: await fingerprintJson(witness.compaction),
+                    projection_fingerprint: validation.replacement_turn_fingerprints[result.turn.header.id],
+                    terminal_execution_id: terminal.id,
+                    original_result_turn_id: terminalResultTurnId,
+                    original_result_block_id: state.result_block_id,
+                };
+            operationWitnesses.set(witness.acceptance.id, witness.acceptance);
+            return {
+                turn: { header: originalHeader.turn },
+                block: {
+                    type: 'tool_result' as const,
+                    id: state.result_block_id,
+                    call_id: terminal.call_id,
+                    status: terminal.status,
+                },
+            };
         };
         for (const turn of turns) {
             if (
@@ -1882,7 +3407,10 @@ async function loadIndexedSelectedContext(
                     if (allowPendingCalls && !callState.result_block_id && !callState.terminal_receipt_id) continue;
                     throw new Error('Indexed selected call requires its exact selected terminal result');
                 }
-                if (callState.result_block_id !== result.block.id || !callState.terminal_receipt_id) {
+                const terminalResult = replacementIds.has(result.turn.header.id)
+                    ? await readDerivedToolResultOriginal(result, callState)
+                    : result;
+                if (callState.result_block_id !== terminalResult.block.id || !callState.terminal_receipt_id) {
                     throw new Error('Indexed selected result lacks its exact terminal receipt index');
                 }
                 if (!executionWitnesses.has(callState.terminal_receipt_id)) {
@@ -1894,12 +3422,12 @@ async function loadIndexedSelectedContext(
                     if (
                         receipt.id !== callState.terminal_receipt_id ||
                         receipt.call_id !== block.call_id ||
-                        receipt.result_turn_id !== result.turn.header.id ||
-                        receipt.status !== result.block.status ||
+                        receipt.result_turn_id !== terminalResult.turn.header.id ||
+                        receipt.status !== terminalResult.block.status ||
                         receipt.executor !== call.block.executor ||
                         (receipt.executor === 'application' && receipt.call_source === undefined) ||
-                        (result.turn.header.execution_id !== undefined &&
-                            result.turn.header.execution_id !== receipt.id) ||
+                        (terminalResult.turn.header.execution_id !== undefined &&
+                            terminalResult.turn.header.execution_id !== receipt.id) ||
                         (receipt.call_source !== undefined &&
                             (receipt.call_source.call_id !== block.call_id ||
                                 receipt.call_source.turn_id !== call.turn.header.id ||
@@ -1916,14 +3444,14 @@ async function loadIndexedSelectedContext(
                     const accepted = await getPagedRecord(
                         store,
                         root.directories.turn_acceptances,
-                        result.turn.header.id,
+                        terminalResult.turn.header.id,
                     );
                     const operation =
                         accepted?.storage === 'marker' && accepted.kind === 'turn_acceptance'
                             ? await readDependency('operation_receipts', accepted.id, OperationReceiptSchema)
                             : undefined;
                     if (
-                        !operation?.accepted_turn_ids?.includes(result.turn.header.id) ||
+                        !operation?.accepted_turn_ids?.includes(terminalResult.turn.header.id) ||
                         !operation.accepted_execution_receipt_ids?.includes(receipt.id) ||
                         operation.conversation_id !== root.source.conversation_id ||
                         operation.result_revision > root.source.revision
@@ -1931,7 +3459,8 @@ async function loadIndexedSelectedContext(
                         throw new Error('Indexed selected result lacks its accepted operation/receipt witness');
                     }
                     operationWitnesses.set(operation.id, operation);
-                    await assertToolResultReceiptFingerprint(result.block, receipt);
+                    if (!replacementIds.has(result.turn.header.id))
+                        await assertToolResultReceiptFingerprint(result.block, receipt);
                     executionWitnesses.set(receipt.id, receipt);
                 }
             }
@@ -1981,6 +3510,7 @@ async function loadIndexedSelectedContext(
             ? IndexedProcessingSelectedContextSchema.parse({
                   ...selectedInput,
                   completeness: 'active_processing_dependencies_verified',
+                  tool_result_projection_witnesses: projectionWitnesses,
               })
             : IndexedConversationSelectedContextSchema.parse(selectedInput);
     if (canonicalJsonContentBytes(selected).byteLength > maxSelectedBytes) {
@@ -2602,6 +4132,61 @@ export async function stageIndexedRecordBatch(
     input: IndexedRecordBatchCommand,
     store: IndexedConversationRecordStore,
 ): Promise<{ root: IndexedConversationRoot; locator?: PagedRecordRef; receipt: OperationReceipt; applied: boolean }> {
+    return stageIndexedRecordBatchOwned(rootInput, input, store, false);
+}
+
+/** Admit only one host-created application call, with an existing active definition. */
+export async function stageIndexedProgramToolCall(
+    rootInput: IndexedConversationRoot,
+    input: IndexedRecordBatchCommand,
+    store: IndexedConversationRecordStore,
+): Promise<{ root: IndexedConversationRoot; locator?: PagedRecordRef; receipt: OperationReceipt; applied: boolean }> {
+    if (!preflightJsonInput(input, { max_bytes: 512 * 1024 }).success)
+        throw new IndexedRecordAppendValidationError('Indexed program call exceeds its bounded operation');
+    const command = IndexedRecordBatchCommandSchema.parse(structuredClone(input));
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const turn = command.batch.turns?.[0];
+    const call = turn?.blocks[0];
+    const entry = command.batch.context_entries?.[0];
+    if (
+        Object.keys(command.batch).some((key) => key !== 'turns' && key !== 'context_entries') ||
+        command.batch.turns?.length !== 1 ||
+        command.batch.context_entries?.length !== 1 ||
+        turn?.kind !== 'program' ||
+        turn.authority !== 'ordinary' ||
+        turn.status !== 'completed' ||
+        turn.provenance.type !== 'inserted' ||
+        turn.provenance.operation_id !== command.options.operation_id ||
+        turn.timestamps.recorded_at !== command.options.recorded_at ||
+        turn.parent_turn_id !== undefined ||
+        turn.execution_id !== undefined ||
+        turn.blocks.length !== 1 ||
+        call?.type !== 'tool_call' ||
+        call.executor !== 'application' ||
+        call.definition_id === undefined ||
+        call.native_id !== undefined ||
+        call.arguments.type !== 'json' ||
+        call.arguments.value === null ||
+        typeof call.arguments.value !== 'object' ||
+        Array.isArray(call.arguments.value) ||
+        entry?.type !== 'source_turn' ||
+        entry.turn_id !== turn.id ||
+        entry.block_ids !== undefined
+    )
+        throw new IndexedRecordAppendValidationError('Indexed program call is not one honest inserted operation');
+    if (command.options.payload_fingerprint !== (await fingerprintJson(command.batch)))
+        throw new IndexedRecordAppendValidationError('Indexed program operation fingerprint differs');
+    const prior = await getPagedRecord(store, root.directories.operation_receipts, command.options.operation_id);
+    if (prior === undefined) await assertIndexedActiveCallDefinition(store, root, call);
+    return stageIndexedRecordBatchOwned(root, command, store, true);
+}
+
+async function stageIndexedRecordBatchOwned(
+    rootInput: IndexedConversationRoot,
+    input: IndexedRecordBatchCommand,
+    store: IndexedConversationRecordStore,
+    allowProgramCall: boolean,
+): Promise<{ root: IndexedConversationRoot; locator?: PagedRecordRef; receipt: OperationReceipt; applied: boolean }> {
     if (!preflightJsonInput(input, { max_bytes: INDEXED_CONVERSATION_ACTIVE_MAX_BYTES }).success) {
         throw new Error('Indexed append command is not bounded JSON');
     }
@@ -2790,6 +4375,18 @@ export async function stageIndexedRecordBatch(
         const existing = await indexedRecordById(store, root, 'tool_call_states', id, IndexedCallStateSchema);
         if (existing) {
             const retainedTurn = await loadIndexedProjectedTurn(store, root, existing.turn_id, [existing.block_id]);
+            if (retainedTurn.header.kind === 'program') {
+                const selected = await loadIndexedProgramToolCallSelection(store, root, {
+                    conversation: root.source,
+                    turn_id: existing.turn_id,
+                    block_id: existing.block_id,
+                    call_id: existing.call_id,
+                    call_fingerprint: existing.call_fingerprint,
+                });
+                callAcceptedRevisions.set(id, selected.operation_receipt.result_revision);
+                callStates.set(id, existing);
+                return existing;
+            }
             if (
                 retainedTurn.header.kind !== 'agent' ||
                 retainedTurn.header.provenance.type !== 'generated' ||
@@ -2937,12 +4534,14 @@ export async function stageIndexedRecordBatch(
                 }
             }
             if (block.type === 'tool_call') {
+                const programCall = allowProgramCall && turn.kind === 'program';
                 if (
-                    turn.kind !== 'agent' ||
-                    turn.provenance.type !== 'generated' ||
-                    !('generation_id' in turn) ||
-                    turn.generation_id === undefined ||
-                    !newGenerations.has(turn.generation_id)
+                    !programCall &&
+                    (turn.kind !== 'agent' ||
+                        turn.provenance.type !== 'generated' ||
+                        !('generation_id' in turn) ||
+                        turn.generation_id === undefined ||
+                        !newGenerations.has(turn.generation_id))
                 ) {
                     throw new Error('Indexed tool call requires an accepted generated agent turn');
                 }
@@ -3464,6 +5063,53 @@ export async function stageIndexedRecordBatch(
             });
         }
     }
+    const toolResultProcessor = processing.processors.find(
+        (processor) => processor.scope === 'on_append' && isToolResultTextStrategy(processor.id, processor.version),
+    );
+    let toolResultEntryIds: string[] | undefined;
+    if (processing.enabled && !assetOnly && toolResultProcessor) {
+        const bytes = canonicalJsonContentBytes(root);
+        const integrity = await hashContentBytes(bytes);
+        const selected = await loadIndexedProcessingToolResultSelectedContext(store, root, {
+            content_hash: integrity.content_hash,
+            size_bytes: integrity.byte_length,
+        });
+        const frame = await indexedToolResultTextFrame(selected, activeIndexedContextWorkingSet(selected));
+        const turns = new Map([...frame.turns, ...newTurns]);
+        for (const receipt of newExecution.values()) {
+            if (receipt.executor !== 'application' || !receipt.call_source || turns.has(receipt.call_source.turn_id))
+                continue;
+            const full = await loadIndexedProjectedTurn(store, root, receipt.call_source.turn_id);
+            turns.set(full.header.id, ConversationTurnSchema.parse({ ...full.header, blocks: full.selected_blocks }));
+        }
+        const activeBlocks = new Map(frame.active_blocks);
+        for (const entry of batch.context_entries ?? []) {
+            const turn = newTurns.get(entry.turn_id);
+            if (!turn) throw new Error('Indexed tool-result selection lost its accepted new turn');
+            activeBlocks.set(
+                entry.id,
+                entry.block_ids === undefined
+                    ? turn.blocks
+                    : turn.blocks.filter((block) => entry.block_ids?.includes(block.id)),
+            );
+        }
+        const nextFrame: ToolResultTextSelectionFrame = {
+            source: { conversation_id: root.source.conversation_id, revision: nextRevision },
+            context: nextContext,
+            turns,
+            active_blocks: activeBlocks,
+            execution_receipts: { ...frame.execution_receipts, ...Object.fromEntries(newExecution) },
+        };
+        toolResultEntryIds = await eligibleToolResultTextWorkingEntries(
+            nextFrame,
+            receipt.accepted_context_entry_ids ?? [],
+            {
+                processor_id: toolResultProcessor.id,
+                processor_version: toolResultProcessor.version,
+                configuration: toolResultProcessor.config,
+            },
+        );
+    }
     const acceptedJobs = await constructProcessingJobs({
         conversation_id: root.source.conversation_id,
         revision: nextRevision,
@@ -3472,6 +5118,7 @@ export async function stageIndexedRecordBatch(
         processors: processing.processors,
         processor_indices: processorIndices,
         entry_ids: selection.entryIds,
+        ...(toolResultEntryIds === undefined ? {} : { tool_result_entry_ids: toolResultEntryIds }),
         ...(exchangeSelections.length === 0 ? {} : { exchange_selections: exchangeSelections }),
         ...(selection.selectedBlockIds === undefined ? {} : { selected_block_ids: selection.selectedBlockIds }),
         ...(selection.selectedEntries === undefined ? {} : { selected_entries: selection.selectedEntries }),
@@ -4431,6 +6078,69 @@ export async function ownedIndexedProcessingJob(
             acceptance.id,
             IndexedProcessingQueueCommandSchema,
         );
+        if (command === undefined) {
+            const materialized = await indexedProcessingRecord(
+                store,
+                root,
+                'materialized_queue_commands',
+                acceptance.id,
+                IndexedMaterializedProcessingQueueSchema,
+            );
+            const selector = materialized?.selection.selector;
+            const captured = acceptance.processing_operation.queue_command;
+            if (
+                !materialized ||
+                job.stage_index !== 0 ||
+                relation.job_ids.length !== 1 ||
+                (materialized.legacy_reconstructed
+                    ? !isToolResultTextProcessor(job) ||
+                      !supportsToolResultTextProcessingScope(job) ||
+                      job.scope !== 'manual' ||
+                      selector?.source.kind !== 'turn_ids' ||
+                      selector.filters !== undefined ||
+                      captured !== undefined ||
+                      acceptance.processing_operation.job_id !== undefined
+                    : !captured ||
+                      acceptance.processing_operation.job_id !== job.id ||
+                      !sameIndexedRecord(captured, {
+                          command: materialized.command,
+                          selection: materialized.selection,
+                      }) ||
+                      !sameIndexedRecord(
+                          acceptance.processing_operation.queue_selected_entries,
+                          materialized.selected_entries,
+                      )) ||
+                acceptance.processing_operation.policy_revision !== job.policy_revision ||
+                job.selection.kind !== 'entries' ||
+                materialized.command.operation_id !== acceptance.id ||
+                materialized.command.expected_revision !== acceptance.base_revision ||
+                materialized.command.recorded_at !== acceptance.recorded_at ||
+                materialized.command.processor_id !== job.processor_id ||
+                materialized.command.scope !== job.scope ||
+                materialized.command.target_fingerprint !== job.target_fingerprint ||
+                materialized.selection.conversation.conversation_id !== root.source.conversation_id ||
+                materialized.selection.conversation.revision !== acceptance.base_revision ||
+                !sameIndexedRecord(
+                    materialized.selected_entries.map((entry) => entry.id),
+                    job.selection.entry_ids,
+                ) ||
+                (materialized.legacy_reconstructed &&
+                    selector?.source.kind === 'turn_ids' &&
+                    !sameIndexedRecord(
+                        materialized.selected_entries.map((entry) => entry.turn_id),
+                        selector.source.turn_ids,
+                    )) ||
+                acceptance.payload_fingerprint !==
+                    (await fingerprintJson({ command: materialized.command, selection: materialized.selection }))
+            )
+                throw new Error('Indexed materialized job lost its exact accepted queue command');
+            for (const entry of materialized.selected_entries) {
+                const descriptor = await getPagedRecord(store, root.directories.context_entries, entry.id);
+                if (descriptor?.storage !== 'record' || descriptor.content_hash !== (await fingerprintJson(entry)))
+                    throw new Error('Indexed materialized queue changed its retained selected entry binding');
+            }
+            return job;
+        }
         if (
             !command ||
             command.operation_id !== acceptance.id ||
@@ -4449,6 +6159,305 @@ export async function ownedIndexedProcessingJob(
             throw new Error('Indexed selected job lost its exact accepted queue command');
     }
     return job;
+}
+
+/** A point-addressed accepted policy epoch, never a processor list reconstructed from job data.
+ * Genesis pins the genuine immutable original header; no policy operation is invented for it. */
+export const IndexedProcessingPolicyEpochSchema = z.discriminatedUnion('kind', [
+    z.strictObject({
+        version: z.literal(1),
+        kind: z.literal('materialized_genesis'),
+        policy_revision: z.literal(0),
+        operation_id: IdentifierSchema,
+        receipt_fingerprint: ContentHashSchema,
+    }),
+    z.strictObject({
+        version: z.literal(1),
+        kind: z.literal('accepted_command'),
+        policy_revision: NonnegativeSafeIntegerSchema,
+        operation_id: IdentifierSchema,
+        receipt_fingerprint: ContentHashSchema,
+    }),
+    z.strictObject({
+        version: z.literal(1),
+        kind: z.literal('genesis'),
+        policy_revision: z.literal(0),
+        source: ConversationRefSchema,
+        processing_header: PagedRecordRefSchema,
+        successor_policy_operation_id: IdentifierSchema.optional(),
+        successor_policy_receipt_fingerprint: ContentHashSchema.optional(),
+    }),
+]);
+
+export async function assertIndexedProcessingPolicyAcceptance(
+    source: z.infer<typeof ConversationRefSchema>,
+    command: z.infer<typeof ProcessingPolicyCommandSchema>,
+    receipt: OperationReceipt,
+): Promise<void> {
+    if (
+        command.operation_id !== receipt.id ||
+        receipt.conversation_id !== source.conversation_id ||
+        receipt.operation_kind !== 'processing' ||
+        receipt.processing_operation?.phase !== 'policy' ||
+        receipt.base_revision !== command.expected_revision ||
+        receipt.result_revision !== command.expected_revision + 1 ||
+        receipt.result_revision > source.revision ||
+        receipt.recorded_at !== command.recorded_at ||
+        receipt.payload_fingerprint !== (await fingerprintJson(command)) ||
+        !sameIndexedRecord(receipt.processing_operation.superseded_job_ids ?? [], command.supersede_job_ids ?? []) ||
+        (receipt.processing_operation.policy_command !== undefined &&
+            !sameIndexedRecord(receipt.processing_operation.policy_command, command))
+    )
+        throw new Error('Indexed retained policy command lost its exact accepted receipt');
+    const genesis = receipt.processing_operation?.policy_genesis;
+    if (
+        genesis !== undefined &&
+        (receipt.processing_operation?.policy_revision !== 0 ||
+            genesis.source.conversation_id !== receipt.conversation_id ||
+            genesis.source.revision !== receipt.base_revision ||
+            genesis.policy.policy_revision !== 0)
+    )
+        throw new Error('Indexed materialized genesis changed its genuine predecessor source');
+}
+
+/** Explicit upgrade/native publication helper. One accepted command supplies one exact epoch. */
+export async function stageIndexedAcceptedProcessingPolicy(
+    store: IndexedConversationRecordStore,
+    source: z.infer<typeof ConversationRefSchema>,
+    directoriesInput: IndexedConversationDirectories,
+    command: z.infer<typeof ProcessingPolicyCommandSchema>,
+    receipt: OperationReceipt,
+): Promise<IndexedConversationDirectories> {
+    await assertIndexedProcessingPolicyAcceptance(source, command, receipt);
+    const oldPolicyRevision = receipt.processing_operation?.policy_revision;
+    if (oldPolicyRevision === undefined) throw new Error('Indexed policy acceptance has no genuine epoch');
+    const epoch = IndexedProcessingPolicyEpochSchema.parse({
+        version: 1,
+        kind: 'accepted_command',
+        policy_revision: oldPolicyRevision + 1,
+        operation_id: receipt.id,
+        receipt_fingerprint: await fingerprintJson(receipt),
+    });
+    const directories = { ...directoriesInput };
+    for (const [family, id, value] of [
+        ['selected_policy_commands', receipt.id, command],
+        ['policy_epochs', String(epoch.policy_revision), epoch],
+    ] as const) {
+        const key = tupleKey(family, id);
+        const existing = await getPagedRecord(store, directories.processing_records, key);
+        const hash = await fingerprintJson(value);
+        if (
+            existing !== undefined &&
+            (existing.storage !== 'record' ||
+                existing.kind !== 'processing_records' ||
+                existing.id !== id ||
+                existing.content_hash !== hash)
+        )
+            throw new Error('Indexed accepted policy epoch has conflicting immutable evidence');
+        if (existing === undefined)
+            directories.processing_records = await putPagedRecord(
+                store,
+                directories.processing_records,
+                key,
+                await stageRecord(store, 'processing_records', id, value),
+            );
+    }
+    if (receipt.processing_operation?.policy_genesis !== undefined) {
+        const genesis = IndexedProcessingPolicyEpochSchema.parse({
+            version: 1,
+            kind: 'materialized_genesis',
+            policy_revision: 0,
+            operation_id: receipt.id,
+            receipt_fingerprint: await fingerprintJson(receipt),
+        });
+        const key = tupleKey('policy_epochs', '0');
+        const existing = await getPagedRecord(store, directories.processing_records, key);
+        if (
+            existing !== undefined &&
+            (existing.storage !== 'record' ||
+                existing.kind !== 'processing_records' ||
+                existing.id !== '0' ||
+                existing.content_hash !== (await fingerprintJson(genesis)))
+        )
+            throw new Error('Indexed materialized genesis has conflicting immutable evidence');
+        if (existing === undefined)
+            directories.processing_records = await putPagedRecord(
+                store,
+                directories.processing_records,
+                key,
+                await stageRecord(store, 'processing_records', '0', genesis),
+            );
+    }
+    return directories;
+}
+
+/** Bounded exact policy epoch audit, independent of current readiness counters. */
+export async function auditIndexedProcessingPolicyEpoch(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    policyRevision: number,
+) {
+    let epoch = await indexedProcessingRecord(
+        store,
+        root,
+        'policy_epochs',
+        String(policyRevision),
+        IndexedProcessingPolicyEpochSchema,
+    );
+    if (epoch === undefined) {
+        const current = await loadRecord(
+            store,
+            {
+                storage: 'record',
+                kind: 'processing_header',
+                id: root.source.conversation_id,
+                ...root.processing_header,
+            },
+            IndexedConversationProcessingHeaderSchema,
+        );
+        if (policyRevision === 0 && current.policy_revision === 0 && current.selected_policy_operation_id === undefined)
+            epoch = IndexedProcessingPolicyEpochSchema.parse({
+                version: 1,
+                kind: 'genesis',
+                policy_revision: 0,
+                source: root.source,
+                processing_header: root.processing_header,
+            });
+        else if (current.policy_revision === policyRevision && current.selected_policy_operation_id !== undefined) {
+            const receipt = await indexedRecordById(
+                store,
+                root,
+                'operation_receipts',
+                current.selected_policy_operation_id,
+                OperationReceiptSchema,
+            );
+            if (!receipt) throw new Error('Indexed current policy has no genuine acceptance');
+            epoch = IndexedProcessingPolicyEpochSchema.parse({
+                version: 1,
+                kind: 'accepted_command',
+                policy_revision: policyRevision,
+                operation_id: receipt.id,
+                receipt_fingerprint: await fingerprintJson(receipt),
+            });
+        }
+    }
+    if (epoch === undefined || epoch.policy_revision !== policyRevision)
+        throw new Error('Indexed historical policy epoch requires authenticated original policy evidence');
+    if (epoch.kind === 'materialized_genesis') {
+        const receipt = await indexedRecordById(
+            store,
+            root,
+            'operation_receipts',
+            epoch.operation_id,
+            OperationReceiptSchema,
+        );
+        const command = await indexedProcessingRecord(
+            store,
+            root,
+            'selected_policy_commands',
+            epoch.operation_id,
+            ProcessingPolicyCommandSchema,
+        );
+        const genesis = receipt?.processing_operation?.policy_genesis;
+        if (
+            !receipt ||
+            !command ||
+            !genesis ||
+            epoch.receipt_fingerprint !== (await fingerprintJson(receipt)) ||
+            receipt.processing_operation?.policy_revision !== 0
+        )
+            throw new Error('Indexed materialized genesis lost its exact accepted first policy receipt');
+        await assertIndexedProcessingPolicyAcceptance(root.source, command, receipt);
+        return { ...genesis.policy, first_transition_revision: receipt.base_revision };
+    }
+    if (epoch.kind === 'genesis') {
+        if (
+            epoch.source.conversation_id !== root.source.conversation_id ||
+            epoch.source.revision > root.source.revision
+        )
+            throw new Error('Indexed genesis policy witness belongs to a different accepted source');
+        const header = await loadRecord(
+            store,
+            {
+                storage: 'record',
+                kind: 'processing_header',
+                id: root.source.conversation_id,
+                ...epoch.processing_header,
+            },
+            IndexedConversationProcessingHeaderSchema,
+        );
+        if (header.policy_revision !== 0 || header.selected_policy_operation_id !== undefined)
+            throw new Error('Indexed genesis policy witness is not the genuine initial header');
+        let firstTransitionRevision: number | undefined;
+        if (
+            epoch.successor_policy_operation_id !== undefined ||
+            epoch.successor_policy_receipt_fingerprint !== undefined
+        ) {
+            if (!epoch.successor_policy_operation_id || !epoch.successor_policy_receipt_fingerprint)
+                throw new Error('Indexed recovered genesis has incomplete first-policy evidence');
+            const receipt = await indexedRecordById(
+                store,
+                root,
+                'operation_receipts',
+                epoch.successor_policy_operation_id,
+                OperationReceiptSchema,
+            );
+            const command = await indexedProcessingRecord(
+                store,
+                root,
+                'selected_policy_commands',
+                epoch.successor_policy_operation_id,
+                ProcessingPolicyCommandSchema,
+            );
+            if (
+                !receipt ||
+                !command ||
+                receipt.processing_operation?.policy_revision !== 0 ||
+                receipt.base_revision !== epoch.source.revision ||
+                epoch.successor_policy_receipt_fingerprint !== (await fingerprintJson(receipt))
+            )
+                throw new Error('Indexed recovered genesis changed its exact accepted first-policy source');
+            await assertIndexedProcessingPolicyAcceptance(root.source, command, receipt);
+            firstTransitionRevision = receipt.base_revision;
+        }
+        return {
+            policy_revision: 0,
+            enabled: header.enabled,
+            processors: header.processors,
+            ...(firstTransitionRevision === undefined ? {} : { first_transition_revision: firstTransitionRevision }),
+            ...(header.budget === undefined ? {} : { budget: header.budget }),
+        };
+    }
+    const command = await indexedProcessingRecord(
+        store,
+        root,
+        'selected_policy_commands',
+        epoch.operation_id,
+        ProcessingPolicyCommandSchema,
+    );
+    const receipt = await indexedRecordById(
+        store,
+        root,
+        'operation_receipts',
+        epoch.operation_id,
+        OperationReceiptSchema,
+    );
+    if (
+        !command ||
+        !receipt ||
+        epoch.receipt_fingerprint !== (await fingerprintJson(receipt)) ||
+        receipt.processing_operation?.policy_revision === undefined ||
+        receipt.processing_operation.policy_revision + 1 !== policyRevision
+    )
+        throw new Error('Indexed historical policy epoch differs from its exact accepted command');
+    await assertIndexedProcessingPolicyAcceptance(root.source, command, receipt);
+    return {
+        policy_revision: policyRevision,
+        enabled: command.enabled,
+        processors: command.processors,
+        accepted_revision: receipt.result_revision,
+        ...(command.budget === undefined ? {} : { budget: command.budget }),
+    };
 }
 
 /** Point-read exact canonical processing evidence. This is a bounded data reader, not a job claim,
@@ -4487,15 +6496,24 @@ export async function auditIndexedProcessingJobEvidence(
     header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
 ) {
     const jobId = job.id;
-    const configuration = header.processors[job.processor_index];
+    const policy = await auditIndexedProcessingPolicyEpoch(store, root, job.policy_revision);
+    const configuration = policy.processors[job.processor_index];
     if (
+        !policy.enabled ||
+        policy.policy_revision > header.policy_revision ||
+        ('first_transition_revision' in policy &&
+            policy.first_transition_revision !== undefined &&
+            job.enqueue_revision > policy.first_transition_revision) ||
+        ('accepted_revision' in policy &&
+            policy.accepted_revision !== undefined &&
+            policy.accepted_revision > job.enqueue_revision) ||
         !configuration ||
         configuration.id !== job.processor_id ||
         configuration.version !== job.processor_version ||
         configuration.scope !== job.scope ||
         configuration.required !== job.required ||
         configuration.failure_behavior !== job.failure_behavior ||
-        header.policy_revision !== job.policy_revision ||
+        policy.policy_revision !== job.policy_revision ||
         (await fingerprintJson(configuration.config)) !== job.configuration_fingerprint
     )
         throw new Error('Indexed job is not bound to its retained policy stage');
@@ -4580,8 +6598,16 @@ export async function loadIndexedProcessingPredecessorEvidence(
         .parse(structuredClone(nomination));
     const store = boundedIndexedProcessingReader(storeInput);
     const job = await ownedIndexedProcessingJob(store, root, jobId);
-    if (job.selection.kind !== 'predecessor_output' || job.stage_index < 1) return undefined;
-    const prior = await loadIndexedProcessingJobState(store, root, job.selection.job_id);
+    if (job.stage_index < 1) return undefined;
+    let predecessorId: string;
+    if (job.selection.kind === 'predecessor_output') predecessorId = job.selection.job_id;
+    else if (isToolResultTextProcessor(job)) {
+        const accepted = await loadIndexedProcessingAppendAcceptance(store, root, job.source_operation_id);
+        const preceding = accepted.jobs.filter((candidate) => candidate.stage_index + 1 === job.stage_index);
+        if (preceding.length !== 1) throw new Error('Indexed tool-result stage has no exact accepted predecessor');
+        predecessorId = preceding[0].id;
+    } else return undefined;
+    const prior = await loadIndexedProcessingJobState(store, root, predecessorId);
     if (!prior.resolution || !prior.resolution_receipt || !prior.output || !prior.completion || prior.supersession)
         throw new Error('Indexed stage predecessor has not durably completed');
     const receiptId = prior.completion.context_change_operation_id ?? `processing:complete:${prior.job.id}`;
@@ -4601,7 +6627,17 @@ export async function loadIndexedProcessingPredecessorEvidence(
         completion: prior.completion,
         receipt,
     });
-    await indexedPredecessorEntrySelection(job, evidence);
+    if (isToolResultTextProcessor(job)) {
+        if (
+            prior.job.source_operation_id !== job.source_operation_id ||
+            prior.job.enqueue_revision !== job.enqueue_revision ||
+            prior.job.policy_revision !== job.policy_revision ||
+            prior.job.scope !== job.scope ||
+            prior.job.processor_index >= job.processor_index
+        )
+            throw new Error('Indexed tool-result preceding stage changed its exact accepted cohort');
+        await indexedCompletedJobEntrySelection(evidence);
+    } else await indexedPredecessorEntrySelection(job, evidence);
     return evidence;
 }
 
@@ -4840,6 +6876,33 @@ async function loadIndexedProcessingContext(
     );
 }
 
+/** Same bounded active closure, plus genuine complete call originals only when their active projection is partial. */
+export async function loadIndexedProcessingToolResultSelectedContext(
+    storeInput: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    locator: PagedRecordRef,
+) {
+    const store = boundedIndexedProcessingReader(storeInput);
+    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const witnesses: Record<string, ConversationTurn> = {};
+    for (const receipt of Object.values(selected.execution_witnesses ?? {})) {
+        const source = receipt.call_source;
+        if (!source || receipt.executor !== 'application') continue;
+        const projection = selected.turns.find((turn) => turn.header.id === source.turn_id);
+        if (!projection || projection.completeness === 'full_turn' || witnesses[source.turn_id]) continue;
+        const complete = await loadIndexedProjectedTurn(store, root, source.turn_id);
+        witnesses[source.turn_id] = ConversationTurnSchema.parse({
+            ...complete.header,
+            blocks: complete.selected_blocks,
+        });
+    }
+    const result = IndexedProcessingSelectedContextSchema.parse({ ...selected, tool_result_call_witnesses: witnesses });
+    if (canonicalJsonContentBytes(result).byteLength > INDEXED_CONVERSATION_ACTIVE_MAX_BYTES)
+        throw new RangeError('Indexed tool-result call witnesses exceed the active working-set bound');
+    await indexedToolResultTextFrame(result, activeIndexedContextWorkingSet(result));
+    return result;
+}
+
 /** Add only immutable completed sibling transitions from this job's accepted append cohort.
  * Historical replacement entries may no longer be active, but their point-addressed records and
  * completion/compaction receipts remain retained. No lifetime compaction scan is permitted.
@@ -5063,7 +7126,9 @@ export async function stageIndexedProcessingPhase(
         const selected =
             job.processor_id === INDEXED_EXCHANGE_PROCESSOR_ID
                 ? await loadIndexedProcessingSelectedContextForJob(store, root, locator, job.id)
-                : await loadIndexedProcessingSelectedContext(store, root, locator);
+                : isToolResultTextProcessor(job)
+                  ? await loadIndexedProcessingToolResultSelectedContext(store, root, locator)
+                  : await loadIndexedProcessingSelectedContext(store, root, locator);
         const predecessor = await loadIndexedProcessingPredecessorEvidence(store, root, job.id);
         const resolution = await resolveIndexedProcessingTextInput(
             selected,
@@ -5088,7 +7153,9 @@ export async function stageIndexedProcessingPhase(
             const selected =
                 job.processor_id === INDEXED_EXCHANGE_PROCESSOR_ID
                     ? await loadIndexedProcessingSelectedContextForJob(store, root, locator, job.id)
-                    : await loadIndexedProcessingSelectedContext(store, root, locator);
+                    : isToolResultTextProcessor(job)
+                      ? await loadIndexedProcessingToolResultSelectedContext(store, root, locator)
+                      : await loadIndexedProcessingSelectedContext(store, root, locator);
             const predecessor = await loadIndexedProcessingPredecessorEvidence(store, root, job.id);
             const current = await resolveIndexedProcessingTextInput(selected, job, resolution.recorded_at, predecessor);
             if (current.context_fingerprint !== resolution.context_fingerprint)
@@ -5182,7 +7249,7 @@ async function stageIndexedContextMutationRecords(
         { id: mutation.receipt.id, kind: 'operation receipt' },
         ...compaction.replacement_turns.flatMap((turn) => [
             { id: turn.id, kind: 'replacement turn' },
-            ...turn.blocks.map((block) => ({ id: block.id, kind: 'block' })),
+            ...deletedContentIdentities(turn.blocks).block_ids.map((id) => ({ id, kind: 'block' })),
         ]),
         ...mutation.change.operations[0].inserted_entry_ids.map((id) => ({ id, kind: 'context entry' })),
         ...mutation.context.retrieval_requirements
@@ -5205,7 +7272,7 @@ async function stageIndexedContextMutationRecords(
     const write = async (family: keyof IndexedConversationDirectories, id: string, value: unknown, key = id) => {
         nominate(family, key, await stageRecord(store, family, id, value));
     };
-    const { replacement_turns: replacementTurns, ...compactionHeader } = compaction;
+    const { replacement_turns: replacementTurns, original_context: _originalContext, ...compactionHeader } = compaction;
     await write('compactions', compaction.id, compactionHeader);
     for (const turn of replacementTurns) {
         const { blocks, ...header } = turn;
@@ -5358,7 +7425,9 @@ export async function stageIndexedTextProcessingCompletion(
     const selected =
         job.processor_id === 'externalize-whole-exchange'
             ? await loadIndexedProcessingSelectedContextForJob(store, root, locator, job.id)
-            : await loadIndexedProcessingSelectedContext(store, root, locator);
+            : isToolResultTextProcessor(job)
+              ? await loadIndexedProcessingToolResultSelectedContext(store, root, locator)
+              : await loadIndexedProcessingSelectedContext(store, root, locator);
     const currentWorkspace = { ...workspace, selected };
     // Replay validates unchanged active-context identity against retained resolution, plus full
     // deterministic output equality. Merely having a job/output marker never proves the delta.
@@ -5399,6 +7468,25 @@ export async function stageIndexedTextProcessingCompletion(
         tupleKey('completions', job.id),
         await stageRecord(store, 'processing_records', job.id, completion),
     );
+    if (isToolResultTextProcessor(job)) {
+        if (!mutation.compaction) throw new Error('Indexed tool-result completion lost its compaction');
+        await stageIndexedToolResultOriginalSource(store, directories, job, resolution, {
+            kind: 'indexed_root',
+            root: locator,
+        });
+        await stageIndexedToolResultValidation(
+            store,
+            root,
+            directories,
+            await indexedToolResultTextFrame(selected, activeIndexedContextWorkingSet(selected)),
+            job,
+            resolution,
+            output,
+            completion,
+            mutation.compaction,
+            mutation.receipt,
+        );
+    }
     const removed = await removePagedRecord(store, directories.processing_pending, job.id);
     if (
         !removed.applied ||
@@ -5741,7 +7829,21 @@ export async function stageIndexedProcessingQueue(
     );
     const processor = header.processors[processorIndex];
     if (!processor) throw new Error('Indexed processing queue processor is absent from the accepted policy');
-    const selected = await loadIndexedProcessingSelectedContext(store, root, locator);
+    const toolResult = isToolResultTextStrategy(processor.id, processor.version);
+    if (
+        toolResult &&
+        (!supportsToolResultTextProcessingScope({
+            processor_id: processor.id,
+            processor_version: processor.version,
+            scope: processor.scope,
+        }) ||
+            command.selected_block_ids !== undefined ||
+            command.target_fingerprint !== undefined)
+    )
+        throw new Error('Manual tool-result queue requires registered v2 whole result entries');
+    const selected = toolResult
+        ? await loadIndexedProcessingToolResultSelectedContext(store, root, locator)
+        : await loadIndexedProcessingSelectedContext(store, root, locator);
     if (selected.context.revision !== command.expected_context_revision)
         throw new Error('Indexed processing queue context revision conflict');
     const entries = new Map(selected.context.entries.map((entry) => [entry.id, entry]));
@@ -5749,20 +7851,39 @@ export async function stageIndexedProcessingQueue(
     if (nominatedEntries.some((entry) => !entry))
         throw new Error('Indexed processing queue selects an unavailable current entry');
     const selectedEntries = nominatedEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-    const plan = await planContextChangeWorkingSet(
-        activeIndexedContextWorkingSet(selected),
-        ContextChangePlanInputSchema.parse({
-            expected_revision: root.source.revision,
-            expected_context_revision: command.expected_context_revision,
-            entry_ids: command.selected_entry_ids,
-            ...(command.selected_block_ids === undefined
-                ? {}
-                : {
-                      selected_block_ids: command.selected_block_ids,
-                      selected_entries: selectedEntries,
-                  }),
-        }),
-    );
+    const workingSet = activeIndexedContextWorkingSet(selected);
+    const selectedResults = toolResult
+        ? await toolResultTextWorkingSelection(
+              await indexedToolResultTextFrame(selected, workingSet),
+              command.selected_entry_ids,
+              { processor_id: processor.id, processor_version: processor.version, configuration: processor.config },
+          )
+        : undefined;
+    if (
+        selectedResults &&
+        (!selectedResults.texts.length ||
+            !sameIndexedRecord(
+                selectedResults.records.map((record) => record.entry.id),
+                command.selected_entry_ids,
+            ))
+    )
+        throw new Error('Manual tool-result queue must select exactly its eligible text-bearing result entries');
+    const plan = selectedResults
+        ? undefined
+        : await planContextChangeWorkingSet(
+              workingSet,
+              ContextChangePlanInputSchema.parse({
+                  expected_revision: root.source.revision,
+                  expected_context_revision: command.expected_context_revision,
+                  entry_ids: command.selected_entry_ids,
+                  ...(command.selected_block_ids === undefined
+                      ? {}
+                      : {
+                            selected_block_ids: command.selected_block_ids,
+                            selected_entries: selectedEntries,
+                        }),
+              }),
+          );
     const jobs = await constructProcessingJobs({
         conversation_id: root.source.conversation_id,
         revision: root.source.revision + 1,
@@ -5770,9 +7891,9 @@ export async function stageIndexedProcessingQueue(
         policy_revision: header.policy_revision,
         processors: header.processors,
         processor_indices: [processorIndex],
-        entry_ids: plan.entry_ids,
-        ...(plan.selected_block_ids === undefined ? {} : { selected_block_ids: plan.selected_block_ids }),
-        ...(plan.selected_entries === undefined ? {} : { selected_entries: plan.selected_entries }),
+        entry_ids: plan?.entry_ids ?? command.selected_entry_ids,
+        ...(plan?.selected_block_ids === undefined ? {} : { selected_block_ids: plan.selected_block_ids }),
+        ...(plan?.selected_entries === undefined ? {} : { selected_entries: plan.selected_entries }),
         ...(command.target_fingerprint === undefined ? {} : { target_fingerprint: command.target_fingerprint }),
     });
     const job = jobs[0];
@@ -6183,11 +8304,85 @@ export async function stageIndexedProcessingPolicy(
         receipt.id,
         await stageRecord(store, 'operation_receipts', receipt.id, receipt),
     );
-    directories.processing_records = await putPagedRecord(
-        store,
-        directories.processing_records,
-        tupleKey('selected_policy_commands', receipt.id),
-        await stageRecord(store, 'processing_records', receipt.id, command),
+    if (header.selected_policy_operation_id !== undefined) {
+        const previousCommand = await indexedProcessingRecord(
+            store,
+            root,
+            'selected_policy_commands',
+            header.selected_policy_operation_id,
+            ProcessingPolicyCommandSchema,
+        );
+        const previousReceipt = await indexedRecordById(
+            store,
+            root,
+            'operation_receipts',
+            header.selected_policy_operation_id,
+            OperationReceiptSchema,
+        );
+        if (
+            !previousCommand ||
+            !previousReceipt ||
+            previousReceipt.processing_operation?.policy_revision === undefined ||
+            previousReceipt.processing_operation.policy_revision + 1 !== header.policy_revision ||
+            previousCommand.enabled !== header.enabled ||
+            !sameIndexedRecord(previousCommand.processors, header.processors) ||
+            !sameIndexedRecord(previousCommand.budget ?? null, header.budget ?? null)
+        )
+            throw new Error('Indexed policy transition lost its actual predecessor command');
+        Object.assign(
+            directories,
+            await stageIndexedAcceptedProcessingPolicy(
+                store,
+                root.source,
+                directories,
+                previousCommand,
+                previousReceipt,
+            ),
+        );
+    }
+    if (
+        header.policy_revision === 0 &&
+        (await getPagedRecord(store, directories.processing_records, tupleKey('policy_epochs', '0'))) !== undefined
+    ) {
+        const originalPolicy = await auditIndexedProcessingPolicyEpoch(store, root, 0);
+        if (
+            originalPolicy.enabled !== header.enabled ||
+            !sameIndexedRecord(originalPolicy.processors, header.processors) ||
+            !sameIndexedRecord(originalPolicy.budget ?? null, header.budget ?? null)
+        )
+            throw new Error('Indexed initial policy transition changed its genuine genesis evidence');
+    }
+    if (
+        header.policy_revision === 0 &&
+        header.selected_policy_operation_id === undefined &&
+        (await getPagedRecord(store, directories.processing_records, tupleKey('policy_epochs', '0'))) === undefined
+    )
+        directories.processing_records = await putPagedRecord(
+            store,
+            directories.processing_records,
+            tupleKey('policy_epochs', '0'),
+            await stageRecord(
+                store,
+                'processing_records',
+                '0',
+                IndexedProcessingPolicyEpochSchema.parse({
+                    version: 1,
+                    kind: 'genesis',
+                    policy_revision: 0,
+                    source: root.source,
+                    processing_header: root.processing_header,
+                }),
+            ),
+        );
+    Object.assign(
+        directories,
+        await stageIndexedAcceptedProcessingPolicy(
+            store,
+            { ...root.source, revision: receipt.result_revision },
+            directories,
+            command,
+            receipt,
+        ),
     );
     directories.identifiers = await putPagedRecord(store, directories.identifiers, receipt.id, {
         storage: 'marker',
@@ -6210,6 +8405,7 @@ export async function stageIndexedProcessingPolicy(
             policy_revision: header.policy_revision + 1,
             processors: command.processors,
             selected_policy_operation_id: receipt.id,
+            selected_policy_origin: 'native_registry',
             ...(command.budget === undefined ? {} : { budget: command.budget }),
             unresolved_job_count: unresolved,
             required_unresolved_job_count: requiredUnresolved,
@@ -6270,7 +8466,35 @@ export function supportsIndexedRegisteredProcessingPolicy(
                 (processor.scope === 'on_append' || processor.scope === 'manual' || processor.scope === 'on_budget') &&
                 Object.keys(processor.config).length === 0,
         );
-    return header.enabled && (exchangeOnly || orderedText);
+    const onAppend = header.processors.filter((processor) => processor.scope === 'on_append');
+    const orderedToolResults =
+        header.processors.length > 0 &&
+        header.processors.length <= MAX_PROCESSING_STAGES_PER_OPERATION &&
+        header.processors.some((processor) => isToolResultTextStrategy(processor.id, processor.version)) &&
+        header.processors.every((processor) => {
+            if (isToolResultTextStrategy(processor.id, processor.version)) {
+                parseToolResultTextStrategy({
+                    processor_id: processor.id,
+                    processor_version: processor.version,
+                    configuration: processor.config,
+                });
+                return (
+                    supportsToolResultTextProcessingScope({
+                        processor_id: processor.id,
+                        processor_version: processor.version,
+                        scope: processor.scope,
+                    }) &&
+                    (processor.scope === 'manual' || processor === onAppend[onAppend.length - 1])
+                );
+            }
+            return (
+                processor.id === 'externalize-text' &&
+                processor.version === '1' &&
+                (processor.scope === 'on_append' || processor.scope === 'manual' || processor.scope === 'on_budget') &&
+                Object.keys(processor.config).length === 0
+            );
+        });
+    return header.enabled && (exchangeOnly || orderedText || orderedToolResults);
 }
 
 /** Initial activation accepts disabled processing or the finite registered execution profile.
@@ -6288,15 +8512,14 @@ function assertSupportedIndexedReadinessPolicy(
         throw new Error('Indexed readiness requires a registered bounded ordered text or whole-exchange policy');
 }
 
-/** Migration without a private policy command authenticates its immutable header; enabled policies
- * additionally require the finite registered stage profile. A selected-policy transition, including
- * disabling processing, requires its point-addressed command and exact current policy receipt.
+/** Authenticate current immutable policy data without granting native execution capability.
+ * Storage-only migration may retain pluggable policy data that its native host cannot execute.
  */
-export async function assertIndexedCurrentPolicy(
+export async function authenticateIndexedCurrentPolicy(
     store: IndexedConversationRecordStore,
     root: IndexedConversationRoot,
     header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
-): Promise<void> {
+): Promise<'materialized' | 'native_registry' | undefined> {
     const integrity = await hashContentBytes(canonicalJsonContentBytes(header));
     if (
         integrity.byte_length !== root.processing_header.size_bytes ||
@@ -6304,7 +8527,7 @@ export async function assertIndexedCurrentPolicy(
     )
         throw new Error('Indexed current policy header differs from its immutable root descriptor');
     const operationId = header.selected_policy_operation_id;
-    if (!operationId) return assertSupportedIndexedReadinessPolicy(header);
+    if (!operationId) return undefined;
     const command = await indexedProcessingRecord(
         store,
         root,
@@ -6331,8 +8554,25 @@ export async function assertIndexedCurrentPolicy(
         canonicalJsonContentString(command.budget ?? null) !== canonicalJsonContentString(header.budget ?? null)
     )
         throw new Error('Indexed selected processor policy lost its accepted registered command');
-    // A selected policy has already passed its host-owned processor registry before publication.
-    // Keep portable custom processors valid; native hosts separately enforce their execution profile.
+    // Materialized acceptance retains portable custom policy data, but does not certify the
+    // native execution registry. A genuine indexed transition separately validates its host
+    // registry before CAS, preserving registered extension policies in the portable core.
+    return header.selected_policy_origin === 'materialized' ||
+        receipt.processing_operation?.policy_command !== undefined
+        ? 'materialized'
+        : 'native_registry';
+}
+
+/** Native readiness requires finite built-in capability for materialized policy acceptance.
+ * Exact native transitions preserve their separately host-validated registered extensions.
+ */
+export async function assertIndexedCurrentPolicy(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    header: z.infer<typeof IndexedConversationProcessingHeaderSchema>,
+): Promise<void> {
+    const origin = await authenticateIndexedCurrentPolicy(store, root, header);
+    if (origin !== 'native_registry') assertSupportedIndexedReadinessPolicy(header);
 }
 
 function assertIndexedRequiredIdentity(
@@ -6530,6 +8770,21 @@ export async function stageIndexedProcessingCoverage(
     };
 }
 
+/** Processing-only witnesses cannot cross the strict native preparation boundary. */
+export function indexedPreparationSelection(input: unknown) {
+    const {
+        lineage_entry_witnesses: _lineageEntries,
+        sibling_compaction_ids: _siblingCompactions,
+        tool_result_call_witnesses: _callWitnesses,
+        tool_result_projection_witnesses: _projectionWitnesses,
+        ...selected
+    } = IndexedProcessingSelectedContextSchema.parse(input);
+    return IndexedConversationSelectedContextSchema.parse({
+        ...selected,
+        completeness: 'selected_media_compaction_pending_admission',
+    });
+}
+
 /** Common drained-processing fence for native preparation and a pending selected retrieval call.
  * Neither projection grants admission or byte access; callers must separately prove their exact
  * native request or selected call, owner and current physical head.
@@ -6585,16 +8840,10 @@ async function loadIndexedSettledSelectedContext(
             'processing',
             true,
         );
-        return IndexedConversationSelectedContextSchema.parse({
-            ...selected,
-            completeness: 'selected_media_compaction_pending_admission',
-        });
+        return indexedPreparationSelection(selected);
     }
     const selected = await loadIndexedProcessingContext(store, root, locator, false);
-    return IndexedConversationSelectedContextSchema.parse({
-        ...selected,
-        completeness: 'selected_media_compaction_pending_admission',
-    });
+    return indexedPreparationSelection(selected);
 }
 
 /** Read-only summary derivation from a settled exact source. Pending application calls retain
@@ -6760,10 +9009,7 @@ export async function loadIndexedReadySelectedContext(
     )
         throw new Error('Indexed ready coverage lost its exact retained receipt or obligation identity');
     return {
-        selection: IndexedConversationSelectedContextSchema.parse({
-            ...selected,
-            completeness: 'selected_media_compaction_pending_admission',
-        }),
+        selection: indexedPreparationSelection(selected),
         coverage,
     };
 }
@@ -6946,6 +9192,146 @@ export async function loadIndexedActiveToolDefinitions(
         definitions.push(definition);
     }
     return definitions;
+}
+
+async function assertIndexedActiveCallDefinition(
+    store: IndexedConversationRecordStore,
+    root: IndexedConversationRoot,
+    call: Pick<z.infer<typeof ApplicationToolCallBlockSchema>, 'definition_id' | 'tool_name'>,
+) {
+    const header = await loadRecord(
+        store,
+        { storage: 'record', kind: 'context_header', id: root.source.conversation_id, ...root.context_header },
+        IndexedConversationContextHeaderSchema,
+    );
+    if (header.active_tool_definition_ids.length > 4096)
+        throw new RangeError('Indexed program catalog exceeds its selected dependency bound');
+    const definition =
+        call.definition_id !== undefined && header.active_tool_definition_ids.includes(call.definition_id)
+            ? await indexedRecordById(store, root, 'tool_definitions', call.definition_id, ToolDefinitionSchema)
+            : undefined;
+    if (!definition || definition.id !== call.definition_id || definition.name !== call.tool_name)
+        throw new IndexedToolCallSelectionConflict('Indexed program call has no exact active definition');
+    return definition;
+}
+
+/** Select a genuine program operation through bounded call/turn/acceptance point lookups. */
+export async function loadIndexedProgramToolCallSelection(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    sourceInput: z.infer<typeof ToolCallSourceRefSchema>,
+) {
+    if (!preflightJsonInput(sourceInput, { max_bytes: 16 * 1024 }).success)
+        throw new RangeError('Indexed program source exceeds its nomination bound');
+    const root = IndexedConversationRootSchema.parse(rootInput);
+    const source = ToolCallSourceRefSchema.parse(structuredClone(sourceInput));
+    if (
+        source.conversation.conversation_id !== root.source.conversation_id ||
+        source.conversation.revision !== root.source.revision ||
+        root.tool_call_state_complete !== true
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed program call requires its exact current source');
+    const state = await indexedRecordById(store, root, 'tool_call_states', source.call_id, IndexedCallStateSchema);
+    const open = await indexedRecordById(store, root, 'open_tool_calls', source.call_id, IndexedOpenToolCallSchema);
+    if (
+        !state ||
+        !open ||
+        state.call_id !== source.call_id ||
+        state.turn_id !== source.turn_id ||
+        state.block_id !== source.block_id ||
+        state.call_fingerprint !== source.call_fingerprint ||
+        state.result_block_id !== undefined ||
+        state.terminal_receipt_id !== undefined ||
+        !sameIndexedRecord(open, {
+            call_id: state.call_id,
+            turn_id: state.turn_id,
+            block_id: state.block_id,
+            call_fingerprint: state.call_fingerprint,
+        })
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed program call differs from its exact open-call index');
+    const turn = await loadIndexedProjectedTurn(store, root, source.turn_id);
+    const call = turn.selected_blocks[0];
+    const binding = await getPagedRecord(store, root.directories.turn_acceptances, source.turn_id);
+    const receipt =
+        binding?.storage === 'marker' && binding.kind === 'turn_acceptance'
+            ? await indexedRecordById(store, root, 'operation_receipts', binding.id, OperationReceiptSchema)
+            : undefined;
+    const entryId = receipt?.accepted_context_entry_ids?.[0];
+    const entry =
+        entryId === undefined
+            ? undefined
+            : await indexedRecordById(store, root, 'context_entries', entryId, ContextEntrySchema);
+    if (
+        turn.completeness !== 'full_turn' ||
+        turn.header.id !== source.turn_id ||
+        turn.header.kind !== 'program' ||
+        turn.header.authority !== 'ordinary' ||
+        turn.header.status !== 'completed' ||
+        turn.header.provenance.type !== 'inserted' ||
+        turn.header.parent_turn_id !== undefined ||
+        turn.header.execution_id !== undefined ||
+        turn.selected_blocks.length !== 1 ||
+        call?.type !== 'tool_call' ||
+        call.executor !== 'application' ||
+        call.id !== source.block_id ||
+        call.call_id !== source.call_id ||
+        call.definition_id === undefined ||
+        call.native_id !== undefined ||
+        call.arguments.type !== 'json' ||
+        call.arguments.value === null ||
+        typeof call.arguments.value !== 'object' ||
+        Array.isArray(call.arguments.value) ||
+        (await fingerprintJson(call)) !== source.call_fingerprint ||
+        !receipt ||
+        receipt.operation_kind !== undefined ||
+        receipt.id !== binding?.id ||
+        receipt.id !== turn.header.provenance.operation_id ||
+        receipt.conversation_id !== root.source.conversation_id ||
+        receipt.result_revision !== receipt.base_revision + 1 ||
+        receipt.result_revision > root.source.revision ||
+        receipt.recorded_at !== turn.header.timestamps.recorded_at ||
+        !sameIndexedRecord(receipt.accepted_turn_ids, [source.turn_id]) ||
+        receipt.accepted_context_entry_ids?.length !== 1 ||
+        receipt.accepted_generation_ids === undefined ||
+        receipt.accepted_asset_ids === undefined ||
+        receipt.accepted_execution_receipt_ids === undefined ||
+        receipt.accepted_tool_definition_ids === undefined ||
+        receipt.accepted_tool_selection === undefined ||
+        !sameIndexedRecord(receipt.accepted_generation_ids, []) ||
+        !sameIndexedRecord(receipt.accepted_asset_ids, []) ||
+        !sameIndexedRecord(receipt.accepted_execution_receipt_ids, []) ||
+        !sameIndexedRecord(receipt.accepted_tool_definition_ids, []) ||
+        !sameIndexedRecord(receipt.accepted_tool_selection, { kind: 'unchanged' }) ||
+        (receipt.accepted_retrieval_requirements?.length ?? 0) !== 0 ||
+        entry?.type !== 'source_turn' ||
+        entry.turn_id !== source.turn_id ||
+        entry.block_ids !== undefined ||
+        !sameIndexedRecord(receipt.accepted_context_entries, [entry]) ||
+        receipt.payload_fingerprint !==
+            (await fingerprintJson({
+                turns: [{ ...turn.header, blocks: turn.selected_blocks }],
+                context_entries: [entry],
+            }))
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed program call lost its exact inserted operation proof');
+    // Retained entry bytes do not establish active membership after an ordered context edit.
+    // This metadata-only working set is bounded by the existing aggregate active-context profile;
+    // it does not materialize turns, model output, assets or generations.
+    const active = await loadIndexedActiveContext(store, root);
+    if (!active.entries.some((candidate) => sameIndexedRecord(candidate, entry)))
+        throw new IndexedToolCallSelectionConflict('Indexed program call source is no longer active in context');
+    const definition = await assertIndexedActiveCallDefinition(store, root, call);
+    const selected = {
+        source,
+        call: ApplicationToolCallBlockSchema.parse(call),
+        assets: {},
+        definition,
+        operation_receipt: receipt,
+    };
+    if (!preflightJsonInput(selected, { max_bytes: 512 * 1024 }).success)
+        throw new RangeError('Indexed program selection exceeds its working-set bound');
+    return selected;
 }
 
 /** Select one exact accepted generated application call and only its hydration dependencies. */
@@ -7215,8 +9601,93 @@ export async function loadIndexedToolCallTerminalResult(
             ? await indexedRecordById(store, root, 'operation_receipts', accepted.id, OperationReceiptSchema)
             : undefined;
     if (!operation) throw new Error('Indexed terminal result lost its accepted operation');
-    const resultTurn = await loadIndexedAcceptedTurn(store, root, receipt.result_turn_id, operation);
-    const result = resultTurn.selected_blocks.find((block) => block.id === state.result_block_id);
+    // A compacted result's committed validation proves its immutable block/terminal hashes.
+    // Resolve only the original operation's finite processing cohort, never active/cold history.
+    let validatedOriginal = false;
+    if (root.processing_index_profile === INDEXED_CONVERSATION_PROCESSING_PROFILE) {
+        const terminalValidationJob = await auditIndexedToolResultTerminalValidation(store, root, receipt.id);
+        const cohort =
+            terminalValidationJob === undefined
+                ? await indexedRecordById(
+                      store,
+                      root,
+                      'processing_by_operation',
+                      operation.id,
+                      IndexedProcessingOperationJobsSchema,
+                  )
+                : undefined;
+        if (
+            cohort &&
+            (cohort.operation_id !== operation.id || cohort.receipt_fingerprint !== (await fingerprintJson(operation)))
+        )
+            throw new IndexedToolCallSelectionConflict('Indexed terminal cohort changed its accepted operation');
+        const validationJobs = terminalValidationJob === undefined ? (cohort?.job_ids ?? []) : [terminalValidationJob];
+        if (validationJobs.length) {
+            for (const jobId of validationJobs) {
+                const job = await indexedProcessingRecord(store, root, 'jobs', jobId, ProcessingJobSchema);
+                if (!job) throw new IndexedToolCallSelectionConflict('Indexed terminal cohort lost its original job');
+                if (!isToolResultTextProcessor(job)) continue;
+                const completion = await indexedProcessingRecord(
+                    store,
+                    root,
+                    'completions',
+                    jobId,
+                    ProcessingCompletionReceiptSchema,
+                );
+                if (completion?.status !== 'applied') continue;
+                const resolution = await indexedProcessingRecord(
+                    store,
+                    root,
+                    'resolved_inputs',
+                    jobId,
+                    ProcessingResolvedInputSchema,
+                );
+                if (!resolution?.source_turn_ids.includes(receipt.result_turn_id)) continue;
+                if (terminalValidationJob !== jobId) await auditIndexedToolResultValidation(store, root, jobId);
+                const validation = await indexedProcessingRecord(
+                    store,
+                    root,
+                    'tool_result_validations',
+                    jobId,
+                    IndexedToolResultValidationSchema,
+                );
+                const descriptor = await getPagedRecord(store, root.directories.blocks, state.result_block_id);
+                const bound = (family: 'turns' | 'blocks' | 'execution_receipts', id: string) =>
+                    validation?.dependencies.some((item) => item.family === family && item.descriptor.id === id);
+                if (
+                    !bound('turns', receipt.result_turn_id) ||
+                    !bound('blocks', state.result_block_id) ||
+                    !bound('execution_receipts', receipt.id) ||
+                    descriptor?.storage !== 'record' ||
+                    descriptor.content_hash !== receipt.result_fingerprint
+                )
+                    throw new IndexedToolCallSelectionConflict(
+                        'Indexed terminal validation lost its original result hash',
+                    );
+                validatedOriginal = true;
+                break;
+            }
+        }
+    }
+    const originalHeader = validatedOriginal
+        ? await indexedRecordById(store, root, 'turns', receipt.result_turn_id, IndexedConversationTurnHeaderSchema)
+        : undefined;
+    if (
+        validatedOriginal &&
+        (originalHeader?.source !== 'ordinary' ||
+            originalHeader.block_ids.length !== 1 ||
+            originalHeader.block_ids[0] !== state.result_block_id)
+    )
+        throw new IndexedToolCallSelectionConflict('Indexed terminal validation lost its exact original turn header');
+    const originalTurn = validatedOriginal
+        ? undefined
+        : await loadIndexedAcceptedTurn(store, root, receipt.result_turn_id, operation);
+    const resultHeader = originalHeader?.turn ?? originalTurn?.header;
+    if (!resultHeader) throw new IndexedToolCallSelectionConflict('Indexed terminal original turn header is absent');
+    const originalResult = originalTurn?.selected_blocks.find((block) => block.id === state.result_block_id);
+    const result = validatedOriginal
+        ? { type: 'tool_result' as const, id: state.result_block_id, call_id: receipt.call_id, status: receipt.status }
+        : originalResult;
     if (
         result?.type !== 'tool_result' ||
         result.id !== state.result_block_id ||
@@ -7233,15 +9704,15 @@ export async function loadIndexedToolCallTerminalResult(
     if (!receipt.result_turn_id)
         throw new IndexedToolCallSelectionConflict('Indexed terminal receipt lacks its exact result turn');
     if (
-        resultTurn.header.kind !== 'tool' ||
-        resultTurn.header.execution_id !== receipt.id ||
+        resultHeader.kind !== 'tool' ||
+        resultHeader.execution_id !== receipt.id ||
         !operation?.accepted_turn_ids?.includes(receipt.result_turn_id) ||
         !operation.accepted_execution_receipt_ids?.includes(receipt.id) ||
         operation.conversation_id !== root.source.conversation_id ||
         operation.result_revision > root.source.revision
     )
         throw new IndexedToolCallSelectionConflict('Indexed terminal result lacks its accepted operation/turn witness');
-    await assertToolResultReceiptFingerprint(result, receipt);
+    if (originalResult?.type === 'tool_result') await assertToolResultReceiptFingerprint(originalResult, receipt);
     return true;
 }
 
@@ -7665,15 +10136,41 @@ export async function loadIndexedAcceptedOutputContinuation(
 }
 
 /** One exact ordinary terminal program turn, bound to its accepted append receipt. */
-export async function loadIndexedTerminalProgramPresentation(
+export function loadIndexedTerminalProgramPresentation(
     store: IndexedConversationRecordStore,
     rootInput: IndexedConversationRoot,
     receiptInput: unknown,
     turnId: string,
 ) {
+    return loadIndexedTerminalProgramRecords(store, rootInput, receiptInput, turnId, false);
+}
+
+/** Current live indexes fence retained terminal content without fabricating a historical root.
+ * Hosts must independently prove the original accepted revision descriptor and current custody. */
+export function loadIndexedRetainedTerminalProgramPresentation(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    receiptInput: unknown,
+    turnId: string,
+) {
+    return loadIndexedTerminalProgramRecords(store, rootInput, receiptInput, turnId, true);
+}
+
+async function loadIndexedTerminalProgramRecords(
+    store: IndexedConversationRecordStore,
+    rootInput: IndexedConversationRoot,
+    receiptInput: unknown,
+    turnId: string,
+    retained: boolean,
+) {
     const root = IndexedConversationRootSchema.parse(rootInput);
     const nominated = OperationReceiptSchema.parse(receiptInput);
-    if (nominated.conversation_id !== root.source.conversation_id || nominated.result_revision !== root.source.revision)
+    if (
+        nominated.conversation_id !== root.source.conversation_id ||
+        (retained
+            ? nominated.result_revision > root.source.revision
+            : nominated.result_revision !== root.source.revision)
+    )
         throw new IndexedPresentationNominationConflict(
             'Indexed terminal output nomination differs from its historical root',
         );

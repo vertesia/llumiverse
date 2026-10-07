@@ -3,11 +3,17 @@ import {
     indexedOrderedKey,
     loadIndexedAcceptedTurn,
     loadRecord,
+    stageIndexedAcceptedProcessingPolicy,
 } from './indexed-conversation.js';
 import { IndexedConversationUpgradeEvidenceError } from './indexed-upgrade-progress.js';
 import { getPagedRecord, putPagedRecord, readPagedRecordRange } from './paged-record-index.js';
+import { recoverAcceptedProcessingPolicyCommand } from './processing-policy-recovery.js';
 import { GenerationSchema, OperationReceiptSchema } from './schemas/execution.js';
-import { type IndexedConversationRoot, IndexedConversationTurnHeaderSchema } from './schemas/indexed-head.js';
+import {
+    IndexedConversationProcessingHeaderSchema,
+    type IndexedConversationRoot,
+    IndexedConversationTurnHeaderSchema,
+} from './schemas/indexed-head.js';
 import type { IndexedConversationUpgradeProgress } from './schemas/indexed-upgrade.js';
 
 /** One accepted receipt identity is processed at a time; effects have their own retained cursor. */
@@ -64,6 +70,31 @@ export async function advanceIndexedUpgradeReceipt(
         throw new IndexedConversationUpgradeEvidenceError('Indexed upgrade authoring receipt claims append outputs');
     }
     const directories = { ...progress.directories };
+    if (receipt.operation_kind === 'processing' && receipt.processing_operation?.phase === 'policy') {
+        const header = await loadRecord(
+            store,
+            {
+                storage: 'record',
+                kind: 'processing_header',
+                id: root.source.conversation_id,
+                ...root.processing_header,
+            },
+            IndexedConversationProcessingHeaderSchema,
+        );
+        const command =
+            receipt.processing_operation.policy_command ??
+            (await recoverAcceptedProcessingPolicyCommand(receipt, header));
+        if (command !== undefined) {
+            if (receipt.processing_operation.policy_revision + 1 > header.policy_revision)
+                throw new IndexedConversationUpgradeEvidenceError(
+                    'Indexed upgraded policy receipt has an impossible original epoch',
+                );
+            Object.assign(
+                directories,
+                await stageIndexedAcceptedProcessingPolicy(store, root.source, directories, command, receipt),
+            );
+        }
+    }
     const scratch = { ...progress.scratch };
     const position = progress.item_cursor ?? 0;
     if (position > effects.length)

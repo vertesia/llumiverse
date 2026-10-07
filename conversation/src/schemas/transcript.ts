@@ -172,9 +172,9 @@ export const ConversationTranscriptAgentBlockSchema = z
     ])
     .meta({ id: 'ConversationTranscriptAgentBlock' });
 
-export const ConversationTranscriptProgramBlockSchema = ConversationTranscriptRenderableBlockSchema.meta({
-    id: 'ConversationTranscriptProgramBlock',
-});
+export const ConversationTranscriptProgramBlockSchema = z
+    .union([ConversationTranscriptRenderableBlockSchema, ConversationTranscriptToolCallBlockSchema])
+    .meta({ id: 'ConversationTranscriptProgramBlock' });
 
 const transcriptTurnShape = {
     metadata: JsonObjectSchema.optional(),

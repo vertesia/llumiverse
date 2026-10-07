@@ -66,6 +66,7 @@ import {
     DerivedBlockLineageSchema,
     DerivedLineageVerificationScopeSchema,
     GenerationSchema,
+    InitialProcessingPolicySchema,
     JsonInverseMappingSchema,
     JsonPointerSchema,
     JsonSourceRegionSchema,
@@ -76,6 +77,10 @@ import {
     NativeConversationImportResultSchema,
     ProcessingJobSchema,
     ProcessingOutputReceiptSchema,
+    ProcessingPolicyCommandSchema,
+    ProcessingPolicyGenesisSchema,
+    ProcessingQueueAcceptanceInputSchema,
+    ProcessingQueueCommandSchema,
     ProcessingReadinessCoverageSchema,
     ProcessingRunResultSchema,
     SelectedBlockSchema,
@@ -534,3 +539,26 @@ export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
     transcript_projection_input: ConversationTranscriptProjectionInputJsonSchema,
     turn: ConversationTurnJsonSchema,
 });
+
+export const ProcessingQueueCommandJsonSchema = emitJsonSchema(
+    ProcessingQueueCommandSchema,
+    'processing-queue-command',
+);
+export const ProcessingQueueAcceptanceInputJsonSchema = emitJsonSchema(
+    ProcessingQueueAcceptanceInputSchema,
+    'processing-queue-acceptance-input',
+);
+
+export const ProcessingPolicyCommandJsonSchema = emitJsonSchema(
+    ProcessingPolicyCommandSchema,
+    'processing-policy-command',
+);
+
+export const InitialProcessingPolicyJsonSchema = emitJsonSchema(
+    InitialProcessingPolicySchema,
+    'initial-processing-policy',
+);
+export const ProcessingPolicyGenesisJsonSchema = emitJsonSchema(
+    ProcessingPolicyGenesisSchema,
+    'processing-policy-genesis',
+);

@@ -28,7 +28,11 @@ export {
 export * from './indexed-upgrade-accepted.js';
 export * from './indexed-upgrade-constants.js';
 export * from './indexed-upgrade-finish.js';
-export { IndexedConversationUpgradeResourceError } from './indexed-upgrade-io.js';
+export {
+    INDEXED_UPGRADE_ACTIVE_LIMITS,
+    INDEXED_UPGRADE_STEP_LIMITS,
+    IndexedConversationUpgradeResourceError,
+} from './indexed-upgrade-io.js';
 export * from './indexed-upgrade-progress.js';
 export * from './indexed-upgrade-step.js';
 export * from './inspection.js';
@@ -108,6 +112,14 @@ export {
 export * from './tool-arguments.js';
 export * from './tool-execution.js';
 export * from './tool-result-text-externalization.js';
+export {
+    parseToolResultTextStrategy,
+    selectToolResultTextBlocks,
+    supportsToolResultTextProcessingScope,
+    type ToolResultTextConfigurationV2,
+    ToolResultTextConfigurationV2Schema,
+    type ToolResultTextStrategy,
+} from './tool-result-text-strategy.js';
 export * from './tool-retrieval-excerpt.js';
 export * from './transcript.js';
 export type * from './types.js';

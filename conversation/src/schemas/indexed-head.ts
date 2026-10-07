@@ -1,15 +1,13 @@
 import { z } from 'zod';
 import { PagedRecordRefSchema } from '../paged-record-index.js';
-import { AssetSchema, ToolDefinitionSchema } from './content.js';
+import { AssetSchema, ConversationTurnSchema, ToolDefinitionSchema } from './content.js';
 import { ContextEntrySchema } from './context-foundation.js';
 import { ConversationDeletedTurnSchema } from './conversation-delete-operation.js';
 import {
     CompactionRecordSchema,
     ConversationContextSchema,
     ConversationLineageSchema,
-    ProcessingBudgetSchema,
     ProcessingStateSchema,
-    ProcessorConfigurationSchema,
 } from './document.js';
 import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from './execution.js';
 import {
@@ -23,6 +21,7 @@ import {
     NonnegativeSafeIntegerSchema,
     TimestampSchema,
 } from './primitives.js';
+import { ProcessingPolicyCommandSchema } from './processing-policy.js';
 import { ProjectedTurnHeaderSchema, RequestSourceProjectedTurnSchema } from './request-source-view.js';
 
 /** Indexed storage is a distinct, partial materialization contract; it is never parsed as ConversationDocument. */
@@ -147,6 +146,7 @@ export const IndexedConversationTurnHeaderSchema = z.strictObject({
 
 export const IndexedConversationCompactionHeaderSchema = CompactionRecordSchema.omit({
     replacement_turns: true,
+    original_context: true,
 });
 
 /** Content-hashed root artifact; the host CAS stores only its locator and exact revision. */
@@ -203,8 +203,10 @@ export const IndexedConversationProcessingHeaderSchema = ProcessingStateSchema.o
     supersessions: true,
     coverage_receipts: true,
 }).extend({
-    /** Accepted private policy command whose registered selected processors were verified before CAS. */
+    /** Exact accepted policy command; acceptance and native registry capability are independent. */
     selected_policy_operation_id: IdentifierSchema.optional(),
+    /** Only the genuine indexed policy writer certifies its host registry before CAS. */
+    selected_policy_origin: z.enum(['native_registry', 'materialized']).optional(),
     /** Validated migration witness; absent on older roots that cannot prove job drain by point lookup. */
     unresolved_job_count: NonnegativeSafeIntegerSchema.optional(),
     job_count: NonnegativeSafeIntegerSchema.optional(),
@@ -254,6 +256,20 @@ export const IndexedConversationSelectedContextSchema = z.strictObject({
 });
 export type IndexedConversationSelectedContext = z.infer<typeof IndexedConversationSelectedContextSchema>;
 
+/** Point-authenticated current projection and its immutable original terminal identity.
+ * The host produces this only after auditing the predecessor's accepted deterministic validation.
+ * It carries no original content and cannot grant a tool execution or retrieval capability.
+ */
+export const ToolResultProjectionWitnessSchema = z.strictObject({
+    compaction_id: IdentifierSchema,
+    compaction_fingerprint: ContentHashSchema,
+    projection_fingerprint: ContentHashSchema,
+    terminal_execution_id: IdentifierSchema,
+    original_result_turn_id: IdentifierSchema,
+    original_result_block_id: IdentifierSchema,
+});
+export type ToolResultProjectionWitness = z.infer<typeof ToolResultProjectionWitnessSchema>;
+
 /** Internal selected processing data only; never accepted by a native prepared-request compiler. */
 export const IndexedProcessingSelectedContextSchema = IndexedConversationSelectedContextSchema.omit({
     completeness: true,
@@ -262,6 +278,9 @@ export const IndexedProcessingSelectedContextSchema = IndexedConversationSelecte
     /** Point-read accepted remainder entries from the original bounded sibling-job cohort. */
     lineage_entry_witnesses: z.record(IdentifierSchema, ContextEntrySchema).optional(),
     sibling_compaction_ids: z.array(IdentifierSchema).max(16).optional(),
+    /** Genuine complete originals for selected executed calls, point-read under the same processing IO budget. */
+    tool_result_call_witnesses: z.record(IdentifierSchema, ConversationTurnSchema).optional(),
+    tool_result_projection_witnesses: z.record(IdentifierSchema, ToolResultProjectionWitnessSchema).optional(),
 });
 export type IndexedProcessingSelectedContext = z.infer<typeof IndexedProcessingSelectedContextSchema>;
 
@@ -300,15 +319,8 @@ export const IndexedProcessingCoverageCommandSchema = z.strictObject({
 export type IndexedProcessingCoverageCommand = z.infer<typeof IndexedProcessingCoverageCommandSchema>;
 
 /** Internal data command. The host owns the current head and selected policy authority. */
-export const IndexedProcessingPolicyCommandSchema = z.strictObject({
-    operation_id: IdentifierSchema,
-    expected_revision: NonnegativeSafeIntegerSchema,
-    recorded_at: TimestampSchema,
-    enabled: z.boolean(),
-    processors: z.array(ProcessorConfigurationSchema).max(16),
-    budget: ProcessingBudgetSchema.optional(),
+export const IndexedProcessingPolicyCommandSchema = ProcessingPolicyCommandSchema.extend({
     supersede_job_ids: z.array(IdentifierSchema).max(256).optional(),
-    supersession_reason: IdentifierSchema.optional(),
 });
 export type IndexedProcessingPolicyCommand = z.infer<typeof IndexedProcessingPolicyCommandSchema>;
 

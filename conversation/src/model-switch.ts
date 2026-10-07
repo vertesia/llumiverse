@@ -1,9 +1,15 @@
 import type { z } from 'zod';
 import { fingerprintJson } from './identity.js';
+import { indexedProcessingContextFingerprint } from './indexed-processing-working-set.js';
 import { preflightJsonInput } from './json-preflight.js';
-import { assessProcessingReadiness, processingContextFingerprint } from './processing.js';
+import { assessProcessingReadiness, type ProcessingReadiness, processingContextFingerprint } from './processing.js';
 import { ContextMeasurementSchema } from './schemas/context-measurement.js';
 import { ModelTargetSchema } from './schemas/execution.js';
+import {
+    IndexedConversationProcessingHeaderSchema,
+    type IndexedConversationSelectedContext,
+    IndexedConversationSelectedContextSchema,
+} from './schemas/indexed-head.js';
 import {
     type ConversationModelSwitchBlockerSchema,
     type ConversationModelSwitchBudgetAnalysisSchema,
@@ -63,6 +69,25 @@ function hasOpenToolCall(document: ConversationDocument): boolean {
     return false;
 }
 
+type ModelSwitchEvidence = {
+    source: ConversationModelSwitchRequest['source'];
+    context_revision: number;
+    source_fingerprint: string;
+    context_fingerprint: string;
+    tool_ids: string[];
+    tools: ConversationDocument['tool_definitions'][string][];
+    measurement_policy?: ConversationModelSwitchRequest['measurement_policy'];
+    processing_enabled: boolean;
+    native_request_max_bytes: number;
+    has_open_calls: boolean;
+    project(target: ModelTarget): Promise<ConversationModelSwitchProjection>;
+    observe_unsettled(): Promise<boolean>;
+    assess_readiness(
+        targetFingerprint: string,
+        projection: ConversationModelSwitchProjection,
+    ): Promise<ProcessingReadiness>;
+};
+
 /** Dry compatible-only plan. It cannot authorize transport or carry provider options from a prior request. */
 export async function prepareModelSwitch(
     sourceInput: ConversationDocument,
@@ -72,42 +97,149 @@ export async function prepareModelSwitch(
     const source = parseConversationDocument(sourceInput);
     const request = ConversationModelSwitchRequestSchema.parse(structuredClone(requestInput));
     const project = runtime.project;
-    const hasUnsettledGeneration = runtime.hasUnsettledGeneration;
-    if (typeof project !== 'function' || typeof hasUnsettledGeneration !== 'function')
+    const observe = runtime.hasUnsettledGeneration;
+    if (typeof project !== 'function' || typeof observe !== 'function')
         throw new TypeError('Model switch requires host projection and live-generation observation');
-    const target = ModelTargetSchema.parse(structuredClone(request.target));
     const toolIds = [...source.context.active_tool_definition_ids];
-    const tools = toolIds.map((id) => {
-        const definition = source.tool_definitions[id];
-        if (!definition) throw new Error(`Active tool definition ${id} is unavailable`);
-        return definition;
-    });
+    return prepareModelSwitchEvidence(
+        {
+            source: { conversation_id: source.id, revision: source.revision },
+            context_revision: source.context.revision,
+            source_fingerprint: await fingerprintJson(source),
+            context_fingerprint: await processingContextFingerprint(source),
+            tool_ids: toolIds,
+            tools: toolIds.map((id) => {
+                const definition = source.tool_definitions[id];
+                if (!definition) throw new Error(`Active tool definition ${id} is unavailable`);
+                return definition;
+            }),
+            measurement_policy: source.processing.budget?.measurement_policy,
+            processing_enabled: source.processing.enabled,
+            native_request_max_bytes: 768 * 1024,
+            has_open_calls: hasOpenToolCall(source),
+            project: (target) => project(structuredClone(source), target),
+            observe_unsettled: () => observe(structuredClone(source)),
+            assess_readiness: (targetFingerprint, projection) =>
+                assessProcessingReadiness(
+                    source,
+                    targetFingerprint,
+                    projection.status === 'compiled'
+                        ? (projection.processing_measurement_fingerprint ?? 'sha256:disabled')
+                        : 'sha256:disabled',
+                ),
+        },
+        request,
+    );
+}
+
+/** Bounded indexed source projection. The host authenticates its current immutable root and
+ * processing header independently; neither this evidence nor a compatible plan grants dispatch. */
+export interface IndexedConversationModelSwitchRuntime {
+    project(
+        selection: IndexedConversationSelectedContext,
+        target: ModelTarget,
+    ): Promise<ConversationModelSwitchProjection>;
+    hasUnsettledGeneration(selection: IndexedConversationSelectedContext): Promise<boolean>;
+    assessProcessingReadiness(
+        selection: IndexedConversationSelectedContext,
+        targetFingerprint: string,
+        projection: ConversationModelSwitchProjection,
+    ): Promise<ProcessingReadiness>;
+}
+
+export async function indexedModelSwitchSourceFingerprint(
+    selection: IndexedConversationSelectedContext,
+): Promise<string> {
+    return fingerprintJson({ source: selection.source, root: selection.root });
+}
+
+/** The same public plan/change contract and budget checks over an authenticated dependency projection. */
+export async function prepareIndexedModelSwitch(
+    sourceInput: {
+        selection: IndexedConversationSelectedContext;
+        processing: z.infer<typeof IndexedConversationProcessingHeaderSchema>;
+    },
+    requestInput: ConversationModelSwitchRequest,
+    runtime: IndexedConversationModelSwitchRuntime,
+): Promise<ConversationModelSwitchPlan> {
+    if (!preflightJsonInput(sourceInput, { max_bytes: 32 * 1024 * 1024 }).success)
+        throw new TypeError('Indexed model switch source exceeds its bounded JSON profile');
+    const request = ConversationModelSwitchRequestSchema.parse(structuredClone(requestInput));
+    const selection = IndexedConversationSelectedContextSchema.parse(structuredClone(sourceInput.selection));
+    const processing = IndexedConversationProcessingHeaderSchema.parse(structuredClone(sourceInput.processing));
+    const project = runtime.project;
+    const observe = runtime.hasUnsettledGeneration;
+    const assess = runtime.assessProcessingReadiness;
+    if (typeof project !== 'function' || typeof observe !== 'function' || typeof assess !== 'function')
+        throw new TypeError('Indexed model switch requires owned host projection, source and readiness observation');
+    const blocks = [...selection.turns, ...(selection.replacement_turns ?? []).map((item) => item.projection)].flatMap(
+        (turn) => turn.selected_blocks,
+    );
+    const terminal = new Set(Object.values(selection.execution_witnesses ?? {}).map((receipt) => receipt.call_id));
+    for (const block of blocks) if (block.type === 'tool_result') terminal.add(block.call_id);
+    const toolIds = [...selection.context.active_tool_definition_ids];
+    return prepareModelSwitchEvidence(
+        {
+            source: selection.source,
+            context_revision: selection.context.revision,
+            source_fingerprint: await indexedModelSwitchSourceFingerprint(selection),
+            context_fingerprint: await indexedProcessingContextFingerprint({
+                ...selection,
+                completeness: 'active_processing_dependencies_verified',
+            }),
+            tool_ids: toolIds,
+            tools: toolIds.map((id) => {
+                const definition = selection.tool_definitions[id];
+                if (!definition) throw new Error(`Active indexed tool definition ${id} is unavailable`);
+                return definition;
+            }),
+            measurement_policy: processing.budget?.measurement_policy,
+            processing_enabled: processing.enabled,
+            native_request_max_bytes: 32 * 1024 * 1024,
+            has_open_calls: blocks.some((block) => block.type === 'tool_call' && !terminal.has(block.call_id)),
+            project: (target) => project(structuredClone(selection), target),
+            observe_unsettled: () => observe(structuredClone(selection)),
+            assess_readiness: (targetFingerprint, projection) =>
+                assess(structuredClone(selection), targetFingerprint, projection),
+        },
+        request,
+    );
+}
+
+async function prepareModelSwitchEvidence(
+    source: ModelSwitchEvidence,
+    requestInput: ConversationModelSwitchRequest,
+): Promise<ConversationModelSwitchPlan> {
+    const request = ConversationModelSwitchRequestSchema.parse(structuredClone(requestInput));
+    const target = ModelTargetSchema.parse(structuredClone(request.target));
+    const toolIds = source.tool_ids;
+    const tools = source.tools;
     const blockers: Blocker[] = [];
-    const sourceRef = { conversation_id: source.id, revision: source.revision };
+    const sourceRef = source.source;
     if (
-        request.source.conversation_id !== source.id ||
-        request.source.revision !== source.revision ||
-        request.expected_context_revision !== source.context.revision
+        request.source.conversation_id !== source.source.conversation_id ||
+        request.source.revision !== source.source.revision ||
+        request.expected_context_revision !== source.context_revision
     ) {
         block(blockers, 'SOURCE_CHANGED', 'Conversation source or active context revision changed');
     }
-    if (hasOpenToolCall(source)) block(blockers, 'OPEN_TOOL_CALL', 'A tool call has no terminal result');
-    const unsettled = await hasUnsettledGeneration(structuredClone(source));
+    if (source.has_open_calls) block(blockers, 'OPEN_TOOL_CALL', 'A tool call has no terminal result');
+    const unsettled = await source.observe_unsettled();
     if (typeof unsettled !== 'boolean') throw new TypeError('Host generation observation must return a boolean');
     if (unsettled)
         block(blockers, 'UNSETTLED_GENERATION', 'A generation is still owed, streaming or awaiting settlement');
 
-    const sourceFingerprint = await fingerprintJson(source);
-    const contextFingerprint = await processingContextFingerprint(source);
+    const sourceFingerprint = source.source_fingerprint;
+    const contextFingerprint = source.context_fingerprint;
     const targetFingerprint = await fingerprintJson(target);
     const optionsFingerprint = await fingerprintJson(target.options ?? {});
     const toolSetFingerprint = await fingerprintJson(tools);
-    const sourceMeasurementPolicy = source.processing.budget?.measurement_policy;
+    const sourceMeasurementPolicy = source.measurement_policy;
     const estimateAllowed =
         sourceMeasurementPolicy !== 'exact_only' &&
         request.measurement_policy !== 'exact_only' &&
         (sourceMeasurementPolicy === 'identified_estimate' || request.measurement_policy === 'identified_estimate');
-    const projection = structuredClone(await project(structuredClone(source), structuredClone(target)));
+    const projection = structuredClone(await source.project(structuredClone(target)));
     let nativeRequestFingerprint: string | undefined;
     let measurement: ContextMeasurement | undefined;
     let budget: ConversationModelSwitchPlan['budget'];
@@ -118,7 +250,7 @@ export async function prepareModelSwitch(
             projection.reason.slice(0, 1024) || 'Target cannot compile the selected context',
         );
     } else {
-        if (!preflightJsonInput(projection.native_request, { max_bytes: 768 * 1024 }).success)
+        if (!preflightJsonInput(projection.native_request, { max_bytes: source.native_request_max_bytes }).success)
             throw new RangeError('Model switch native request exceeds its bounded projection envelope');
         const nativeRequest = JsonValueSchema.parse(structuredClone(projection.native_request));
         nativeRequestFingerprint = await fingerprintJson(nativeRequest);
@@ -157,15 +289,11 @@ export async function prepareModelSwitch(
                     block(blockers, 'BUDGET_UNSATISFIED', 'Measured request exceeds the target context window');
             }
         }
-        if (source.processing.enabled) {
+        if (source.processing_enabled) {
             if (projection.processing_measurement_fingerprint === undefined) {
                 block(blockers, 'PROCESSING_PENDING', 'Target-specific processing coverage is unavailable');
             } else {
-                const readiness = await assessProcessingReadiness(
-                    source,
-                    targetFingerprint,
-                    projection.processing_measurement_fingerprint,
-                );
+                const readiness = await source.assess_readiness(targetFingerprint, projection);
                 if (readiness.status !== 'ready')
                     block(
                         blockers,
@@ -174,14 +302,14 @@ export async function prepareModelSwitch(
                     );
             }
         } else {
-            const readiness = await assessProcessingReadiness(source, targetFingerprint, 'sha256:disabled');
+            const readiness = await source.assess_readiness(targetFingerprint, projection);
             if (readiness.status !== 'ready') block(blockers, 'PROCESSING_PENDING', readiness.reason);
         }
     }
     return ConversationModelSwitchPlanSchema.parse({
         version: 1,
         source: sourceRef,
-        expected_context_revision: source.context.revision,
+        expected_context_revision: source.context_revision,
         source_fingerprint: sourceFingerprint,
         context_fingerprint: contextFingerprint,
         target,
@@ -226,6 +354,38 @@ export async function applyModelSwitch(
         },
         runtime,
     );
+    return modelSwitchChangeFromRefreshedPlan(plan, refreshed, ownedCommand);
+}
+
+export async function applyIndexedModelSwitch(
+    source: Parameters<typeof prepareIndexedModelSwitch>[0],
+    planInput: ConversationModelSwitchPlan,
+    command: { operation_id: string; recorded_at: string },
+    runtime: IndexedConversationModelSwitchRuntime,
+): Promise<ConversationModelSwitchNextRequestChange> {
+    const plan = ConversationModelSwitchPlanSchema.parse(structuredClone(planInput));
+    const ownedCommand = structuredClone(command);
+    if (plan.compatibility !== 'compatible' || plan.blockers.length !== 0)
+        throw new Error('Blocked indexed model switch cannot be applied');
+    const refreshed = await prepareIndexedModelSwitch(
+        source,
+        {
+            source: plan.source,
+            expected_context_revision: plan.expected_context_revision,
+            target: plan.target,
+            ...(plan.measurement_policy === undefined ? {} : { measurement_policy: plan.measurement_policy }),
+            ...(plan.measurement_mode === undefined ? {} : { measurement_mode: plan.measurement_mode }),
+        },
+        runtime,
+    );
+    return modelSwitchChangeFromRefreshedPlan(plan, refreshed, ownedCommand);
+}
+
+function modelSwitchChangeFromRefreshedPlan(
+    plan: ConversationModelSwitchPlan,
+    refreshed: ConversationModelSwitchPlan,
+    ownedCommand: { operation_id: string; recorded_at: string },
+): ConversationModelSwitchNextRequestChange {
     if (
         refreshed.compatibility !== 'compatible' ||
         refreshed.source_fingerprint !== plan.source_fingerprint ||

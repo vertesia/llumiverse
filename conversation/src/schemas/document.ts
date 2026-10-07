@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import { ProcessingBudgetSchema, ProcessorConfigurationSchema } from './processing-policy-foundation.js';
+
+export { ProcessingBudgetSchema, ProcessorConfigurationSchema } from './processing-policy-foundation.js';
+
 import { AssetSchema, ConversationTurnSchema, ToolDefinitionSchema } from './content.js';
 import {
     CompactionStrategySchema,
@@ -14,7 +18,6 @@ import {
     ContentHashSchema,
     ConversationRefSchema,
     IdentifierSchema,
-    JsonObjectSchema,
     MetadataSchema,
     NonnegativeSafeIntegerSchema,
     PositiveSafeIntegerSchema,
@@ -73,6 +76,8 @@ export const CompactionRecordSchema = z
         strategy: CompactionStrategySchema,
         source: CompactionSourceSchema,
         replacement_turns: z.array(ConversationTurnSchema).min(1),
+        /** Exact accepted pre-transform context; recovery must not replay later active selections. */
+        original_context: ConversationContextSchema.optional(),
         fidelity: z.enum(['value_preserving', 'reversible_representation', 'heuristic', 'semantic', 'retrievable']),
         retained_asset_ids: z.array(IdentifierSchema),
         generation_ids: z.array(IdentifierSchema),
@@ -82,25 +87,6 @@ export const CompactionRecordSchema = z
         metadata: MetadataSchema.optional(),
     })
     .meta({ id: 'ConversationCompactionRecord' });
-
-export const ProcessorConfigurationSchema = z
-    .strictObject({
-        id: IdentifierSchema,
-        version: IdentifierSchema,
-        scope: z.enum(['on_append', 'on_budget', 'manual']),
-        config: JsonObjectSchema,
-        required: z.boolean(),
-        failure_behavior: z.enum(['block', 'skip_with_diagnostic']),
-    })
-    .meta({ id: 'ConversationProcessorConfiguration' });
-
-export const ProcessingBudgetSchema = z
-    .strictObject({
-        max_input_tokens: PositiveSafeIntegerSchema,
-        output_reserve_tokens: NonnegativeSafeIntegerSchema,
-        measurement_policy: z.enum(['exact_only', 'identified_estimate']).optional(),
-    })
-    .meta({ id: 'ConversationProcessingBudget' });
 
 export const ProcessingStateSchema = z
     .strictObject({

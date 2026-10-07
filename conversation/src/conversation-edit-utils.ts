@@ -19,9 +19,18 @@ export function nextRevision(revision: number): number {
     return revision + 1;
 }
 export function cacheAfterEdit(document: ConversationDocument, entries: ContextEntry[], contentChangedAt?: number) {
-    const cache = document.context.cache_intent;
+    return cacheAfterContextEdit(document.context, entries, contentChangedAt);
+}
+
+/** Same edit semantics over explicit context dependencies, without a fabricated source document. */
+export function cacheAfterContextEdit(
+    context: ConversationContext,
+    entries: ContextEntry[],
+    contentChangedAt?: number,
+) {
+    const cache = context.cache_intent;
     if (!cache || cache.stable_through_entry_id === undefined) return cache;
-    const oldIndex = document.context.entries.findIndex((entry) => entry.id === cache.stable_through_entry_id);
+    const oldIndex = context.entries.findIndex((entry) => entry.id === cache.stable_through_entry_id);
     const missing = !entries.some((entry) => entry.id === cache.stable_through_entry_id);
     const affected = missing || (contentChangedAt !== undefined && contentChangedAt <= oldIndex);
     if (!affected) return cache;

@@ -6,10 +6,8 @@ import { ContextEntrySchema } from './schemas/context-foundation.js';
 import { ProcessorConfigurationSchema } from './schemas/document.js';
 import { ContentHashSchema, IdentifierSchema, NonnegativeSafeIntegerSchema } from './schemas/primitives.js';
 import { ProcessingJobSchema } from './schemas/processing.js';
-import {
-    TOOL_RESULT_TEXT_PROCESSOR_ID,
-    TOOL_RESULT_TEXT_PROCESSOR_VERSION,
-} from './tool-result-text-externalization.js';
+import { isToolResultTextProcessor } from './tool-result-text-externalization.js';
+import { parseToolResultTextStrategy, supportsToolResultTextProcessingScope } from './tool-result-text-strategy.js';
 import type { ProcessingJob } from './types.js';
 
 export const MAX_PROCESSING_STAGES_PER_OPERATION = 16;
@@ -57,11 +55,35 @@ export async function constructProcessingJobs(input: ProcessingJobConstruction):
             owned.source_operation_id,
             String(index),
         );
-        const toolResultStage =
-            processor.id === TOOL_RESULT_TEXT_PROCESSOR_ID && processor.version === TOOL_RESULT_TEXT_PROCESSOR_VERSION;
-        if (toolResultStage && processor.scope !== 'on_append')
-            throw new Error('Tool-result text externalization supports only accepted on-append results');
-        if (toolResultStage && index !== owned.processor_indices.length - 1)
+        const toolResultStage = isToolResultTextProcessor({
+            processor_id: processor.id,
+            processor_version: processor.version,
+        });
+        if (toolResultStage)
+            parseToolResultTextStrategy({
+                processor_id: processor.id,
+                processor_version: processor.version,
+                configuration: processor.config,
+            });
+        if (
+            toolResultStage &&
+            !supportsToolResultTextProcessingScope({
+                processor_id: processor.id,
+                processor_version: processor.version,
+                scope: processor.scope,
+            })
+        )
+            throw new Error('Tool-result text externalization supports append jobs or explicit manual v2 selections');
+        if (
+            toolResultStage &&
+            processor.scope === 'manual' &&
+            (index !== 0 ||
+                owned.processor_indices.length !== 1 ||
+                owned.selected_block_ids !== undefined ||
+                owned.target_fingerprint !== undefined)
+        )
+            throw new Error('Manual tool-result processing requires one complete result-entry selection');
+        if (toolResultStage && processor.scope === 'on_append' && index !== owned.processor_indices.length - 1)
             throw new Error('Tool-result text externalization must be the final on-append stage');
         if (toolResultStage && owned.tool_result_entry_ids?.length === 0) continue;
         const exchangeStage =

@@ -3,6 +3,11 @@ import { applyContextMutationWorkingSet, type ContextMutationResult } from './co
 import { type ContextChangeWorkingSet, planContextChangeWorkingSet } from './context-change-working-set.js';
 import { fingerprintJson } from './identity.js';
 import { INDEXED_EXCHANGE_PROCESSOR_ID, INDEXED_EXCHANGE_PROCESSOR_VERSION } from './indexed-exchange-constants.js';
+import {
+    buildIndexedToolResultTextProposal,
+    indexedToolResultTextFrame,
+    resolveIndexedToolResultTextInput,
+} from './indexed-tool-result-text.js';
 import { preflightJsonInput } from './json-preflight.js';
 import type { ProcessorResult } from './processing.js';
 import { ContextChangePlanInputSchema, ContextChangeRequestSchema } from './schemas/context-change.js';
@@ -23,6 +28,12 @@ import {
     ProcessingResolvedInputSchema,
 } from './schemas/processing.js';
 import { buildTextWorkingSetProposal, selectedTextWorkingSet } from './text-externalization-working-set.js';
+import {
+    isToolResultTextProcessor,
+    toolResultTextApplyReceipt,
+    toolResultTextWorkingMutation,
+    toolResultTextWorkingSelection,
+} from './tool-result-text-externalization.js';
 import type {
     ContextEntry,
     OperationReceipt,
@@ -313,7 +324,21 @@ export async function indexedCompletedJobEntrySelection(
               receipt.payload_fingerprint !== (await fingerprintJson(completion)))
     )
         throw new Error('Indexed stage lost its exact accepted predecessor output and completion');
-    if (completion.status === 'applied' && output.kind === 'proposal' && receipt.context_change) {
+    if (completion.status === 'applied' && output.kind === 'proposal' && isToolResultTextProcessor(prior)) {
+        if (output.proposal.kind !== 'replace_with_compaction')
+            throw new Error('Indexed tool-result predecessor lacks its registered compaction proposal');
+        const expected = await toolResultTextApplyReceipt(
+            { conversation_id: receipt.conversation_id, revision: receipt.base_revision },
+            prior,
+            resolution,
+            output.proposal,
+            receipt.recorded_at,
+        );
+        if (canonicalJsonContentString(receipt) !== canonicalJsonContentString(expected))
+            throw new Error(
+                'Indexed tool-result predecessor apply receipt differs from its exact proposal/source contract',
+            );
+    } else if (completion.status === 'applied' && output.kind === 'proposal' && receipt.context_change) {
         const appliedHash = receipt.context_change.source_fingerprint;
         const proposal =
             output.proposal.kind === 'replace_with_compaction'
@@ -376,6 +401,16 @@ export async function resolveIndexedProcessingTextInput(
     if (!preflightJsonInput(jobInput).success) throw new TypeError('Indexed processing job is not bounded JSON');
     const job = ProcessingJobSchema.parse(structuredClone(jobInput));
     const recordedAt = TimestampSchema.parse(recordedAtInput);
+    if (isToolResultTextProcessor(job)) {
+        return resolveIndexedToolResultTextInput(
+            selected,
+            activeIndexedContextWorkingSet(selected),
+            job,
+            recordedAt,
+            await contextFingerprint(selected),
+            predecessorInput,
+        );
+    }
     if (
         !(
             (job.processor_id === 'externalize-text' && job.processor_version === '1') ||
@@ -488,6 +523,12 @@ export async function buildIndexedTextExternalizationProposal(
         throw new TypeError('Indexed processor workspace is not bounded JSON');
     const workspace = IndexedProcessingClaimWorkspaceSchema.parse(structuredClone(input));
     const { job, resolution, configuration, attempt, selected, archives, predecessor } = workspace;
+    if (isToolResultTextProcessor(job))
+        return buildIndexedToolResultTextProposal(
+            workspace,
+            activeIndexedContextWorkingSet(selected),
+            await contextFingerprint(selected),
+        );
     if (
         job.processor_id !== 'externalize-text' ||
         job.processor_version !== '1' ||
@@ -573,6 +614,18 @@ export async function applyIndexedTextExternalizationOutput(
     if (canonicalJsonContentString(output) !== canonicalJsonContentString(expected) || output.kind !== 'proposal')
         throw new Error('Indexed completion differs from its exact deterministic archived output');
     const frame = activeIndexedContextWorkingSet(workspace.selected);
+    if (isToolResultTextProcessor(workspace.job)) {
+        const proposal = output.proposal;
+        if (proposal.kind !== 'replace_with_compaction')
+            throw new Error('Indexed tool-result output lost its compaction');
+        return toolResultTextWorkingMutation(
+            await indexedToolResultTextFrame(workspace.selected, frame),
+            workspace.job,
+            workspace.resolution,
+            proposal,
+            workspace.snapshot_at,
+        );
+    }
     const selection = ContextChangePlanInputSchema.parse({
         expected_revision: frame.source.revision,
         expected_context_revision: frame.context.revision,
@@ -692,7 +745,16 @@ export async function indexedTextExternalizationOriginals(
     );
     if (canonicalJsonContentString(expected) !== canonicalJsonContentString(resolution))
         throw new Error('Indexed originals differ from their exact retained resolved selection');
-    const texts = selectedTextWorkingSet(activeIndexedContextWorkingSet(selected), resolution);
+    const frame = activeIndexedContextWorkingSet(selected);
+    const texts = isToolResultTextProcessor(job)
+        ? (
+              await toolResultTextWorkingSelection(
+                  await indexedToolResultTextFrame(selected, frame),
+                  resolution.entry_ids,
+                  job,
+              )
+          ).texts
+        : selectedTextWorkingSet(frame, resolution);
     if (texts.length > 4096) throw new RangeError('Indexed originals exceed bounded text selection');
     const originals = [];
     let bytes = 0;

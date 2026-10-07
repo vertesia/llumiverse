@@ -21,6 +21,7 @@ import {
     type ConversationTranscriptInputOmissionSchema,
     type ConversationTranscriptProgramBlockSchema,
     ConversationTranscriptProjectionInputSchema,
+    type ConversationTranscriptRenderableBlockSchema,
     type ConversationTranscriptToolArgumentsSchema,
     type ConversationTranscriptToolResultBlockSchema,
     type ConversationTranscriptTurnOmissionSchema,
@@ -50,6 +51,7 @@ export type ConversationTranscriptGeneration = z.infer<typeof ConversationTransc
 export type ConversationTranscriptUserBlock = z.infer<typeof ConversationTranscriptUserBlockSchema>;
 export type ConversationTranscriptAgentBlock = z.infer<typeof ConversationTranscriptAgentBlockSchema>;
 export type ConversationTranscriptProgramBlock = z.infer<typeof ConversationTranscriptProgramBlockSchema>;
+export type ConversationTranscriptRenderableBlock = z.infer<typeof ConversationTranscriptRenderableBlockSchema>;
 export type ConversationTranscriptToolResultBlock = z.infer<typeof ConversationTranscriptToolResultBlockSchema>;
 export type ConversationTranscriptToolArguments = z.infer<typeof ConversationTranscriptToolArgumentsSchema>;
 export type ConversationTranscriptInputOmission = z.infer<typeof ConversationTranscriptInputOmissionSchema>;
@@ -261,7 +263,7 @@ function projectRenderableBlock(
     includedAssetIds: Set<string>,
     omittedBlocks: ConversationTranscriptBlockOmission[],
     omittedAssets: ConversationTranscriptAssetOmission[],
-): ConversationTranscriptProgramBlock | undefined {
+): ConversationTranscriptRenderableBlock | undefined {
     switch (block.type) {
         case 'text':
             return {
@@ -395,7 +397,7 @@ function projectTurn(
     }
     const blocks: ConversationTranscriptAgentBlock[] = [];
     for (const block of turn.blocks) {
-        if (turn.kind === 'agent' && block.type === 'tool_call') {
+        if ((turn.kind === 'agent' || turn.kind === 'program') && block.type === 'tool_call') {
             const projectedArguments = projectToolArguments(block.arguments);
             if (projectedArguments === undefined) {
                 appendBounded(
@@ -444,7 +446,7 @@ function projectTurn(
                 blocks: blocks as ConversationTranscriptAgentBlock[],
             };
         case 'program':
-            return { ...common, kind: 'program', blocks: blocks as ConversationTranscriptProgramBlock[] };
+            return { ...common, kind: 'program', blocks };
     }
 }
 

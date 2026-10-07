@@ -1,8 +1,30 @@
 import { canonicalJsonContentString, hashUtf8Content } from './content-integrity.js';
+import type { ContextMutationResult } from './context-change-transition.js';
+import { collectAssetIds } from './context-change-working-set.js';
 import { createContextTurnIndex, resolveContextEntry } from './context-entry-resolution.js';
-import { cacheAfterEdit } from './conversation-edit-utils.js';
+import { cacheAfterContextEdit } from './conversation-edit-utils.js';
 import { deriveConversationId, fingerprintJson } from './identity.js';
 import type { ConversationProcessor, ProcessorResult } from './processing.js';
+import { ContextChangeSchema } from './schemas/change.js';
+import { CompactionRecordSchema, ConversationContextSchema } from './schemas/document.js';
+import { OperationReceiptSchema } from './schemas/execution.js';
+import { type ToolResultProjectionWitness, ToolResultProjectionWitnessSchema } from './schemas/indexed-head.js';
+import {
+    isToolResultTextStrategy,
+    parseToolResultTextStrategy,
+    selectToolResultTextBlocks,
+    supportsToolResultTextProcessingScope,
+    TOOL_RESULT_TEXT_PROCESSOR_ID,
+    type ToolResultTextStrategy,
+} from './tool-result-text-strategy.js';
+
+export {
+    TOOL_RESULT_TEXT_CHAINED_PROCESSOR_VERSION,
+    TOOL_RESULT_TEXT_PARTIAL_PROCESSOR_VERSION,
+    TOOL_RESULT_TEXT_PROCESSOR_ID,
+    TOOL_RESULT_TEXT_PROCESSOR_VERSION,
+} from './tool-result-text-strategy.js';
+
 import { ConversationTurnSchema, RetrievalCapabilitySchema } from './schemas/content.js';
 import { ContextChangeProposalSchema } from './schemas/context-change.js';
 import {
@@ -14,37 +36,40 @@ import {
 
 import { assertToolResultReceiptFingerprint } from './tool-result-integrity.js';
 import type {
+    Asset,
+    ContentBlock,
     ContextEntry,
+    ConversationContext,
     ConversationDocument,
+    ConversationRef,
     ConversationTurn,
     ExecutionReceipt,
     ExternalReferenceBlock,
+    OperationReceipt,
     ProcessingJob,
     ProcessingOutputReceipt,
     ProcessingResolvedInput,
     RetrievalCapability,
+    ToolDefinition,
     ToolResultBlock,
 } from './types.js';
 import { parseConversationDocument } from './validation.js';
 
 /** Separate from v1 ordinary text processing: executable arguments are never selected or rewritten. */
-export const TOOL_RESULT_TEXT_PROCESSOR_ID = 'externalize-tool-result-text';
-export const TOOL_RESULT_TEXT_PROCESSOR_VERSION = '1';
+
 const MAX_BYTES = 32 * 1024 * 1024;
 const MAX_BLOCKS = 4096;
 export function isToolResultTextProcessor(job: Pick<ProcessingJob, 'processor_id' | 'processor_version'>): boolean {
-    return (
-        job.processor_id === TOOL_RESULT_TEXT_PROCESSOR_ID &&
-        job.processor_version === TOOL_RESULT_TEXT_PROCESSOR_VERSION
-    );
+    return isToolResultTextStrategy(job.processor_id, job.processor_version);
 }
 
-interface SelectedResult {
+export interface SelectedToolResultTextRecord {
     entry: ContextEntry;
     turn: ConversationTurn;
     result: ToolResultBlock;
     receipt: ExecutionReceipt;
     call_turn: ConversationTurn;
+    projection_witness?: ToolResultProjectionWitness;
 }
 export interface ToolResultExternalizationText {
     entry_id: string;
@@ -54,17 +79,196 @@ export interface ToolResultExternalizationText {
     text: string;
 }
 
-async function selectedResults(document: ConversationDocument, entryIds: readonly string[]): Promise<SelectedResult[]> {
+/** Explicit dependencies, never a partial ConversationDocument or inferred historical source. */
+export interface ToolResultTextSelectionFrame {
+    source: ConversationRef;
+    context: ConversationContext;
+    turns: ReadonlyMap<string, ConversationTurn>;
+    active_blocks: ReadonlyMap<string, readonly ContentBlock[]>;
+    execution_receipts: Readonly<Record<string, ExecutionReceipt>>;
+    projection_witnesses?: Readonly<Record<string, ToolResultProjectionWitness>>;
+    /** Materialized source already owned by its caller; only the nominated predecessor is inspected. */
+    projection_records?: Pick<ConversationDocument, 'compactions' | 'processing' | 'operation_receipts'>;
+}
+export function materializedToolResultTextFrame(document: ConversationDocument): ToolResultTextSelectionFrame {
+    const turns = createContextTurnIndex(document);
+    return {
+        source: { conversation_id: document.id, revision: document.revision },
+        context: document.context,
+        turns,
+        active_blocks: new Map(
+            document.context.entries.map((entry) => [entry.id, resolveContextEntry(turns, entry).blocks]),
+        ),
+        execution_receipts: document.execution_receipts,
+        projection_records: document,
+    };
+}
+/** A current projection is accepted evidence, never a new terminal result. Indexed hosts
+ * supply the point-authenticated witness; materialized hosts prove the exact retained predecessor.
+ */
+async function toolResultProjectionWitness(
+    frame: ToolResultTextSelectionFrame,
+    entry: Extract<ContextEntry, { type: 'replacement_turn' }>,
+    turn: ConversationTurn,
+    terminal: ExecutionReceipt,
+): Promise<ToolResultProjectionWitness> {
+    let witness = frame.projection_witnesses?.[turn.id];
+    if (!witness) {
+        const records = frame.projection_records;
+        const compaction = records?.compactions[entry.compaction_id];
+        const acceptance = compaction ? records?.operation_receipts[compaction.operation_id] : undefined;
+        const jobId = compaction?.operation_id.startsWith('processing:apply:')
+            ? compaction.operation_id.slice('processing:apply:'.length)
+            : '';
+        const job = records?.processing.jobs?.[jobId];
+        const resolution = records?.processing.resolved_inputs?.[jobId];
+        const attempt = records?.processing.attempts?.[jobId];
+        const output = records?.processing.outputs?.[jobId];
+        const completion = records?.processing.completions?.[jobId];
+        const original = terminal.result_turn_id ? frame.turns.get(terminal.result_turn_id) : undefined;
+        const originalResult = original?.blocks[0];
+        if (
+            !compaction ||
+            !acceptance ||
+            !job ||
+            !resolution ||
+            !attempt ||
+            output?.kind !== 'proposal' ||
+            output.proposal.kind !== 'replace_with_compaction' ||
+            completion?.status !== 'applied' ||
+            !supportsToolResultTextProcessingScope(job) ||
+            compaction.strategy.version !== job.processor_version ||
+            compaction.strategy.id !== job.processor_id ||
+            compaction.strategy.configuration_fingerprint !== job.configuration_fingerprint ||
+            job.configuration_fingerprint !== (await fingerprintJson(job.configuration)) ||
+            job.selection_fingerprint !== (await fingerprintJson(job.selection)) ||
+            resolution.job_id !== job.id ||
+            attempt.job_id !== job.id ||
+            attempt.resolved_input_fingerprint !== (await fingerprintJson(resolution)) ||
+            completion.job_id !== job.id ||
+            completion.output_fingerprint !== output.output_fingerprint ||
+            completion.context_change_operation_id !== acceptance.id ||
+            completion.result_revision !== acceptance.result_revision ||
+            acceptance.operation_kind !== 'context_change' ||
+            acceptance.context_change?.source_fingerprint !== resolution.source_fingerprint ||
+            acceptance.payload_fingerprint !== (await fingerprintJson(output.proposal)) ||
+            output.proposal.compaction_id !== compaction.id ||
+            compaction.fidelity !== output.proposal.fidelity ||
+            compaction.source.source_fingerprint !== resolution.source_fingerprint ||
+            compaction.source.block_ids === undefined ||
+            canonicalJsonContentString(compaction.source.block_ids) !==
+                canonicalJsonContentString(
+                    output.proposal.replacement_turns.flatMap((candidate) =>
+                        candidate.provenance.type === 'derived' ? (candidate.provenance.source_block_ids ?? []) : [],
+                    ),
+                ) ||
+            canonicalJsonContentString(compaction.retained_asset_ids) !==
+                canonicalJsonContentString(output.proposal.retained_asset_ids) ||
+            canonicalJsonContentString(compaction.generation_ids) !==
+                canonicalJsonContentString(output.proposal.generation_ids) ||
+            compaction.derivation_generation !== undefined ||
+            compaction.created_at !== acceptance.recorded_at ||
+            compaction.metadata?.payload_fingerprint !== acceptance.payload_fingerprint ||
+            compaction.metadata?.applied_revision !== acceptance.result_revision ||
+            compaction.metadata?.source_context_revision !== resolution.context_revision ||
+            canonicalJsonContentString(compaction.replacement_turns) !==
+                canonicalJsonContentString(output.proposal.replacement_turns) ||
+            canonicalJsonContentString(compaction.source.turn_ids) !==
+                canonicalJsonContentString(resolution.source_turn_ids) ||
+            !compaction.replacement_turns.some(
+                (candidate) => canonicalJsonContentString(candidate) === canonicalJsonContentString(turn),
+            ) ||
+            original?.kind !== 'tool' ||
+            original.execution_id !== terminal.id ||
+            original.blocks.length !== 1 ||
+            originalResult?.type !== 'tool_result' ||
+            originalResult.call_id !== terminal.call_id
+        )
+            throw new Error('Chained tool-result selection lacks its exact accepted predecessor and original terminal');
+        const predecessorIds = new Set(
+            resolution.source_turn_ids.flatMap((sourceId) => {
+                const source = frame.turns.get(sourceId);
+                return source?.provenance.type === 'derived' ? [source.provenance.derivation_id] : [];
+            }),
+        );
+        const expectedSupersession =
+            job.processor_version === '3' && predecessorIds.size === 1 ? [...predecessorIds][0] : undefined;
+        if (compaction.supersedes_compaction_id !== expectedSupersession)
+            throw new Error('Chained tool-result selection changed its exact accepted predecessor supersession');
+        const { output_fingerprint: outputFingerprint, ...outputPayload } = output;
+        const expectedAcceptance = await toolResultTextApplyReceipt(
+            { conversation_id: frame.source.conversation_id, revision: acceptance.base_revision },
+            job,
+            resolution,
+            output.proposal,
+            acceptance.recorded_at,
+        );
+        if (
+            output.job_id !== job.id ||
+            output.attempt_token !== attempt.attempt_token ||
+            output.resolved_input_fingerprint !== (await fingerprintJson(resolution)) ||
+            outputFingerprint !== (await fingerprintJson(outputPayload)) ||
+            acceptance.id !== expectedAcceptance.id ||
+            acceptance.conversation_id !== expectedAcceptance.conversation_id ||
+            acceptance.result_revision !== expectedAcceptance.result_revision ||
+            acceptance.result_revision > frame.source.revision ||
+            canonicalJsonContentString(acceptance.context_change) !==
+                canonicalJsonContentString(expectedAcceptance.context_change) ||
+            canonicalJsonContentString(acceptance.accepted_context_entry_ids) !==
+                canonicalJsonContentString(expectedAcceptance.accepted_context_entry_ids) ||
+            canonicalJsonContentString(completion.inserted_entry_ids) !==
+                canonicalJsonContentString(expectedAcceptance.accepted_context_entry_ids)
+        )
+            throw new Error('Chained tool-result selection changed its accepted predecessor output fence or receipt');
+        await assertToolResultReceiptFingerprint(originalResult, terminal);
+        const { replacement_turns: _turns, original_context: _originalContext, ...header } = compaction;
+        witness = {
+            compaction_id: compaction.id,
+            compaction_fingerprint: await fingerprintJson(header),
+            projection_fingerprint: await fingerprintJson(turn),
+            terminal_execution_id: terminal.id,
+            original_result_turn_id: original.id,
+            original_result_block_id: originalResult.id,
+        };
+    }
+    const owned = ToolResultProjectionWitnessSchema.parse(witness);
+    if (
+        owned.compaction_id !== entry.compaction_id ||
+        owned.projection_fingerprint !== (await fingerprintJson(turn)) ||
+        owned.terminal_execution_id !== terminal.id ||
+        owned.original_result_turn_id !== terminal.result_turn_id ||
+        turn.provenance.type !== 'derived' ||
+        turn.provenance.derivation_id !== entry.compaction_id
+    )
+        throw new Error('Chained tool-result selection changed its current projection/original terminal binding');
+    return owned;
+}
+
+function toolResultSupersession(frame: ToolResultTextSelectionFrame, entryIds: readonly string[], job: ProcessingJob) {
+    if (job.processor_version !== '3') return {};
+    const predecessors = new Set(
+        frame.context.entries
+            .filter((entry) => entryIds.includes(entry.id))
+            .flatMap((entry) => (entry.type === 'replacement_turn' ? [entry.compaction_id] : [])),
+    );
+    return predecessors.size === 1 ? { supersedes_compaction_id: [...predecessors][0] } : {};
+}
+
+async function selectedResults(
+    document: ToolResultTextSelectionFrame,
+    entryIds: readonly string[],
+    strategy?: ToolResultTextStrategy,
+): Promise<SelectedToolResultTextRecord[]> {
     if (entryIds.length > MAX_BLOCKS || new Set(entryIds).size !== entryIds.length)
         throw new Error('Tool-result text selection exceeds its unique entry bound');
     const selected = document.context.entries.filter((entry) => entryIds.includes(entry.id));
     if (canonicalJsonContentString(selected.map((entry) => entry.id)) !== canonicalJsonContentString(entryIds))
         throw new Error('Tool-result text selection is not exact active context order');
-    const records: SelectedResult[] = [];
+    const records: SelectedToolResultTextRecord[] = [];
     for (const entry of selected) {
-        const turn = document.turns.find((item) => item.id === entry.turn_id);
+        const turn = document.turns.get(entry.turn_id);
         if (
-            entry.type !== 'source_turn' ||
+            (entry.type !== 'source_turn' && strategy?.processor_version !== '3') ||
             !turn ||
             turn.kind !== 'tool' ||
             turn.status !== 'completed' ||
@@ -80,7 +284,7 @@ async function selectedResults(document: ConversationDocument, entryIds: readonl
         const receipt = turn.execution_id ? document.execution_receipts[turn.execution_id] : undefined;
         if (
             receipt?.executor !== 'application' ||
-            receipt.result_turn_id !== turn.id ||
+            (entry.type === 'source_turn' && receipt.result_turn_id !== turn.id) ||
             receipt.call_id !== result.call_id ||
             result.status === 'unknown' ||
             receipt.status !== result.status ||
@@ -89,9 +293,13 @@ async function selectedResults(document: ConversationDocument, entryIds: readonl
             result.content.some((block) => block.type === 'native_replay')
         )
             throw new Error('Tool-result text selection lacks an eligible exact terminal application receipt');
-        await assertToolResultReceiptFingerprint(result, receipt);
+        const projectionWitness =
+            entry.type === 'replacement_turn'
+                ? await toolResultProjectionWitness(document, entry, turn, receipt)
+                : undefined;
+        if (!projectionWitness) await assertToolResultReceiptFingerprint(result, receipt);
         const callSource = receipt.call_source;
-        const callTurn = document.turns.find((item) => item.id === callSource.turn_id);
+        const callTurn = document.turns.get(callSource.turn_id);
         const call = callTurn?.blocks.find((block) => block.id === callSource.block_id);
         const callEntries = document.context.entries.filter(
             (item) =>
@@ -109,8 +317,8 @@ async function selectedResults(document: ConversationDocument, entryIds: readonl
             call?.type !== 'tool_call' ||
             call.executor !== 'application' ||
             call.call_id !== receipt.call_id ||
-            callSource.conversation.conversation_id !== document.id ||
-            callSource.conversation.revision > document.revision ||
+            callSource.conversation.conversation_id !== document.source.conversation_id ||
+            callSource.conversation.revision > document.source.revision ||
             (await fingerprintJson(call)) !== callSource.call_fingerprint ||
             callEntries.length !== 1 ||
             callEntries.some((item) => document.context.protected_entry_ids.includes(item.id))
@@ -119,9 +327,9 @@ async function selectedResults(document: ConversationDocument, entryIds: readonl
         // The executed call and its native replay remain active and byte-for-byte unchanged.
         // Replacing result content cannot silently invalidate replay in another active entry.
         const changedBlocks = new Set([result.id, ...result.content.map((block) => block.id)]);
-        const turns = createContextTurnIndex(document);
         for (const active of document.context.entries) {
-            const { blocks } = resolveContextEntry(turns, active);
+            const blocks = document.active_blocks.get(active.id);
+            if (!blocks) throw new Error('Tool-result selection lacks its complete active replay closure');
             for (const block of blocks) {
                 const replays =
                     block.type === 'native_replay'
@@ -141,7 +349,14 @@ async function selectedResults(document: ConversationDocument, entryIds: readonl
         }
         if (!result.content.some((block) => block.type === 'text'))
             throw new Error('Tool-result text selection has no inline text');
-        records.push({ entry, turn, result, receipt, call_turn: callTurn });
+        records.push({
+            entry,
+            turn,
+            result,
+            receipt,
+            call_turn: callTurn,
+            ...(projectionWitness ? { projection_witness: projectionWitness } : {}),
+        });
     }
     return records;
 }
@@ -150,37 +365,56 @@ async function selectedResults(document: ConversationDocument, entryIds: readonl
 export async function eligibleToolResultTextEntries(
     document: ConversationDocument,
     accepted: readonly string[],
+    strategy?: ToolResultTextStrategy,
 ): Promise<string[]> {
+    return eligibleToolResultTextWorkingEntries(materializedToolResultTextFrame(document), accepted, strategy);
+}
+
+export async function eligibleToolResultTextWorkingEntries(
+    frame: ToolResultTextSelectionFrame,
+    accepted: readonly string[],
+    strategy?: ToolResultTextStrategy,
+): Promise<string[]> {
+    if (strategy) parseToolResultTextStrategy(strategy);
     const ids: string[] = [];
-    for (const entry of document.context.entries) {
-        if (!accepted.includes(entry.id)) continue;
-        const turn = document.turns.find((item) => item.id === entry.turn_id);
-        if (turn?.kind !== 'tool') continue;
+    for (const entry of frame.context.entries) {
+        if (!accepted.includes(entry.id) || frame.turns.get(entry.turn_id)?.kind !== 'tool') continue;
         try {
-            await selectedResults(document, [entry.id]);
+            await selectedResults(frame, [entry.id], strategy);
             ids.push(entry.id);
         } catch {
-            // Unresolved/protected/received/provider content never becomes executable projection authority.
+            /* Protected/unresolved result entries are left unchanged; source integrity is the owning adapter's gate. */
         }
     }
+    if (ids.length && strategy)
+        return (await toolResultTextWorkingSelection(frame, ids, strategy)).records.map((record) => record.entry.id);
     return ids;
 }
 
-export async function toolResultTextSelection(
+export function toolResultTextSelection(
     document: ConversationDocument,
     entryIds: readonly string[],
+    strategy?: ToolResultTextStrategy,
+) {
+    return toolResultTextWorkingSelection(materializedToolResultTextFrame(document), entryIds, strategy);
+}
+
+export async function toolResultTextWorkingSelection(
+    document: ToolResultTextSelectionFrame,
+    entryIds: readonly string[],
+    strategy?: ToolResultTextStrategy,
 ): Promise<{
-    records: SelectedResult[];
+    records: SelectedToolResultTextRecord[];
     texts: ToolResultExternalizationText[];
     integrities: Awaited<ReturnType<typeof hashUtf8Content>>[];
     source_fingerprint: string;
 }> {
-    const records = await selectedResults(document, entryIds);
-    const texts: ToolResultExternalizationText[] = [];
+    const records = await selectedResults(document, entryIds, strategy);
+    const candidates: ToolResultExternalizationText[] = [];
     for (const record of records)
         for (const block of record.result.content) {
             if (block.type === 'text')
-                texts.push({
+                candidates.push({
                     entry_id: record.entry.id,
                     turn_id: record.turn.id,
                     result_block_id: record.result.id,
@@ -188,26 +422,33 @@ export async function toolResultTextSelection(
                     text: block.text,
                 });
         }
+    const texts = selectToolResultTextBlocks(candidates, strategy);
+    const chosenEntries = new Set(texts.map((text) => text.entry_id));
+    const selectedRecords = records.filter((record) => chosenEntries.has(record.entry.id));
     if (texts.length > MAX_BLOCKS) throw new RangeError('Tool-result text selection exceeds block bound');
     const integrities = await Promise.all(texts.map((item) => hashUtf8Content(item.text)));
     if (integrities.reduce((sum, item) => sum + item.byte_length, 0) > MAX_BYTES)
         throw new RangeError('Tool-result text selection exceeds byte bound');
     const sourceFingerprint = await fingerprintJson({
         kind: 'tool_result_text_selection',
-        records: records.map((item) => ({
+        records: selectedRecords.map((item) => ({
             entry: item.entry,
             turn: item.turn,
             receipt: item.receipt,
             call_turn: item.call_turn,
+            ...(item.projection_witness ? { projection_witness: item.projection_witness } : {}),
         })),
+        ...(strategy && strategy.processor_version !== '1'
+            ? { selected_text_blocks: texts.map(({ text: _text, ...identity }) => identity) }
+            : {}),
     });
-    return { records, texts, integrities, source_fingerprint: sourceFingerprint };
+    return { records: selectedRecords, texts, integrities, source_fingerprint: sourceFingerprint };
 }
 
 export async function toolResultExternalizationArchiveInputs(document: ConversationDocument, job: ProcessingJob) {
     if (
         !isToolResultTextProcessor(job) ||
-        job.scope !== 'on_append' ||
+        !supportsToolResultTextProcessingScope(job) ||
         job.selection.kind !== 'entries' ||
         job.selection.selected_block_ids !== undefined
     )
@@ -223,18 +464,21 @@ export async function toolResultExternalizationArchiveInputs(document: Conversat
         if (!completion || completion.status === 'blocked')
             throw new Error('Tool-result text archive requires its completed preceding processing stage');
     }
-    const selected = await toolResultTextSelection(document, job.selection.entry_ids);
+    const selected = await toolResultTextSelection(document, job.selection.entry_ids, job);
     return {
         texts: selected.texts,
         integrities: selected.integrities,
-        payload_fingerprint: await fingerprintJson({
-            kind: 'tool_result_text_archive',
-            blocks: selected.texts.map(({ text: _text, ...item }, index) => ({
-                ...item,
-                ...selected.integrities[index],
-            })),
-        }),
+        payload_fingerprint: await toolResultTextArchiveFingerprint(selected),
     };
+}
+
+export function toolResultTextArchiveFingerprint(
+    selected: Pick<Awaited<ReturnType<typeof toolResultTextWorkingSelection>>, 'texts' | 'integrities'>,
+): Promise<string> {
+    return fingerprintJson({
+        kind: 'tool_result_text_archive',
+        blocks: selected.texts.map(({ text: _text, ...item }, index) => ({ ...item, ...selected.integrities[index] })),
+    });
 }
 
 function resultTextPreview(text: string): string {
@@ -253,45 +497,78 @@ export async function buildToolResultTextExternalizationProposal(
     resolution: ProcessingResolvedInput,
     retrievals: readonly RetrievalCapability[],
 ): Promise<ProposalResult> {
-    if (!isToolResultTextProcessor(job) || Object.keys(job.configuration).length)
-        throw new Error('Tool-result text processor configuration is unavailable');
-    const selected = await toolResultTextSelection(document, resolution.entry_ids);
+    const receipt = document.operation_receipts[`processing:archive:${job.id}`];
+    if (!receipt) throw new Error('Tool-result text processing requires its durably accepted archive');
+    // The materialized predecessor gate remains independent of the pure selected-record builder.
+    await toolResultExternalizationArchiveInputs(document, job);
+    return buildToolResultTextWorkingProposal(
+        materializedToolResultTextFrame(document),
+        document.assets,
+        document.tool_definitions,
+        receipt,
+        'tool_result_text',
+        job,
+        resolution,
+        retrievals,
+    );
+}
+
+export async function buildToolResultTextWorkingProposal(
+    frame: ToolResultTextSelectionFrame,
+    assets: Readonly<Record<string, Asset>>,
+    toolDefinitions: Readonly<Record<string, ToolDefinition>>,
+    receipt: OperationReceipt,
+    archiveProfile: 'tool_result_text' | 'indexed_assets',
+    job: ProcessingJob,
+    resolution: ProcessingResolvedInput,
+    retrievals: readonly RetrievalCapability[],
+): Promise<ProposalResult> {
+    if (!isToolResultTextProcessor(job)) throw new Error('Tool-result text processor configuration is unavailable');
+    parseToolResultTextStrategy(job);
+    const selected = await toolResultTextWorkingSelection(frame, resolution.entry_ids, job);
     if (selected.source_fingerprint !== resolution.source_fingerprint)
         throw new Error('Tool-result text processing lost its original call/result/receipt selection');
-    const receipt = document.operation_receipts[`processing:archive:${job.id}`];
-    const assetIds = receipt?.accepted_asset_ids ?? [];
+    const assetIds = receipt.accepted_asset_ids ?? [];
     if (
         !receipt ||
         receipt.operation_kind !== undefined ||
         retrievals.length !== selected.texts.length ||
         assetIds.length !== selected.texts.length ||
         new Set(assetIds).size !== assetIds.length ||
+        receipt.id !== `processing:archive:${job.id}` ||
+        receipt.conversation_id !== frame.source.conversation_id ||
+        receipt.result_revision > frame.source.revision ||
         receipt.payload_fingerprint !==
-            (await toolResultExternalizationArchiveInputs(document, job)).payload_fingerprint
+            (archiveProfile === 'indexed_assets'
+                ? await fingerprintJson(assetIds.map((id) => assets[id]))
+                : await toolResultTextArchiveFingerprint(selected))
     )
         throw new Error('Tool-result text processing requires its exact durably accepted ordered archive');
     const compactionId = await deriveConversationId('tool-result-text-compaction', job.id);
     const replacementTurns: ConversationTurn[] = [];
     let ordinal = 0;
+    const chosenTextIds = new Set(selected.texts.map((text) => text.block_id));
     for (const record of selected.records) {
         const content = [];
         for (const block of record.result.content) {
+            // v3's exact nested predecessor mapping is this registered ID derivation. IDs must
+            // differ across retained projections; every copied block keeps its non-ID payload.
             const id = await deriveConversationId('tool-result-text-block', job.id, block.id);
-            if (block.type !== 'text') {
+            if (block.type !== 'text' || !chosenTextIds.has(block.id)) {
                 content.push({ ...block, id });
                 continue;
             }
-            const asset = document.assets[assetIds[ordinal]];
+            const asset = assets[assetIds[ordinal]];
             const exact = selected.integrities[ordinal];
             const retrieval = RetrievalCapabilitySchema.parse(retrievals[ordinal]);
-            const definition = document.tool_definitions[retrieval.tool_definition_id ?? ''];
+            const definition = toolDefinitions[retrieval.tool_definition_id ?? ''];
             if (
                 asset?.kind !== 'text' ||
                 asset.storage.type !== 'external' ||
                 asset.content_hash !== exact.content_hash ||
                 asset.byte_length !== exact.byte_length ||
                 !definition ||
-                !document.context.active_tool_definition_ids.includes(definition.id) ||
+                !frame.context.active_tool_definition_ids.includes(definition.id) ||
                 definition.name !== retrieval.capability ||
                 retrieval.version !== 1
             )
@@ -332,6 +609,12 @@ export async function buildToolResultTextExternalizationProposal(
             }),
         );
     }
+    const retainedAssetIds =
+        job.processor_version !== '1'
+            ? [...new Set([...assetIds, ...replacementTurns.flatMap((turn) => [...collectAssetIds(turn.blocks)])])]
+            : assetIds;
+    if (retainedAssetIds.some((id) => !assets[id]))
+        throw new Error('Tool-result text projection lost an authenticated retained original asset');
     return {
         kind: 'proposal',
         proposal: ContextChangeProposalSchema.parse({
@@ -339,13 +622,13 @@ export async function buildToolResultTextExternalizationProposal(
             compaction_id: compactionId,
             strategy: {
                 id: TOOL_RESULT_TEXT_PROCESSOR_ID,
-                version: TOOL_RESULT_TEXT_PROCESSOR_VERSION,
+                version: job.processor_version,
                 configuration_fingerprint: await fingerprintJson(job.configuration),
             },
             replacement_turns: replacementTurns,
             fidelity: 'retrievable',
             accepted_asset_operation_id: receipt.id,
-            retained_asset_ids: assetIds,
+            retained_asset_ids: retainedAssetIds,
             generation_ids: [],
             placement: { mode: 'per_selected_range', causal_order: 'preserved_disjoint_ranges' },
         }),
@@ -374,6 +657,31 @@ export function createToolResultTextExternalizationProcessor(
     };
 }
 
+/** Only newly archived texts introduce retrieval bindings. Older references keep their own publication. */
+export function toolResultTextArchiveRetrievals(
+    proposal: Extract<ProposalResult['proposal'], { kind: 'replace_with_compaction' }>,
+    archive: OperationReceipt,
+): RetrievalCapability[] {
+    const ids = archive.accepted_asset_ids ?? [];
+    if (new Set(ids).size !== ids.length || ids.some((id) => !proposal.retained_asset_ids.includes(id)))
+        throw new Error('Tool-result text projection changed its exact ordered archive assets');
+    const references = new Map<string, ExternalReferenceBlock[]>();
+    for (const turn of proposal.replacement_turns)
+        for (const block of turn.blocks)
+            if (block.type === 'tool_result')
+                for (const nested of block.content)
+                    if (nested.type === 'external_reference') {
+                        const retained = references.get(nested.asset_id) ?? [];
+                        retained.push(nested);
+                        references.set(nested.asset_id, retained);
+                    }
+    return ids.map((id) => {
+        const matches = references.get(id) ?? [];
+        if (matches.length !== 1) throw new Error('Tool-result text projection lost its unique archived reference');
+        return matches[0].retrieval;
+    });
+}
+
 /** Dedicated deterministic application. Generic context-edit eligibility remains unchanged. */
 export async function applyToolResultTextExternalizationOutput(
     document: ConversationDocument,
@@ -385,23 +693,120 @@ export async function applyToolResultTextExternalizationOutput(
     const proposal = output.proposal;
     if (proposal.kind !== 'replace_with_compaction' || output.usage !== undefined)
         throw new Error('Tool-result text output is not a deterministic retrievable projection');
-    const references: ExternalReferenceBlock[] = [];
-    for (const turn of proposal.replacement_turns)
-        for (const block of turn.blocks) {
-            if (block.type === 'tool_result')
-                for (const nested of block.content)
-                    if (nested.type === 'external_reference' && proposal.retained_asset_ids.includes(nested.asset_id))
-                        references.push(nested);
-        }
-    const expected = await buildToolResultTextExternalizationProposal(
-        document,
-        job,
-        resolution,
-        references.map((item) => item.retrieval),
-    );
+    const archive = document.operation_receipts[`processing:archive:${job.id}`];
+    if (!archive) throw new Error('Tool-result text output has no retained archive acceptance');
+    const retrievals = toolResultTextArchiveRetrievals(proposal, archive);
+    const expected = await buildToolResultTextExternalizationProposal(document, job, resolution, retrievals);
     if (canonicalJsonContentString(expected.proposal) !== canonicalJsonContentString(proposal))
         throw new Error('Tool-result text output changed exact original/dependency/archive/projection bytes');
+    const mutation = await toolResultTextWorkingMutation(
+        materializedToolResultTextFrame(document),
+        job,
+        resolution,
+        proposal,
+        recordedAt,
+    );
+    const { coverage: _coverage, ...processing } = document.processing;
+    if (!mutation.compaction) throw new Error('Tool-result text mutation lacks its exact compaction');
+    return parseConversationDocument({
+        ...document,
+        revision: mutation.receipt.result_revision,
+        updated_at: recordedAt,
+        context: mutation.context,
+        compactions: { ...document.compactions, [mutation.compaction.id]: mutation.compaction },
+        operation_receipts: { ...document.operation_receipts, [mutation.receipt.id]: mutation.receipt },
+        processing: {
+            ...processing,
+            completions: {
+                ...processing.completions,
+                [job.id]: {
+                    job_id: job.id,
+                    output_fingerprint: output.output_fingerprint,
+                    status: 'applied',
+                    result_revision: mutation.receipt.result_revision,
+                    inserted_entry_ids: mutation.change.operations[0].inserted_entry_ids,
+                    context_change_operation_id: mutation.receipt.id,
+                    recorded_at: recordedAt,
+                },
+            },
+        },
+    });
+}
+
+/** Exact registered tool-result apply receipt contract. Its caller separately authenticates
+ * the accepted source/job and deterministic proposal; constructing this data grants no authority.
+ */
+export async function toolResultTextApplyReceipt(
+    source: ConversationRef,
+    job: ProcessingJob,
+    resolution: ProcessingResolvedInput,
+    proposal: Extract<ProposalResult['proposal'], { kind: 'replace_with_compaction' }>,
+    recordedAt: string,
+): Promise<OperationReceipt> {
+    parseToolResultTextStrategy(job);
+    if (
+        !isToolResultTextProcessor(job) ||
+        resolution.job_id !== job.id ||
+        resolution.selected_block_ids !== undefined ||
+        resolution.selected_entries !== undefined ||
+        proposal.strategy.id !== job.processor_id ||
+        proposal.strategy.version !== job.processor_version ||
+        proposal.strategy.configuration_fingerprint !== job.configuration_fingerprint ||
+        job.configuration_fingerprint !== (await fingerprintJson(job.configuration)) ||
+        proposal.compaction_id !== (await deriveConversationId('tool-result-text-compaction', job.id)) ||
+        proposal.fidelity !== 'retrievable' ||
+        proposal.accepted_asset_operation_id !== `processing:archive:${job.id}` ||
+        proposal.generation_ids.length !== 0 ||
+        proposal.derivation_generation !== undefined ||
+        proposal.placement.mode !== 'per_selected_range' ||
+        proposal.placement.causal_order !== 'preserved_disjoint_ranges' ||
+        proposal.replacement_turns.length !== resolution.entry_ids.length ||
+        resolution.source_turn_ids.length !== resolution.entry_ids.length ||
+        proposal.replacement_turns.some(
+            (turn, index) =>
+                turn.provenance.type !== 'derived' ||
+                turn.provenance.derivation_id !== proposal.compaction_id ||
+                turn.provenance.source_hash !== resolution.source_fingerprint ||
+                canonicalJsonContentString(turn.provenance.source_turn_ids) !==
+                    canonicalJsonContentString([resolution.source_turn_ids[index]]),
+        )
+    )
+        throw new Error('Tool-result apply receipt changed its registered proposal/source contract');
+    const inserted = await Promise.all(
+        resolution.entry_ids.map((id) => deriveConversationId('tool-result-text-entry', job.id, id)),
+    );
+    return OperationReceiptSchema.parse({
+        id: `processing:apply:${job.id}`,
+        conversation_id: source.conversation_id,
+        base_revision: source.revision,
+        result_revision: source.revision + 1,
+        recorded_at: recordedAt,
+        payload_fingerprint: await fingerprintJson(proposal),
+        accepted_turn_ids: [],
+        accepted_generation_ids: [],
+        accepted_context_entry_ids: inserted,
+        operation_kind: 'context_change',
+        context_change: {
+            kind: 'replace_with_compaction',
+            removed_entry_ids: resolution.entry_ids,
+            inserted_entry_ids: inserted,
+            source_fingerprint: resolution.source_fingerprint,
+            placement: proposal.placement,
+        },
+    });
+}
+
+/** Specialized deterministic delta; executable call/receipt and retained original records are never rewritten. */
+export async function toolResultTextWorkingMutation(
+    frame: ToolResultTextSelectionFrame,
+    job: ProcessingJob,
+    resolution: ProcessingResolvedInput,
+    proposal: Extract<ProposalResult['proposal'], { kind: 'replace_with_compaction' }>,
+    recordedAt: string,
+): Promise<ContextMutationResult> {
     const replacements = new Map<string, ContextEntry>();
+    if (proposal.replacement_turns.length !== resolution.entry_ids.length)
+        throw new Error('Tool-result text projection lost its exact selected result entries');
     for (const [index, entryId] of resolution.entry_ids.entries())
         replacements.set(entryId, {
             id: await deriveConversationId('tool-result-text-entry', job.id, entryId),
@@ -411,90 +816,82 @@ export async function applyToolResultTextExternalizationOutput(
         });
     const operationId = `processing:apply:${job.id}`;
     const inserted = [...replacements.values()].map((item) => item.id);
-    const receipt = {
-        id: operationId,
-        conversation_id: document.id,
-        base_revision: document.revision,
-        result_revision: document.revision + 1,
-        recorded_at: recordedAt,
-        payload_fingerprint: await fingerprintJson(proposal),
-        accepted_turn_ids: [],
-        accepted_generation_ids: [],
-        accepted_context_entry_ids: inserted,
-        operation_kind: 'context_change' as const,
-        context_change: {
-            kind: 'replace_with_compaction' as const,
-            removed_entry_ids: resolution.entry_ids,
-            inserted_entry_ids: inserted,
-            source_fingerprint: resolution.source_fingerprint,
-            placement: proposal.placement,
-        },
-    };
+    const receipt = await toolResultTextApplyReceipt(frame.source, job, resolution, proposal, recordedAt);
+    const selectedOriginals = await toolResultTextWorkingSelection(frame, resolution.entry_ids, job);
+    const newReferenceIds = new Set(
+        await Promise.all(
+            selectedOriginals.texts.map((text) =>
+                deriveConversationId('tool-result-text-block', job.id, text.block_id),
+            ),
+        ),
+    );
     const requirements = [];
-    for (const reference of references)
-        requirements.push({
-            id: await deriveConversationId('retrieval_requirement', operationId, reference.asset_id),
-            asset_id: reference.asset_id,
-            retrieval: reference.retrieval,
-            accepted_asset_operation_id: proposal.accepted_asset_operation_id,
-        });
-    const entries = document.context.entries.map((entry) => replacements.get(entry.id) ?? entry);
-    const firstChanged = document.context.entries.findIndex((entry) => replacements.has(entry.id));
-    const cache = cacheAfterEdit(document, entries, firstChanged < 0 ? undefined : firstChanged);
-    const { coverage: _coverage, ...processing } = document.processing;
-    return parseConversationDocument({
-        ...document,
-        revision: receipt.result_revision,
-        updated_at: recordedAt,
-        context: {
-            ...document.context,
-            revision: document.context.revision + 1,
+    for (const turn of proposal.replacement_turns)
+        for (const block of turn.blocks) {
+            if (block.type !== 'tool_result') throw new Error('Tool-result projection changed its result block kind');
+            for (const reference of block.content)
+                if (reference.type === 'external_reference' && newReferenceIds.has(reference.id)) {
+                    requirements.push({
+                        id: await deriveConversationId('retrieval_requirement', operationId, reference.asset_id),
+                        asset_id: reference.asset_id,
+                        retrieval: reference.retrieval,
+                        accepted_asset_operation_id: proposal.accepted_asset_operation_id,
+                    });
+                }
+        }
+    const entries = frame.context.entries.map((entry) => replacements.get(entry.id) ?? entry);
+    const firstChanged = frame.context.entries.findIndex((entry) => replacements.has(entry.id));
+    const cache = cacheAfterContextEdit(frame.context, entries, firstChanged < 0 ? undefined : firstChanged);
+    return {
+        context: ConversationContextSchema.parse({
+            ...frame.context,
+            revision: frame.context.revision + 1,
             entries,
             ...(cache ? { cache_intent: cache } : {}),
-            retrieval_requirements: [...document.context.retrieval_requirements, ...requirements],
-        },
-        compactions: {
-            ...document.compactions,
-            [proposal.compaction_id]: {
-                id: proposal.compaction_id,
-                operation_id: operationId,
-                strategy: proposal.strategy,
-                source: {
-                    turn_ids: resolution.source_turn_ids,
-                    block_ids: proposal.replacement_turns.flatMap((turn) =>
-                        turn.provenance.type === 'derived' ? (turn.provenance.source_block_ids ?? []) : [],
-                    ),
-                    source_fingerprint: resolution.source_fingerprint,
-                },
-                replacement_turns: proposal.replacement_turns,
-                fidelity: 'retrievable',
-                retained_asset_ids: proposal.retained_asset_ids,
-                generation_ids: [],
-                created_at: recordedAt,
-                metadata: {
-                    applied_revision: receipt.result_revision,
-                    source_context_revision: document.context.revision,
-                    payload_fingerprint: receipt.payload_fingerprint,
-                },
+            retrieval_requirements: [...frame.context.retrieval_requirements, ...requirements],
+        }),
+        compaction: CompactionRecordSchema.parse({
+            id: proposal.compaction_id,
+            operation_id: operationId,
+            strategy: proposal.strategy,
+            source: {
+                turn_ids: resolution.source_turn_ids,
+                block_ids: proposal.replacement_turns.flatMap((turn) =>
+                    turn.provenance.type === 'derived' ? (turn.provenance.source_block_ids ?? []) : [],
+                ),
+                source_fingerprint: resolution.source_fingerprint,
             },
-        },
-        operation_receipts: { ...document.operation_receipts, [operationId]: receipt },
-        processing: {
-            ...processing,
-            completions: {
-                ...processing.completions,
-                [job.id]: {
-                    job_id: job.id,
-                    output_fingerprint: output.output_fingerprint,
-                    status: 'applied',
-                    result_revision: receipt.result_revision,
+            replacement_turns: proposal.replacement_turns,
+            original_context: frame.context,
+            ...toolResultSupersession(frame, resolution.entry_ids, job),
+            fidelity: 'retrievable',
+            retained_asset_ids: proposal.retained_asset_ids,
+            generation_ids: [],
+            created_at: recordedAt,
+            metadata: {
+                applied_revision: receipt.result_revision,
+                source_context_revision: frame.context.revision,
+                payload_fingerprint: receipt.payload_fingerprint,
+            },
+        }),
+        change: ContextChangeSchema.parse({
+            operation_id: operationId,
+            conversation_id: frame.source.conversation_id,
+            base_revision: frame.source.revision,
+            result_revision: receipt.result_revision,
+            operations: [
+                {
+                    kind: 'replace_with_compaction',
+                    removed_entry_ids: resolution.entry_ids,
                     inserted_entry_ids: inserted,
-                    context_change_operation_id: operationId,
-                    recorded_at: recordedAt,
+                    source_fingerprint: resolution.source_fingerprint,
+                    placement: proposal.placement,
                 },
-            },
-        },
-    });
+            ],
+            diagnostics: [],
+        }),
+        receipt,
+    };
 }
 
 /** Host dispatch retains the historical v1 implementation unchanged for ordinary text. */

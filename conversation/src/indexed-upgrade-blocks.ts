@@ -1,5 +1,6 @@
 import { fingerprintJson } from './identity.js';
 import {
+    assertIndexedAcceptedCompaction,
     IndexedCallStateSchema,
     type IndexedConversationRecordStore,
     loadIndexedAcceptedTurn,
@@ -9,9 +10,14 @@ import { auditIndexedUpgradeContent } from './indexed-upgrade-content.js';
 import { IndexedConversationUpgradeEvidenceError } from './indexed-upgrade-progress.js';
 import { getPagedRecord, putPagedRecord, readPagedRecordRange } from './paged-record-index.js';
 import { ContentBlockSchema } from './schemas/content.js';
-import { OperationReceiptSchema } from './schemas/execution.js';
-import { type IndexedConversationRoot, IndexedConversationTurnHeaderSchema } from './schemas/indexed-head.js';
+import { ExecutionReceiptSchema, OperationReceiptSchema } from './schemas/execution.js';
+import {
+    IndexedConversationCompactionHeaderSchema,
+    type IndexedConversationRoot,
+    IndexedConversationTurnHeaderSchema,
+} from './schemas/indexed-head.js';
 import type { IndexedConversationUpgradeProgress } from './schemas/indexed-upgrade.js';
+import { isToolResultTextStrategy } from './tool-result-text-strategy.js';
 
 /** Reverse audit catches orphan blocks/calls which a forward turn walk cannot establish. */
 export async function advanceIndexedUpgradeBlock(
@@ -152,7 +158,88 @@ export async function advanceIndexedUpgradeBlock(
                 'Indexed upgrade call terminal state lacks original execution coverage',
             );
     }
-    if (block.type === 'tool_result') {
+    if (block.type === 'tool_result' && turn.source === 'replacement') {
+        if (!turn.compaction_id)
+            throw new IndexedConversationUpgradeEvidenceError('Indexed upgrade derived result lacks its compaction');
+        const compaction = await loadRecord(
+            store,
+            await getPagedRecord(store, root.directories.compactions, turn.compaction_id),
+            IndexedConversationCompactionHeaderSchema,
+        );
+        const acceptance = await loadRecord(
+            store,
+            await getPagedRecord(store, root.directories.operation_receipts, compaction.operation_id),
+            OperationReceiptSchema,
+        );
+        assertIndexedAcceptedCompaction(root, turn.compaction_id, compaction, acceptance);
+        const state = await loadRecord(
+            store,
+            await getPagedRecord(store, root.directories.tool_call_states, block.call_id),
+            IndexedCallStateSchema,
+        );
+        const terminal = await loadRecord(
+            store,
+            await getPagedRecord(store, root.directories.execution_receipts, state.terminal_receipt_id ?? ''),
+            ExecutionReceiptSchema,
+        );
+        let originalIdentityBound =
+            !!terminal.result_turn_id && compaction.source.turn_ids.includes(terminal.result_turn_id);
+        if (!originalIdentityBound && compaction.strategy.version === '3' && turn.turn.provenance.type === 'derived') {
+            // Authenticate the immediate current projection; deterministic original binding is
+            // regenerated/audited one job at a time before this upgrade can publish readiness.
+            for (const id of turn.turn.provenance.source_turn_ids) {
+                if (!compaction.source.turn_ids.includes(id)) continue;
+                const source = await loadRecord(
+                    store,
+                    await getPagedRecord(store, root.directories.turns, id),
+                    IndexedConversationTurnHeaderSchema,
+                );
+                if (
+                    source.source !== 'replacement' ||
+                    source.turn.kind !== 'tool' ||
+                    source.turn.execution_id !== terminal.id ||
+                    !source.compaction_id
+                )
+                    continue;
+                const predecessor = await loadRecord(
+                    store,
+                    await getPagedRecord(store, root.directories.compactions, source.compaction_id),
+                    IndexedConversationCompactionHeaderSchema,
+                );
+                const accepted = await loadRecord(
+                    store,
+                    await getPagedRecord(store, root.directories.operation_receipts, predecessor.operation_id),
+                    OperationReceiptSchema,
+                );
+                assertIndexedAcceptedCompaction(root, predecessor.id, predecessor, accepted);
+                if (
+                    accepted.result_revision >= acceptance.result_revision ||
+                    (compaction.supersedes_compaction_id !== undefined &&
+                        compaction.supersedes_compaction_id !== predecessor.id)
+                )
+                    throw new IndexedConversationUpgradeEvidenceError(
+                        'Indexed chained compaction changed its predecessor ordering',
+                    );
+                originalIdentityBound = true;
+            }
+        }
+        if (
+            !isToolResultTextStrategy(compaction.strategy.id, compaction.strategy.version) ||
+            turn.turn.kind !== 'tool' ||
+            turn.turn.execution_id !== terminal.id ||
+            terminal.id !== state.terminal_receipt_id ||
+            terminal.call_id !== block.call_id ||
+            terminal.status !== block.status ||
+            state.result_block_id === undefined ||
+            !terminal.result_turn_id ||
+            !originalIdentityBound
+        )
+            throw new IndexedConversationUpgradeEvidenceError(
+                'Indexed upgrade derived result differs from its immutable original terminal lineage',
+            );
+        // Its deterministic compaction validation is independently audited/recovered in the
+        // processing phases. A derived result never becomes an original terminal candidate.
+    } else if (block.type === 'tool_result') {
         const previous = await getPagedRecord(store, scratch.call_results, block.call_id);
         if (
             previous &&

@@ -35,7 +35,7 @@ export async function finishIndexedConversationUpgrade(
     const command = IndexedConversationUpgradeCommandSchema.parse(commandInput);
     const current = IndexedConversationRootSchema.parse(currentInput);
     const complete = await readIndexedUpgradeProgress(store, command, completeLocator);
-    if (complete.phase !== 'complete')
+    if (complete.phase !== 'complete' || complete.scratch.missing_tool_result_validations !== undefined)
         throw new IndexedConversationUpgradeEvidenceError('Indexed upgrade cannot publish incomplete evidence');
     const payload = await fingerprintJson({ command, completed_progress: completeLocator });
     const retained = await getPagedRecord(store, current.directories.operation_receipts, command.operation_id);

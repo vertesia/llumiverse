@@ -3,6 +3,7 @@ import formatsPlugin from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import {
     appendConversationRecordsWithProcessing,
+    applyIndexedModelSwitch,
     applyModelSwitch,
     ConversationModelSwitchNextRequestChangeSchema,
     ConversationModelSwitchPlanSchema,
@@ -13,10 +14,18 @@ import {
     createTextBlock,
     createUserTurn,
     fingerprintJson,
+    type IndexedConversationModelSwitchRuntime,
+    IndexedConversationProcessingHeaderSchema,
+    type IndexedConversationRecordStore,
+    indexedModelSwitchSourceFingerprint,
+    indexedProcessingContextFingerprint,
+    loadIndexedSelectedTextContext,
+    prepareIndexedModelSwitch,
     prepareModelSwitch,
     processingContextFingerprint,
     recordProcessingCoverage,
     setProcessingPolicy,
+    stageIndexedConversationSnapshot,
 } from '../src/index.js';
 import {
     CONVERSATION_JSON_SCHEMAS,
@@ -545,5 +554,107 @@ describe('revision-bound model switch proposal', () => {
         expect(plan.target.model).toBe('new-model');
         expect(plan.measurement_policy).toBe('exact_only');
         expect(plan.compatibility).toBe('compatible');
+    });
+});
+
+describe('bounded indexed model switch plan and apply', () => {
+    it('binds the immutable selected source while sharing native count, budget, quiescence and apply checks', async () => {
+        const document = source();
+        const bytes = new Map<string, Uint8Array>();
+        const store: IndexedConversationRecordStore = {
+            async read(ref) {
+                const value = bytes.get(ref.content_hash);
+                if (!value) throw new Error('Missing indexed page');
+                return Uint8Array.from(value);
+            },
+            async write(value, ref) {
+                bytes.set(ref.content_hash, Uint8Array.from(value));
+            },
+            async readRecord(ref) {
+                const value = bytes.get(ref.content_hash);
+                if (!value) throw new Error('Missing indexed record');
+                return Uint8Array.from(value);
+            },
+            async writeRecord(ref, value) {
+                bytes.set(ref.content_hash, Uint8Array.from(value));
+            },
+        };
+        const staged = await stageIndexedConversationSnapshot(document, undefined, store);
+        const selection = await loadIndexedSelectedTextContext(store, staged.root, staged.locator);
+        const processing = IndexedConversationProcessingHeaderSchema.parse(document.processing);
+        const native = { model: target.model, messages: [], max_tokens: 20 };
+        const projection = {
+            status: 'compiled' as const,
+            native_request: native,
+            counted_request_fingerprint: await fingerprintJson(native),
+            measurement: {
+                input_tokens: 12,
+                method: 'exact' as const,
+                tokenizer: 'unit-native-count',
+                adapter: target.protocol,
+                adapter_version: target.adapter_version,
+                source_fingerprint: await indexedProcessingContextFingerprint({
+                    ...selection,
+                    completeness: 'active_processing_dependencies_verified',
+                }),
+                target_model: target.model,
+                measured_at: at,
+            },
+            context_limit_tokens: 100,
+            output_reserve_tokens: 20,
+        };
+        const runtime: IndexedConversationModelSwitchRuntime = {
+            project: async () => structuredClone(projection),
+            hasUnsettledGeneration: async () => false,
+            assessProcessingReadiness: async () => ({ status: 'ready' }),
+        };
+        const evidence = { selection, processing };
+        const plan = await prepareIndexedModelSwitch(evidence, request(document), runtime);
+        expect(plan.compatibility).toBe('compatible');
+        expect(plan.source_fingerprint).toBe(await indexedModelSwitchSourceFingerprint(selection));
+        expect(plan.source_fingerprint).not.toBe(await fingerprintJson(document));
+        const change = await applyIndexedModelSwitch(
+            evidence,
+            plan,
+            {
+                operation_id: 'switch:indexed',
+                recorded_at: at,
+            },
+            runtime,
+        );
+        expect(change.expected_source_fingerprint).toBe(plan.source_fingerprint);
+        expect(change.native_request_fingerprint).toBe(plan.native_request_fingerprint);
+        const changed = structuredClone(evidence);
+        changed.selection.root.content_hash = await fingerprintJson({ unrelated: 'immutable root' });
+        await expect(
+            applyIndexedModelSwitch(
+                changed,
+                plan,
+                {
+                    operation_id: 'switch:indexed-changed',
+                    recorded_at: at,
+                },
+                runtime,
+            ),
+        ).rejects.toThrow('changed before apply');
+        const overflow = await prepareIndexedModelSwitch(evidence, request(document), {
+            ...runtime,
+            project: async () => ({ ...projection, context_limit_tokens: 30 }),
+        });
+        expect(overflow.blockers.map((block) => block.code)).toContain('BUDGET_UNSATISFIED');
+        const unsettled = await prepareIndexedModelSwitch(evidence, request(document), {
+            ...runtime,
+            hasUnsettledGeneration: async () => true,
+        });
+        expect(unsettled.blockers.map((block) => block.code)).toContain('UNSETTLED_GENERATION');
+        const pending = await prepareIndexedModelSwitch(evidence, request(document), {
+            ...runtime,
+            assessProcessingReadiness: async () => ({
+                status: 'pending',
+                code: 'PROCESSING_PENDING',
+                reason: 'Current root still owes an accepted processing obligation',
+            }),
+        });
+        expect(pending.blockers.map((block) => block.code)).toContain('PROCESSING_PENDING');
     });
 });

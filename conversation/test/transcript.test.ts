@@ -936,3 +936,79 @@ describe('bounded external original transcript cues', () => {
         },
     );
 });
+
+describe('honest program call transcript projection', () => {
+    it('projects a public program application call while keeping internal program control content and tool-result nesting separate', () => {
+        const call = {
+            id: 'program:block',
+            type: 'tool_call' as const,
+            call_id: 'program:call',
+            tool_name: 'set_context',
+            definition_id: 'definition:program',
+            executor: 'application' as const,
+            arguments: { type: 'json' as const, value: { updates: { ready: true } } },
+        };
+        const input: ConversationTranscriptProjectionInput = {
+            source,
+            turns: [
+                {
+                    ...commonTurn('program:visible'),
+                    kind: 'program',
+                    presentation: 'transcript',
+                    model_visibility: 'exclude',
+                    provenance: { type: 'inserted', operation_id: 'operation:program' },
+                    blocks: [call],
+                },
+                {
+                    ...commonTurn('program:internal'),
+                    kind: 'program',
+                    model_visibility: 'exclude',
+                    provenance: { type: 'inserted', operation_id: 'operation:internal' },
+                    blocks: [{ ...call, id: 'internal:block', call_id: 'internal:call' }],
+                },
+                {
+                    ...commonTurn('program:result'),
+                    kind: 'tool',
+                    blocks: [
+                        {
+                            id: 'result:block',
+                            type: 'tool_result',
+                            call_id: call.call_id,
+                            status: 'success',
+                            content: [{ id: 'result:text', type: 'text', text: 'committed', format: 'plain' }],
+                        },
+                    ],
+                },
+            ],
+            generations: [],
+            assets: [],
+            window: { gap_before: false, gap_after: false, omitted_turns: [], omitted_generations: [] },
+        };
+        const projected = createConversationTranscriptFragment(input);
+        expect(projected.turns.map((turn) => turn.kind)).toEqual(['program', 'tool']);
+        expect(projected.turns[0]).toMatchObject({
+            kind: 'program',
+            blocks: [
+                {
+                    id: call.id,
+                    type: 'tool_call',
+                    call_id: call.call_id,
+                    tool_name: call.tool_name,
+                    executor: 'application',
+                    arguments: call.arguments,
+                },
+            ],
+        });
+        expect(projected.turns[0]).not.toHaveProperty('generation_id');
+        expect(projected.turns[0]?.blocks[0]).not.toHaveProperty('native_id');
+        expect(projected.turns[1]).toMatchObject({
+            kind: 'tool',
+            blocks: [{ type: 'tool_result', content: [{ type: 'text', text: 'committed' }] }],
+        });
+        expect(projected.completeness.omitted_turns).toContainEqual({
+            turn_id: 'program:internal',
+            reason: 'internal_program',
+        });
+        expect(ConversationTranscriptFragmentSchema.safeParse(projected).success).toBe(true);
+    });
+});

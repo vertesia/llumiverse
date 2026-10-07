@@ -1,12 +1,10 @@
 import { z } from 'zod';
-import { AssetSchema, ToolCallBlockSchema, ToolTurnSchema } from './content.js';
+import { ApplicationToolCallBlockSchema, AssetSchema, ToolTurnSchema } from './content.js';
+
+export { ApplicationToolCallBlockSchema } from './content.js';
+
 import { ExecutionReceiptSchema, ToolCallSourceRefSchema } from './execution.js';
 import { IdentifierSchema, JsonObjectSchema } from './primitives.js';
-
-/** A canonical tool call that authorizes execution by the host application. */
-export const ApplicationToolCallBlockSchema = ToolCallBlockSchema.extend({
-    executor: z.literal('application'),
-}).meta({ id: 'ConversationApplicationToolCallBlock' });
 
 export const PendingApplicationToolCallSchema = z
     .strictObject({

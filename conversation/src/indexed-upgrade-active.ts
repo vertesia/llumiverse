@@ -1,6 +1,6 @@
 import { fingerprintJson } from './identity.js';
 import {
-    assertIndexedCurrentPolicy,
+    authenticateIndexedCurrentPolicy,
     type IndexedConversationRecordStore,
     loadIndexedAcceptedTurn,
     loadIndexedActiveContext,
@@ -77,7 +77,7 @@ export async function auditIndexedUpgradeActiveWindow(
         IndexedConversationProcessingHeaderSchema,
     );
     if (processing.selected_policy_operation_id !== undefined)
-        await assertIndexedCurrentPolicy(store, root, processing);
+        await authenticateIndexedCurrentPolicy(store, { ...root, directories: progress.directories }, processing);
     if (root.accepted_response !== undefined) {
         const nomination = root.accepted_response;
         const receipt = await loadRecord(
@@ -112,5 +112,12 @@ export async function auditIndexedUpgradeActiveWindow(
                 'Indexed upgrade accepted response differs from original immutable tuple',
             );
     }
-    return { ...progress, phase: 'complete' };
+    // Missing deterministic witnesses were independently collected during phase audit.
+    // This phase reads only the active window; each retained obligation is recovered later
+    // in its own bounded step, including active compactions.
+    const { cursor: _cursor, ...next } = progress;
+    return {
+        ...next,
+        phase: progress.scratch.missing_tool_result_validations === undefined ? 'complete' : 'tool_result_validations',
+    };
 }

@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import {
     appendConversationRecords,
     createConversationDocument,
@@ -6,7 +7,7 @@ import {
     createUserTurn,
 } from '@llumiverse/conversation';
 import { JsonObjectSchema } from '@llumiverse/conversation/schemas';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AnthropicDriver } from '../anthropic/index.js';
 import { canonicalConversationTurnNumber, providerJsonValue } from '../conversation/canonical-runtime.js';
 import { getClaudePayload, projectClaudeConversation } from './claude-messages.js';
@@ -49,6 +50,41 @@ function document() {
 }
 
 describe('Claude Messages compatible model switch projection', () => {
+    it('does not retain an abort listener when prepared publication fails before native transport', async () => {
+        const driver = new AnthropicDriver({ apiKey: 'never-network' });
+        const controller = new AbortController();
+        const before = getEventListeners(controller.signal, 'abort');
+        const transport = vi.spyOn(driver.client.messages, 'stream');
+        const publication = vi.fn(async () => {
+            throw new Error('Prepared publication interrupted');
+        });
+        const source = document();
+        await expect(
+            driver.streamCanonicalContextEvents(
+                {
+                    model: target.model,
+                    conversation: source,
+                    conversation_runtime: {
+                        conversation_id: source.id,
+                        request_id: 'request:publication-failed',
+                        attempt_id: 'attempt:publication-failed',
+                        input_operation_id: 'input:publication-failed',
+                        response_operation_id: 'response:publication-failed',
+                        recorded_at: at,
+                    },
+                    on_canonical_request_prepared: publication,
+                },
+                controller.signal,
+                { stream_id: 'stream:publication-failed' },
+            ),
+        ).rejects.toThrow('Prepared publication interrupted');
+        expect(publication).toHaveBeenCalledOnce();
+        expect(transport).not.toHaveBeenCalled();
+        expect(getEventListeners(controller.signal, 'abort')).toEqual(before);
+        controller.abort();
+        expect(transport).not.toHaveBeenCalled();
+    });
+
     it('owns configured-driver source and target before its dynamic compiler import', async () => {
         const driver = new AnthropicDriver({ apiKey: 'test-only' });
         const source = document();

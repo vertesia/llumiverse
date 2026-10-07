@@ -87,7 +87,11 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
+import {
+    type CanonicalNativeStreamFinalization,
+    canonicalNativeExecutionEventStream,
+    validateCanonicalNativeStreamOpen,
+} from '../conversation/canonical-execution-event-stream.js';
 import {
     assertAcceptedCanonicalRequest,
     CANONICAL_TOOL_SELECTION_TARGET_OPTION,
@@ -1909,6 +1913,7 @@ async function streamPreparedCanonicalClaudeEvents(
         );
     }
 
+    validateCanonicalNativeStreamOpen(identity, open);
     const finalized = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
         streamingPayload as unknown as MessageCreateParamsBase,
@@ -1923,6 +1928,64 @@ async function streamPreparedCanonicalClaudeEvents(
         counted === undefined
             ? finalized
             : { ...finalized, receipt: { ...finalized.receipt, measurement: counted.measurement } };
+    await publishCanonicalPreparedRequest(prepared, options, counted);
+    const eventStream = await streamPreparedClaudeNativeEvents(client, {
+        prepared,
+        payload: streamingPayload,
+        options,
+        open,
+        logger,
+        provider,
+        transportOptions: { ...requestOptions, ...transportOptions },
+        finalize_response: async (decoded, finalMessage) => {
+            const document = await appendClaudeCanonicalResponseWithProcessing(prepared, decoded);
+            const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
+                ...(options.include_original_response ? { original_response: finalMessage } : {}),
+            });
+            return { decoded, response };
+        },
+    });
+    return eventStream;
+}
+
+/** Shared native draft/reconciliation engine. Indexed callers provide an already-owned
+ * counted/committed request and host output CAS; this never fabricates a ConversationDocument. */
+export async function streamPreparedClaudeNativeEvents(
+    client: ClaudeMessagesClient,
+    input: {
+        prepared: Parameters<typeof decodeClaudeCanonicalResponse>[1];
+        payload: MessageStreamParams;
+        options: ExecutionOptions;
+        open: CanonicalStreamOpenOptions;
+        logger?: Logger;
+        provider: string;
+        transportOptions?: RequestOptions;
+        beforeTransport?: () => Promise<void>;
+        finalize_response(
+            decoded: DecodedConversationResponse,
+            message: Message,
+        ): Promise<CanonicalNativeStreamFinalization>;
+    },
+): Promise<CanonicalExecutionEventStream> {
+    const {
+        prepared,
+        payload: streamingPayload,
+        options,
+        open,
+        logger,
+        provider,
+        transportOptions,
+        beforeTransport,
+        finalize_response: finalizeResponse,
+    } = input;
+    const identity = {
+        request_id: prepared.runtime.request_id,
+        attempt_id: prepared.runtime.attempt_id,
+        response_operation_id: prepared.runtime.response_operation_id,
+        generation_id: prepared.generation_id,
+        draft_turn_id: prepared.response_turn_id,
+    };
     const abortController = new AbortController();
     const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
     let responseStream: ClaudeMessageStream | undefined;
@@ -1931,13 +1994,14 @@ async function streamPreparedCanonicalClaudeEvents(
     const eventStream = canonicalNativeExecutionEventStream({
         identity,
         open,
+        ...(beforeTransport === undefined ? {} : { beforeTransport }),
         openSource: async () => {
             responseStream = await streamClaudeMessages(
                 client,
                 streamingPayload,
                 transportOptions
-                    ? { ...requestOptions, ...transportOptions, signal: abortController.signal }
-                    : { ...requestOptions, signal: abortController.signal },
+                    ? { ...transportOptions, signal: abortController.signal }
+                    : { signal: abortController.signal },
             );
             return responseStream;
         },
@@ -2048,14 +2112,10 @@ async function streamPreparedCanonicalClaudeEvents(
             if (normalized?.status === 'invalid') {
                 decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
             }
-            const document = await appendClaudeCanonicalResponseWithProcessing(prepared, decoded);
-            const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
-                service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
-                ...(options.include_original_response ? { original_response: finalMessage } : {}),
-            });
+            const committed = await finalizeResponse(decoded, finalMessage);
             return {
+                ...committed,
                 decoded,
-                response,
                 prepare_reconciliation: async () => {
                     const positions = claudeSemanticPositions(finalMessage);
                     const rawBlocks = claudeSemanticBlocks(rawDecoded, prepared.response_turn_id);
@@ -2194,7 +2254,6 @@ async function streamPreparedCanonicalClaudeEvents(
         },
         close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
     });
-    await publishCanonicalPreparedRequest(prepared, options, counted);
     if (transportOptions?.signal?.aborted) forwardAbort();
     else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
     return eventStream;

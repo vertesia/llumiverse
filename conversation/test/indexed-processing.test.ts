@@ -327,7 +327,8 @@ describe('indexed processing append index', () => {
         const bytes = memory.records.get(staged.root.processing_header.content_hash);
         if (!bytes) throw new Error('Inherited policy lacks its actual immutable header');
         const header = IndexedConversationProcessingHeaderSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
-        expect(header.selected_policy_operation_id).toBeUndefined();
+        expect(header.selected_policy_operation_id).toBe(policy.change.operation_id);
+        expect(header.selected_policy_origin).toBe('materialized');
         expect(header.processors).toEqual(policy.document.processing.processors);
         await expect(assertIndexedCurrentPolicy(memory.store, staged.root, header)).resolves.toBeUndefined();
         const pending = await loadIndexedPendingProcessingJobs(memory.store, staged.root);
@@ -464,9 +465,26 @@ describe('indexed processing append index', () => {
                 expect(ProcessingResolvedInputSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))).toEqual(
                     retained.processing.resolved_inputs?.[job.id],
                 );
-                await expect(loadIndexedProcessingJobState(memory.store, migrated.root, job.id)).rejects.toThrow(
-                    'not bound to its retained policy stage',
-                );
+                // Historical inspection authenticates the real old policy without permitting new work.
+                const historical = await loadIndexedProcessingJobState(memory.store, migrated.root, job.id);
+                expect(historical.job).toEqual(job);
+                expect(historical.resolution).toEqual(retained.processing.resolved_inputs?.[job.id]);
+                expect(historical.supersession).toEqual(superseded.document.processing.supersessions?.[job.id]);
+                const recordsBefore = memory.records.size,
+                    pagesBefore = memory.pages.size;
+                await expect(
+                    stageIndexedProcessingPhase(memory.store, migrated.root, migrated.locator, {
+                        phase: 'attempt',
+                        value: {
+                            job_id: job.id,
+                            resolved_input_fingerprint: await fingerprintJson(historical.resolution),
+                            attempt_token: 'attempt:cannot-restart-superseded',
+                            started_at: RECORDED_AT,
+                        },
+                    }),
+                ).rejects.toThrow('completed or superseded job');
+                expect(memory.records.size).toBe(recordsBefore);
+                expect(memory.pages.size).toBe(pagesBefore);
             }
         },
     );
@@ -935,6 +953,7 @@ describe('indexed processing append index', () => {
             JSON.parse(new TextDecoder().decode(selectedPolicyBytes)),
         );
         expect(selectedPolicy.selected_policy_operation_id).toBe(policyCommand.operation_id);
+        expect(selectedPolicy.selected_policy_origin).toBe('native_registry');
         // The portable core retains a host-validated registered extension. This is not native
         // processor execution capability: the native host predicate still refuses this profile.
         expect(supportsIndexedRegisteredProcessingPolicy(selectedPolicy)).toBe(false);

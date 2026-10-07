@@ -3,6 +3,7 @@ import {
     type IndexedConversationRecordStore,
     IndexedProcessingOperationJobsSchema,
     loadRecord,
+    stageIndexedAcceptedProcessingPolicy,
     stageRecord,
 } from './indexed-conversation.js';
 import { IndexedConversationUpgradeEvidenceError } from './indexed-upgrade-progress.js';
@@ -11,6 +12,7 @@ import { OperationReceiptSchema } from './schemas/execution.js';
 import type { IndexedConversationRoot } from './schemas/indexed-head.js';
 import type { IndexedConversationUpgradeProgress } from './schemas/indexed-upgrade.js';
 import { ProcessingJobSchema } from './schemas/processing.js';
+import { ProcessingPolicyCommandSchema } from './schemas/processing-policy.js';
 
 /** Build operation cohorts first. A later pass audits every exact phase before counting obligations. */
 export async function advanceIndexedUpgradeProcessing(
@@ -57,9 +59,31 @@ export async function advanceIndexedUpgradeProcessing(
             'coverage_receipts',
             'indexed_coverage',
             'selected_queue_commands',
+            'materialized_queue_commands',
+            'selected_policy_commands',
+            'policy_epochs',
+            'tool_result_validations',
+            'tool_result_sources',
+            'tool_result_validation_by_terminal',
         ].includes(family)
     )
         throw new IndexedConversationUpgradeEvidenceError('Indexed upgrade processing has an unsupported family');
+    if (family === 'selected_policy_commands') {
+        const command = await loadRecord(store, entry.value, ProcessingPolicyCommandSchema);
+        const receipt = await loadRecord(
+            store,
+            await getPagedRecord(store, root.directories.operation_receipts, id),
+            OperationReceiptSchema,
+        );
+        const directories = await stageIndexedAcceptedProcessingPolicy(
+            store,
+            root.source,
+            progress.directories,
+            command,
+            receipt,
+        );
+        return { ...progress, directories, cursor: entry.key };
+    }
     if (family !== 'jobs') return { ...progress, cursor: entry.key };
     const job = await loadRecord(store, entry.value, ProcessingJobSchema);
     const receipt = await loadRecord(

@@ -23,6 +23,7 @@ import {
 import { advanceIndexedUpgradeReceipt } from './indexed-upgrade-receipts.js';
 import { advanceIndexedUpgradeRecordAudit } from './indexed-upgrade-record-audit.js';
 import { advanceIndexedUpgradeTurn } from './indexed-upgrade-turns.js';
+import { advanceIndexedUpgradeValidation } from './indexed-upgrade-validations.js';
 import type { PagedRecordRef } from './paged-record-index.js';
 import type {
     IndexedConversationUpgradeCommand,
@@ -46,7 +47,9 @@ export async function advanceIndexedConversationUpgrade(
     const initial = createIndexedUpgradeStepStore(underlying);
     const nominated = await readIndexedUpgradeProgress(initial.store, command, previousLocator);
     const { store, usage } =
-        nominated.phase === 'active_window'
+        nominated.phase === 'active_window' ||
+        nominated.phase === 'tool_result_validations' ||
+        nominated.phase === 'tool_result_terminal_validations'
             ? createIndexedUpgradeStepStore(underlying, INDEXED_UPGRADE_ACTIVE_LIMITS, initial.usage)
             : initial;
     const root = await loadIndexedUpgradePredecessor(store, command);
@@ -85,6 +88,10 @@ export async function advanceIndexedConversationUpgrade(
                 next = await advanceIndexedUpgradeRecordAudit(store, root, previous);
             else
                 throw new IndexedConversationUpgradeEvidenceError('Indexed upgrade reverse-directory phase is invalid');
+            break;
+        case 'tool_result_terminal_validations':
+        case 'tool_result_validations':
+            next = await advanceIndexedUpgradeValidation(store, root, previous);
             break;
         case 'active_window':
             next = await auditIndexedUpgradeActiveWindow(store, root, previous);

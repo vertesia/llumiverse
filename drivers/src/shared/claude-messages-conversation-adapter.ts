@@ -9,6 +9,7 @@ import type {
     ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources/messages.js';
 import type { ExecutionOptions } from '@llumiverse/common';
+import type { IndexedConversationSelectedContext } from '@llumiverse/conversation';
 import {
     type AgentContentBlock,
     type Asset,
@@ -38,6 +39,7 @@ import {
     toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
+import { IndexedConversationSelectedContextSchema } from '@llumiverse/conversation/schemas';
 import {
     type CanonicalExecutionContextOptions,
     type CanonicalStructuredOutput,
@@ -77,6 +79,7 @@ import {
     snapshotNativeConversationImportOptions,
 } from '../conversation/native-import.js';
 import { retrievableTextReference } from '../conversation/retrievable-text-reference.js';
+import { selectedWorkingSetSource } from '../conversation/selected-working-set-source.js';
 import {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
@@ -857,7 +860,12 @@ function assetToClaudeBlock(asset: Asset): ImageBlockParam | DocumentBlockParam 
     };
 }
 
-function canonicalBlockToClaude(block: ContentBlock, document: ConversationDocument): ContentBlockParam {
+type ClaudeProjectionDependencies = Pick<ConversationDocument, 'assets'> &
+    Partial<Pick<ConversationDocument, 'context' | 'tool_definitions' | 'operation_receipts'>> & {
+        indexed_reference_evidence?: IndexedConversationSelectedContext;
+    };
+
+function canonicalBlockToClaude(block: ContentBlock, document: ClaudeProjectionDependencies): ContentBlockParam {
     if (block.type === 'text') return { type: 'text', text: block.text };
     if (block.type === 'json') return { type: 'text', text: JSON.stringify(block.value) };
     if (block.type === 'external_reference') {
@@ -886,7 +894,7 @@ type ClaudeToolResultContentBlock = Extract<NonNullable<ToolResultBlockParam['co
 
 function canonicalToolResultContentToClaude(
     block: NestedToolResultContentBlock,
-    document: ConversationDocument,
+    document: ClaudeProjectionDependencies,
 ): ClaudeToolResultContentBlock {
     if (
         block.type !== 'text' &&
@@ -938,7 +946,7 @@ function claudeReplay(
 
 function agentContent(
     turn: ConversationTurn,
-    document: ConversationDocument,
+    document: ClaudeProjectionDependencies,
     target?: { provider?: string; model?: string },
 ): ContentBlockParam[] {
     const replay = claudeReplay(turn, target);
@@ -997,7 +1005,7 @@ function agentContent(
     });
 }
 
-function ordinaryContent(turn: ConversationTurn, document: ConversationDocument): ContentBlockParam[] {
+function ordinaryContent(turn: ConversationTurn, document: ClaudeProjectionDependencies): ContentBlockParam[] {
     if (turn.kind === 'tool') {
         const result = turn.blocks[0];
         const content = result.content.map((block) => canonicalToolResultContentToClaude(block, document));
@@ -1047,9 +1055,6 @@ function projectClaudeMessagesConversation(
     conversation: ClaudePrompt;
     mappings: NativeItemMapping[];
 } {
-    const system: TextBlockParam[] = [];
-    const messages: MessageParam[] = [];
-    const mappings: NativeItemMapping[] = [];
     const selectedTurns = selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true });
     if (!readOnlyCompatibilityProjection) {
         assertCanonicalContextProjection(document, selectedTurns, {
@@ -1061,6 +1066,17 @@ function projectClaudeMessagesConversation(
         if (!readOnlyCompatibilityProjection)
             assertProtectedReplayCompatibility(document, turn, CLAUDE_MESSAGES_PROTOCOL, target);
     }
+    return compileClaudeSelectedTurns(document, selectedTurns, target);
+}
+
+function compileClaudeSelectedTurns(
+    document: ClaudeProjectionDependencies,
+    selectedTurns: ConversationTurn[],
+    target?: { provider?: string; model?: string },
+): { conversation: ClaudePrompt; mappings: NativeItemMapping[] } {
+    const system: TextBlockParam[] = [];
+    const messages: MessageParam[] = [];
+    const mappings: NativeItemMapping[] = [];
     for (const turn of selectedTurns) {
         if (turn.kind === 'program' && (turn.authority === 'system' || turn.authority === 'developer')) {
             const nativeBlocks = ordinaryContent(turn, document);
@@ -1093,6 +1109,35 @@ function projectClaudeMessagesConversation(
         conversation: { messages, ...(system.length === 0 ? {} : { system }) },
         mappings,
     };
+}
+
+/** Project the authenticated dependency selection directly, preserving Claude replay order. */
+export function compileClaudeIndexedSelection(
+    input: IndexedConversationSelectedContext,
+    target?: { provider?: string; model?: string },
+): { conversation: ClaudePrompt; mappings: NativeItemMapping[] } {
+    const selection = IndexedConversationSelectedContextSchema.parse(input);
+    const source = selectedWorkingSetSource({ ...selection, indexed_reference_evidence: selection });
+    const turns = selectedCanonicalTurns(source, { allow_interrupted_with_complete_tool_calls: true });
+    assertCanonicalContextProjection(source, turns, {
+        label: 'Claude indexed',
+        program_authorities: ['system', 'ordinary'],
+    });
+    if (
+        selection.completeness === 'selected_text_pending_admission' &&
+        turns.some((turn) => turn.blocks.some((block) => block.type !== 'text'))
+    )
+        throw new TypeError('Indexed Claude text selection contains unsupported content');
+    const generations = Object.fromEntries(
+        Object.entries(selection.generation_witnesses).map(([id, witness]) => [id, witness.generation]),
+    );
+    for (const turn of turns)
+        assertProtectedReplayCompatibility({ generations }, turn, CLAUDE_MESSAGES_PROTOCOL, target);
+    return compileClaudeSelectedTurns(
+        { ...source, tool_definitions: selection.tool_definitions, operation_receipts: selection.operation_witnesses },
+        turns,
+        target,
+    );
 }
 
 /** Pure registered-protocol import. The report explicitly leaves continuation readiness unvalidated. */
@@ -1412,7 +1457,16 @@ function claudeUsage(native: AnthropicUsageLike | undefined): GenerationUsage | 
 
 export async function decodeClaudeCanonicalResponse(
     response: Message,
-    prepared: PreparedClaudeConversation,
+    prepared: Pick<
+        PreparedClaudeConversation,
+        | 'runtime'
+        | 'receipt'
+        | 'tool_definitions'
+        | 'provider'
+        | 'requested_model'
+        | 'response_turn_id'
+        | 'generation_id'
+    >,
     structuredOutput?: CanonicalStructuredOutput,
 ): Promise<DecodedConversationResponse> {
     if (response.stop_reason === null) {

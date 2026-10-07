@@ -302,6 +302,11 @@ export const ToolCallBlockSchema = z
     })
     .meta({ id: 'ConversationToolCallBlock' });
 
+/** A canonical tool call that authorizes execution by the host application. */
+export const ApplicationToolCallBlockSchema = ToolCallBlockSchema.extend({
+    executor: z.literal('application'),
+}).meta({ id: 'ConversationApplicationToolCallBlock' });
+
 export const RetrievalCapabilitySchema = z
     .strictObject({
         capability: IdentifierSchema,
@@ -464,6 +469,7 @@ export const AgentContentBlockSchema = z
 
 export const ProgramContentBlockSchema = z
     .discriminatedUnion('type', [
+        ApplicationToolCallBlockSchema,
         TextBlockSchema,
         JsonBlockSchema,
         ImageBlockSchema,

@@ -26,6 +26,8 @@ export * from './primitives.js';
 export * from './processing.js';
 export * from './processing-change.js';
 export { ProcessingChangeOperationSchema } from './processing-operation.js';
+export * from './processing-policy.js';
+export * from './processing-queue.js';
 export * from './request-source-view.js';
 export * from './selection.js';
 export * from './source-slices.js';

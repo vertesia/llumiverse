@@ -45,14 +45,51 @@ import {
     CLAUDE_MESSAGES_ADAPTER_VERSION,
     CLAUDE_MESSAGES_PROTOCOL,
 } from '../shared/claude-messages-conversation-adapter.js';
-
 import { countAnthropicModelSwitchRequest } from './canonical-model-switch-count.js';
+import { countAnthropicIndexedRequest } from './indexed-count.js';
+import {
+    executeAnthropicIndexedRequest,
+    prepareAnthropicIndexedRequest,
+    streamAnthropicIndexedRequest,
+} from './indexed-request.js';
 
 export type { AnthropicDriverOptions } from '../driver-options.js';
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
     provider = Providers.anthropic;
     client: Anthropic;
+
+    /** @internal Native indexed compiler and transport retain the normal configured client. */
+    prepareIndexedTextRequest(...args: Parameters<typeof prepareAnthropicIndexedRequest>) {
+        return prepareAnthropicIndexedRequest(...args);
+    }
+
+    executeCommittedIndexedTextRequest(
+        ...args: [input: Parameters<typeof executeAnthropicIndexedRequest>[1], host?: CanonicalHostCapabilities]
+    ) {
+        return executeAnthropicIndexedRequest(
+            this.client,
+            args[0],
+            args[1],
+            this.getDriverRequestOptions(args[0].options, args[0].signal),
+        );
+    }
+
+    streamCommittedIndexedTextRequest(
+        input: Parameters<typeof streamAnthropicIndexedRequest>[1],
+        host?: CanonicalHostCapabilities,
+    ) {
+        return streamAnthropicIndexedRequest(
+            this.client,
+            input,
+            host,
+            this.getDriverRequestOptions(input.options, input.signal),
+        );
+    }
+
+    countIndexedNativeRequest(nativeRequest: unknown, target: ModelTarget, signal?: AbortSignal) {
+        return countAnthropicIndexedRequest(this.client, nativeRequest, target, signal);
+    }
 
     override async resolveCanonicalModelSwitchTarget(
         model: string,

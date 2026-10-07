@@ -186,6 +186,33 @@ contracts. One-time migration of a fully materialized legacy document uses a sep
 32 MiB of JSON, 2 million JSON nodes, and 100,000 turns. It validates and owns the complete source before
 writing records, so migration can require substantially more memory than its 32 MiB input limit. Indexed append
 and selected-context reads remain bounded by the active working set after migration.
+Registered tool-result text v2 also supports explicit manual selections of current complete result
+turns. Its configuration selects all nested text, text meeting a minimum UTF-8 byte count, or exact
+nested text identities. Manual queues reject executable calls, partial outer result selection, and
+stale context/source revisions. Policy and queue acceptance retain control acknowledgments; processing,
+native measurement and readiness coverage still complete independently. An applied compaction retains
+a point relation from its original terminal execution to its exact validation, so duplicate terminal
+replay can authenticate a manual result without reading the cold original or searching job history.
+Tool-result v3 is a separate opt-in manual strategy with the same typed text selectors. It can select
+remaining inline text from an active partial tool-result projection after authenticating its exact
+accepted predecessor. The new projection retains the original execution, call and result status, names
+its immediate predecessor, and records compaction supersession when there is one predecessor. Every
+nested block gets a new globally unique ID deterministically derived from the job and predecessor
+block ID; copied payloads and prior asset/retrieval identities remain exact. The indexed proof binds
+current projection records separately from immutable original result descriptors, so ordinary retries
+and terminal replay need neither recursive ancestor scans nor cold original/output bodies.
+Tool-result v1 remains append-only, and tool-result budget-triggered queues remain unsupported.
+Tool-result text compactions retain their exact `original_context`. Indexed migration stores that context
+separately from the active preparation header; indexed completion instead retains its genuine source-root
+locator. Recovery verifies the original resolution fingerprint before replay, then prepares accepted
+compactions from immutable descriptor attestations without reading original result bodies. Later context
+appends or tool removal cannot substitute a new processing source. Old materialized compactions without
+an original context migrate only when an exact inversion reproduces the accepted context fingerprint, or
+an authenticated host supplies the exact historical revision (at most 64 MiB of historical documents per
+migration). The native host resolves committed revisions. The Studio legacy head has no historical-revision
+resolver: an old post-edited compaction lacking its original closure explicitly remains unsupported.
+Missing indexed attestations require the retained source descriptor or an authenticated original-root
+resolver; recovery never scans complete history or replays today's context as the original.
 The selected archive remains explicitly unverified for execution, and the indexed text request still needs a
 durably accepted prepared record and generation admission before transport. Full indexed consumer registration,
 general history fragments, sparse dependency-witness validation, full processor strategy and host lifecycle

@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
 import {
+    ApplicationToolCallBlockSchema,
     ContentBlockSchema,
     ConversationTurnSchema,
     GeneratedAgentTurnSchema,
@@ -16,6 +17,7 @@ import {
     CONVERSATION_SCHEMA_VERSION,
 } from './schemas/primitives.js';
 import type {
+    ApplicationToolCallBlock,
     ContentBlock,
     ConversationDocument,
     ConversationMetadata,
@@ -38,6 +40,10 @@ export type UserTurnBuilderInput = Omit<UserTurn, 'kind'>;
 export type GeneratedAgentTurnBuilderInput = Omit<GeneratedAgentTurn, 'kind'>;
 export type ToolTurnBuilderInput = Omit<ToolTurn, 'kind'>;
 export type ProgramTurnBuilderInput = Omit<ProgramTurn, 'kind'>;
+export type ProgramToolCallBuilderInput = Pick<ApplicationToolCallBlock, 'id' | 'call_id' | 'tool_name'> & {
+    definition_id: string;
+    arguments: Record<string, import('./types.js').JsonValue>;
+};
 
 function buildSchemaValue<T>(schema: z.ZodType<T>, input: unknown): T {
     const preflight = preflightJsonInput(input);
@@ -118,6 +124,20 @@ export function createGeneratedAgentTurn(input: GeneratedAgentTurnBuilderInput):
 export function createToolTurn(input: ToolTurnBuilderInput): ToolTurn {
     assertJsonBuilderInput(input);
     return buildSchemaValue(ToolTurnSchema, { ...input, kind: 'tool' });
+}
+
+/** A host operation call has no model generation or provider-native identity. */
+export function createProgramToolCall(input: ProgramToolCallBuilderInput): ApplicationToolCallBlock {
+    assertJsonBuilderInput(input);
+    return buildSchemaValue(ApplicationToolCallBlockSchema, {
+        id: input.id,
+        type: 'tool_call',
+        call_id: input.call_id,
+        tool_name: input.tool_name,
+        definition_id: input.definition_id,
+        executor: 'application',
+        arguments: { type: 'json', value: input.arguments },
+    });
 }
 
 export function createProgramTurn(input: ProgramTurnBuilderInput): ProgramTurn {

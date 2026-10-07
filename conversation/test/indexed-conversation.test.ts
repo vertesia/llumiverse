@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createUserTurn } from '../src/builders.js';
+import { createProgramToolCall, createProgramTurn, createToolTurn, createUserTurn } from '../src/builders.js';
 import { canonicalJsonContentBytes, hashContentBytes } from '../src/content-integrity.js';
 import { applyContextChange, planContextChange } from '../src/context-change.js';
 import { resolveIndexedTextExternalReference } from '../src/external-reference-retrieval.js';
@@ -21,6 +21,7 @@ import {
     loadIndexedPendingProcessingJobs,
     loadIndexedProcessingJobState,
     loadIndexedProcessingSelectedContext,
+    loadIndexedProgramToolCallSelection,
     loadIndexedProjectedTurn,
     loadIndexedReadySelectedContext,
     loadIndexedRestartEvidence,
@@ -40,6 +41,7 @@ import {
     stageIndexedConversationSnapshot,
     stageIndexedProcessingPhase,
     stageIndexedProgramAppend,
+    stageIndexedProgramToolCall,
     stageIndexedRecordBatch,
     stageIndexedTextProcessingCompletion,
     supportsIndexedInheritedProcessingPolicy,
@@ -2490,7 +2492,7 @@ describe('indexed conversation snapshot', () => {
         expect(memory.records.size).toBe(count);
     });
 
-    it('retains materialized processing job-drain parity when disabled policy hides pending or blocked work', async () => {
+    it('preserves materialized job-drain obligations across genuine policy changes and rejects disabled-header tampering', async () => {
         const initial = emptyDocument('conversation:indexed-processing');
         const enabled = await setProcessingPolicy(initial, {
             operation_id: 'policy:enable',
@@ -2499,8 +2501,8 @@ describe('indexed conversation snapshot', () => {
             enabled: true,
             processors: [
                 {
-                    id: 'processor:required',
-                    version: 'v1',
+                    id: 'externalize-text',
+                    version: '1',
                     config: {},
                     scope: 'on_append',
                     required: true,
@@ -2526,6 +2528,19 @@ describe('indexed conversation snapshot', () => {
             altered.processing.enabled = false;
             return parseConversationDocument(altered);
         };
+        const retainWithoutAutomaticProcessing = async (source: ConversationDocument) =>
+            (
+                await setProcessingPolicy(source, {
+                    operation_id: 'policy:manual-only',
+                    expected_revision: source.revision,
+                    recorded_at: RECORDED_AT,
+                    enabled: true,
+                    processors: source.processing.processors.map((processor) => ({
+                        ...processor,
+                        scope: 'manual' as const,
+                    })),
+                })
+            ).document;
         const assertIndexedBlocked = async (source: ConversationDocument, expectedCount: number) => {
             await expect(assertProcessingReady(source, '', '')).rejects.toThrow(
                 'Accepted processing jobs remain outstanding',
@@ -2545,7 +2560,28 @@ describe('indexed conversation snapshot', () => {
             expect(memory.records.size).toBe(recordCount);
             return { memory, staged };
         };
-        const pending = disabledWithoutSupersession(accepted.document);
+        // The real materialized transition cannot disable outstanding jobs without supersession.
+        await expect(
+            setProcessingPolicy(accepted.document, {
+                operation_id: 'policy:invalid-disable',
+                expected_revision: accepted.document.revision,
+                recorded_at: RECORDED_AT,
+                enabled: false,
+                processors: [],
+            }),
+        ).rejects.toThrow('Disabling processing requires explicit pending-job supersession');
+        const forgedDisabled = disabledWithoutSupersession(accepted.document);
+        await expect(assertProcessingReady(forgedDisabled, '', '')).rejects.toThrow(
+            'Accepted processing jobs remain outstanding',
+        );
+        const rejected = memoryStore();
+        await expect(stageIndexedConversationSnapshot(forgedDisabled, undefined, rejected.store)).rejects.toThrow(
+            'current policy differs from its retained accepted command',
+        );
+        expect(rejected.pages.size).toBe(0);
+        expect(rejected.records.size).toBe(0);
+        const pending = await retainWithoutAutomaticProcessing(accepted.document);
+        expect(pending.processing.jobs?.[job.id]).toEqual(job);
         const { memory, staged } = await assertIndexedBlocked(pending, 1);
         const headerKey = `processing_header:${staged.root.processing_header.content_hash}`;
         const currentHeaderBytes = memory.records.get(headerKey);
@@ -2617,7 +2653,8 @@ describe('indexed conversation snapshot', () => {
             () => RECORDED_AT,
         );
         expect(current.processing.completions?.[job.id]?.status).toBe('blocked');
-        const blocked = disabledWithoutSupersession(current);
+        const blocked = await retainWithoutAutomaticProcessing(current);
+        expect(blocked.processing.jobs?.[job.id]).toEqual(job);
         await expect(assertProcessingReady(blocked, '', '')).rejects.toThrow(
             'Accepted processing jobs remain outstanding',
         );
@@ -4463,4 +4500,306 @@ describe('bounded indexed restart evidence', () => {
             IndexedRestartSourceUnavailable,
         );
     });
+});
+
+describe('indexed host program application calls', () => {
+    const definition = { id: 'definition:program', name: 'read', version: '1', input_schema: { type: 'object' } };
+
+    async function prepare() {
+        const memory = memoryStore();
+        const document = emptyDocument('process:canonical');
+        document.tool_definitions[definition.id] = definition;
+        document.context.active_tool_definition_ids = [definition.id];
+        const initial = await stageIndexedConversationSnapshot(document, undefined, memory.store);
+        const call = createProgramToolCall({
+            id: 'block:program-call',
+            call_id: 'call:program',
+            tool_name: definition.name,
+            definition_id: definition.id,
+            arguments: { path: '/tmp/process-node' },
+        });
+        const turn = createProgramTurn({
+            id: 'turn:program-call',
+            authority: 'ordinary',
+            blocks: [call],
+            status: 'completed',
+            presentation: 'internal',
+            model_visibility: 'exclude',
+            provenance: { type: 'inserted', operation_id: 'operation:program-call' },
+            timestamps: { recorded_at: RECORDED_AT },
+        });
+        const batch: IndexedRecordBatchCommand['batch'] = {
+            turns: [turn],
+            context_entries: [{ id: 'entry:program-call', type: 'source_turn', turn_id: turn.id }],
+        };
+        const command: IndexedRecordBatchCommand = {
+            conversation_id: document.id,
+            batch,
+            options: {
+                operation_id: 'operation:program-call',
+                expected_revision: 0,
+                recorded_at: RECORDED_AT,
+                payload_fingerprint: await fingerprintJson(batch),
+            },
+        };
+        return { memory, initial, call, turn, command };
+    }
+
+    it('should accept a genuine inserted program operation with zero generated records', async () => {
+        const { memory, initial, call, turn, command } = await prepare();
+        await expect(stageIndexedRecordBatch(initial.root, command, memory.store)).rejects.toThrow(
+            'accepted generated agent turn',
+        );
+        const accepted = await stageIndexedProgramToolCall(initial.root, command, memory.store);
+        expect(accepted.receipt.accepted_generation_ids).toEqual([]);
+        expect(accepted.root.directories.generations).toBeUndefined();
+        const source = {
+            conversation: accepted.root.source,
+            turn_id: turn.id,
+            block_id: call.id,
+            call_id: call.call_id,
+            call_fingerprint: await fingerprintJson(call),
+        };
+        memory.recordReads.length = 0;
+        memory.pageReads.length = 0;
+        const selected = await loadIndexedProgramToolCallSelection(memory.store, accepted.root, source);
+        expect(selected.call).toEqual(call);
+        expect(selected.definition).toEqual(definition);
+        expect(selected.operation_receipt).toEqual(accepted.receipt);
+        expect(memory.recordReads.some((read) => read.startsWith('generations:'))).toBe(false);
+        expect(memory.recordReads.length).toBeLessThan(12);
+        expect(memory.pageReads.length).toBeLessThan(100);
+        await expect(loadIndexedToolCallSelection(memory.store, accepted.root, source)).rejects.toThrow(
+            'generated content',
+        );
+        expect((await stageIndexedProgramToolCall(accepted.root, command, memory.store)).applied).toBe(false);
+        expect(ProgramTurnSchema.safeParse({ ...turn, blocks: [{ ...call, executor: 'provider' }] }).success).toBe(
+            false,
+        );
+        expect(ProgramTurnSchema.safeParse({ ...turn, generation_id: 'generation:invented' }).success).toBe(false);
+    });
+
+    it('should reject stale, foreign, revoked and forged program nominations', async () => {
+        const { memory, initial, call, turn, command } = await prepare();
+        const accepted = await stageIndexedProgramToolCall(initial.root, command, memory.store);
+        const source = {
+            conversation: accepted.root.source,
+            turn_id: turn.id,
+            block_id: call.id,
+            call_id: call.call_id,
+            call_fingerprint: await fingerprintJson(call),
+        };
+        for (const conversation of [
+            { ...source.conversation, revision: 0 },
+            { ...source.conversation, conversation_id: 'foreign' },
+        ]) {
+            await expect(
+                loadIndexedProgramToolCallSelection(memory.store, accepted.root, { ...source, conversation }),
+            ).rejects.toThrow('exact current source');
+        }
+        const batch = { active_tool_definition_ids: [] };
+        const revoked = await stageIndexedRecordBatch(
+            accepted.root,
+            {
+                conversation_id: accepted.root.source.conversation_id,
+                batch,
+                options: {
+                    operation_id: 'operation:revoke-program',
+                    expected_revision: 1,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            },
+            memory.store,
+        );
+        await expect(
+            loadIndexedProgramToolCallSelection(memory.store, revoked.root, {
+                ...source,
+                conversation: revoked.root.source,
+            }),
+        ).rejects.toThrow('active definition');
+        const turnAcceptances = await putPagedRecord(
+            memory.store,
+            accepted.root.directories.turn_acceptances,
+            turn.id,
+            { storage: 'marker', kind: 'turn_acceptance', id: 'operation:revoke-program' },
+            'replace',
+        );
+        await expect(
+            loadIndexedProgramToolCallSelection(
+                memory.store,
+                { ...revoked.root, directories: { ...revoked.root.directories, turn_acceptances: turnAcceptances } },
+                { ...source, conversation: revoked.root.source },
+            ),
+        ).rejects.toThrow('inserted operation proof');
+        await expect(
+            stageIndexedProgramToolCall(
+                initial.root,
+                { ...command, options: { ...command.options, payload_fingerprint: `sha256:${'0'.repeat(64)}` } },
+                memory.store,
+            ),
+        ).rejects.toThrow('fingerprint differs');
+    });
+
+    it('should reject retained open-call proof when its original context entry is no longer active', async () => {
+        const { memory, initial, call, turn, command } = await prepare();
+        const accepted = await stageIndexedProgramToolCall(initial.root, command, memory.store);
+        const source = {
+            conversation: accepted.root.source,
+            turn_id: turn.id,
+            block_id: call.id,
+            call_id: call.call_id,
+            call_fingerprint: await fingerprintJson(call),
+        };
+        // Change only active order/header custody. Retained source entry, call state, acceptance,
+        // original operation and definition remain present, so none can stand in for membership.
+        const excluded = {
+            ...accepted.root,
+            context_header: initial.root.context_header,
+            directories: {
+                ...accepted.root.directories,
+                active_context_order: initial.root.directories.active_context_order,
+            },
+        };
+        await expect(loadIndexedProgramToolCallSelection(memory.store, excluded, source)).rejects.toThrow(
+            'no longer active in context',
+        );
+    });
+
+    it('should reject a legitimate attempt to exclude the unresolved program call dependency', async () => {
+        const { memory, initial, turn, command } = await prepare();
+        const accepted = await stageIndexedProgramToolCall(initial.root, command, memory.store);
+        const document = emptyDocument('process:canonical');
+        document.revision = 1;
+        document.context.revision = 1;
+        document.tool_definitions[definition.id] = definition;
+        document.context.active_tool_definition_ids = [definition.id];
+        document.turns = [turn];
+        document.context.entries = [...(command.batch.context_entries ?? [])];
+        document.operation_receipts[accepted.receipt.id] = accepted.receipt;
+        await expect(
+            planContextChange(document, {
+                expected_revision: 1,
+                expected_context_revision: 1,
+                entry_ids: ['entry:program-call'],
+            }),
+        ).rejects.toThrow('pending tool call');
+    });
+
+    it('should reject a receipt whose empty accepted families or unchanged catalog are missing', async () => {
+        const { memory, initial, call, turn, command } = await prepare();
+        const accepted = await stageIndexedProgramToolCall(initial.root, command, memory.store);
+        const source = {
+            conversation: accepted.root.source,
+            turn_id: turn.id,
+            block_id: call.id,
+            call_id: call.call_id,
+            call_fingerprint: await fingerprintJson(call),
+        };
+        const descriptor = await getPagedRecord(
+            memory.store,
+            accepted.root.directories.operation_receipts,
+            accepted.receipt.id,
+        );
+        if (descriptor?.storage !== 'record') throw new Error('Original program operation is missing');
+        for (const field of [
+            'accepted_generation_ids',
+            'accepted_asset_ids',
+            'accepted_execution_receipt_ids',
+            'accepted_tool_definition_ids',
+            'accepted_tool_selection',
+        ] as const) {
+            const receipt = { ...accepted.receipt };
+            delete receipt[field];
+            const bytes = canonicalJsonContentBytes(receipt);
+            const integrity = await hashContentBytes(bytes);
+            const forged = { ...descriptor, content_hash: integrity.content_hash, size_bytes: bytes.byteLength };
+            await memory.store.writeRecord(forged, bytes);
+            const operations = await putPagedRecord(
+                memory.store,
+                accepted.root.directories.operation_receipts,
+                accepted.receipt.id,
+                forged,
+                'replace',
+            );
+            await expect(
+                loadIndexedProgramToolCallSelection(
+                    memory.store,
+                    { ...accepted.root, directories: { ...accepted.root.directories, operation_receipts: operations } },
+                    source,
+                ),
+            ).rejects.toThrow('inserted operation proof');
+        }
+    });
+
+    it.each(['success', 'cancelled'] as const)(
+        'should retain one %s terminal result and exact lost-ACK retry',
+        async (status) => {
+            const { memory, initial, call, turn, command } = await prepare();
+            const accepted = await stageIndexedProgramToolCall(initial.root, command, memory.store);
+            const source = {
+                conversation: accepted.root.source,
+                turn_id: turn.id,
+                block_id: call.id,
+                call_id: call.call_id,
+                call_fingerprint: await fingerprintJson(call),
+            };
+            const resultBlock = {
+                id: 'block:program-result',
+                type: 'tool_result' as const,
+                call_id: call.call_id,
+                status,
+                content: [
+                    { id: 'block:program-result-text', type: 'text' as const, format: 'plain' as const, text: status },
+                ],
+            };
+            const result = createToolTurn({
+                id: 'turn:program-result',
+                authority: 'ordinary',
+                blocks: [resultBlock],
+                status: 'completed',
+                timestamps: { recorded_at: RECORDED_AT },
+                execution_id: 'execution:program',
+                model_visibility: 'exclude',
+                provenance: { type: 'inserted', operation_id: 'execution:program' },
+            });
+            const batch: IndexedRecordBatchCommand['batch'] = {
+                turns: [result],
+                execution_receipts: [
+                    {
+                        id: 'execution:program',
+                        call_id: call.call_id,
+                        executor: 'application',
+                        call_source: source,
+                        result_turn_id: result.id,
+                        status,
+                        recorded_at: RECORDED_AT,
+                        result_fingerprint: await fingerprintJson(resultBlock),
+                    },
+                ],
+                context_entries: [{ id: 'entry:program-result', type: 'source_turn', turn_id: result.id }],
+            };
+            const completion: IndexedRecordBatchCommand = {
+                conversation_id: source.conversation.conversation_id,
+                batch,
+                options: {
+                    operation_id: 'operation:program-result',
+                    expected_revision: 1,
+                    recorded_at: RECORDED_AT,
+                    payload_fingerprint: await fingerprintJson(batch),
+                },
+            };
+            const completed = await stageIndexedRecordBatch(accepted.root, completion, memory.store);
+            expect(await loadIndexedToolCallTerminalResult(memory.store, completed.root, source)).toBe(true);
+            expect((await stageIndexedRecordBatch(completed.root, completion, memory.store)).applied).toBe(false);
+            expect((await stageIndexedProgramToolCall(completed.root, command, memory.store)).applied).toBe(false);
+            await expect(
+                loadIndexedProgramToolCallSelection(memory.store, completed.root, {
+                    ...source,
+                    conversation: completed.root.source,
+                }),
+            ).rejects.toThrow('open-call index');
+            expect(completed.root.directories.generations).toBeUndefined();
+        },
+    );
 });

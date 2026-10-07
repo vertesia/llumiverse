@@ -1,3 +1,7 @@
+import { selectedWorkingSetSource } from '../conversation/selected-working-set-source.js';
+
+export { selectedWorkingSetSource } from '../conversation/selected-working-set-source.js';
+
 import type { ExecutionOptions } from '@llumiverse/common';
 import {
     type AgentContentBlock,
@@ -6,7 +10,6 @@ import {
     type ConversationDocument,
     type ConversationPreparedRequestRecord,
     type ConversationTurn,
-    ConversationTurnSchema,
     type DecodedConversationResponse,
     deriveConversationId,
     type ExecutedGeneration,
@@ -1063,33 +1066,6 @@ function compileOpenAIChatSelectedTurns(
  * The caller must separately authenticate its prepared-record CAS and prove native-request parity;
  * this pure projection cannot authorize provider transport or a new derived edit.
  */
-export function selectedWorkingSetSource(
-    workingSet: Pick<RequestSourceWorkingSet, 'turns' | 'context' | 'assets'> & {
-        replacement_turns?: RequestSourceWorkingSet['replacement_turns'];
-        indexed_reference_evidence?: IndexedConversationSelectedContext;
-    },
-) {
-    const materialize = (projection: RequestSourceWorkingSet['turns'][number]): ConversationTurn =>
-        ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
-    const turns = workingSet.turns.map(materialize);
-    const grouped = new Map<string, ConversationTurn[]>();
-    for (const { compaction_id, projection } of workingSet.replacement_turns ?? []) {
-        const prior = grouped.get(compaction_id) ?? [];
-        prior.push(materialize(projection));
-        grouped.set(compaction_id, prior);
-    }
-    const compactions = Object.fromEntries([...grouped].map(([id, replacement_turns]) => [id, { replacement_turns }]));
-    return {
-        turns,
-        context: workingSet.context,
-        compactions,
-        assets: workingSet.assets,
-        ...(workingSet.indexed_reference_evidence === undefined
-            ? {}
-            : { indexed_reference_evidence: workingSet.indexed_reference_evidence }),
-    };
-}
-
 /** Compile a host-verified indexed text selection without representing it as a full conversation document. */
 export function compileOpenAIChatIndexedSelectedText(
     input: IndexedConversationSelectedContext,
