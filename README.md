@@ -238,8 +238,8 @@ JSON inside a complete JSON fence to make its boundaries explicit.
 Recovery sets `response.json_output_diagnostic`, with independent `extracted` and `repaired` flags, the original text,
 and the strict parser error when repaired. Original text may contain sensitive output; treat this diagnostic like
 response content. Diagnostics remain available when recovered JSON subsequently fails schema validation. To disable
-syntax repair for one execution, pass `{ jsonRepair: false }` in execution options. The same constructor option
-sets the driver default; the per-execution option takes precedence. Explicit wrapper extraction remains available.
+syntax repair for one execution, pass `{ jsonRepair: false }` in execution options. Repair defaults to enabled
+when omitted. Explicit wrapper extraction remains available.
 Token-limit completions (`finish_reason: 'length'`) always fail structured-output validation, even if their prefix is
 parseable. Successful repair and schema validation do not establish that the model generated all intended information.
 

@@ -254,7 +254,7 @@ export const StatelessExecutionOptionsSchema = z
             .meta({
                 description:
                     'Allow conservative JSON syntax repair during result-schema validation for this execution. ' +
-                    'Overrides the driver default. Complete JSON wrappers may still be extracted when disabled.',
+                    'Defaults to enabled. Complete JSON wrappers may still be extracted when disabled.',
             }),
         prompt_cache_schema_suffix: z
             .boolean()

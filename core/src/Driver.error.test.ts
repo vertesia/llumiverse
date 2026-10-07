@@ -102,10 +102,13 @@ describe('AbstractDriver Error Formatting', () => {
     });
 
     it('preserves raw text and reports an error when repair is disabled', () => {
-        driver = new TestDriver({ jsonRepair: false });
         const raw = [{ type: 'text' as const, value: '{"a":1,}' }];
         const completion: Completion = { result: raw, finish_reason: 'stop' };
-        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });
+        driver.validateResult(completion, {
+            model: 'test-model',
+            result_schema: { type: 'object' },
+            jsonRepair: false,
+        });
         expect(completion.error).toMatchObject({ code: 'json_error', data: raw });
         expect(completion.result).toBe(raw);
         expect(completion.json_output_diagnostic).toBeUndefined();
@@ -124,8 +127,7 @@ describe('AbstractDriver Error Formatting', () => {
         },
     );
 
-    it.each([true, false])('isolates per-execution repair overrides on a reused driver (default %s)', (jsonRepair) => {
-        driver = new TestDriver({ jsonRepair });
+    it('isolates per-execution repair settings on a reused driver and defaults to enabled', () => {
         for (const override of [false, true, undefined]) {
             const completion: Completion = { result: [{ type: 'text', value: '{"a":1,}' }], finish_reason: 'stop' };
             driver.validateResult(completion, {
@@ -133,7 +135,7 @@ describe('AbstractDriver Error Formatting', () => {
                 result_schema: { type: 'object' },
                 jsonRepair: override,
             });
-            expect(completion.error?.code).toBe((override ?? jsonRepair) ? undefined : 'json_error');
+            expect(completion.error?.code).toBe(override !== false ? undefined : 'json_error');
         }
     });
 

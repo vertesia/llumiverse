@@ -564,8 +564,6 @@ export interface Logger {
 export type HttpTimeoutOptions = z.infer<typeof HttpTimeoutOptionsSchema>;
 
 export interface DriverOptions {
-    /** Allow conservative JSON syntax repair during result-schema validation. Defaults to true. */
-    jsonRepair?: boolean;
     logger?: Logger | 'console';
     /**
      * Optional HTTP timeouts applied to the driver's upstream LLM-provider
@@ -649,7 +647,7 @@ export const TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX =
     'When not calling tools, the answer must be a JSON object using the following JSON Schema:';
 
 export interface ExecutionOptionsBase extends PromptOptions {
-    /** Override the driver's JSON syntax repair policy for this execution. */
+    /** Allow conservative JSON syntax repair for this execution. Defaults to true. */
     jsonRepair?: boolean;
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
