@@ -49,16 +49,20 @@ const artifact = z
         ),
     );
 const at = '2026-10-06T00:00:00.000Z';
+// Decode the pinned immutable byte cohort once; each fixture still owns fresh byte arrays and
+// mutable maps, so corruption/recovery tests cannot change another case's authentic source.
+const originalPages = Object.entries(artifact.pages).map(
+    ([key, value]) => [key, Uint8Array.from(Buffer.from(value, 'base64'))] as const,
+);
+const originalRecords = Object.entries(artifact.records).map(
+    ([key, value]) => [key, Uint8Array.from(Buffer.from(value, 'base64'))] as const,
+);
 
 function fixture(name: string) {
     const original = artifact.cases[name];
     if (!original) throw new Error('Historical case missing');
-    const pages = new Map(
-        Object.entries(artifact.pages).map(([key, value]) => [key, Uint8Array.from(Buffer.from(value, 'base64'))]),
-    );
-    const records = new Map(
-        Object.entries(artifact.records).map(([key, value]) => [key, Uint8Array.from(Buffer.from(value, 'base64'))]),
-    );
+    const pages = new Map(originalPages.map(([key, bytes]) => [key, Uint8Array.from(bytes)]));
+    const records = new Map(originalRecords.map(([key, bytes]) => [key, Uint8Array.from(bytes)]));
     const store: IndexedConversationRecordStore = {
         async read(ref) {
             const bytes = pages.get(ref.content_hash);
@@ -103,9 +107,18 @@ async function complete(f: ReturnType<typeof fixture>) {
         expect(usage.record_reads).toBeLessThanOrEqual(limits.record_reads);
         expect(usage.page_reads).toBeLessThanOrEqual(limits.page_reads);
         expect(usage.bytes).toBeLessThanOrEqual(limits.bytes);
+        expect(usage.writes).toBeLessThanOrEqual(limits.writes);
         if (previous.progress.phase === 'active_window') activeReads = usage.record_reads;
-        // Recovered progress is the immutable point-read record, not a live in-memory cursor.
-        expect(await readIndexedUpgradeProgress(f.store, f.command, state.locator)).toEqual(state.progress);
+        // Every next advance authenticates this immutable progress locator itself. Explicit
+        // roundtrips cover the first step, each phase/audit-family boundary and completion;
+        // the dedicated interrupted-step test separately proves exact predecessor replay.
+        if (
+            steps === 1 ||
+            state.progress.phase !== previous.progress.phase ||
+            state.progress.audit_family !== previous.progress.audit_family ||
+            state.progress.phase === 'complete'
+        )
+            expect(await readIndexedUpgradeProgress(f.store, f.command, state.locator)).toEqual(state.progress);
     }
     return { ...state, steps, activeReads };
 }

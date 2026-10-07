@@ -2543,7 +2543,7 @@ describe('indexed conversation snapshot', () => {
             ).document;
         const assertIndexedBlocked = async (source: ConversationDocument, expectedCount: number) => {
             await expect(assertProcessingReady(source, '', '')).rejects.toThrow(
-                'Accepted processing jobs remain outstanding',
+                'Current context, policy and target need processing evaluation',
             );
             const memory = memoryStore();
             const staged = await stageIndexedConversationSnapshot(source, undefined, memory.store);
@@ -2552,7 +2552,7 @@ describe('indexed conversation snapshot', () => {
             expect(JSON.parse(new TextDecoder().decode(headerBytes)).unresolved_job_count).toBe(expectedCount);
             const recordCount = memory.records.size;
             await expect(loadIndexedSelectedTextContext(memory.store, staged.root, staged.locator)).rejects.toThrow(
-                'accepted processing jobs outstanding',
+                'Indexed selected preparation requires processing readiness',
             );
             await expect(
                 loadIndexedSettledRetrievalSelectedContext(memory.store, staged.root, staged.locator),
@@ -2600,7 +2600,7 @@ describe('indexed conversation snapshot', () => {
         memory.records.set(`root:${legacyRootHash}`, legacyRootBytes);
         const legacyLocator = { content_hash: legacyRootHash, size_bytes: legacyRootBytes.byteLength };
         await expect(loadIndexedSelectedTextContext(memory.store, legacyRoot, legacyLocator)).rejects.toThrow(
-            'no accepted processing job-drain witness',
+            'Indexed selected preparation requires processing readiness',
         );
 
         const ordinary = emptyDocument('conversation:indexed-legacy-no-processing');
@@ -2656,7 +2656,7 @@ describe('indexed conversation snapshot', () => {
         const blocked = await retainWithoutAutomaticProcessing(current);
         expect(blocked.processing.jobs?.[job.id]).toEqual(job);
         await expect(assertProcessingReady(blocked, '', '')).rejects.toThrow(
-            'Accepted processing jobs remain outstanding',
+            'Current context, policy and target need processing evaluation',
         );
         const blockedMemory = memoryStore();
         const blockedBefore = structuredClone(blocked);

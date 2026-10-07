@@ -1,13 +1,17 @@
+import { canonicalJsonContentString } from './content-integrity.js';
+import { deriveConversationId } from './identity.js';
 import {
     assertIndexedAcceptedCompaction,
     IndexedCallStateSchema,
     type IndexedConversationRecordStore,
     indexedDeleteDependencyEntry,
     loadRecord,
+    ownedIndexedProcessingJob,
 } from './indexed-conversation.js';
 import { IndexedConversationUpgradeEvidenceError } from './indexed-upgrade-progress.js';
 import { getPagedRecord, putPagedRecord, readPagedRecordRange } from './paged-record-index.js';
 import { AssetSchema, ContentBlockSchema } from './schemas/content.js';
+import { ContextEntrySchema } from './schemas/context-foundation.js';
 import { ExecutionReceiptSchema, GenerationSchema, OperationReceiptSchema } from './schemas/execution.js';
 import {
     IndexedConversationCompactionHeaderSchema,
@@ -15,7 +19,8 @@ import {
     IndexedConversationTurnHeaderSchema,
 } from './schemas/indexed-head.js';
 import type { IndexedConversationUpgradeProgress } from './schemas/indexed-upgrade.js';
-import { ProcessingJobSchema } from './schemas/processing.js';
+import { ProcessingJobSchema, ProcessingResolvedInputSchema } from './schemas/processing.js';
+import { isToolResultTextStrategy } from './tool-result-text-strategy.js';
 
 const families = ['turns', 'blocks', 'execution_receipts', 'assets', 'compactions', 'processing_records'] as const;
 interface Target {
@@ -48,6 +53,7 @@ export async function advanceIndexedUpgradeDependencies(
     const targets: Target[] = [];
     let kind: 'turn' | 'asset' | 'compaction' | 'job' = 'turn';
     let owner = entry.key;
+    let jobEnqueueRevision: number | undefined;
     const add = (id: string | undefined, refKind: Target['kind'] = 'turn') => {
         if (id !== undefined) targets.push({ kind: refKind, id });
     };
@@ -128,6 +134,7 @@ export async function advanceIndexedUpgradeDependencies(
                 throw new IndexedConversationUpgradeEvidenceError('Indexed upgrade dependency job identity differs');
             owner = job.id;
             kind = 'job';
+            jobEnqueueRevision = job.enqueue_revision;
             if (job.selection.kind === 'entries') {
                 for (const id of job.selection.entry_ids) add(id, 'entry');
                 for (const selected of job.selection.selected_entries ?? []) add(selected.turn_id);
@@ -208,11 +215,121 @@ export async function advanceIndexedUpgradeDependencies(
         targetTurn = state.turn_id;
     } else if (target.kind === 'entry') {
         const value = await getPagedRecord(store, progress.scratch.entry_turns, target.id);
-        if (value?.storage !== 'marker' || value.kind !== 'upgrade_entry_turn')
-            throw new IndexedConversationUpgradeEvidenceError(
-                'Indexed upgrade job selection lacks retained original entry witness',
+        if (value?.storage === 'marker' && value.kind === 'upgrade_entry_turn') targetTurn = value.id;
+        else {
+            // A later job may select a replacement entry introduced by an accepted compaction,
+            // rather than an append. Authenticate that exact retained insertion by point lookup;
+            // it is never an original-turn acceptance or a reconstructed active-context witness.
+            const descriptor = await getPagedRecord(store, root.directories.context_entries, target.id);
+            const selected = await loadRecord(store, descriptor, ContextEntrySchema);
+            if (
+                descriptor?.storage !== 'record' ||
+                descriptor.kind !== 'context_entries' ||
+                descriptor.id !== target.id ||
+                selected.id !== target.id ||
+                selected.type !== 'replacement_turn' ||
+                selected.block_ids !== undefined
+            )
+                throw new IndexedConversationUpgradeEvidenceError(
+                    'Indexed upgrade job selection lacks exact accepted replacement entry witness',
+                );
+            const header = await loadRecord(
+                store,
+                await getPagedRecord(store, root.directories.turns, selected.turn_id),
+                IndexedConversationTurnHeaderSchema,
             );
-        targetTurn = value.id;
+            const compaction = await loadRecord(
+                store,
+                await getPagedRecord(store, root.directories.compactions, selected.compaction_id),
+                IndexedConversationCompactionHeaderSchema,
+            );
+            const acceptance = await loadRecord(
+                store,
+                await getPagedRecord(store, root.directories.operation_receipts, compaction.operation_id),
+                OperationReceiptSchema,
+            );
+            assertIndexedAcceptedCompaction(root, selected.compaction_id, compaction, acceptance);
+            if (isToolResultTextStrategy(compaction.strategy.id, compaction.strategy.version)) {
+                // Registered tool-result deltas have their own exact entry/turn ID recipe.
+                // Authenticate the prior accepted job and its retained resolution; no output
+                // body or recursive original/projection history is loaded for this mapping.
+                if (!acceptance.id.startsWith('processing:apply:'))
+                    throw new IndexedConversationUpgradeEvidenceError(
+                        'Indexed upgrade job selection lacks exact accepted replacement entry witness',
+                    );
+                const predecessorJobId = acceptance.id.slice('processing:apply:'.length);
+                const predecessor = await ownedIndexedProcessingJob(
+                    store,
+                    { ...root, directories: progress.directories },
+                    predecessorJobId,
+                );
+                const resolution = await loadRecord(
+                    store,
+                    await getPagedRecord(
+                        store,
+                        root.directories.processing_records,
+                        JSON.stringify(['resolved_inputs', predecessorJobId]),
+                    ),
+                    ProcessingResolvedInputSchema,
+                );
+                const inserted = acceptance.context_change?.inserted_entry_ids ?? [];
+                const index = inserted.indexOf(selected.id);
+                if (
+                    index < 0 ||
+                    inserted.filter((id) => id === selected.id).length !== 1 ||
+                    predecessor.processor_id !== compaction.strategy.id ||
+                    predecessor.processor_version !== compaction.strategy.version ||
+                    predecessor.configuration_fingerprint !== compaction.strategy.configuration_fingerprint ||
+                    resolution.job_id !== predecessor.id ||
+                    resolution.source_fingerprint !== compaction.source.source_fingerprint ||
+                    resolution.entry_ids.length !== inserted.length ||
+                    resolution.source_turn_ids.length !== inserted.length ||
+                    canonicalJsonContentString(resolution.entry_ids) !==
+                        canonicalJsonContentString(acceptance.context_change?.removed_entry_ids) ||
+                    selected.id !==
+                        (await deriveConversationId(
+                            'tool-result-text-entry',
+                            predecessor.id,
+                            resolution.entry_ids[index],
+                        )) ||
+                    selected.turn_id !==
+                        (await deriveConversationId(
+                            'tool-result-text-turn',
+                            predecessor.id,
+                            resolution.source_turn_ids[index],
+                        )) ||
+                    compaction.id !== (await deriveConversationId('tool-result-text-compaction', predecessor.id))
+                )
+                    throw new IndexedConversationUpgradeEvidenceError(
+                        'Indexed upgrade job selection lacks exact accepted replacement entry witness',
+                    );
+            } else if (
+                selected.id !== (await deriveConversationId('context_entry', selected.compaction_id, selected.turn_id))
+            )
+                throw new IndexedConversationUpgradeEvidenceError(
+                    'Indexed upgrade job selection lacks exact accepted replacement entry witness',
+                );
+            const provenance = header.turn.provenance;
+            if (
+                jobEnqueueRevision === undefined ||
+                acceptance.result_revision >= jobEnqueueRevision ||
+                !acceptance.context_change?.inserted_entry_ids.includes(selected.id) ||
+                header.turn.id !== selected.turn_id ||
+                header.source !== 'replacement' ||
+                header.compaction_id !== compaction.id ||
+                provenance.type !== 'derived' ||
+                provenance.derivation_id !== compaction.id ||
+                provenance.source_hash !== compaction.source.source_fingerprint ||
+                provenance.source_turn_ids.length === 0 ||
+                provenance.source_turn_ids.some((id) => !compaction.source.turn_ids.includes(id)) ||
+                (compaction.source.block_ids !== undefined &&
+                    (provenance.source_block_ids ?? []).some((id) => !compaction.source.block_ids?.includes(id)))
+            )
+                throw new IndexedConversationUpgradeEvidenceError(
+                    'Indexed upgrade job selection lacks exact accepted replacement entry witness',
+                );
+            targetTurn = selected.turn_id;
+        }
     }
     if ((await getPagedRecord(store, root.directories.turns, targetTurn)) === undefined)
         throw new IndexedConversationUpgradeEvidenceError(
