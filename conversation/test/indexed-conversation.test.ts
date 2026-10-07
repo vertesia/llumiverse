@@ -26,6 +26,7 @@ import {
     loadIndexedReadySelectedContext,
     loadIndexedRestartEvidence,
     loadIndexedRetainedAcceptedOutputPresentation,
+    loadIndexedRetainedTerminalProgramPresentation,
     loadIndexedSelectedDependencyContext,
     loadIndexedSelectedMediaCompactionContext,
     loadIndexedSelectedTextContext,
@@ -3949,6 +3950,36 @@ describe('bounded indexed historical presentation', () => {
         await expect(
             loadIndexedTerminalProgramPresentation(memory.store, staged.root, staged.receipt, 'turn:foreign'),
         ).rejects.toThrow(IndexedPresentationNominationConflict);
+        if (!staged.locator) throw new Error('Actual terminal append lost its immutable root locator');
+        const deleted = await stageIndexedConversationDelete(
+            staged.root,
+            {
+                operation_id: 'operation:delete-terminal',
+                source: staged.root.source,
+                expected_source_root: staged.locator,
+                recorded_at: RECORDED_AT,
+                dependency_policy: 'reject',
+                context_policy: 'exclude',
+                turn_ids: [turn.id],
+            },
+            memory.store,
+        );
+        memory.recordReads.length = 0;
+        const refused = loadIndexedRetainedTerminalProgramPresentation(
+            memory.store,
+            deleted.root,
+            staged.receipt,
+            turn.id,
+        );
+        await expect(refused).rejects.toThrow(IndexedPresentationNominationConflict);
+        await expect(refused).rejects.toThrow('live program');
+        expect(memory.recordReads.some((read) => read.startsWith('blocks:'))).toBe(false);
+        expect(memory.recordReads.some((read) => read.startsWith('deleted_turns:'))).toBe(false);
+        // The accepted old root and immutable payload remain available; current completion
+        // cannot resurrect deliberately deleted content by borrowing that original root.
+        expect(
+            await loadIndexedTerminalProgramPresentation(memory.store, staged.root, staged.receipt, turn.id),
+        ).toEqual(selected);
     });
 
     it('selects exact accepted generation/turn records and rejects a changed receipt', async () => {

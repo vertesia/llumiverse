@@ -30,7 +30,7 @@ import { indexedPreparedReceiptMatches } from './indexed-prepared-receipt.js';
 
 // These test adapter integrity constraints only. Actual epoch/phase authority and measured count
 // are exercised by the installed handoff HTTP/Mongo/Temporal fixture, never conferred by this data.
-async function fixture(protocol: 'chat' | 'responses' | 'anthropic') {
+async function fixture(protocol: 'chat' | 'responses' | 'responses_counted' | 'anthropic') {
     const at = '2026-10-05T00:00:00.000Z';
     let document = createConversationDocument({ id: 'conversation:measured-indexed', created_at: at });
     for (let i = 0; i < 4; i++) {
@@ -102,9 +102,22 @@ async function fixture(protocol: 'chat' | 'responses' | 'anthropic') {
     });
     const measurement = {
         input_tokens: 20,
-        method: protocol === 'anthropic' ? ('provider_counted' as const) : ('estimated' as const),
-        tokenizer: protocol === 'anthropic' ? 'anthropic.messages.count_tokens:v1' : 'fixture:bpe',
-        tokenizer_version: protocol === 'anthropic' ? 'anthropic.messages.count_tokens:projection-2026-10-05.v1' : '1',
+        method:
+            protocol === 'anthropic' || protocol === 'responses_counted'
+                ? ('provider_counted' as const)
+                : ('estimated' as const),
+        tokenizer:
+            protocol === 'anthropic'
+                ? 'anthropic.messages.count_tokens:v1'
+                : protocol === 'responses_counted'
+                  ? 'openai.responses.input_tokens:v1'
+                  : 'fixture:bpe',
+        tokenizer_version:
+            protocol === 'anthropic'
+                ? 'anthropic.messages.count_tokens:projection-2026-10-05.v1'
+                : protocol === 'responses_counted'
+                  ? 'openai.responses.input_tokens:projection-2026-10-07.v1'
+                  : '1',
         adapter: prepared.receipt.target.protocol,
         adapter_version: prepared.receipt.target.adapter_version,
         source_fingerprint: await indexedProcessingContextFingerprint({
@@ -149,12 +162,38 @@ async function fixture(protocol: 'chat' | 'responses' | 'anthropic') {
     return { record, selection, receipt: prepared.receipt, driver, document, store, at };
 }
 
+async function rejectUnregisteredOpenAICount(
+    record: Parameters<typeof indexedPreparedReceiptMatches>[0],
+    selection: Parameters<typeof indexedPreparedReceiptMatches>[1],
+    compiled: Parameters<typeof indexedPreparedReceiptMatches>[2],
+) {
+    for (const field of ['provider', 'protocol', 'version'] as const) {
+        const changed = structuredClone(record);
+        const receipt = structuredClone(compiled);
+        const measurement = changed.request_receipt.measurement;
+        const witness = changed.indexed_source?.processing_input ?? changed.indexed_source?.native_measurement;
+        if (!measurement || !witness) throw new Error('Expected measured provider count witness');
+        if (field === 'provider') receipt.target.provider = 'openai_compatible';
+        if (field === 'protocol') receipt.target.protocol = 'openai.chat.completions';
+        if (field === 'version') measurement.tokenizer_version = 'unregistered:counter-version';
+        // Rebind every dependent hash so refusal proves the finite counter registration,
+        // rather than merely detecting an unrelated receipt or stale coverage fingerprint.
+        changed.request_receipt.target = structuredClone(receipt.target);
+        measurement.adapter = receipt.target.protocol;
+        witness.coverage.target_fingerprint = await fingerprintJson(receipt.target);
+        witness.coverage.tokenizer_id = `${measurement.tokenizer}:${measurement.tokenizer_version}`;
+        witness.coverage.measurement_fingerprint = await fingerprintJson(measurement);
+        expect(await indexedPreparedReceiptMatches(changed, selection, receipt), field).toBe(false);
+    }
+}
+
 describe('indexed measured native receipt integrity', () => {
-    it.each(['chat', 'responses'] as const)(
+    it.each(['chat', 'responses', 'responses_counted'] as const)(
         'retains exact %s native receipt with its separate measured coverage',
         async (protocol) => {
             const { record, selection, receipt } = await fixture(protocol);
             expect(await indexedPreparedReceiptMatches(record, selection, receipt)).toBe(true);
+            if (protocol === 'responses_counted') await rejectUnregisteredOpenAICount(record, selection, receipt);
             const oldProfile = parseConversationPreparedRequestRecord({
                 ...record,
                 indexed_source: {
@@ -188,7 +227,7 @@ describe('indexed measured native receipt integrity', () => {
 });
 
 describe('generic measured native prepared profile', () => {
-    it.each(['chat', 'responses', 'anthropic'] as const)(
+    it.each(['chat', 'responses', 'responses_counted', 'anthropic'] as const)(
         'binds %s count to the accepted input without borrowing an epoch',
         async (protocol) => {
             const { record: ordinary, selection, receipt } = await fixture(protocol);
@@ -215,6 +254,7 @@ describe('generic measured native prepared profile', () => {
                 },
             });
             expect(await indexedPreparedReceiptMatches(record, selection, receipt)).toBe(true);
+            if (protocol === 'responses_counted') await rejectUnregisteredOpenAICount(record, selection, receipt);
             if (protocol === 'anthropic') {
                 expect(await indexedPreparedReceiptMatches(ordinary, selection, receipt)).toBe(true);
                 const unsupported = structuredClone(record);
@@ -324,7 +364,12 @@ describe('measured accepted-output native profile', () => {
                 });
             } else {
                 prior.driver.service = prior.driver.service.withOptions({
-                    fetch: async () => {
+                    fetch: async (url) => {
+                        if (
+                            prior.driver instanceof OpenAIDriver &&
+                            new URL(String(url)).pathname === '/v1/responses/input_tokens'
+                        )
+                            return Response.json({ object: 'response.input_tokens', input_tokens: 20 });
                         transports++;
                         const text = transports === 1 ? 'Actual prior accepted output.' : 'Continued exactly once.';
                         const body =
@@ -459,7 +504,7 @@ describe('measured accepted-output native profile', () => {
                 stream: false,
             });
             const providerCount =
-                prior.driver instanceof AnthropicDriver
+                prior.driver instanceof AnthropicDriver || prior.driver instanceof OpenAIDriver
                     ? await prior.driver.countIndexedNativeRequest(
                           preparedBeforeCoverage.native_request,
                           preparedBeforeCoverage.receipt.target,
@@ -526,6 +571,10 @@ describe('measured accepted-output native profile', () => {
             expect(output.result_revision).toBeLessThan(pinned.root.source.revision);
             expect(record.runtime).not.toHaveProperty('materialized_input');
             expect(await indexedPreparedReceiptMatches(record, selection, prepared.receipt)).toBe(true);
+            if (prior.driver instanceof OpenAIDriver) {
+                expect(measurement.method).toBe('provider_counted');
+                await rejectUnregisteredOpenAICount(record, selection, prepared.receipt);
+            }
             const assertCommitted = vi.fn(async () => undefined);
             const baseTransports = transports;
             for (const mutation of [

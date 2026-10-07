@@ -81,10 +81,14 @@ export async function indexedPreparedReceiptMatches(
                 (indexed?.validator_profile === INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE ||
                     indexed?.validator_profile === INDEXED_MEASURED_OUTPUT_PREPARED_VALIDATOR_PROFILE ||
                     indexed?.validator_profile === INDEXED_PROCESSED_INPUT_PREPARED_VALIDATOR_PROFILE) &&
-                compiled.target.provider === 'anthropic' &&
-                compiled.target.protocol === 'anthropic.messages' &&
-                measurement.tokenizer === 'anthropic.messages.count_tokens:v1' &&
-                measurement.tokenizer_version === 'anthropic.messages.count_tokens:projection-2026-10-05.v1')
+                ((compiled.target.provider === 'anthropic' &&
+                    compiled.target.protocol === 'anthropic.messages' &&
+                    measurement.tokenizer === 'anthropic.messages.count_tokens:v1' &&
+                    measurement.tokenizer_version === 'anthropic.messages.count_tokens:projection-2026-10-05.v1') ||
+                    (compiled.target.provider === 'openai' &&
+                        compiled.target.protocol === 'openai.responses' &&
+                        measurement.tokenizer === 'openai.responses.input_tokens:v1' &&
+                        measurement.tokenizer_version === 'openai.responses.input_tokens:projection-2026-10-07.v1')))
         ) ||
         !measurement.tokenizer_version ||
         measurement.adapter !== compiled.target.protocol ||

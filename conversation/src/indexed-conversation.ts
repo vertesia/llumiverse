@@ -10186,6 +10186,13 @@ async function loadIndexedTerminalProgramRecords(
         throw new IndexedPresentationNominationConflict(
             'Indexed terminal output differs from its nominated turn and receipt',
         );
+    // A retained nomination must use the live current index. A tombstone or absent
+    // turn is a nomination conflict, never permission to recover its historical body.
+    const descriptor = await getPagedRecord(boundedStore, root.directories.turns, turnId);
+    if (descriptor?.storage !== 'record')
+        throw new IndexedPresentationNominationConflict(
+            'Indexed terminal output is not the exact live program acceptance',
+        );
     const projection = await loadIndexedProjectedTurn(boundedStore, root, turnId);
     const turn = ConversationTurnSchema.parse({ ...projection.header, blocks: projection.selected_blocks });
     if (

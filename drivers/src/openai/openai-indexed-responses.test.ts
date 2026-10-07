@@ -9,14 +9,18 @@ import {
     deriveConversationId,
     fingerprintJson,
     hashContentBytes,
+    INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE,
     type IndexedConversationRecordStore,
+    indexedProcessingContextFingerprint,
     loadIndexedAcceptedOutputContinuation,
+    loadIndexedReadySelectedContext,
     loadIndexedSelectedDependencyContext,
     loadIndexedSelectedMediaCompactionContext,
     loadIndexedSelectedTextContext,
     parseConversationPreparedRequestRecord,
     type ResolveConversationAsset,
     stageIndexedConversationSnapshot,
+    stageIndexedProcessingCoverage,
 } from '@llumiverse/conversation';
 import {
     assertCanonicalFailedExecutionMatchesPreparedRecord,
@@ -134,7 +138,7 @@ async function selectedText(withDependencies = false, externalImage = false) {
         recorded_at: at,
         purpose: 'interaction' as const,
     };
-    return { document, selection, runtime, reads, store, bytes };
+    return { document, selection, runtime, reads, store, bytes, staged };
 }
 
 function responseBody(): OpenAI.Responses.Response {
@@ -889,4 +893,130 @@ it('streams configured Chat text and exact tool arguments through the same index
         operation_receipt_id: runtime.response_operation_id,
     });
     expect(stream.completion).toBeUndefined();
+});
+
+it('dispatches genuinely selected media only after its exact provider count and accepted coverage fence', async () => {
+    const f = await selectedText(true, true);
+    const originalInput = f.document.operation_receipts['operation:user'];
+    if (!originalInput) throw new Error('Genuine source append receipt missing');
+    const runtime = {
+        ...f.runtime,
+        materialized_input: {
+            operation_id: originalInput.id,
+            result_revision: originalInput.result_revision,
+        },
+    };
+    const requests: { url: string; body: unknown }[] = [];
+    const driver = new OpenAIDriver({ apiKey: 'owned-counted-media' });
+    driver.service = driver.service.withOptions({
+        fetch: async (url, options) => {
+            const path = new URL(String(url)).pathname;
+            const body: unknown = JSON.parse(String(options?.body));
+            requests.push({ url: path, body });
+            if (path === '/v1/responses/input_tokens')
+                return Response.json({ object: 'response.input_tokens', input_tokens: 37 });
+            expect(path).toBe('/v1/responses');
+            return Response.json(responseBody());
+        },
+        maxRetries: 0,
+    });
+    const host: CanonicalHostCapabilities = {
+        resolve_canonical_asset: async function* () {
+            yield Uint8Array.from(f.bytes);
+        },
+    };
+    const options = { model: 'gpt-5.4', model_options: { max_tokens: 128 } };
+    const before = await driver.prepareIndexedTextRequest(
+        {
+            selection: f.selection,
+            runtime,
+            options,
+            stream: false,
+        },
+        host,
+    );
+    const counted = await driver.countIndexedNativeRequest(before.native_request, before.receipt.target);
+    expect(counted.request_fingerprint).toBe(await fingerprintJson(before.native_request));
+    expect(JSON.stringify(requests[0]?.body)).toContain(Buffer.from(f.bytes).toString('base64'));
+    expect(JSON.stringify(requests[0]?.body)).toContain('read_image');
+    const measurement = {
+        input_tokens: counted.input_tokens,
+        method: 'provider_counted' as const,
+        tokenizer: counted.profile,
+        tokenizer_version: counted.tokenizer_version,
+        adapter: before.receipt.target.protocol,
+        adapter_version: before.receipt.target.adapter_version,
+        source_fingerprint: await indexedProcessingContextFingerprint({
+            ...f.selection,
+            completeness: 'active_processing_dependencies_verified',
+        }),
+        target_model: options.model,
+        measured_at: runtime.recorded_at,
+    };
+    const coverage = {
+        operation_id: 'coverage:counted-media',
+        expected_revision: f.selection.source.revision,
+        target_fingerprint: await fingerprintJson(before.receipt.target),
+        measured_input_tokens: counted.input_tokens,
+        tokenizer_id: `${measurement.tokenizer}:${measurement.tokenizer_version}`,
+        measurement_fingerprint: await fingerprintJson(measurement),
+        recorded_at: runtime.recorded_at,
+    };
+    const covered = await stageIndexedProcessingCoverage(f.store, f.staged.root, f.staged.locator, coverage);
+    expect(covered.coverage.status).toBe('ready');
+    const selection = await loadIndexedSelectedMediaCompactionContext(f.store, covered.root, covered.locator);
+    const prepared = await driver.prepareIndexedTextRequest({ selection, runtime, options, stream: false }, host);
+    expect(prepared.native_request).toEqual(before.native_request);
+    const record = parseConversationPreparedRequestRecord({
+        source: selection.source,
+        runtime,
+        request_receipt: { ...prepared.receipt, measurement },
+        generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+        response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+        indexed_source: {
+            version: 1,
+            validator_profile: INDEXED_MEASURED_NATIVE_PREPARED_VALIDATOR_PROFILE,
+            root: selection.root,
+            context_revision: selection.context.revision,
+            native_measurement: {
+                version: 1,
+                accepted_source: f.selection.source,
+                accepted_root: f.selection.root,
+                accepted_operation_id: originalInput.id,
+                runtime_input_operation_id: runtime.input_operation_id,
+                accepted_receipt_fingerprint: await fingerprintJson(originalInput),
+                settled_source: f.selection.source,
+                settled_root: f.selection.root,
+                coverage,
+            },
+        },
+    });
+    let committed = false;
+    const dispatch = () =>
+        driver.executeCommittedIndexedTextRequest(
+            {
+                selection,
+                record,
+                options,
+                assert_committed: async () => {
+                    if (!committed) throw new Error('Real accepted counted-media coverage not yet committed');
+                    await loadIndexedReadySelectedContext(f.store, covered.root, covered.locator, {
+                        target_fingerprint: coverage.target_fingerprint,
+                        measured_input_tokens: coverage.measured_input_tokens,
+                        tokenizer_id: coverage.tokenizer_id,
+                        measurement_fingerprint: coverage.measurement_fingerprint,
+                    });
+                },
+            },
+            host,
+        );
+    await expect(dispatch()).rejects.toThrow('not yet committed');
+    expect(requests).toHaveLength(1);
+    committed = true;
+    const decoded = await dispatch();
+    expect(requests.map((request) => request.url)).toEqual(['/v1/responses/input_tokens', '/v1/responses']);
+    expect(requests[1]?.body).toEqual(before.native_request);
+    expect(decoded.generation.record_source).toBe('executed');
+    expect(decoded.generation.request_receipt).toEqual(record.request_receipt);
+    expect(decoded.generation.request_receipt.measurement?.method).toBe('provider_counted');
 });

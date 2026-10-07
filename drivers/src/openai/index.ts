@@ -121,6 +121,7 @@ import {
     validateOpenAICanonicalImageInput,
 } from './image.js';
 import { imageDataUrl, imageRequest } from './images.js';
+import { countOpenAIIndexedRequest } from './indexed-count.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import { selectedWorkingSetSource } from './openai-chat-conversation-adapter.js';
@@ -1886,6 +1887,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
+
+    /** @internal Count the unchanged indexed native body through this configured Responses service. */
+    countIndexedNativeRequest(nativeRequest: unknown, target: ModelTarget, signal?: AbortSignal) {
+        return countOpenAIIndexedRequest(this.service, nativeRequest, target, signal);
+    }
 
     /** @internal Compile a paged text request through this configured Responses driver. */
     prepareIndexedTextRequest(
