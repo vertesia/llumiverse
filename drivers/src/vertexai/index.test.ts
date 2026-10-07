@@ -31,6 +31,9 @@ class TestVertexAIDriver extends VertexAIDriver {
                             { name: 'publishers/google/models/gemini-live-future' },
                             { name: 'publishers/google/models/gemini-robotics-er-2-preview-info' },
                             { name: 'publishers/google/models/gemini-3.5-live-translate-preview' },
+                            { name: 'publishers/google/models/gemini-3.8-live' },
+                            { name: 'publishers/google/models/gemini-4-live-preview' },
+                            { name: 'publishers/google/models/gemini-nano-banana-2.1' },
                             { name: 'publishers/google/models/gemini-4-tts' },
                         ],
                     ];
@@ -72,6 +75,22 @@ describe('VertexAIDriver listModels', () => {
                 name: 'Global gemini-omni-flash-preview',
             }),
         ]);
+    });
+
+    it('lists Nano Banana globally and excludes versioned Live models from both catalogs', async () => {
+        const models = await new TestVertexAIDriver([
+            { name: 'models/gemini-3.8-live', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-4-live-preview' },
+            { name: 'models/gemini-nano-banana-2.1', supportedActions: ['generateContent'] },
+        ]).listModels();
+        expect(models.some((model) => model.id.includes('-live'))).toBe(false);
+        expect(models.filter((model) => model.id.includes('gemini-nano-banana'))).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ id: 'locations/global/publishers/google/models/gemini-nano-banana-2.1' }),
+                expect.objectContaining({ id: 'locations/global/models/gemini-nano-banana-2.1' }),
+            ]),
+        );
+        expect(models.some((model) => model.id === 'publishers/google/models/gemini-nano-banana-2.1')).toBe(false);
     });
 
     it('uses supported actions to keep only models executable by the implemented Google paths', async () => {
