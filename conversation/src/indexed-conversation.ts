@@ -3348,10 +3348,7 @@ async function loadIndexedSelectedContext(
                         const integrity = await inlineAssetContentIntegrity(asset.storage);
                         const external =
                             includeMediaCompaction &&
-                            asset.kind === 'image' &&
                             asset.storage.type === 'external' &&
-                            asset.storage.resolver === 'url' &&
-                            typeof asset.storage.locator.url === 'string' &&
                             asset.content_hash !== undefined &&
                             asset.byte_length !== undefined;
                         if (
@@ -4631,9 +4628,7 @@ async function stageIndexedRecordBatchOwned(
                     }
                     const integrity = await inlineAssetContentIntegrity(retained.storage);
                     const external =
-                        retained.kind === 'image' &&
                         retained.storage.type === 'external' &&
-                        retained.storage.resolver === 'url' &&
                         retained.content_hash !== undefined &&
                         retained.byte_length !== undefined;
                     if (external) await verifyExternalAsset(retained);

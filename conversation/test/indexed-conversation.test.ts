@@ -598,6 +598,116 @@ describe('indexed conversation snapshot', () => {
         expect(checks).toBe(1);
     });
 
+    it.each([
+        ['image', 'image/png'],
+        ['audio', 'audio/wav'],
+        ['video', 'video/mp4'],
+        ['document', 'application/pdf'],
+    ] as const)(
+        'retains authenticated custom-resolver %s tool media and fails closed without exact custody',
+        async (kind, mime) => {
+            const memory = memoryStore();
+            const initial = await stageIndexedConversationSnapshot(
+                emptyDocument(`conversation:external-${kind}`),
+                undefined,
+                memory.store,
+            );
+            const commands = await toolMediaCommands(initial.root.source);
+            const called = await stageIndexedRecordBatch(initial.root, commands.agentCommand, memory.store);
+            const external = {
+                ...commands.asset,
+                kind,
+                mime_type: mime,
+                storage: {
+                    type: 'external' as const,
+                    resolver: 'test.owned_media',
+                    locator: { key: `original-${kind}` },
+                },
+            };
+            const result = ToolTurnSchema.parse({
+                ...commands.result,
+                blocks: [
+                    {
+                        ...commands.result.blocks[0],
+                        content: [
+                            textBlock('block:dependency-text', 'Owned tool result.'),
+                            { id: 'block:dependency-image', type: kind, asset_id: external.id },
+                        ],
+                    },
+                ],
+            });
+            const execution = { ...commands.execution, result_fingerprint: await fingerprintJson(result.blocks[0]) };
+            const batch = {
+                ...commands.resultCommand.batch,
+                turns: [result],
+                execution_receipts: [execution],
+                assets: [external],
+            };
+            const command = {
+                ...commands.resultCommand,
+                batch,
+                options: { ...commands.resultCommand.options, payload_fingerprint: await fingerprintJson(batch) },
+            };
+            const before = memory.records.size;
+            await expect(stageIndexedRecordBatch(called.root, command, memory.store)).rejects.toThrow('host custody');
+            expect(memory.records.size).toBe(before);
+            memory.store.assertExternalAssetIntegrity = async () => {
+                throw new Error('Actual owned byte custody rejected');
+            };
+            await expect(stageIndexedRecordBatch(called.root, command, memory.store)).rejects.toThrow(
+                'owned byte custody rejected',
+            );
+            expect(memory.records.size).toBe(before);
+            let checks = 0;
+            memory.store.assertExternalAssetIntegrity = async (asset) => {
+                checks++;
+                expect(asset).toEqual(external);
+            };
+            const accepted = await stageIndexedRecordBatch(called.root, command, memory.store);
+            if (!accepted.locator) throw new Error('Accepted external media has no immutable root');
+            expect(checks).toBe(1);
+            expect(accepted.receipt.accepted_asset_ids).toEqual([external.id]);
+            delete memory.store.assertExternalAssetIntegrity;
+            const selected = await loadIndexedSelectedMediaCompactionContext(
+                memory.store,
+                accepted.root,
+                accepted.locator,
+            );
+            expect(selected.assets[external.id]).toEqual(external);
+            expect(selected.execution_witnesses?.[execution.id]).toEqual(execution);
+            expect(selected.operation_witnesses?.[accepted.receipt.id]).toEqual(accepted.receipt);
+            const retainedCount = memory.records.size;
+            const retry = await stageIndexedRecordBatch(accepted.root, command, memory.store);
+            expect(retry.applied).toBe(false);
+            expect(retry.receipt).toEqual(accepted.receipt);
+            expect(checks).toBe(1);
+            expect(memory.records.size).toBe(retainedCount);
+
+            const { content_hash: _hash, ...missingHash } = external;
+            const { byte_length: _length, ...missingLength } = external;
+            for (const incomplete of [missingHash, missingLength]) {
+                // A host callback never substitutes for the canonical immutable length/hash record.
+                memory.store.assertExternalAssetIntegrity = async () => undefined;
+                const incompleteBatch = { ...batch, assets: [incomplete] };
+                await expect(
+                    stageIndexedRecordBatch(
+                        called.root,
+                        {
+                            ...command,
+                            batch: incompleteBatch,
+                            options: {
+                                ...command.options,
+                                payload_fingerprint: await fingerprintJson(incompleteBatch),
+                            },
+                        },
+                        memory.store,
+                    ),
+                ).rejects.toThrow('integrity-bound inline custody');
+                expect(memory.records.size).toBe(retainedCount);
+            }
+        },
+    );
+
     it('keeps external tool-result publication, retry and selected closure bounded at 10k and 100k cold turns', async () => {
         const phaseProfiles: Record<string, number>[] = [];
         for (const coldCount of [10_000, 100_000]) {
