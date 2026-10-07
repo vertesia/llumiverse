@@ -32,72 +32,71 @@ export function parseJSON(text: string, allowRepair = true): JSONValue {
     }
 }
 
-function extractCandidate(text: string): string {
+function extractCandidates(text: string): string[] {
     const fence = text.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i);
-    if (fence) {
-        if (/(?:^|\r?\n)```(?:json)?[ \t]*(?:\r?\n|$)/i.test(fence[1]))
-            throw new SyntaxError('Ambiguous JSON output: multiple code blocks');
-        return fence[1].trim();
-    }
+    if (fence) return [fence[1].trim()];
 
-    // Preserve the historical prose extraction, extended to arrays. Do not search inside a root scalar or comment.
-    if (/^["'\d/-]|^(?:true|false|null)\b/.test(text)) return text;
+    const candidates: string[] = [];
     const start = text.search(/[[{]/);
     const end = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']')) + 1;
-    if (start < 0 || end <= start) return text;
-    const suffix = text
-        .slice(end)
-        .trim()
-        .replace(/^```(?:\s|$)/, '')
-        .trim();
-    if (/[[{]/.test(suffix) || /^["'\d-]|^(?:true|false|null)\b/.test(suffix) || suffix.includes('```')) {
-        return text;
-    }
-    return text.slice(start, end);
+    if (start >= 0 && end > start) candidates.push(text.slice(start, end));
+
+    // Retain the old object extraction when surrounding prose contains brackets or other formatting.
+    const objectStart = text.indexOf('{');
+    const objectEnd = text.lastIndexOf('}') + 1;
+    if (objectStart >= 0 && objectEnd > objectStart) candidates.push(text.slice(objectStart, objectEnd));
+    return candidates;
 }
 
 /** Strict parsing first, then optional jsonrepair recovery. Callers validate the recovered value against their schema. */
 export function parseJSONOutput(text: string, options: JSONOutputParseOptions = {}): JSONValue {
-    let parseError: unknown;
+    let lastError: unknown;
     try {
         return JSON.parse(text);
     } catch (error: unknown) {
-        parseError = error;
+        lastError = error;
     }
 
     const normalized = text.trim();
-    const candidate = extractCandidate(normalized);
-    const extracted = candidate !== normalized;
-    let value: JSONValue | undefined;
-    if (extracted) {
+    const candidates = extractCandidates(normalized);
+    // Repair a root JSON value before extracting from it: braces inside unfinished strings are content.
+    const sources = /^[{["']/.test(normalized) ? [normalized, ...candidates] : [...candidates, normalized];
+    for (const source of new Set(sources)) {
+        let value: JSONValue;
+        let repaired = false;
+        let parseError: unknown;
         try {
-            value = JSON.parse(candidate);
+            value = JSON.parse(source);
         } catch (error: unknown) {
             parseError = error;
+            lastError = error;
+            if (options.allowRepair === false) continue;
+            try {
+                value = repairJSON(source, parseError);
+                repaired = true;
+            } catch (error: unknown) {
+                lastError = error;
+                continue;
+            }
         }
-        if (value !== undefined) {
-            options.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
-            return value;
+        // A repaired wrapper must not turn an object answer plus trailing prose into an array of unrelated values.
+        if (
+            source === normalized &&
+            normalized.startsWith('{') &&
+            Array.isArray(value) &&
+            candidates.some((c) => c !== normalized)
+        ) {
+            continue;
         }
+        options.onDiagnostic?.({
+            extracted: source !== normalized,
+            repaired,
+            original_text: text,
+            ...(repaired ? { parse_error: errorMessage(parseError) } : {}),
+        });
+        return value;
     }
-    if (options.allowRepair === false) throw parseError;
-
-    let repaired: JSONValue;
-    let repairedExtraction = false;
-    try {
-        repaired = repairJSON(normalized, parseError);
-    } catch (error: unknown) {
-        if (!extracted) throw error;
-        repaired = repairJSON(candidate, parseError);
-        repairedExtraction = true;
-    }
-    options.onDiagnostic?.({
-        extracted: repairedExtraction,
-        repaired: true,
-        original_text: text,
-        parse_error: errorMessage(parseError),
-    });
-    return repaired;
+    throw lastError;
 }
 
 export function extractAndParseJSON(text: string, allowRepair = true): JSONValue {

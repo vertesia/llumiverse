@@ -28,19 +28,35 @@ describe('validateResult', () => {
         ]);
     });
 
-    it('rejects multiple typed JSON results rather than selecting one', () => {
-        expect(() =>
+    it('joins numeric fragments rather than treating the first digit as a complete answer', () => {
+        expect(
             validateResult(
                 [
-                    { type: 'json', value: { a: 1 } },
-                    { type: 'json', value: { b: 2 } },
+                    { type: 'text', value: '4' },
+                    { type: 'text', value: '2' },
+                ],
+                { type: 'number' },
+            ),
+        ).toEqual([{ type: 'json', value: 42 }]);
+    });
+
+    it('retains a complete first text answer before interpreting later independent text', () => {
+        expect(
+            validateResult(
+                [
+                    { type: 'text', value: '{"a":1}' },
+                    { type: 'text', value: '{"b":2}' },
                 ],
                 { type: 'object' },
             ),
-        ).toThrow(/multiple JSON results/);
+        ).toEqual([{ type: 'json', value: { a: 1 } }]);
     });
 
     it.each<CompletionResult[]>([
+        [
+            { type: 'json', value: { a: 1 } },
+            { type: 'json', value: { b: 2 } },
+        ],
         [
             { type: 'json', value: { a: 1 } },
             { type: 'text', value: 'Explanation' },
@@ -49,7 +65,7 @@ describe('validateResult', () => {
             { type: 'text', value: '{"a":1}' },
             { type: 'image', value: 'image' },
         ],
-    ])('validates JSON content alongside auxiliary response parts: %j', (...parts) => {
+    ])('preserves typed JSON precedence and validates text with auxiliary parts: %j', (...parts) => {
         expect(validateResult(parts, { type: 'object' })).toEqual([{ type: 'json', value: { a: 1 } }]);
     });
 

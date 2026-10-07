@@ -232,7 +232,8 @@ Structured output is parsed strictly first. Recovery can unwrap JSON formatting 
 surrounding prose, preserving the historical extraction behavior. Syntax repair uses normal `jsonrepair` behavior,
 including quoting strings, escaping newlines and completing truncated documents. Recovered output must still pass
 the supplied result schema. Text response parts are joined; a single typed JSON result takes precedence over auxiliary
-content, while multiple typed JSON results are rejected rather than silently selecting one.
+content, preserving the previous first-JSON-result precedence. An independently complete text answer retains its
+precedence; otherwise text parts are joined before repair, avoiding repair of isolated fragments into partial answers.
 
 Recovery sets `response.json_output_diagnostic`, with independent `extracted` and `repaired` flags, the original text,
 and the strict parser error when repaired. Original text may contain sensitive output; treat this diagnostic like

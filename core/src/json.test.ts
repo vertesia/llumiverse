@@ -45,18 +45,7 @@ describe('parseJSONOutput', () => {
         });
     });
 
-    it.each([
-        '{"a":1} {"b":2}',
-        '{"a":1} {"b":',
-        '{"a":1} 42',
-        'Answer: {"a":1} [2]',
-        'Answer: {"a":1} "second"',
-        'Answer: {"a":1} true',
-        '```json\n{"a":1}\n```\n```json\n{"b":2}\n```',
-        '{"a":1 + 2}',
-        '// {"a":1}',
-        '/* {"a":1} */',
-    ])('rejects ambiguous extraction or unrecoverable output: %s', (text) => {
+    it.each(['{"a":1} {"b":2}', '{"a":1 + 2}'])('reports unrecoverable output: %s', (text) => {
         const onDiagnostic = vi.fn();
         expect(() => parseJSONOutput(text, { onDiagnostic })).toThrow();
         expect(onDiagnostic).not.toHaveBeenCalled();
@@ -67,6 +56,12 @@ describe('parseJSONOutput', () => {
         ['```\n"keep {this}"\n```', 'keep {this}'],
         ['```json\n{"text":"keep ```"}\n```', { text: 'keep ```' }],
         ['Answer: {"a":1} done.', { a: 1 }],
+        ['[INFO] {"a":1}', { a: 1 }],
+        ['1. {"a":1}', { a: 1 }],
+        ['"Answer" {"a":1}', { a: 1 }],
+        ['// {"a":1}', { a: 1 }],
+        ['{"a":1} 42 tokens used.', { a: 1 }],
+        ['{"a":1} true story', { a: 1 }],
         ['{"a":1} — confidence: 0.9', { a: 1 }],
         ['callback({"a":1});', { a: 1 }],
         ['```json\n{"a":1}', { a: 1 }],
@@ -84,10 +79,12 @@ describe('parseJSONOutput', () => {
         expect(() => parseJSONOutput(text, { allowRepair: false })).toThrow();
     });
 
-    it('retains the historical fallback for malformed JSON in prose', () => {
-        const text = 'Answer: {"name":Alice Smith} done.';
+    it.each([
+        ['Answer: {"name":Alice Smith} done.', { name: 'Alice Smith' }],
+        ['{"a":1,}\n```\nExtra explanation', { a: 1 }],
+    ])('retains the historical fallback for malformed JSON in prose: %s', (text, expected) => {
         const onDiagnostic = vi.fn();
-        expect(parseJSONOutput(text, { onDiagnostic })).toEqual({ name: 'Alice Smith' });
+        expect(parseJSONOutput(text, { onDiagnostic })).toEqual(expected);
         expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ extracted: true, repaired: true }));
     });
 

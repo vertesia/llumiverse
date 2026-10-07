@@ -68,24 +68,39 @@ export function validateResult(
 ): CompletionResult[] {
     const parseOptions = typeof options === 'boolean' ? { allowRepair: options } : options;
     const jsonResults = data.filter((part) => part.type === 'json');
-    let json: JSONValue;
-    if (jsonResults.length > 1) {
-        throw new ValidationError('json_error', 'Expected one JSON value, received multiple JSON results');
-    }
-    if (jsonResults.length === 1) {
+    let json: JSONValue | undefined;
+    if (jsonResults.length > 0) {
         json = jsonResults[0].value;
     } else {
-        const text = data
-            .filter((part): part is Extract<CompletionResult, { type: 'text' }> => part.type === 'text')
-            .map((part) => part.value)
-            .join('');
+        const textParts = data.filter(
+            (part): part is Extract<CompletionResult, { type: 'text' }> => part.type === 'text',
+        );
+        const text = textParts.map((part) => part.value).join('');
         if (!text.trim()) {
             throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
         }
-        try {
-            json = parseJSONOutput(text, parseOptions);
-        } catch (error: unknown) {
-            throw new ValidationError('json_error', errorMessage(error), { cause: error });
+        // Preserve complete independent containers. Scalars can still be fragments (for example, 1 followed by 2).
+        if (textParts.length > 1) {
+            for (const part of textParts) {
+                try {
+                    const complete: JSONValue = JSON.parse(part.value);
+                    if (complete !== null && typeof complete === 'object') {
+                        json = complete;
+                        break;
+                    }
+                } catch {
+                    // This part is not a complete JSON value.
+                }
+            }
+        }
+        if (json !== undefined) {
+            parseOptions.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
+        } else {
+            try {
+                json = parseJSONOutput(text, parseOptions);
+            } catch (error: unknown) {
+                throw new ValidationError('json_error', errorMessage(error), { cause: error });
+            }
         }
     }
 
