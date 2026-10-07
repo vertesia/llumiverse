@@ -81,8 +81,9 @@ export function validateResult(
         }
         // A complete joined answer outranks containers that are merely nested fragments of it.
         let joined: JSONValue | undefined;
+        const fence = text.trim().match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i);
         try {
-            joined = JSON.parse(text);
+            joined = JSON.parse(fence ? fence[1] : text);
         } catch {
             // Preserve independent complete answers before attempting repair of joined text.
         }
@@ -102,6 +103,7 @@ export function validateResult(
         }
         if (joined !== undefined) {
             json = joined;
+            if (fence) parseOptions.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
         } else if (json !== undefined) {
             parseOptions.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
         } else {

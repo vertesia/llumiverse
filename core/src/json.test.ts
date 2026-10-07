@@ -23,7 +23,6 @@ describe('parseJSONOutput', () => {
         ["{a:'x'}", { a: 'x' }],
         ['{"a":1,}', { a: 1 }],
         ['[1 2]', [1, 2]],
-        ['[{"a":1}', [{ a: 1 }]],
         ['{"a" 1}', { a: 1 }],
         ['{"a":1 /* don\'t treat } ] as syntax */,"b":2}', { a: 1, b: 2 }],
         ['{"a":1 // a comment containing " [ }\n}', { a: 1 }],
@@ -34,6 +33,7 @@ describe('parseJSONOutput', () => {
         ['{"name":Alice Smith}', { name: 'Alice Smith' }],
         ['{"a":"unfinished', { a: 'unfinished' }],
         ['{"a":"keep } the whole string"', { a: 'keep } the whole string' }],
+        [String.raw`"keep {\"a\":1} the whole string`, 'keep {"a":1} the whole string'],
         ['[1,2,...]', [1, 2]],
     ])('uses normal jsonrepair recovery and reports diagnostics: %s', (text, expected) => {
         const onDiagnostic = vi.fn();
@@ -72,6 +72,10 @@ describe('parseJSONOutput', () => {
         expect(onDiagnostic).toHaveBeenCalledWith({ extracted: true, repaired: false, original_text: text });
     });
 
+    it('retains complete-object extraction from an ambiguous incomplete array', () => {
+        expect(parseJSONOutput('[{"a":1}')).toEqual({ a: 1 });
+    });
+
     it('does not turn arbitrary prose into a JSON string', () => {
         expect(() => parseJSONOutput('hello')).toThrow();
     });
@@ -87,6 +91,8 @@ describe('parseJSONOutput', () => {
     it.each([
         ['Answer: {"name":Alice Smith} done.', { name: 'Alice Smith' }],
         ['[note {name:Alice Smith}]', { name: 'Alice Smith' }],
+        ['[[note {name:Alice Smith}]]', { name: 'Alice Smith' }],
+        ['[42 notes {name:Alice Smith}]', { name: 'Alice Smith' }],
         ['Answer: {a:1}\nextra [brackets]', { a: 1 }],
         ['"Answer" {a:1}\nextra [brackets]', { a: 1 }],
         ['{"a":1,}\n```\nExtra explanation', { a: 1 }],

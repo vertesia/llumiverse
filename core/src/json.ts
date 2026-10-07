@@ -48,11 +48,6 @@ function extractCandidates(text: string): string[] {
     return candidates;
 }
 
-// An array starting with an unquoted word is ambiguous prose; preserve extraction precedence there.
-function isJSONRoot(text: string): boolean {
-    return /^[{"']/.test(text) || /^\[\s*(?:[[{"'\]\d-]|true\b|false\b|null\b|$)/.test(text);
-}
-
 /** Strict parsing first, then optional jsonrepair recovery. Callers validate the recovered value against their schema. */
 export function parseJSONOutput(text: string, options: JSONOutputParseOptions = {}): JSONValue {
     let lastError: unknown;
@@ -64,11 +59,13 @@ export function parseJSONOutput(text: string, options: JSONOutputParseOptions = 
 
     const normalized = text.trim();
     const candidates = [...new Set(extractCandidates(normalized))].filter((source) => source !== normalized);
-    // Preserve unfinished root content, then prefer strict extraction, then the historical object repair fallback.
+    // Preserve unfinished quoted content and strict candidates. For ambiguous arrays, retain object extraction first.
     const attempts = [
-        ...(isJSONRoot(normalized) ? [{ source: normalized, repair: true }] : []),
+        ...(/^["']/.test(normalized) ? [{ source: normalized, repair: true }] : []),
         ...candidates.map((source) => ({ source, repair: false })),
+        ...(normalized.startsWith('{') ? [{ source: normalized, repair: true }] : []),
         ...[...candidates].reverse().map((source) => ({ source, repair: true })),
+        ...(normalized.startsWith('[') ? [{ source: normalized, repair: true }] : []),
     ];
     for (const { source, repair } of attempts) {
         let value: JSONValue;
@@ -79,7 +76,7 @@ export function parseJSONOutput(text: string, options: JSONOutputParseOptions = 
         } catch (error: unknown) {
             parseError = error;
             lastError = error;
-            if (!repair || options.allowRepair === false || !isJSONRoot(source)) continue;
+            if (!repair || options.allowRepair === false || !/^[{["']/.test(source)) continue;
             try {
                 value = repairJSON(source, parseError);
                 repaired = true;
@@ -88,10 +85,10 @@ export function parseJSONOutput(text: string, options: JSONOutputParseOptions = 
                 continue;
             }
         }
-        // A repaired wrapper must not turn an object answer plus trailing prose into an array of unrelated values.
+        // A repaired wrapper must not turn an object answer plus surrounding prose into an array of unrelated values.
         if (
             source === normalized &&
-            normalized.startsWith('{') &&
+            /^[{"']/.test(normalized) &&
             Array.isArray(value) &&
             candidates.some((c) => c !== normalized)
         ) {

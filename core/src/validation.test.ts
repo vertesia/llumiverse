@@ -1,5 +1,5 @@
 import type { CompletionResult } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { validateResult } from './validation.js';
 
 describe('validateResult', () => {
@@ -71,6 +71,33 @@ describe('validateResult', () => {
         }
     });
 
+    it.each([
+        ['```json\n[', '{"id":"2","extra":true}', ']\n```', [{ id: 2, label: 'default' }]],
+        ['```json\n{"item":', '{"id":"2","extra":true}', '}\n```', { item: { id: 2, label: 'default' } }],
+    ])('preserves a complete fenced multipart container: %s', (start, inner, end, expected) => {
+        const itemSchema = {
+            type: 'object',
+            properties: { id: { type: 'number' }, label: { type: 'string', default: 'default' } },
+            required: ['id'],
+            additionalProperties: false,
+        };
+        const schema = Array.isArray(expected)
+            ? { type: 'array', items: itemSchema }
+            : { type: 'object', properties: { item: itemSchema }, required: ['item'] };
+        const text = [start, inner, end].join('');
+        const parts: CompletionResult[] = [start, inner, end].map((value) => ({ type: 'text', value }));
+        for (const allowRepair of [true, false]) {
+            expect(validateResult(parts, {}, allowRepair)).toEqual([
+                { type: 'json', value: JSON.parse(text.slice(text.indexOf('\n') + 1, text.lastIndexOf('\n'))) },
+            ]);
+            const onDiagnostic = vi.fn();
+            expect(validateResult(parts, schema, { allowRepair, onDiagnostic })).toEqual([
+                { type: 'json', value: expected },
+            ]);
+            expect(onDiagnostic).toHaveBeenCalledWith({ extracted: true, repaired: false, original_text: text });
+        }
+    });
+
     it('retains a complete first text answer before interpreting later independent text', () => {
         expect(
             validateResult(
@@ -87,7 +114,12 @@ describe('validateResult', () => {
         ['```json\n{"a":"2"}\n``` [done]'],
         ['Answer [note {"a":"2"}]'],
         ['[note {"a":"2"}]'],
+        ['[[note {"a":"2"}]]'],
+        ['[42 notes {"a":"2"}]'],
+        ['[true explanation {"a":"2"}]'],
         ['"Answer" {"a":"2"}\nextra [brackets]'],
+        ['"Answer"\n{"a":"2"}'],
+        ['\'Answer\'\n{"a":"2"}'],
         ['```json\n{"a":"1","extra":true}\n```', '{"a":"2"}'],
         ['Answer: {"a":"1","extra":true}', '{"a":"2"}'],
     ])('preserves the complete answer through extraction and schema validation: %j', (...texts) => {
@@ -111,6 +143,24 @@ describe('validateResult', () => {
             ).toEqual([{ type: 'json', value: { a: Number(a), d: 'default' } }]);
         }
     });
+
+    it.each(['```json\n[1]\n```', 'Answer: [1]'])(
+        'preserves an earlier wrapped array before a later object: %s',
+        (first) => {
+            for (const allowRepair of [true, false]) {
+                expect(
+                    validateResult(
+                        [
+                            { type: 'text', value: first },
+                            { type: 'text', value: '{"a":2}' },
+                        ],
+                        {},
+                        allowRepair,
+                    ),
+                ).toEqual([{ type: 'json', value: [1] }]);
+            }
+        },
+    );
 
     it.each<CompletionResult[]>([
         [

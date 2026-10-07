@@ -231,10 +231,12 @@ console.log(data.sentiment); // "positive"
 Structured output is parsed strictly first. Recovery can unwrap JSON formatting or extract an object/array from
 surrounding prose, preserving the historical extraction behavior. Syntax repair uses normal `jsonrepair` behavior,
 including quoting strings, escaping newlines and completing truncated documents. Repair is attempted for recognizable
-JSON containers or quoted strings; arbitrary prose is not converted into a JSON scalar. Bracket-led annotations retain
-complete-object extraction precedence. Recovered output must still pass the supplied result schema. Text response parts are joined; a single typed JSON result takes precedence over auxiliary
+JSON containers or quoted strings; arbitrary prose is not converted into a JSON scalar. Complete extracted values
+precede broader repair. For ambiguous malformed arrays containing an extractable object, historical object extraction
+(including repair) takes precedence; incomplete outer structure can still be lost. Recovered output must still pass the
+supplied result schema. Text response parts are joined; a single typed JSON result takes precedence over auxiliary
 content, preserving the previous first-JSON-result precedence. An independently complete text answer retains its
-precedence when the joined text is not itself complete JSON; otherwise the complete joined value takes precedence.
+precedence when joined text is not itself complete JSON or an exact JSON fence; otherwise the joined value takes precedence.
 Unresolved text parts are joined before repair, avoiding repair of isolated fragments into partial answers.
 
 Recovery sets `response.json_output_diagnostic`, with independent `extracted` and `repaired` flags, the original text,
