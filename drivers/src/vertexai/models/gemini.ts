@@ -249,14 +249,16 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
+    const isNanoBanana = options.model.toLowerCase().includes('gemini-nano-banana');
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
         responseModalities: [Modality.TEXT, Modality.IMAGE], // This is an error if only Text, and Only Image just gets blank responses.
         candidateCount: 1,
         //Model options
-        temperature: model_options?.temperature,
-        topP: model_options?.top_p,
+        // Nano Banana 2.1 does not accept sampling parameters.
+        temperature: isNanoBanana ? undefined : model_options?.temperature,
+        topP: isNanoBanana ? undefined : model_options?.top_p,
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
         thinkingConfig: geminiThinkingConfig(options),
@@ -302,7 +304,7 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
     return {
         model: options.model,
         contents: payloadContents,
-        config: options.model.toLowerCase().includes('image') ? configNanoBanana : config,
+        config: options.model.toLowerCase().includes('image') || isNanoBanana ? configNanoBanana : config,
     };
 }
 
@@ -564,7 +566,7 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions): Thinkin
         };
     }
     if (model_options?.effort) {
-        if (isGeminiModelVersionGte(option.model, '3.0')) {
+        if (option.model.includes('gemini-nano-banana') || isGeminiModelVersionGte(option.model, '3.0')) {
             return {
                 includeThoughts: include_thoughts,
                 thinkingLevel: geminiThinkingLevelForEffort(model_options.effort),
@@ -784,8 +786,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         prompt.contents = conversation;
 
         // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes('gemini-2.5-flash-image')) {
-            region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
+        if (options.model.includes('gemini-2.5-flash-image') || options.model.includes('gemini-nano-banana')) {
+            region = 'global'; // These image-generation families are available only in the global region.
         }
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
@@ -899,8 +901,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        if (options.model.includes('gemini-2.5-flash-image')) {
-            region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
+        if (options.model.includes('gemini-2.5-flash-image') || options.model.includes('gemini-nano-banana')) {
+            region = 'global'; // These image-generation families are available only in the global region.
         }
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
