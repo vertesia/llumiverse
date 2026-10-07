@@ -59,8 +59,23 @@ export function parseJSONOutput(text: string, options: JSONOutputParseOptions = 
 
     const normalized = text.trim();
     const candidates = extractCandidates(normalized);
+    const isRoot = /^[{["']/.test(normalized);
+    // Prefer a complete answer to repairing surrounding prose or formatting into unrelated values.
+    if (!isRoot) {
+        for (const source of new Set(candidates)) {
+            let value: JSONValue;
+            try {
+                value = JSON.parse(source);
+            } catch (error: unknown) {
+                lastError = error;
+                continue;
+            }
+            options.onDiagnostic?.({ extracted: true, repaired: false, original_text: text });
+            return value;
+        }
+    }
     // Repair a root JSON value before extracting from it: braces inside unfinished strings are content.
-    const sources = /^[{["']/.test(normalized) ? [normalized, ...candidates] : [...candidates, normalized];
+    const sources = isRoot ? [normalized, ...candidates] : [...candidates, normalized];
     for (const source of new Set(sources)) {
         let value: JSONValue;
         let repaired = false;

@@ -52,6 +52,33 @@ describe('validateResult', () => {
         ).toEqual([{ type: 'json', value: { a: 1 } }]);
     });
 
+    it.each([
+        ['```json\n{"a":"2"}\n``` [done]'],
+        ['Answer [note {"a":"2"}]'],
+        ['```json\n{"a":"1","extra":true}\n```', '{"a":"2"}'],
+        ['Answer: {"a":"1","extra":true}', '{"a":"2"}'],
+    ])('preserves the complete answer through extraction and schema validation: %j', (...texts) => {
+        const parts: CompletionResult[] = texts.map((value) => ({ type: 'text', value }));
+        const a = texts.length === 1 ? '2' : '1';
+        for (const allowRepair of [true, false]) {
+            expect(validateResult(parts, {}, allowRepair)).toEqual([
+                { type: 'json', value: { a, ...(texts.length > 1 ? { extra: true } : {}) } },
+            ]);
+            expect(
+                validateResult(
+                    parts,
+                    {
+                        type: 'object',
+                        properties: { a: { type: 'number' }, d: { type: 'string', default: 'default' } },
+                        required: ['a'],
+                        additionalProperties: false,
+                    },
+                    allowRepair,
+                ),
+            ).toEqual([{ type: 'json', value: { a: Number(a), d: 'default' } }]);
+        }
+    });
+
     it.each<CompletionResult[]>([
         [
             { type: 'json', value: { a: 1 } },

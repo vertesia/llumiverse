@@ -83,7 +83,7 @@ export function validateResult(
         if (textParts.length > 1) {
             for (const part of textParts) {
                 try {
-                    const complete: JSONValue = JSON.parse(part.value);
+                    const complete = parseJSONOutput(part.value, { allowRepair: false });
                     if (complete !== null && typeof complete === 'object') {
                         json = complete;
                         break;
