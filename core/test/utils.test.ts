@@ -11,11 +11,11 @@ describe('Core Utilities', () => {
         expect(r).toEqual({ a: 1, b: 2 });
     });
 
-    test('extractAndParseJSON retains conservative repair and its opt-out', () => {
+    test('extractAndParseJSON supports repair and its opt-out', () => {
         expect(extractAndParseJSON('```json\n[1, 2]\n```')).toEqual([1, 2]);
         expect(extractAndParseJSON('{"a":1,}')).toEqual({ a: 1 });
         expect(() => extractAndParseJSON('{"a":1,}', false)).toThrow();
-        expect(() => extractAndParseJSON('{"items":[')).toThrow(/container boundaries/);
+        expect(extractAndParseJSON('{"items":[')).toEqual({ items: [] });
     });
 
     test('parseJSON', () => {

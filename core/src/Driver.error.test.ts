@@ -71,18 +71,26 @@ describe('AbstractDriver Error Formatting', () => {
         expect(completion.json_output_diagnostic).toBeUndefined();
     });
 
-    it.each(['{"a":1}', '{"a":1,}', '```json\n{"a":1}\n```'])(
-        'rejects token exhaustion regardless of JSON syntax: %s',
-        (value) => {
-            const completion: Completion = { result: [{ type: 'text', value }], finish_reason: 'length' };
-            driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });
-            expect(completion.error).toMatchObject({
-                code: 'json_error',
-                message: expect.stringContaining('token limit'),
-            });
-            expect(completion.result).toEqual([{ type: 'text', value }]);
-        },
-    );
+    it.each([
+        [{ type: 'text' as const, value: '{"a":1}' }],
+        [{ type: 'text' as const, value: '{"a":1,}' }],
+        [{ type: 'text' as const, value: '```json\n{"a":1}\n```' }],
+        [{ type: 'json' as const, value: { a: 1 } }],
+    ])('validates usable output even when the token limit was reached: %j', (...result) => {
+        const completion: Completion = { result, finish_reason: 'length' };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });
+        expect(completion.error).toBeUndefined();
+        expect(completion.result).toEqual([{ type: 'json', value: { a: 1 } }]);
+    });
+
+    it('still rejects schema-invalid output when the token limit was reached', () => {
+        const completion: Completion = {
+            result: [{ type: 'text', value: '{"a":1}' }],
+            finish_reason: 'length',
+        };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object', required: ['b'] } });
+        expect(completion.error?.code).toBe('validation_error');
+    });
 
     it('isolates per-execution repair settings on a reused driver and defaults to enabled', () => {
         for (const override of [false, true, undefined]) {

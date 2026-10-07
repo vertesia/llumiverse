@@ -253,7 +253,7 @@ export const StatelessExecutionOptionsSchema = z
             .optional()
             .meta({
                 description:
-                    'Allow conservative JSON syntax repair during result-schema validation for this execution. ' +
+                    'Allow JSON syntax repair during result-schema validation for this execution. ' +
                     'Defaults to enabled. Complete JSON wrappers may still be extracted when disabled.',
             }),
         prompt_cache_schema_suffix: z

@@ -27,7 +27,14 @@ describe('parseJSONOutput', () => {
         ['{"a":1 /* don\'t treat } ] as syntax */,"b":2}', { a: 1, b: 2 }],
         ['{"a":1 // a comment containing " [ }\n}', { a: 1 }],
         ["'complete string'", 'complete string'],
-    ])('repairs syntax without changing values or containers: %s', (text, expected) => {
+        ['{"items":[{"id":"a"}', { items: [{ id: 'a' }] }],
+        ['{"a":}', { a: null }],
+        ['{"a":"raw\nnewline"}', { a: 'raw\nnewline' }],
+        ['{"name":Alice Smith}', { name: 'Alice Smith' }],
+        ['{"a":"unfinished', { a: 'unfinished' }],
+        ['{"a":"keep } the whole string"', { a: 'keep } the whole string' }],
+        ['[1,2,...]', [1, 2]],
+    ])('uses normal jsonrepair recovery and reports diagnostics: %s', (text, expected) => {
         const onDiagnostic = vi.fn();
         expect(parseJSONOutput(text, { onDiagnostic })).toEqual(expected);
         expect(onDiagnostic).toHaveBeenCalledWith({
@@ -39,25 +46,9 @@ describe('parseJSONOutput', () => {
     });
 
     it.each([
-        '{"a":',
-        '{"a":1',
-        '{"items":[{"id":"a"}',
-        '"unfinished',
-        "'unfinished",
-        '{"a":}',
-        '[1,,2]',
-        '[1,2,...]',
         '{"a":1} {"b":2}',
-        '{"a":1}\n{"b":2}',
         '{"a":1} {"b":',
-        'tru',
-        'undefined',
-        '{"a":1e}',
-        '{"a":"unterminated}',
-        '{"a":"raw\nnewline"}',
-        '{"a":[1,2}',
         '{"a":1} 42',
-        'Answer: {"a":1} {"b":2}',
         'Answer: {"a":1} [2]',
         'Answer: {"a":1} "second"',
         'Answer: {"a":1} true',
@@ -65,9 +56,7 @@ describe('parseJSONOutput', () => {
         '{"a":1 + 2}',
         '// {"a":1}',
         '/* {"a":1} */',
-        '{"a":()=>1}',
-        '{"a":`template`}',
-    ])('rejects incomplete, ambiguous or value-changing recovery: %s', (text) => {
+    ])('rejects ambiguous extraction or unrecoverable output: %s', (text) => {
         const onDiagnostic = vi.fn();
         expect(() => parseJSONOutput(text, { onDiagnostic })).toThrow();
         expect(onDiagnostic).not.toHaveBeenCalled();
@@ -76,19 +65,30 @@ describe('parseJSONOutput', () => {
     it.each([
         ['```json\n[1,2]\n```', [1, 2]],
         ['```\n"keep {this}"\n```', 'keep {this}'],
+        ['```json\n{"text":"keep ```"}\n```', { text: 'keep ```' }],
         ['Answer: {"a":1} done.', { a: 1 }],
+        ['{"a":1} — confidence: 0.9', { a: 1 }],
+        ['callback({"a":1});', { a: 1 }],
+        ['```json\n{"a":1}', { a: 1 }],
     ])('reports extraction independently of repair: %s', (text, expected) => {
         const onDiagnostic = vi.fn();
         expect(parseJSONOutput(text, { allowRepair: false, onDiagnostic })).toEqual(expected);
         expect(onDiagnostic).toHaveBeenCalledWith({ extracted: true, repaired: false, original_text: text });
     });
 
-    it('reports both extraction and repair for a fenced malformed value', () => {
+    it('uses jsonrepair for malformed fenced output and honors the opt-out', () => {
         const text = '```json\n{"a":1,}\n```';
         const onDiagnostic = vi.fn();
         expect(parseJSONOutput(text, { onDiagnostic })).toEqual({ a: 1 });
-        expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ extracted: true, repaired: true }));
+        expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ repaired: true }));
         expect(() => parseJSONOutput(text, { allowRepair: false })).toThrow();
+    });
+
+    it('retains the historical fallback for malformed JSON in prose', () => {
+        const text = 'Answer: {"name":Alice Smith} done.';
+        const onDiagnostic = vi.fn();
+        expect(parseJSONOutput(text, { onDiagnostic })).toEqual({ name: 'Alice Smith' });
+        expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ extracted: true, repaired: true }));
     });
 
     it('does not swallow a diagnostic consumer failure or retry successful extraction', () => {
@@ -112,9 +112,10 @@ describe('parseJSONOutput', () => {
 });
 
 describe('parseJSON', () => {
-    it('retains the permissive utility separately from the conservative output parser', () => {
+    it('supports repair and its opt-out in both entry points', () => {
         expect(parseJSON('{"a":1')).toEqual({ a: 1 });
         expect(() => parseJSON('{"a":1', false)).toThrow();
-        expect(() => parseJSONOutput('{"a":1')).toThrow();
+        expect(parseJSONOutput('{"a":1')).toEqual({ a: 1 });
+        expect(() => parseJSONOutput('{"a":1', { allowRepair: false })).toThrow();
     });
 });

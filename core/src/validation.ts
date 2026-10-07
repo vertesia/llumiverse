@@ -67,15 +67,15 @@ export function validateResult(
     options: boolean | JSONOutputParseOptions = true,
 ): CompletionResult[] {
     const parseOptions = typeof options === 'boolean' ? { allowRepair: options } : options;
-    const content = data.filter((part) => part.type !== 'thoughts');
+    const jsonResults = data.filter((part) => part.type === 'json');
     let json: JSONValue;
-    if (content.length === 1 && content[0].type === 'json') {
-        json = content[0].value;
+    if (jsonResults.length > 1) {
+        throw new ValidationError('json_error', 'Expected one JSON value, received multiple JSON results');
+    }
+    if (jsonResults.length === 1) {
+        json = jsonResults[0].value;
     } else {
-        if (content.length === 0 || content.some((part) => part.type !== 'text')) {
-            throw new ValidationError('json_error', 'Expected one JSON value or text-only response content');
-        }
-        const text = content
+        const text = data
             .filter((part): part is Extract<CompletionResult, { type: 'text' }> => part.type === 'text')
             .map((part) => part.value)
             .join('');

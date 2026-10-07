@@ -647,7 +647,7 @@ export const TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX =
     'When not calling tools, the answer must be a JSON object using the following JSON Schema:';
 
 export interface ExecutionOptionsBase extends PromptOptions {
-    /** Allow conservative JSON syntax repair for this execution. Defaults to true. */
+    /** Allow JSON syntax repair for this execution. Defaults to true. */
     jsonRepair?: boolean;
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.

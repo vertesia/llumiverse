@@ -28,26 +28,48 @@ describe('validateResult', () => {
         ]);
     });
 
+    it('rejects multiple typed JSON results rather than selecting one', () => {
+        expect(() =>
+            validateResult(
+                [
+                    { type: 'json', value: { a: 1 } },
+                    { type: 'json', value: { b: 2 } },
+                ],
+                { type: 'object' },
+            ),
+        ).toThrow(/multiple JSON results/);
+    });
+
     it.each<CompletionResult[]>([
         [
             { type: 'json', value: { a: 1 } },
-            { type: 'json', value: { b: 2 } },
-        ],
-        [
-            { type: 'json', value: { a: 1 } },
-            { type: 'text', value: '{"b":2}' },
+            { type: 'text', value: 'Explanation' },
         ],
         [
             { type: 'text', value: '{"a":1}' },
             { type: 'image', value: 'image' },
         ],
-        [{ type: 'thoughts', value: 'no answer' }],
-    ])('rejects multiple values or non-text response content: %j', (...parts) => {
-        expect(() => validateResult(parts, { type: 'object' })).toThrow(/Expected one JSON value/);
+    ])('validates JSON content alongside auxiliary response parts: %j', (...parts) => {
+        expect(validateResult(parts, { type: 'object' })).toEqual([{ type: 'json', value: { a: 1 } }]);
+    });
+
+    it('rejects responses with no JSON or text content', () => {
+        expect(() => validateResult([{ type: 'thoughts', value: 'no answer' }], { type: 'object' })).toThrow(
+            /No JSON compatible response/,
+        );
+    });
+
+    it('rejects repaired output that fails its result schema', () => {
+        expect(() =>
+            validateResult([{ type: 'text', value: '{"a":}' }], {
+                type: 'object',
+                properties: { a: { type: 'number', minimum: 1 } },
+            }),
+        ).toThrow(expect.objectContaining({ code: 'validation_error' }));
     });
 
     it('preserves the original parser failure as the validation error cause', () => {
-        expect(() => validateResult([{ type: 'text', value: '{"a":}' }], { type: 'object' })).toThrow(
+        expect(() => validateResult([{ type: 'text', value: '{"a":1} {"b":2}' }], { type: 'object' })).toThrow(
             expect.objectContaining({ code: 'json_error', cause: expect.any(SyntaxError) }),
         );
     });
