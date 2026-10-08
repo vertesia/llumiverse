@@ -396,7 +396,9 @@ export function getAvailableEffortLevels(modelString: string): Record<string, Cl
         return null;
     }
     const version = parseClaudeVersion(modelString);
-    const mediumIsDefault = version?.variant === 'opus' && version.major === 5 && version.minor >= 5;
+    const mediumIsDefault =
+        (version?.variant === 'opus' && version.major === 5 && version.minor >= 5) ||
+        (version?.variant === 'haiku' && isClaudeVersionGTE(modelString, 5, 5));
     const levels: Record<string, ClaudeEffortLevel> = {
         Low: 'low',
         ...(mediumIsDefault ? { 'Medium (default)': 'medium' } : { Medium: 'medium' }),

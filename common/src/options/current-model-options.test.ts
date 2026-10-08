@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveModelProfile } from '../model-directory.js';
 import { getOptions } from '../options.js';
 import { OptionType, Providers, SharedOptions } from '../types.js';
 
@@ -9,6 +10,26 @@ function effortValues(model: string, provider: Providers): string[] {
 }
 
 describe('current reasoning model options', () => {
+    it.each([
+        [Providers.anthropic, 'claude-haiku-5-5'],
+        [Providers.bedrock, 'anthropic.claude-haiku-5-5'],
+        [Providers.bedrock_mantle, 'anthropic.claude-haiku-5-5'],
+        [Providers.vertexai, 'publishers/anthropic/models/claude-haiku-5-5'],
+        [Providers.azure_foundry, 'deployment::claude-haiku-5-5'],
+    ])('exposes Haiku 5.5 limits and supported controls through %s', (provider, model) => {
+        const options = getOptions(model, provider).options;
+        expect(resolveModelProfile(model, provider).context_window).toBe(1_000_000);
+        expect(options.find((option) => option.name === SharedOptions.max_tokens)).toMatchObject({
+            max: provider === Providers.bedrock ? 127_999 : 128_000,
+        });
+        expect(options.find((option) => option.name === SharedOptions.effort)).toMatchObject({
+            enum: { Low: 'low', 'Medium (default)': 'medium', High: 'high', 'Extra High': 'xhigh', Max: 'max' },
+        });
+        for (const name of ['temperature', 'top_p', 'top_k', 'thinking_budget_tokens', 'thinking_mode']) {
+            expect(options.map((option) => option.name)).not.toContain(name);
+        }
+    });
+
     it.each([Providers.azure_openai, Providers.mistralai, Providers.togetherai, Providers.xai])(
         'provides inference options for %s',
         (provider) => {
