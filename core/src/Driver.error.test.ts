@@ -58,6 +58,80 @@ describe('AbstractDriver Error Formatting', () => {
         driver = new TestDriver({});
     });
 
+    it.each(['stop', 'length', undefined])('logs the finish reason for validation failures: %s', (finish_reason) => {
+        const log = vi.spyOn(driver.logger, 'error').mockImplementation(() => {});
+        for (const [value, code] of [
+            ['not JSON', 'json_error'],
+            ['{}', 'validation_error'],
+        ]) {
+            const completion: Completion = { result: [{ type: 'text', value }], finish_reason };
+            driver.validateResult(completion, {
+                model: 'test-model',
+                result_schema: { type: 'object', required: ['a'] },
+                jsonRepair: false,
+            });
+            expect(completion.error?.code).toBe(code);
+            expect(log).toHaveBeenLastCalledWith(
+                expect.objectContaining({ finish_reason, err: expect.any(Error) }),
+                expect.any(String),
+            );
+        }
+    });
+
+    it('preserves raw text and reports an error when repair is disabled', () => {
+        const raw = [{ type: 'text' as const, value: '{"a":1,}' }];
+        const completion: Completion = { result: raw, finish_reason: 'stop' };
+        driver.validateResult(completion, {
+            model: 'test-model',
+            result_schema: { type: 'object' },
+            jsonRepair: false,
+        });
+        expect(completion.error).toMatchObject({ code: 'json_error', data: raw });
+        expect(completion.result).toBe(raw);
+        expect(completion.json_output_diagnostic).toBeUndefined();
+    });
+
+    it.each([
+        [{ type: 'text' as const, value: '{"a":1}' }],
+        [{ type: 'text' as const, value: '{"a":1,}' }],
+        [{ type: 'text' as const, value: '```json\n{"a":1}\n```' }],
+        [{ type: 'json' as const, value: { a: 1 } }],
+    ])('validates usable output even when the token limit was reached: %j', (...result) => {
+        const completion: Completion = { result, finish_reason: 'length' };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object' } });
+        expect(completion.error).toBeUndefined();
+        expect(completion.result).toEqual([{ type: 'json', value: { a: 1 } }]);
+    });
+
+    it('still rejects schema-invalid output when the token limit was reached', () => {
+        const completion: Completion = {
+            result: [{ type: 'text', value: '{"a":1}' }],
+            finish_reason: 'length',
+        };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object', required: ['b'] } });
+        expect(completion.error?.code).toBe('validation_error');
+    });
+
+    it('isolates per-execution repair settings on a reused driver and defaults to enabled', () => {
+        for (const override of [false, true, undefined]) {
+            const completion: Completion = { result: [{ type: 'text', value: '{"a":1,}' }], finish_reason: 'stop' };
+            driver.validateResult(completion, {
+                model: 'test-model',
+                result_schema: { type: 'object' },
+                jsonRepair: override,
+            });
+            expect(completion.error?.code).toBe(override !== false ? undefined : 'json_error');
+        }
+    });
+
+    it('retains recovery diagnostics when repaired JSON fails schema validation', () => {
+        const completion: Completion = { result: [{ type: 'text', value: '{"a":1,}' }], finish_reason: 'stop' };
+        driver.validateResult(completion, { model: 'test-model', result_schema: { type: 'object', required: ['b'] } });
+        expect(completion.error).toMatchObject({ code: 'validation_error' });
+        expect(completion.json_output_diagnostic).toMatchObject({ repaired: true, original_text: '{"a":1,}' });
+        expect(completion.result).toEqual([{ type: 'text', value: '{"a":1,}' }]);
+    });
+
     describe('isRetryableError', () => {
         describe('HTTP status codes', () => {
             it('should mark 429 as retryable (rate limit)', () => {

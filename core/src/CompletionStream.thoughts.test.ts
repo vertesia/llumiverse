@@ -222,3 +222,60 @@ describe('non-audio completion isolation', () => {
         },
     );
 });
+
+describe('structured-output recovery across execution paths', () => {
+    it.each(['blocking', 'streaming', 'fallback'] as const)(
+        'exposes recovery diagnostics and preserves thoughts through %s execution',
+        async (mode) => {
+            const raw = '{"a":1,}';
+            const completion: Completion = {
+                result: [
+                    { type: 'thoughts', value: 'reason' },
+                    { type: 'text', value: raw },
+                ],
+                finish_reason: 'stop',
+            };
+            const driver = new ThoughtsStreamDriver({});
+            vi.spyOn(driver, 'requestTextCompletion').mockResolvedValue(completion);
+            vi.spyOn(driver, 'requestTextCompletionStream').mockResolvedValue({
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        result: [
+                            { type: 'thoughts', value: 'reason' },
+                            { type: 'text', value: '{"a":' },
+                        ],
+                    };
+                    yield { result: [{ type: 'text', value: '1,}' }], finish_reason: 'stop' };
+                },
+            });
+            const options: ExecutionOptions = { model: 'test', result_schema: { type: 'object' } };
+            try {
+                let result: Completion | undefined;
+                if (mode === 'blocking') {
+                    result = await driver._execute('test', options);
+                } else {
+                    const stream =
+                        mode === 'streaming'
+                            ? new DefaultCompletionStream(driver, 'test', options)
+                            : new FallbackCompletionStream(driver, 'test', options);
+                    for await (const _chunk of stream) {
+                        /* consume */
+                    }
+                    result = stream.completion;
+                }
+                expect(result?.error).toBeUndefined();
+                expect(result?.result).toEqual([
+                    { type: 'thoughts', value: 'reason' },
+                    { type: 'json', value: { a: 1 } },
+                ]);
+                expect(result?.json_output_diagnostic).toMatchObject({
+                    repaired: true,
+                    extracted: false,
+                    original_text: raw,
+                });
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
+});

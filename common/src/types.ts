@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
     ExecutionTokenUsageSchema,
+    JSONOutputDiagnosticSchema,
     PromptCacheDiagnosticSchema,
     PromptCacheModeSchema,
     PromptCachePathSchema,
@@ -483,6 +484,9 @@ export interface ToolUse<ParamsT = JSONObject> {
     thought_signature?: string;
 }
 
+/** Records recovery of structured response content. The original text can contain sensitive model output. */
+export type JSONOutputDiagnostic = z.infer<typeof JSONOutputDiagnosticSchema>;
+
 export interface Completion {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver
     result: CompletionResult[];
@@ -491,6 +495,8 @@ export interface Completion {
     service_tier?: string;
     /** Safe diagnostics for the provider-side explicit prompt-cache path used by this completion. */
     prompt_cache_diagnostic?: PromptCacheDiagnostic;
+    /** Present when structured response content required extraction or syntax repair. */
+    json_output_diagnostic?: JSONOutputDiagnostic;
     /**
      * Contains the tools from which the model awaits information.
      */
@@ -641,6 +647,8 @@ export const TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX =
     'When not calling tools, the answer must be a JSON object using the following JSON Schema:';
 
 export interface ExecutionOptionsBase extends PromptOptions {
+    /** Allow JSON syntax repair for this execution. Defaults to true. */
+    jsonRepair?: boolean;
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
      * This is useful for debugging and for some advanced use cases.

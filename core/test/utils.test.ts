@@ -11,6 +11,13 @@ describe('Core Utilities', () => {
         expect(r).toEqual({ a: 1, b: 2 });
     });
 
+    test('extractAndParseJSON supports repair and its opt-out', () => {
+        expect(extractAndParseJSON('```json\n[1, 2]\n```')).toEqual([1, 2]);
+        expect(extractAndParseJSON('{"a":1,}')).toEqual({ a: 1 });
+        expect(() => extractAndParseJSON('{"a":1,}', false)).toThrow();
+        expect(extractAndParseJSON('{"items":[')).toEqual({ items: [] });
+    });
+
     test('parseJSON', () => {
         const url = new URL('./json.txt', import.meta.url);
         const text = readFileSync(url, 'utf8');
