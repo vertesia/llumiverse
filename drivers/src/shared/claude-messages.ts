@@ -6,7 +6,6 @@
  * client and authentication wiring differ.
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import {
     AnthropicError,
     APIConnectionError,
@@ -229,7 +228,13 @@ type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     abort(): void;
     finalMessage(): Promise<Message>;
 };
-type ClaudeMessagesClient = { messages: Pick<Anthropic['messages'], 'stream'> };
+// Platform SDKs can depend on different Anthropic SDK versions. Only require the
+// request options and stream results used here, not version-specific SDK internals.
+type ClaudeMessagesClient = {
+    messages: {
+        stream(payload: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
+    };
+};
 
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
