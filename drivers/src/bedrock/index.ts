@@ -78,6 +78,7 @@ import {
     converseSystemToMessages,
     formatConversePrompt,
     relocateConverseToolImages,
+    sanitizeConverseMessages,
     shouldIncludeSchemaInConversePrompt,
     supportsConverseOutputConfig,
 } from './converse.js';
@@ -1086,10 +1087,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Add assistant message
         const assistantMessage: ConverseRequest = {
             messages: [
-                {
-                    content: messageContent.length > 0 ? messageContent : [{ text: '' }],
-                    role: 'assistant',
-                },
+                // An empty turn is dropped by updateConversation: Converse rejects blank content.
+                { content: messageContent, role: 'assistant' },
             ],
             modelId: conversePrompt.modelId,
         };
@@ -1144,7 +1143,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             executorScope.close();
         }
 
-        const assistantMsg = res.output?.message ?? { content: [{ text: '' }], role: 'assistant' };
+        const assistantMsg = res.output?.message ?? { content: [], role: 'assistant' };
         const processedConversation = finalizeBedrockConversation(conversation, assistantMsg, options);
 
         let tool_use: ToolUse<unknown>[] | undefined;
@@ -2206,7 +2205,8 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     // (interrupted run) gets a synthetic result; a toolResult with no matching
     // toolUse in the previous message (e.g. compaction-trimmed) is dropped. Either
     // would otherwise trip the Converse API's toolUse/toolResult pairing check.
-    const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(combinedMessages));
+    // Sanitizing last also repairs stored conversations that already hold an empty turn.
+    const fixedMessages = sanitizeConverseMessages(fixOrphanedToolResults(fixOrphanedToolUse(combinedMessages)));
 
     return {
         modelId: prompt?.modelId || conversation?.modelId,
