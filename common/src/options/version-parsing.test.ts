@@ -35,7 +35,7 @@ describe('Claude model version parsing', () => {
         expect(parseClaudeVersion('claude-unknown-5')).toBeNull();
     });
 
-    it.each(['claude-fable-5', 'claude-mythos-5', 'claude-sonnet-5', 'claude-opus-4-8'])(
+    it.each(['claude-fable-5', 'claude-mythos-5', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-4-8'])(
         'advertises adaptive thinking and current effort levels for %s',
         (model) => {
             expect(supportsAdaptiveThinking(model)).toBe(true);
@@ -50,15 +50,26 @@ describe('Claude model version parsing', () => {
         },
     );
 
-    it('marks medium as the default effort for Opus 5.5', () => {
-        expect(getAvailableEffortLevels('claude-opus-5-5')).toEqual({
-            Low: 'low',
-            'Medium (default)': 'medium',
-            High: 'high',
-            'Extra High': 'xhigh',
-            Max: 'max',
-        });
-    });
+    it.each(['claude-haiku-5', 'claude-haiku-5-4', 'claude-opus-5', 'claude-opus-5-4', 'claude-opus-6'])(
+        'preserves high default effort below the Haiku boundary and for other generations: %s',
+        (model) => {
+            expect(getAvailableEffortLevels(model)).toHaveProperty('High (default)', 'high');
+            expect(getAvailableEffortLevels(model)).not.toHaveProperty('Medium (default)');
+        },
+    );
+
+    it.each(['claude-opus-5-5', 'claude-haiku-5-5', 'us.anthropic.claude-haiku-5-5', 'claude-haiku-6'])(
+        'marks medium as the default effort for %s',
+        (model) => {
+            expect(getAvailableEffortLevels(model)).toEqual({
+                Low: 'low',
+                'Medium (default)': 'medium',
+                High: 'high',
+                'Extra High': 'xhigh',
+                Max: 'max',
+            });
+        },
+    );
 });
 
 describe('OpenAI GPT model version parsing', () => {
