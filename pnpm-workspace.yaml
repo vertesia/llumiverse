@@ -14,6 +14,22 @@ blockExoticSubdeps: true
 minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
 minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
+  # Explicit package-manager upgrade inside the 3-day cooldown.
+  - pnpm@12.10.1
+  - '@pnpm/exe.android-arm64@12.10.1'
+  - '@pnpm/exe.android-x64@12.10.1'
+  - '@pnpm/exe.darwin-arm64@12.10.1'
+  - '@pnpm/exe.darwin-x64@12.10.1'
+  - '@pnpm/exe.freebsd-x64@12.10.1'
+  - '@pnpm/exe.linux-arm64@12.10.1'
+  - '@pnpm/exe.linux-arm64-musl@12.10.1'
+  - '@pnpm/exe.linux-ppc64@12.10.1'
+  - '@pnpm/exe.linux-riscv64@12.10.1'
+  - '@pnpm/exe.linux-s390x@12.10.1'
+  - '@pnpm/exe.linux-x64@12.10.1'
+  - '@pnpm/exe.linux-x64-musl@12.10.1'
+  - '@pnpm/exe.win32-arm64@12.10.1'
+  - '@pnpm/exe.win32-x64@12.10.1'
   - '@anthropic-ai/foundry-sdk@0.5.2'
   # Current Images API and Responses image-tool SDK types.
   - openai@7.25.0
