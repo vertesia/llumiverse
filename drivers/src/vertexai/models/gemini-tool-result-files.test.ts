@@ -11,7 +11,7 @@ import type { Content } from '@google/genai';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { VertexAIDriver } from '../index.js';
-import { GeminiModelDefinition } from './gemini.js';
+import { GEMINI_INLINE_MEDIA_MAX_BYTES, GeminiModelDefinition } from './gemini.js';
 
 const OPTIONS = { model: 'gemini-3-pro' } as unknown as ExecutionOptions;
 
@@ -67,6 +67,33 @@ describe('Gemini tool result attachments', () => {
             response: { artifact_path: 'out/plot.png' },
             parts: [{ inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }],
         });
+    });
+
+    it('refuses to buffer a non-GCS source past the inline budget, and stops reading it', async () => {
+        const chunk = new Uint8Array(1_000_000);
+        let reads = 0;
+        const cancel = vi.fn();
+        const file = {
+            name: 'video.mp4',
+            mime_type: 'video/mp4',
+            getStream: vi.fn().mockResolvedValue(
+                new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                        reads++;
+                        controller.enqueue(chunk);
+                    },
+                    cancel,
+                }),
+            ),
+            getURL: vi.fn(),
+            getURI: vi.fn().mockResolvedValue('https://bucket.s3.amazonaws.com/video.mp4?X-Amz-Signature=x'),
+        } as unknown as DataSource;
+
+        await expect(createPrompt([{ role: PromptRole.user, content: 'Describe', files: [file] }])).rejects.toThrow(
+            `video.mp4 exceeds the ${GEMINI_INLINE_MEDIA_MAX_BYTES} byte limit for inline Gemini input`,
+        );
+        expect(cancel).toHaveBeenCalled();
+        expect(reads).toBeLessThanOrEqual(GEMINI_INLINE_MEDIA_MAX_BYTES / chunk.byteLength + 2);
     });
 
     it('passes a Cloud Storage attachment by URI instead of inlining it', async () => {
