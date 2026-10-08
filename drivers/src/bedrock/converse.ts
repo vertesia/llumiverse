@@ -359,6 +359,31 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
     return result;
 }
 
+/**
+ * Remove what the Converse API rejects outright: blank text blocks and messages left with no content.
+ * A response the model ends without output (e.g. a `content_filtered` stop) would otherwise be stored
+ * as an empty assistant turn and fail every later request with a ValidationException. Dropping a
+ * message can leave two same-role messages adjacent, so they are merged afterwards.
+ */
+export function sanitizeConverseMessages(messages: Message[]): Message[] {
+    const kept: Message[] = [];
+    let changed = false;
+    for (const message of messages) {
+        const content = message.content?.filter((block) => block.text === undefined || block.text.trim().length > 0);
+        if (!content?.length) {
+            changed = true;
+            continue;
+        }
+        if (content.length === message.content?.length) {
+            kept.push(message);
+        } else {
+            changed = true;
+            kept.push({ ...message, content });
+        }
+    }
+    return converseConcatMessages(changed ? kept : messages);
+}
+
 /** Keep tool images visible on models that only accept them as ordinary user content. */
 export function relocateConverseToolImages(messages: Message[], model: string): Message[] {
     // AWS only documents nested tool-result images for Nova and Claude.
