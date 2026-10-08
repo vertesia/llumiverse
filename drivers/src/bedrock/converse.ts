@@ -370,12 +370,21 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
  */
 export function sanitizeConverseMessages(messages: Message[]): Message[] {
     const kept: Message[] = [];
+    let changed = false;
     for (const message of messages) {
         const content = message.content?.filter((block) => block.text === undefined || block.text.trim().length > 0);
-        if (!content?.length) continue;
-        kept.push(content.length === message.content?.length ? message : { ...message, content });
+        if (!content?.length) {
+            changed = true;
+            continue;
+        }
+        if (content.length === message.content?.length) {
+            kept.push(message);
+        } else {
+            changed = true;
+            kept.push({ ...message, content });
+        }
     }
-    return converseConcatMessages(kept);
+    return converseConcatMessages(changed ? kept : messages);
 }
 
 /** Keep tool images visible on models that only accept them as ordinary user content. */

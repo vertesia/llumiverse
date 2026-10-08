@@ -2205,8 +2205,12 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     // (interrupted run) gets a synthetic result; a toolResult with no matching
     // toolUse in the previous message (e.g. compaction-trimmed) is dropped. Either
     // would otherwise trip the Converse API's toolUse/toolResult pairing check.
-    // Sanitizing last also repairs stored conversations that already hold an empty turn.
-    const fixedMessages = sanitizeConverseMessages(fixOrphanedToolResults(fixOrphanedToolUse(combinedMessages)));
+    // Both repairs compare adjacent messages, so an empty turn (e.g. one already stored) is removed
+    // first; otherwise it would separate a toolUse from its result. The final pass merges anything
+    // the repairs leave adjacent or empty.
+    const fixedMessages = sanitizeConverseMessages(
+        fixOrphanedToolResults(fixOrphanedToolUse(sanitizeConverseMessages(combinedMessages))),
+    );
 
     return {
         modelId: prompt?.modelId || conversation?.modelId,

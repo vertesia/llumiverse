@@ -60,7 +60,7 @@ describe('sanitizeConverseMessages', () => {
     it('returns valid conversations unchanged', () => {
         const messages = [...toolTurn, { role: 'assistant', content: [{ text: 'done' }] } satisfies Message];
         const sanitized = sanitizeConverseMessages(messages);
-        expect(sanitized).toEqual(messages);
+        expect(sanitized).toBe(messages);
         sanitized.forEach((message, i) => {
             expect(message).toBe(messages[i]);
         });
@@ -122,6 +122,34 @@ describe('Bedrock empty assistant turns', () => {
         expectValidConverseMessages(converseStream.mock.calls[0][0].messages);
         const persisted = (await stream.finalizeConversation?.()) as ConverseRequest | undefined;
         expectValidConverseMessages(persisted?.messages);
+    });
+
+    it('keeps a real tool result that an empty turn separated from its tool use', async () => {
+        const { driver, converseStream } = streamingDriver([
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'ok' } } },
+            { messageStop: { stopReason: 'end_turn' } },
+            usage,
+        ]);
+        const stored: ConverseRequest = {
+            modelId: MODEL,
+            messages: [toolTurn[0], toolTurn[1], { role: 'assistant', content: [] }, toolTurn[2]],
+        };
+
+        const stream = await driver.requestTextCompletionStream(
+            { modelId: MODEL, messages: [{ role: 'user', content: [{ text: 'continue' }] }] },
+            {
+                model: MODEL,
+                conversation: stored,
+                tools: [{ name: 'think', description: 'Record a thought', input_schema: { type: 'object' } }],
+            },
+        );
+        for await (const _chunk of stream) {
+            // drain
+        }
+
+        const request = converseStream.mock.calls[0][0];
+        expectValidConverseMessages(request.messages);
+        expect(request.messages?.at(-1)?.content).toEqual([...(toolTurn[2].content ?? []), { text: 'continue' }]);
     });
 
     it('does not persist a blank assistant turn when a non-streaming response has no message', async () => {
