@@ -1475,6 +1475,36 @@ type GeminiMediaPart =
     | { fileData: { fileUri: string; mimeType?: string } }
     | { inlineData: { data: string; mimeType?: string } };
 
+/**
+ * Largest source read for inline media, matching Gemini's 100 MB inline file limit; anything bigger
+ * must be passed as a gs:// URI. An uncapped source is buffered whole and then base64-encoded in the
+ * caller's heap: a few-hundred-MB video from a non-GCS bucket exhausted the host process before the
+ * request was ever sent.
+ */
+export const GEMINI_INLINE_MEDIA_MAX_BYTES = 100_000_000;
+
+/** Stop reading, and cancel the source, as soon as it passes the inline budget. */
+function boundedInlineStream(
+    source: ReadableStream<Uint8Array | string>,
+    name: string,
+): ReadableStream<Uint8Array | string> {
+    let bytes = 0;
+    return source.pipeThrough(
+        new TransformStream<Uint8Array | string, Uint8Array | string>({
+            transform(chunk, controller) {
+                bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+                if (bytes > GEMINI_INLINE_MEDIA_MAX_BYTES) {
+                    throw new Error(
+                        `Media file ${name} exceeds the ${GEMINI_INLINE_MEDIA_MAX_BYTES} byte limit for inline ` +
+                            'Gemini input; provide it as a gs:// URI instead',
+                    );
+                }
+                controller.enqueue(chunk);
+            },
+        }),
+    );
+}
+
 async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
     const fileUri = await file.getURI();
     if (fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/')) {
@@ -1482,7 +1512,9 @@ async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
     }
     const source = await file.getStream();
     const data = await readStreamAsBase64(
-        file.mime_type.startsWith('audio/') ? boundedAudioStream(source, 25_000_000) : source,
+        file.mime_type.startsWith('audio/')
+            ? boundedAudioStream(source, 25_000_000)
+            : boundedInlineStream(source, file.name),
     );
     return { inlineData: { data, mimeType: file.mime_type } };
 }
