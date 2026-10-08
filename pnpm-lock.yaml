@@ -168,8 +168,8 @@ catalogs:
       specifier: 7.0.2
       version: 7.0.2
     vitest:
-      specifier: 5.0.2
-      version: 5.0.2
+      specifier: 5.0.3
+      version: 5.0.3
     zod:
       specifier: 4.6.5
       version: 4.6.5
@@ -201,7 +201,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   common:
     dependencies:
@@ -220,7 +220,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   core:
     dependencies:
@@ -254,37 +254,37 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   drivers:
     dependencies:
       '@anthropic-ai/bedrock-sdk':
-        specifier: ^0.34.0
-        version: 0.34.0(zod@4.6.5)
+        specifier: ^0.34.2
+        version: 0.34.2(zod@4.6.5)
       '@anthropic-ai/foundry-sdk':
         specifier: 0.5.2
         version: 0.5.2(zod@4.6.5)
       '@anthropic-ai/sdk':
-        specifier: ^0.129.0
-        version: 0.129.0(zod@4.6.5)
+        specifier: ^0.131.0
+        version: 0.131.0(zod@4.6.5)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.20.0
-        version: 0.20.0(zod@4.6.5)
+        specifier: ^0.20.2
+        version: 0.20.2(zod@4.6.5)
       '@aws-sdk/client-bedrock':
-        specifier: ^3.1139.0
-        version: 3.1141.0
+        specifier: ^3.1144.0
+        version: 3.1146.0
       '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.1139.0
-        version: 3.1141.0
+        specifier: ^3.1144.0
+        version: 3.1146.0
       '@aws-sdk/client-s3':
-        specifier: ^3.1139.0
-        version: 3.1141.0
+        specifier: ^3.1144.0
+        version: 3.1146.0
       '@aws-sdk/credential-providers':
-        specifier: ^3.1139.0
-        version: 3.1141.0
+        specifier: ^3.1144.0
+        version: 3.1146.0
       '@aws-sdk/lib-storage':
-        specifier: ^3.1139.0
-        version: 3.1141.0(@aws-sdk/client-s3@3.1141.0)
+        specifier: ^3.1144.0
+        version: 3.1146.0(@aws-sdk/client-s3@3.1146.0)
       '@aws-sdk/types':
         specifier: ^3.974.6
         version: 3.974.6
@@ -304,8 +304,8 @@ importers:
         specifier: ^7.4.1
         version: 7.4.1
       '@google/genai':
-        specifier: ^2.24.0
-        version: 2.24.0
+        specifier: ^2.25.0
+        version: 2.27.0
       '@huggingface/inference':
         specifier: ^4.13.30
         version: 4.13.30
@@ -319,7 +319,7 @@ importers:
         specifier: ^2.7.0
         version: 2.7.0(@opentelemetry/api@1.9.1)
       '@openrouter/sdk':
-        specifier: ^1.4.7
+        specifier: ^1.4.10
         version: 1.4.21
       '@vertesia/api-fetch-client':
         specifier: ^1.5.0
@@ -360,7 +360,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1))
 
   examples:
     dependencies:
@@ -383,8 +383,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/bedrock-sdk@0.34.0':
-    resolution: {integrity: sha512-B7eWuX75B/CLpJnuP+qT/BD3J2Qw/ui7dRhWGuhDT8YAzw5Se48gRjiCEjWbuUvVw7D/4SPlfeN/Wh8GFfz6ew==}
+  '@anthropic-ai/bedrock-sdk@0.34.2':
+    resolution: {integrity: sha512-gyHgFA5Q+DDrWpFtm97FpI4i0rH9Ecs+slNsIwaYR8CvCwMf4Fo2G1t9k0XW4mv62rYDgGB/FryArx1vuzhXlw==}
 
   '@anthropic-ai/foundry-sdk@0.5.2':
     resolution: {integrity: sha512-+6ECjnTncBD06kw+TW/QDwLlU1xjVpKFYLqc8Oy3oOTwlf0aOLlu98mKYBWLp5lgZtKd2hD7022JoKdFf6xOQw==}
@@ -398,8 +398,17 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.20.0':
-    resolution: {integrity: sha512-iLeaXJo3O4dC0yy6go9ow6RtrKaNmV7DO4r+N9tByME+iXFe0+skcbt3xjBp0cvKMwzMSR4pKWBFnHQZeM5kig==}
+  '@anthropic-ai/sdk@0.131.0':
+    resolution: {integrity: sha512-9+PepoU7qVMmM70jSahdnfcMHAvAnzhMOLv2W9WjRLO+OG/MAiBETkwKZqv7KIJ1Cj5h8eZ019bHzZaq+Mbepw==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@anthropic-ai/vertex-sdk@0.20.2':
+    resolution: {integrity: sha512-lEZGMWG7FceQayg61Ujfur8PCP8XaN00laPb1FyJeWIh50rZu+TmqPxfKrrdt5EqXMFDeO9/YPhrlfvG4i2F/Q==}
 
   '@aws-crypto/crc32@3.0.0':
     resolution: {integrity: sha512-IzSgsrxUcsrejQbPVilIKy16kAT52EwB6zSaI+M3xxIhKh5+aldEyvI+z6erM7TCLB2BJsFrtHjp6/4/sr+3dA==}
@@ -421,12 +430,16 @@ packages:
     resolution: {integrity: sha512-AoA3qW7HcFDa2MoZu9hozh68mBYI5KyvhHxN8Cbi5UtSTDDfq0JXW2fXGg7UzVNKVPRyRq2lrOQRzKPB1UEDxQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-bedrock@3.1141.0':
-    resolution: {integrity: sha512-cZWUoWPzDxtn/V6rHkSyRo0xUfT1WhI68SqUaeriYYHfk3arX+c+fMkuhLB+wwFykaMlduM5Qe1Nhyiq1aWicw==}
+  '@aws-sdk/client-bedrock-runtime@3.1146.0':
+    resolution: {integrity: sha512-FPg7W8TtLGv6ruAjkfjhX02ks6ozhwQ12tBp0hdc9DPBx7stsJbwQunejwQhF5dfdOtShkTJuXQKNR7BqZGjlg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-s3@3.1141.0':
-    resolution: {integrity: sha512-uOVH37xGLenAdJkCPCin/JJG2PgWrFcSsDnQ9+C9Zq8N9Oalo5ol4xmn5fG28iWAlA/b/9boQZgHbMh+UsIhcg==}
+  '@aws-sdk/client-bedrock@3.1146.0':
+    resolution: {integrity: sha512-8p0RQlENKfGpeaLMwABJAqV3I/PvkBURjJninjUBYbzMF7tK/UYsCI2AmQygiNjFhou0r5D69e+mY6o2Fm8qeQ==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-s3@3.1146.0':
+    resolution: {integrity: sha512-WY0YCBzxc4muFfY6UbGpA+oib0nGT/Px2aEPGYX7pp1la2OmDLChnK81mu8H7LdYvwGU1pLAsLIa/qgad0Wd7g==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.978.0':
@@ -481,15 +494,19 @@ packages:
     resolution: {integrity: sha512-NgnEx9d4QGxbtNW3qf/LUgKSm4svcexwxJH/ksEgYibqohq25SYULXk0lq7gzk25NRt6LA/B01MW68SGsgHUOg==}
     engines: {node: '>=20.0.0'}
 
+  '@aws-sdk/credential-providers@3.1146.0':
+    resolution: {integrity: sha512-RgMv0ZFlGfCxNF6fhxENjFuaPwJVy0ysY6maTuZ9k0vtTl2lpwjPaOhBI44X4stig/0v4Jilrtd/UUoIDnBOPw==}
+    engines: {node: '>=20.0.0'}
+
   '@aws-sdk/eventstream-handler-node@3.972.35':
     resolution: {integrity: sha512-a8xilRoRaalvSPZdfrs0VY3/BPc0uYhXW56Z/k6nmZ5Vk430LHeowf9APIPq8utM3tMJSNGSSuJMlB9YrPsN+A==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/lib-storage@3.1141.0':
-    resolution: {integrity: sha512-Qkn5bI3ESne9iJX1hX3CVkuyikgNP/3MbO5nql4sd1wcV0S79yJdCBANNJBTgW0bnd/Z2sujsy0JVbuaoMsAhQ==}
+  '@aws-sdk/lib-storage@3.1146.0':
+    resolution: {integrity: sha512-Fqnbc3xayxP0GfsQoxcLl9wublbVC2eo5uWFds6tTUejAyHKYcMFvgziBmZBFOKA04oYY8kgXMjAuJGQoPFk5A==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
-      '@aws-sdk/client-s3': ^3.1141.0
+      '@aws-sdk/client-s3': ^3.1146.0
 
   '@aws-sdk/middleware-eventstream@3.972.30':
     resolution: {integrity: sha512-B6gvZlcnRBNWraKgyEjKsbhv+VjtbyHmpU7hmtTHzXpDSxHPpCJnYLpglEOOsF+SFne20DbZC5IVC1aNr2Pb4A==}
@@ -517,6 +534,10 @@ packages:
 
   '@aws-sdk/token-providers@3.1141.0':
     resolution: {integrity: sha512-ErZTCJEjGO9RLFxREEZ07HgDe2SunXkwdG+ZvMoIElVXDGG2krhGs+rEhbVjK6DlxzhQ6/YHMjoYmBxPnqWMsA==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/token-providers@3.1146.0':
+    resolution: {integrity: sha512-ocX29IyTSK/9y25lZ7X7E/1v04BIZ3kfu9DDDYr/c9aJxFik53kvzJao5T25lh/Uob9VkVAbgXRN776nr1EI3Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/types@3.974.6':
@@ -708,8 +729,8 @@ packages:
     resolution: {integrity: sha512-DbbEsq9h6wMhvxuYVPNmDQtpf8MEF43J8oL5sYhAOCtbkCO/AeASarhO5EM+DenGM0cByND18WvtPoazI3QVvQ==}
     engines: {node: '>=22'}
 
-  '@google/genai@2.24.0':
-    resolution: {integrity: sha512-bIu5eoxF1AaPWs9ivmUJGp1RpDHyapoODvWvnkzRDx2CTIW6UJXFhDdjj0BlRve3ZHMMuEkQBVrA/ALqpW4apA==}
+  '@google/genai@2.27.0':
+    resolution: {integrity: sha512-W6F9Y9d4h7cVQNa85IPCOVVP9PiUzve/ZQPBvQnBmnBJcLvxstEw+R2X/RyCH0SOe0HVDQzeKDpDUf6ZRtbmdQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -948,10 +969,6 @@ packages:
 
   '@smithy/fetch-http-handler@2.5.0':
     resolution: {integrity: sha512-BOWEBeppWhLn/no/JxUL/ghTfANTjT7kg3Ww2rPqTUY9R4yHPXxJ9JhMe3Z03LN3aPwiwlpDIUcVw1xDyHqEhw==}
-
-  '@smithy/fetch-http-handler@5.7.2':
-    resolution: {integrity: sha512-nZyWTmSpJEXl6VtWVMBJve/7x12DZu6sIX1z1a+ZMaHlQQRs9Zpu6NbTe/gmxYXVRpkjxyDYpZ5gx2IM6f/Wkw==}
-    engines: {node: '>=18.0.0'}
 
   '@smithy/fetch-http-handler@5.8.0':
     resolution: {integrity: sha512-ycSJu3tFAQ4v04CBB0agqFMVsSQ1iG3yw+SpgxRqKfaURpQD4CZ8Wn0zPMmSnOuTpTh65Vz+EA0rMrw089wvkA==}
@@ -1290,8 +1307,8 @@ packages:
   '@vertesia/api-fetch-client@1.5.0':
     resolution: {integrity: sha512-JYAJiO5pl2DwSxp2ckKp8lQqRAAmbKFb5Ruji42i+ivb87MXqlxqOosqjl2LSRcTpv7i1DMDdurhoDBfEzAzew==}
 
-  '@vitest/mocker@5.0.2':
-    resolution: {integrity: sha512-Z5FS00Q1SJHkB35xATsmWGdQ5WA1/0MV3CDjqyv7GavHv1OfOj145MNfHOlHk7QLes21dKFDHr8EO2zvL+9WGA==}
+  '@vitest/mocker@5.0.3':
+    resolution: {integrity: sha512-T8sWAIbkSyAjkwTcaEc3Iu0o9A27X1/kdXrizhZkGuSKScRQtRzclfAMpOTcGdXCsqxeWlpGy3XjqaW8CpLORg==}
     peerDependencies:
       msw: ^2.4.9
       vite: ^8.0.16
@@ -1301,8 +1318,8 @@ packages:
       vite:
         optional: true
 
-  '@vitest/spy@5.0.2':
-    resolution: {integrity: sha512-Ijc7T1nT9efNb5LxvjaBrEqw3f/QwUv5EE0nKqZxgqsaV/FxAAZ8baGylA8X/Z2oS4Lp+K74Jr6dTJsDKxJDeg==}
+  '@vitest/spy@5.0.3':
+    resolution: {integrity: sha512-XhFysQTB8AZ+P4gMi+Lpo99vg2AZi0qKpaB9yXQl37+CaMEAPO3iH/wGVnSyL5MPERiLezpqTVtrR6UZH5GCXg==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -2005,20 +2022,20 @@ packages:
       yaml:
         optional: true
 
-  vitest@5.0.2:
-    resolution: {integrity: sha512-7MQrx9pDv5aHiUcovIb/70Ys3tgtkUVgCtledvKdCmEO+/1Dicq5ZqoSxOW034m03oqC+oHOKui2dM6qtMLoJg==}
+  vitest@5.0.3:
+    resolution: {integrity: sha512-xMw97S3rjdtj5dkVat7jCsqWBpvchs3RlpQctUqwJD0KkERk40vz2fJ77lDwW/Vzh/pk18eItYAzkodhSes3jQ==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^24.19.0
-      '@vitest/browser-playwright': 5.0.2
-      '@vitest/browser-preview': 5.0.2
+      '@vitest/browser-playwright': 5.0.3
+      '@vitest/browser-preview': 5.0.3
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
-      '@vitest/coverage-istanbul': 5.0.2
-      '@vitest/coverage-v8': 5.0.2
-      '@vitest/ui': 5.0.2
+      '@vitest/coverage-istanbul': 5.0.3
+      '@vitest/coverage-v8': 5.0.3
+      '@vitest/ui': 5.0.3
       happy-dom: '*'
       jsdom: '*'
       vite: ^8.0.16
@@ -2050,8 +2067,8 @@ packages:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
 
-  why-is-node-running@3.2.2:
-    resolution: {integrity: sha512-NKUzAelcoCXhXL4dJzKIwXeR8iEVqsA0Lq6Vnd0UXvgaKbzVo4ZTHROF2Jidrv+SgxOQ03fMinnNhzZATxOD3A==}
+  why-is-node-running@3.2.1:
+    resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
     engines: {node: '>=20.11'}
     hasBin: true
 
@@ -2100,14 +2117,14 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/bedrock-sdk@0.34.0(zod@4.6.5)':
+  '@anthropic-ai/bedrock-sdk@0.34.2(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
       '@aws-crypto/sha256-js': 4.0.0
       '@aws-sdk/client-bedrock-runtime': 3.1141.0
       '@aws-sdk/credential-providers': 3.1141.0
       '@smithy/eventstream-serde-node': 2.2.0
-      '@smithy/fetch-http-handler': 5.7.2
+      '@smithy/fetch-http-handler': 5.8.0
       '@smithy/protocol-http': 3.3.0
       '@smithy/signature-v4': 3.1.2
       '@smithy/smithy-client': 2.5.1
@@ -2118,7 +2135,7 @@ snapshots:
 
   '@anthropic-ai/foundry-sdk@0.5.2(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.131.0(zod@4.6.5)
     transitivePeerDependencies:
       - zod
 
@@ -2129,7 +2146,14 @@ snapshots:
     optionalDependencies:
       zod: 4.6.5
 
-  '@anthropic-ai/vertex-sdk@0.20.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.131.0(zod@4.6.5)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.0.0
+    optionalDependencies:
+      zod: 4.6.5
+
+  '@anthropic-ai/vertex-sdk@0.20.2(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
       google-auth-library: 11.1.0
@@ -2184,11 +2208,14 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock@3.1141.0':
+  '@aws-sdk/client-bedrock-runtime@3.1146.0':
     dependencies:
       '@aws-sdk/core': 3.978.1
       '@aws-sdk/credential-provider-node': 3.972.84
-      '@aws-sdk/token-providers': 3.1141.0
+      '@aws-sdk/eventstream-handler-node': 3.972.35
+      '@aws-sdk/middleware-eventstream': 3.972.30
+      '@aws-sdk/middleware-websocket': 3.972.54
+      '@aws-sdk/token-providers': 3.1146.0
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.0
       '@smithy/fetch-http-handler': 5.8.0
@@ -2196,7 +2223,19 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-s3@3.1141.0':
+  '@aws-sdk/client-bedrock@3.1146.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.1
+      '@aws-sdk/credential-provider-node': 3.972.84
+      '@aws-sdk/token-providers': 3.1146.0
+      '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.35.0
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-s3@3.1146.0':
     dependencies:
       '@aws-sdk/checksums': 3.1001.1
       '@aws-sdk/core': 3.978.1
@@ -2358,6 +2397,25 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
+  '@aws-sdk/credential-providers@3.1146.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.1
+      '@aws-sdk/credential-provider-cognito-identity': 3.972.71
+      '@aws-sdk/credential-provider-env': 3.972.72
+      '@aws-sdk/credential-provider-http': 3.972.74
+      '@aws-sdk/credential-provider-ini': 3.973.17
+      '@aws-sdk/credential-provider-login': 3.972.79
+      '@aws-sdk/credential-provider-node': 3.972.84
+      '@aws-sdk/credential-provider-process': 3.972.72
+      '@aws-sdk/credential-provider-sso': 3.973.16
+      '@aws-sdk/credential-provider-web-identity': 3.972.78
+      '@aws-sdk/nested-clients': 3.997.46
+      '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.35.0
+      '@smithy/credential-provider-imds': 4.5.2
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
   '@aws-sdk/eventstream-handler-node@3.972.35':
     dependencies:
       '@aws-sdk/types': 3.974.6
@@ -2365,9 +2423,9 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/lib-storage@3.1141.0(@aws-sdk/client-s3@3.1141.0)':
+  '@aws-sdk/lib-storage@3.1146.0(@aws-sdk/client-s3@3.1146.0)':
     dependencies:
-      '@aws-sdk/client-s3': 3.1141.0
+      '@aws-sdk/client-s3': 3.1146.0
       '@smithy/core': 3.35.0
       '@smithy/types': 4.19.0
       buffer: 5.6.0
@@ -2437,6 +2495,15 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
+  '@aws-sdk/token-providers@3.1146.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.1
+      '@aws-sdk/nested-clients': 3.997.46
+      '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.35.0
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
   '@aws-sdk/types@3.974.6':
     dependencies:
       '@smithy/types': 4.19.0
@@ -2463,7 +2530,7 @@ snapshots:
 
   '@aws/bedrock-token-generator@1.1.0':
     dependencies:
-      '@aws-sdk/credential-providers': 3.1141.0
+      '@aws-sdk/credential-providers': 3.1146.0
       '@aws-sdk/util-format-url': 3.972.29
       '@smithy/config-resolver': 4.6.6
       '@smithy/hash-node': 4.4.6
@@ -2713,7 +2780,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@2.24.0':
+  '@google/genai@2.27.0':
     dependencies:
       google-auth-library: 11.1.0
       p-retry: 4.6.2
@@ -2880,8 +2947,8 @@ snapshots:
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
-      '@smithy/core': 3.33.3
-      '@smithy/types': 4.17.2
+      '@smithy/core': 3.35.0
+      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/eventstream-codec@2.2.0':
@@ -2911,15 +2978,9 @@ snapshots:
       '@smithy/util-base64': 2.3.0
       tslib: 2.8.1
 
-  '@smithy/fetch-http-handler@5.7.2':
-    dependencies:
-      '@smithy/core': 3.33.3
-      '@smithy/types': 4.17.2
-      tslib: 2.8.1
-
   '@smithy/fetch-http-handler@5.8.0':
     dependencies:
-      '@smithy/core': 3.33.3
+      '@smithy/core': 3.35.0
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
@@ -2983,7 +3044,7 @@ snapshots:
 
   '@smithy/node-http-handler@4.12.1':
     dependencies:
-      '@smithy/core': 3.33.3
+      '@smithy/core': 3.35.0
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
@@ -3253,16 +3314,16 @@ snapshots:
     dependencies:
       eventsource-parser: 4.1.0
 
-  '@vitest/mocker@5.0.2(vite@8.0.16(@types/node@24.19.1))':
+  '@vitest/mocker@5.0.3(vite@8.0.16(@types/node@24.19.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.2
+      '@vitest/spy': 5.0.3
       estree-walker: 3.0.3
       magic-string: 1.3.1
     optionalDependencies:
       vite: 8.0.16(@types/node@24.19.1)
 
-  '@vitest/spy@5.0.2': {}
+  '@vitest/spy@5.0.3': {}
 
   abort-controller@3.0.0:
     dependencies:
@@ -3909,10 +3970,10 @@ snapshots:
       '@types/node': 24.19.1
       fsevents: 2.3.3
 
-  vitest@5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1)):
+  vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.0.16(@types/node@24.19.1)):
     dependencies:
       '@types/chai': 5.2.2
-      '@vitest/mocker': 5.0.2(vite@8.0.16(@types/node@24.19.1))
+      '@vitest/mocker': 5.0.3(vite@8.0.16(@types/node@24.19.1))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -3924,7 +3985,7 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       vite: 8.0.16(@types/node@24.19.1)
-      why-is-node-running: 3.2.2
+      why-is-node-running: 3.2.1
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@types/node': 24.19.1
@@ -3933,7 +3994,7 @@ snapshots:
 
   web-streams-polyfill@3.3.3: {}
 
-  why-is-node-running@3.2.2: {}
+  why-is-node-running@3.2.1: {}
 
   wrap-ansi@7.0.0:
     dependencies:

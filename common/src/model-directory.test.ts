@@ -310,6 +310,26 @@ describe('central model directory', () => {
         });
     });
 
+    it.each(['gemini-nano-banana-2.1', 'locations/global/publishers/google/models/gemini-nano-banana-3.0'])(
+        'uses image metadata and options for %s',
+        (model) => {
+            expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+                context_window: 131_072,
+                max_output_tokens: 32_768,
+                capabilities: {
+                    input: { text: true, image: true, video: true, audio: false },
+                    output: { text: true, image: true },
+                    tool_support: false,
+                },
+            });
+            const options = getOptions(model, Providers.vertexai).options;
+            const names = options.map((option) => option.name);
+            expect(names).toEqual(expect.arrayContaining(['image_size', 'image_aspect_ratio', 'effort']));
+            for (const name of ['temperature', 'top_p', 'top_k', 'seed']) expect(names).not.toContain(name);
+            expect(options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 32_768 });
+        },
+    );
+
     it('retains Nemotron family identity and newest family limits', () => {
         expect(resolveModelProfile('nvidia.nemotron-nano-12b-v2-vl-bf16', Providers.bedrock)).toMatchObject({
             family: 'nemotron',
