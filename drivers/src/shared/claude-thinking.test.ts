@@ -118,6 +118,38 @@ describe('resolveClaudeThinking', () => {
         },
     );
 
+    it.each(['claude-haiku-5-5', 'anthropic.claude-haiku-5-5', 'claude-haiku-6'])(
+        'uses default adaptive thinking and ignores stale budgets for %s',
+        (model) => {
+            expect(resolveClaudeThinking(model)).toMatchObject({
+                thinking: { type: 'adaptive', display: 'omitted' },
+                outputConfig: undefined,
+                hasSamplingRestriction: true,
+            });
+            expect(
+                resolveClaudeThinking(model, { include_thoughts: true, thinking_budget_tokens: 8000 }),
+            ).toMatchObject({
+                thinking: { type: 'adaptive', display: 'summarized' },
+                outputConfig: undefined,
+            });
+        },
+    );
+
+    it('preserves budget-driven thinking for Haiku 4.5', () => {
+        expect(resolveClaudeThinking('claude-haiku-4-5').thinking).toEqual({ type: 'disabled' });
+        expect(resolveClaudeThinking('claude-haiku-4-5', { thinking_budget_tokens: 8000 }).thinking).toEqual({
+            type: 'enabled',
+            budget_tokens: 8000,
+        });
+    });
+
+    it.each(['claude-haiku-5', 'claude-haiku-5-4'])(
+        'leaves the provider thinking default unchanged before Haiku 5.5: %s',
+        (model) => {
+            expect(resolveClaudeThinking(model, { include_thoughts: true }).thinking).toBeUndefined();
+        },
+    );
+
     it('drops legacy budget settings on models that only support adaptive thinking', () => {
         expect(
             resolveClaudeThinking('claude-opus-4-7', {

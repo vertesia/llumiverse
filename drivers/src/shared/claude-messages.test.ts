@@ -618,3 +618,30 @@ describe('Sonnet between-tools payload', () => {
         },
     );
 });
+
+describe('Haiku 5.5 payload', () => {
+    it.each(['anthropic-claude', 'vertexai-claude', 'bedrock-mantle-claude'] as const)(
+        'requests thinking summaries without effort and removes legacy parameters for %s',
+        (_option_id) => {
+            const { payload } = getClaudePayload(
+                {
+                    model: 'claude-haiku-5-5',
+                    model_options: {
+                        _option_id,
+                        include_thoughts: true,
+                        thinking_budget_tokens: 8000,
+                        temperature: 0.5,
+                        top_p: 0.8,
+                        top_k: 20,
+                    },
+                },
+                { messages: [{ role: 'user', content: 'Hello' }] },
+            );
+            expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+            expect(payload.output_config).toBeUndefined();
+            expect(payload.temperature).toBeUndefined();
+            expect(payload.top_p).toBeUndefined();
+            expect(payload.top_k).toBeUndefined();
+        },
+    );
+});
