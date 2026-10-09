@@ -5,10 +5,6 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 export const VERTEX_MISTRAL_CHAT_MODELS = ['mistral-small-2503', 'mistral-medium-3', 'codestral-2'] as const;
 const MISTRAL_REGIONS = ['us-central1', 'europe-west4'] as const;
 
-export function isVertexMistralChatModel(publisher: string | undefined, model: string): boolean {
-    return publisher === 'mistralai' && VERTEX_MISTRAL_CHAT_MODELS.some((entry) => entry === model);
-}
-
 export function getListedVertexMistralModels(): AIModel[] {
     return VERTEX_MISTRAL_CHAT_MODELS.flatMap((model) =>
         MISTRAL_REGIONS.map((region) => ({

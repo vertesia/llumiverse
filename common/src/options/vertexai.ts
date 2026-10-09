@@ -157,7 +157,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getGeminiOptions(model, option);
     } else if (model.includes('claude')) {
         return getClaudeOptions(model, option);
-    } else if (isOpenMaaSChatModel(model) || isMistralChatModel(model)) {
+    } else if (isOpenMaaSChatModel(model) || isVertexMistralChatModel('mistralai', model)) {
         return getOpenMaaSChatOptions(model);
     }
     return textOptionsFallback;
@@ -728,9 +728,10 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
     };
 }
 
-function isMistralChatModel(model: string): boolean {
-    const modelName = model.split('/').pop()?.split('@')[0];
-    return ['mistral-small-2503', 'mistral-medium-3', 'codestral-2'].some((entry) => entry === modelName);
+export function isVertexMistralChatModel(publisher: string | undefined, model: string): boolean {
+    const modelName = model.split('/').pop()?.split('@')[0] ?? '';
+    // These regional chat families share rawPredict; OCR and other special-purpose families are excluded.
+    return publisher === 'mistralai' && /^(?:mistral-(?:small|medium)|codestral)-\d/.test(modelName);
 }
 
 function isOpenMaaSChatModel(model: string): boolean {
@@ -790,7 +791,7 @@ export function getMaxTokensLimitVertexAi(model: string): number {
         return getClaudeMaxTokensLimit(model);
     } else if (model.includes('gemini')) {
         return getGeminiMaxTokensLimit(model);
-    } else if (isOpenMaaSChatModel(model) || isMistralChatModel(model)) {
+    } else if (isOpenMaaSChatModel(model) || isVertexMistralChatModel('mistralai', model)) {
         return resolveModelProfile(model, Providers.vertexai).max_output_tokens ?? getMaxOutputTokens(model);
     }
     return 8192; // Default fallback limit

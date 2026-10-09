@@ -193,10 +193,6 @@ export function getVertexOpenMaaSRequestModel(
         };
     }
 
-    if (publisher === 'xai') {
-        return { modelName: `xai/${model}` };
-    }
-
     // Catalog entries retain exact aliases and endpoint workarounds, but are not a routing allowlist.
     // Newly discovered MaaS models from a supported publisher use the same OpenAI-compatible protocol.
     const normalizedPublisher = publisher === 'zaiorg' ? 'zai-org' : publisher;
@@ -206,7 +202,7 @@ export function getVertexOpenMaaSRequestModel(
             entry.publisher === normalizedPublisher &&
             resolveModelProfile(entry.model, Providers.vertexai).family === family,
     );
-    if (publisherModel && model.endsWith('-maas')) {
+    if (publisherModel && (model.endsWith('-maas') || normalizedPublisher === 'xai')) {
         return {
             modelName: `${publisherModel.requestPublisher}/${model}`,
             region: publisherModel.regions[0],
@@ -215,6 +211,9 @@ export function getVertexOpenMaaSRequestModel(
             extraBody: publisherModel.extraBody,
         };
     }
+
+    // xAI's publisher API also accepts models outside the catalog without the MaaS suffix.
+    if (publisher === 'xai') return { modelName: `xai/${model}`, region: 'global' };
 
     return undefined;
 }

@@ -1,3 +1,4 @@
+import { isVertexMistralChatModel } from '@llumiverse/common';
 import { PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { VertexAIDriver } from './index.js';
@@ -22,6 +23,13 @@ function createDriverStub() {
 }
 
 describe('Vertex regional Mistral chat models', () => {
+    it.each(['mistral-ocr-2505', 'mistral-embed', 'voxtral-small-2507'])(
+        'excludes the special-purpose model %s from the chat route',
+        (model) => expect(isVertexMistralChatModel('mistralai', model)).toBe(false),
+    );
+    it('does not route another publisher through Mistral', () => {
+        expect(isVertexMistralChatModel('google', 'mistral-small-2603')).toBe(false);
+    });
     it('lists only supported chat models in both documented regions', () => {
         const models = getListedVertexMistralModels();
         expect(models.map((model) => model.id).sort()).toEqual(
@@ -35,26 +43,29 @@ describe('Vertex regional Mistral chat models', () => {
         expect(models.some((model) => model.id.includes('ocr'))).toBe(false);
     });
 
-    it.each(VERTEX_MISTRAL_CHAT_MODELS)('routes unary and streaming %s through publisher endpoints', async (model) => {
-        const modelId = `locations/europe-west4/publishers/mistralai/models/${model}`;
-        const definition = getModelDefinition(modelId);
-        const stub = createDriverStub();
-        const options = { model: modelId, model_options: { _option_id: 'text-fallback' as const, temperature: 0 } };
-        const prompt = await definition.createPrompt(
-            stub.driver,
-            [{ role: PromptRole.user, content: 'hello' }],
-            options,
-        );
-        const completion = await definition.requestTextCompletion(stub.driver, prompt, options);
-        expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
-        await definition.requestTextCompletionStream(stub.driver, prompt, options);
-        expect(stub.getFetchClientForRegion).toHaveBeenCalledWith('europe-west4', undefined);
-        expect(stub.post).toHaveBeenNthCalledWith(1, `publishers/mistralai/models/${model}:rawPredict`, {
-            payload: expect.objectContaining({ model, stream: false, temperature: 0 }),
-        });
-        expect(stub.post).toHaveBeenNthCalledWith(2, `publishers/mistralai/models/${model}:streamRawPredict`, {
-            payload: expect.objectContaining({ model, stream: true, temperature: 0 }),
-            reader: 'sse',
-        });
-    });
+    it.each([...VERTEX_MISTRAL_CHAT_MODELS, 'mistral-small-2603', 'mistral-medium-4', 'codestral-3'])(
+        'routes unary and streaming %s through publisher endpoints',
+        async (model) => {
+            const modelId = `locations/europe-west4/publishers/mistralai/models/${model}`;
+            const definition = getModelDefinition(modelId);
+            const stub = createDriverStub();
+            const options = { model: modelId, model_options: { _option_id: 'text-fallback' as const, temperature: 0 } };
+            const prompt = await definition.createPrompt(
+                stub.driver,
+                [{ role: PromptRole.user, content: 'hello' }],
+                options,
+            );
+            const completion = await definition.requestTextCompletion(stub.driver, prompt, options);
+            expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
+            await definition.requestTextCompletionStream(stub.driver, prompt, options);
+            expect(stub.getFetchClientForRegion).toHaveBeenCalledWith('europe-west4', undefined);
+            expect(stub.post).toHaveBeenNthCalledWith(1, `publishers/mistralai/models/${model}:rawPredict`, {
+                payload: expect.objectContaining({ model, stream: false, temperature: 0 }),
+            });
+            expect(stub.post).toHaveBeenNthCalledWith(2, `publishers/mistralai/models/${model}:streamRawPredict`, {
+                payload: expect.objectContaining({ model, stream: true, temperature: 0 }),
+                reader: 'sse',
+            });
+        },
+    );
 });

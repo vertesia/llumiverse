@@ -1,3 +1,4 @@
+import { isVertexMistralChatModel } from '@llumiverse/common';
 import type {
     AIModel,
     Completion,
@@ -8,7 +9,6 @@ import type {
     PromptSegment,
 } from '@llumiverse/core';
 import type { VertexAIDriver, VertexAIPrompt } from './index.js';
-import { isVertexMistralChatModel } from './mistral-models.js';
 import { ClaudeModelDefinition } from './models/claude.js';
 import { GeminiModelDefinition } from './models/gemini.js';
 import { GeminiOmniVideoModelDefinition, isGeminiOmniVideoModel } from './models/omni-video.js';

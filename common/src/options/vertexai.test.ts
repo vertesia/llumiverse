@@ -177,18 +177,33 @@ describe('Gemini 2.5 thinking defaults', () => {
 });
 
 describe('Vertex regional Mistral chat metadata', () => {
+    it.each([
+        'mistral-small-2503',
+        'mistral-medium-3',
+        'codestral-2',
+        'mistral-small-2603',
+        'mistral-medium-4',
+        'codestral-3',
+    ])('uses compatible chat options without reasoning defaults for %s', (model) => {
+        const options = getVertexAiOptions(`locations/europe-west4/publishers/mistralai/models/${model}`);
+        expect(options._option_id).toBe('openai-text');
+        expect(options.options.map((option) => option.name)).toEqual(
+            expect.arrayContaining(['temperature', 'top_p', 'max_tokens', 'stop_sequence', 'extra_body']),
+        );
+        expect(options.options.map((option) => option.name)).not.toContain('top_k');
+        expect(options.options.map((option) => option.name)).not.toContain('presence_penalty');
+        expect(options.options.map((option) => option.name)).not.toContain('frequency_penalty');
+        expect(options.options.map((option) => option.name)).not.toContain('effort');
+    });
     it.each(['mistral-small-2503', 'mistral-medium-3', 'codestral-2'])(
-        'uses compatible chat options without reasoning defaults for %s',
+        'preserves documented capabilities for %s',
         (model) => {
-            const options = getVertexAiOptions(`locations/europe-west4/publishers/mistralai/models/${model}`);
-            expect(options._option_id).toBe('openai-text');
-            expect(options.options.map((option) => option.name)).toEqual(
-                expect.arrayContaining(['temperature', 'top_p', 'max_tokens', 'stop_sequence', 'extra_body']),
-            );
-            expect(options.options.map((option) => option.name)).not.toContain('effort');
             const capabilities = getModelCapabilities(model, Providers.vertexai);
             expect(capabilities.input).toMatchObject({ text: true, image: model !== 'codestral-2' });
             expect(capabilities.tool_support).toBe(model !== 'codestral-2');
         },
     );
+    it('excludes OCR from the compatible chat option surface', () => {
+        expect(getVertexAiOptions('publishers/mistralai/models/mistral-ocr-2505')._option_id).toBe('text-fallback');
+    });
 });

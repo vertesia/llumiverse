@@ -267,6 +267,24 @@ describe('Vertex MaaS forward routing', () => {
             });
         },
     );
+    it.each(['grok-4.8', 'grok-5'])('inherits the Grok global endpoint for uncatalogued %s', async (model) => {
+        expect(getVertexOpenMaaSRequestModel('xai', model)).toMatchObject({
+            modelName: `xai/${model}`,
+            region: 'global',
+        });
+        const { getFetchClientForRegion } = await requestForModel(`publishers/xai/models/${model}`);
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('global', undefined);
+        const explicit = await requestForModel(`locations/us/publishers/xai/models/${model}`);
+        expect(explicit.getFetchClientForRegion).toHaveBeenCalledWith('us', undefined);
+    });
+
+    it('retains the global xAI fallback for an unknown family', () => {
+        expect(getVertexOpenMaaSRequestModel('xai', 'new-chat-model')).toEqual({
+            modelName: 'xai/new-chat-model',
+            region: 'global',
+        });
+    });
+
     it('inherits Meta transport settings when no location is specified', async () => {
         const model = 'llama-5-new-instruct-maas';
         const request = getVertexOpenMaaSRequestModel('meta', model);
