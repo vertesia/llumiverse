@@ -56,13 +56,16 @@ describe('Vertex regional Mistral chat models', () => {
     it('does not route another publisher through Mistral', () => {
         expect(isVertexMistralChatModel('google', 'mistral-small-2603')).toBe(false);
     });
-    it('lists only supported chat models in both documented regions', () => {
-        const models = getListedVertexMistralModels();
+    it.each([
+        ['europe-west4', 'europe-west4'],
+        ['us-central1', 'us-central1'],
+        ['asia-northeast1', 'us-central1'],
+        ['global', 'us-central1'],
+    ])('lists one regional variant for parent %s', (configuredRegion, selectedRegion) => {
+        const models = getListedVertexMistralModels(configuredRegion);
         expect(models.map((model) => model.id).sort()).toEqual(
-            VERTEX_MISTRAL_CHAT_MODELS.flatMap((model) =>
-                ['us-central1', 'europe-west4'].map(
-                    (region) => `locations/${region}/publishers/mistralai/models/${model}`,
-                ),
+            VERTEX_MISTRAL_CHAT_MODELS.map(
+                (model) => `locations/${selectedRegion}/publishers/mistralai/models/${model}`,
             ).sort(),
         );
         expect(models.every((model) => model.owner === 'mistralai' && model.can_stream)).toBe(true);

@@ -782,7 +782,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         ]);
 
         // OCR offerings (DeepSeek OCR and Mistral OCR) are intentionally skipped as special-purpose models.
-        models = models.concat(getListedVertexOpenMaaSModels(this.options.region), getListedVertexMistralModels());
+        models = models.concat(
+            getListedVertexOpenMaaSModels(this.options.region),
+            getListedVertexMistralModels(this.options.region),
+        );
 
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;

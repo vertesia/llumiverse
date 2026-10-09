@@ -1,6 +1,7 @@
 import { type Completion, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createFetchClient, type VertexAIDriver } from './index.js';
+import { selectVertexListingRegions } from './listing-regions.js';
 import { getModelDefinition } from './models.js';
 import {
     getListedVertexOpenMaaSModels,
@@ -61,6 +62,18 @@ async function requestForModel(model: string): Promise<{
 }
 
 describe('Vertex open MaaS catalog', () => {
+    it.each([
+        ['europe-west4', ['global', 'us-central1', 'europe-west4'], ['global', 'europe-west4']],
+        ['asia-northeast1', ['global', 'us-central1', 'europe-west4'], ['global', 'us-central1']],
+        ['global', ['global', 'us-central1', 'europe-west4'], ['global', 'us-central1']],
+        ['us-east5', ['us-central1', 'us-east5'], ['us-east5']],
+        ['europe-west4', ['global', 'us'], ['global', 'us']],
+        ['europe-west4', ['global'], ['global']],
+        ['asia-northeast1', ['europe-west4'], []],
+    ])('selects listing regions for parent %s from %j', (parent, available, expected) => {
+        expect(selectVertexListingRegions(available, parent)).toEqual(expected);
+    });
+
     it('catalogs the documented MaaS model and region matrix', () => {
         const catalog = Object.fromEntries(
             VERTEX_OPEN_MAAS_MODELS.map((entry) => [`${entry.publisher}/${entry.model}`, entry.regions]),

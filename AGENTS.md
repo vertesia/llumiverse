@@ -99,6 +99,10 @@ or a llumiverse release to have a reasonable chance of working on its first day 
   support in the target provider's context; do not assume direct-provider support or limits apply to a hosted version.
 - Keep exact-ID exceptions only for documented model-specific behavior that cannot be represented by a family or
   version rule. Explain the exception next to the code.
+- For regional model listings, show one regional variant per model: prefer the parent driver's configured region
+  when available; otherwise use an available US region. Always retain a global listing when available, alongside
+  the selected regional variant. Do not list every regional duplicate. This listing policy does not rewrite explicit
+  caller-supplied model locations during execution.
 - Treat the provider's model-discovery API as the source of regional and account availability. Llumiverse should filter
   or enrich those results by category; it should not maintain a second exhaustive provider catalog.
 - Tests should cover category invariants, version boundaries, representative current IDs, and plausible future IDs.

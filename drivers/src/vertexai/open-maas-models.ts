@@ -1,6 +1,7 @@
 import { getMaxOutputTokens, resolveModelProfile } from '@llumiverse/common';
 import { type AIModel, Providers } from '@llumiverse/core';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { selectVertexListingRegions } from './listing-regions.js';
 
 export interface VertexOpenMaaSModel {
     publisher: string;
@@ -230,8 +231,10 @@ export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region:
     } satisfies AIModel;
 }
 
-export function getListedVertexOpenMaaSModels(_region: string): AIModel[] {
+export function getListedVertexOpenMaaSModels(region: string): AIModel[] {
     return (VERTEX_OPEN_MAAS_MODELS as readonly VertexOpenMaaSModel[]).flatMap((entry) => {
-        return entry.regions.map((listingRegion) => vertexOpenMaaSModelToAIModel(entry, listingRegion));
+        return selectVertexListingRegions(entry.regions, region).map((listingRegion) =>
+            vertexOpenMaaSModelToAIModel(entry, listingRegion),
+        );
     });
 }
