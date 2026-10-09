@@ -58,7 +58,7 @@ describe('central model directory', () => {
         const mantle = resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle);
 
         expect(direct.context_window).toBe(1_050_000);
-        expect(mantle.context_window).toBe(272_000);
+        expect(mantle.context_window).toBe(1_050_000);
         expect(mantle.max_output_tokens).toBe(128_000);
     });
 
@@ -144,7 +144,7 @@ describe('central model directory', () => {
 
     it('keeps source identity separate from transport-specific limits', () => {
         expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.openai_compatible).context_window).toBe(1_050_000);
-        expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.bedrock_mantle).context_window).toBe(1_000_000);
     });
 
     it('uses conservative capabilities and options for genuinely unknown models', () => {

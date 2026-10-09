@@ -394,7 +394,8 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
             provider === Providers.azure_openai ||
             isOpenAICompatibleTransport(provider) ||
             provider === Providers.azure_foundry ||
-            provider === Providers.bedrock_mantle
+            provider === Providers.bedrock_mantle ||
+            provider === Providers.bedrock
         ) {
             if (/^o\d+(?:[-_.]|$)/.test(model)) return ['low', 'medium', 'high'];
             return Object.values(getOpenAIReasoningEffortLevels(model) ?? {});
