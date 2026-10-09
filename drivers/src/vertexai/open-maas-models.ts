@@ -1,6 +1,7 @@
-import { getMaxOutputTokens } from '@llumiverse/common';
+import { getMaxOutputTokens, resolveModelProfile } from '@llumiverse/common';
 import { type AIModel, Providers } from '@llumiverse/core';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { selectVertexListingRegions } from './listing-regions.js';
 
 export interface VertexOpenMaaSModel {
     publisher: string;
@@ -61,9 +62,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
-    // DeepSeek OCR is intentionally omitted: the documented regional model currently requires the
-    // global endpoint but did not return reliably through raw curl or the OpenAI-compatible driver.
-    // DeepSeek V3.1 is also omitted because Vertex returns FAILED_PRECONDITION for its documented region.
+    // DeepSeek OCR is intentionally skipped as a special-purpose model.
+    // DeepSeek V3.1 is omitted because Vertex returns FAILED_PRECONDITION for its documented region.
     {
         publisher: 'deepseek-ai',
         model: 'deepseek-v3.2-maas',
@@ -100,6 +100,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         model: 'qwen3-235b-a22b-instruct-2507-maas',
         requestPublisher: 'qwen',
         regions: US_SOUTH1_AND_GLOBAL_REGIONS,
+    },
+    {
+        publisher: 'zai-org',
+        model: 'glm-5.2-maas',
+        requestPublisher: 'zai-org',
+        regions: GLOBAL_REGIONS,
     },
     {
         publisher: 'zai-org',
@@ -147,6 +153,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         requestPublisher: 'google',
         regions: GLOBAL_REGIONS,
     },
+    ...['grok-4.7', 'grok-4.6', 'grok-4.3', 'grok-4.20-reasoning', 'grok-4.20-non-reasoning'].map((model) => ({
+        publisher: 'xai',
+        model,
+        requestPublisher: 'xai',
+        regions: model === 'grok-4.7' || model === 'grok-4.6' ? ['global', 'us'] : GLOBAL_REGIONS,
+    })),
 ] as const;
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {
@@ -182,9 +194,27 @@ export function getVertexOpenMaaSRequestModel(
         };
     }
 
-    if (publisher === 'xai') {
-        return { modelName: `xai/${model}` };
+    // Catalog entries retain exact aliases and endpoint workarounds, but are not a routing allowlist.
+    // Newly discovered MaaS models from a supported publisher use the same OpenAI-compatible protocol.
+    const normalizedPublisher = publisher === 'zaiorg' ? 'zai-org' : publisher;
+    const family = resolveModelProfile(model, Providers.vertexai).family;
+    const publisherModel = VERTEX_OPEN_MAAS_MODELS.find(
+        (entry) =>
+            entry.publisher === normalizedPublisher &&
+            resolveModelProfile(entry.model, Providers.vertexai).family === family,
+    );
+    if (publisherModel && (model.endsWith('-maas') || normalizedPublisher === 'xai')) {
+        return {
+            modelName: `${publisherModel.requestPublisher}/${model}`,
+            region: publisherModel.regions[0],
+            apiVersion: publisherModel.apiVersion,
+            endpointRegion: publisherModel.endpointRegion,
+            extraBody: publisherModel.extraBody,
+        };
     }
+
+    // xAI's publisher API also accepts models outside the catalog without the MaaS suffix.
+    if (publisher === 'xai') return { modelName: `xai/${model}`, region: 'global' };
 
     return undefined;
 }
@@ -201,8 +231,10 @@ export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region:
     } satisfies AIModel;
 }
 
-export function getListedVertexOpenMaaSModels(_region: string): AIModel[] {
+export function getListedVertexOpenMaaSModels(region: string): AIModel[] {
     return (VERTEX_OPEN_MAAS_MODELS as readonly VertexOpenMaaSModel[]).flatMap((entry) => {
-        return entry.regions.map((listingRegion) => vertexOpenMaaSModelToAIModel(entry, listingRegion));
+        return selectVertexListingRegions(entry.regions, region).map((listingRegion) =>
+            vertexOpenMaaSModelToAIModel(entry, listingRegion),
+        );
     });
 }

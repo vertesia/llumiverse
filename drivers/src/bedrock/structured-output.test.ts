@@ -61,6 +61,34 @@ describe('Bedrock Converse structured output', () => {
         expect(last?.content?.[0]?.text).toBe('```json');
     });
 
+    it.each(['low', 'medium', 'high'] as const)('omits Nova JSON prefill with %s reasoning', async (effort) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const options = {
+            model: 'us.amazon.nova-2-lite-v1:0',
+            model_options: { _option_id: 'bedrock-nova' as const, effort },
+            result_schema,
+        };
+        const prompt = await formatConversePrompt([{ role: PromptRole.user, content: 'hello' }], options);
+        const payload = driver.preparePayload(prompt, options);
+
+        expect(payload.messages?.at(-1)?.role).toBe('user');
+        expect(payload.system).toEqual([{ text: expect.stringContaining('JSON Schema') }]);
+        expect(payload.outputConfig).toBeUndefined();
+    });
+
+    it('keeps Nova JSON prefill when reasoning is disabled', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(
+            { modelId: undefined, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            {
+                model: 'us.amazon.nova-2-lite-v1:0',
+                model_options: { _option_id: 'bedrock-nova', effort: 'none' },
+                result_schema,
+            },
+        );
+        expect(payload.messages?.at(-1)?.role).toBe('assistant');
+    });
+
     it('clamps caller-provided max_tokens to the Claude model output limit', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const payload = driver.preparePayload(

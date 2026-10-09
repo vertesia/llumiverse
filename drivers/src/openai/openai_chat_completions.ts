@@ -16,6 +16,7 @@ import {
     isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
+    type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
@@ -34,6 +35,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -1004,7 +1006,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, false);
+        const payload = this.buildPayload(
+            conversation,
+            options,
+            false,
+            (driver as { logger?: Logger } | undefined)?.logger,
+        );
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1063,7 +1070,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, true);
+        const payload = this.buildPayload(
+            conversation,
+            options,
+            true,
+            (driver as { logger?: Logger } | undefined)?.logger,
+        );
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
@@ -1164,6 +1176,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         stream: boolean,
+        logger?: Logger,
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -1174,17 +1187,18 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
             messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
-            // Some OpenAI-compatible providers return empty/truncated completions unless a
+            // Compatibility exception: some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
             temperature: modelOptions?.temperature,
             top_p: modelOptions?.top_p,
             presence_penalty: modelOptions?.presence_penalty,
             frequency_penalty: modelOptions?.frequency_penalty,
+            // Compatibility exception: the completion interface consumes one generated choice.
             n: 1,
             stop: modelOptions?.stop_sequence,
             seed: modelOptions?.seed,
-            reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
+            reasoning_effort: resolveOpenAIEffort(modelOptions, logger, options.model),
             service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
             stream,
         };
@@ -1251,6 +1265,7 @@ interface OpenAIChatCompletionsTransportDriver {
 
 export interface OpenAISDKChatCompletionsDriver {
     service: OpenAI;
+    logger?: Logger;
 }
 
 export function openAIChatCompletionsStreamToSSE(
@@ -1348,6 +1363,7 @@ function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenA
 
 export function toOpenAINonStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
+    logger?: Logger,
 ): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
     const { messages, stream: _stream, extra_body, ...body } = payload;
     const request = mergeOpenAIExtraBody(
@@ -1357,12 +1373,15 @@ export function toOpenAINonStreamingPayload(
             stream: false,
         } satisfies OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
         extra_body,
+        logger,
+        payload.model,
     );
     return request;
 }
 
 export function toOpenAIStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
+    logger?: Logger,
 ): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
     const { messages, stream: _stream, extra_body, ...body } = payload;
     const request = mergeOpenAIExtraBody(
@@ -1373,6 +1392,8 @@ export function toOpenAIStreamingPayload(
             stream_options: { include_usage: true },
         } satisfies OpenAI.Chat.ChatCompletionCreateParamsStreaming,
         extra_body,
+        logger,
+        payload.model,
     );
     return request;
 }
@@ -1383,7 +1404,7 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toOpenAINonStreamingPayload(payload);
+        const request = toOpenAINonStreamingPayload(payload, driver.logger);
         const requestOptions = this.options.resolveRequestOptions?.(options);
         const response = requestOptions
             ? await driver.service.chat.completions.create(request, requestOptions)
@@ -1400,7 +1421,7 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toOpenAIStreamingPayload(payload);
+        const request = toOpenAIStreamingPayload(payload, driver.logger);
         const requestOptions =
             this.options.resolveRequestOptions?.(options, signal) ?? (signal ? { signal } : undefined);
         const stream = requestOptions
@@ -1500,7 +1521,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toOpenAINonStreamingPayload(payload);
+        const request = toOpenAINonStreamingPayload(payload, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const response = requestOptions
             ? await this.service.chat.completions.create(request, requestOptions)
@@ -1516,7 +1537,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toOpenAIStreamingPayload(payload);
+        const request = toOpenAIStreamingPayload(payload, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const stream = requestOptions
             ? await this.service.chat.completions.create(request, requestOptions)

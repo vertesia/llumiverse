@@ -1,13 +1,30 @@
 import { ThinkingLevel } from '@google/genai';
-import type { StatelessExecutionOptions } from '@llumiverse/core';
-import { describe, expect, it } from 'vitest';
-import { geminiThinkingConfig } from './gemini.js';
+import { getOptions, type ModelOptions, Providers, type StatelessExecutionOptions } from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
+import { geminiThinkingConfig, getGeminiPayload } from './gemini.js';
 
 function options(model: string, model_options?: Record<string, unknown>): StatelessExecutionOptions {
     return { model, model_options } as StatelessExecutionOptions;
 }
 
 describe('Gemini thinking configuration', () => {
+    it('warns when native thinking controls take precedence over generic effort', () => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const model = 'gemini-3.5-flash';
+        expect(
+            getGeminiPayload(options(model, { effort: 'high', thinking_level: 'low' }), { contents: [] }, logger).config
+                ?.thinkingConfig,
+        ).toMatchObject({ thinkingLevel: 'low' });
+        expect(logger.warn).toHaveBeenCalledOnce();
+        expect(logger.warn).toHaveBeenCalledWith(
+            { model, option_names: ['effort'], reason: 'gemini_native_thinking_precedence' },
+            'Model option compatibility exception changed caller input',
+        );
+        logger.warn.mockClear();
+        geminiThinkingConfig(options(model, { thinking_level: 'low' }), logger);
+        expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it('leaves thinking undefined when the caller did not configure it', () => {
         expect(geminiThinkingConfig(options('gemini-3.5-flash'))).toBeUndefined();
         expect(geminiThinkingConfig(options('gemini-2.5-pro'))).toBeUndefined();
@@ -39,5 +56,104 @@ describe('Gemini thinking configuration', () => {
         expect(geminiThinkingConfig(options('gemini-3.5-flash', { include_thoughts: true }))).toEqual({
             includeThoughts: true,
         });
+    });
+});
+
+describe('explicit Gemini thinking controls', () => {
+    it.each([0, -1, 8192])('preserves budget %s and disabled thought inclusion', (thinking_budget_tokens) => {
+        expect(
+            geminiThinkingConfig(
+                options('gemini-2.5-flash', {
+                    thinking_budget_tokens,
+                    include_thoughts: false,
+                    effort: 'high',
+                }),
+            ),
+        ).toEqual({ includeThoughts: false, thinkingBudget: thinking_budget_tokens });
+    });
+
+    it('preserves explicit thought inclusion with a zero budget for provider validation', () => {
+        expect(
+            geminiThinkingConfig(
+                options('gemini-2.5-flash', {
+                    thinking_budget_tokens: 0,
+                    include_thoughts: true,
+                }),
+            ),
+        ).toEqual({ includeThoughts: true, thinkingBudget: 0 });
+    });
+
+    it('honors thought exclusion with an explicit thinking level', () => {
+        expect(
+            geminiThinkingConfig(
+                options('gemini-3.8-flash', {
+                    thinking_level: ThinkingLevel.LOW,
+                    include_thoughts: false,
+                }),
+            ),
+        ).toEqual({ includeThoughts: false, thinkingLevel: ThinkingLevel.LOW });
+    });
+});
+
+describe('Gemini Flash generation parameters', () => {
+    it.each(['gemini-3.7-flash', 'publishers/google/models/gemini-3.8-flash-cyber', 'gemini-4.0-flash'])(
+        'preserves caller parameters for provider validation on %s',
+        (model) => {
+            const payload = getGeminiPayload(
+                options(model, {
+                    temperature: 0.7,
+                    top_p: 0.9,
+                    top_k: 10,
+                    presence_penalty: 0.5,
+                    frequency_penalty: 0.5,
+                    max_tokens: 512,
+                    effort: 'low',
+                }),
+                { contents: [{ role: 'user', parts: [{ text: 'Hello' }] }] },
+            );
+            const config = JSON.parse(JSON.stringify(payload.config));
+            expect(config).not.toHaveProperty('candidateCount');
+            expect(config).toMatchObject({
+                temperature: 0.7,
+                topP: 0.9,
+                topK: 10,
+                presencePenalty: 0.5,
+                frequencyPenalty: 0.5,
+            });
+            expect(config).toMatchObject({ maxOutputTokens: 512, thinkingConfig: { thinkingLevel: 'LOW' } });
+        },
+    );
+
+    it('preserves sampling for earlier Flash models', () => {
+        const payload = getGeminiPayload(options('gemini-3.6-flash', { temperature: 0.7, top_p: 0.9 }), {
+            contents: [],
+        });
+        expect(payload.config).toMatchObject({ candidateCount: 1, temperature: 0.7, topP: 0.9 });
+    });
+});
+
+describe('Gemini metadata-derived defaults', () => {
+    it.each([
+        ['gemini-2.5-flash-lite', false],
+        ['gemini-2.5-flash', true],
+        ['gemini-3.8-flash', true],
+    ])('preserves provider thinking defaults for %s', (model, includeThoughts) => {
+        const metadata = getOptions(model, Providers.vertexai);
+        const model_options = {
+            _option_id: metadata._option_id,
+            ...Object.fromEntries(
+                metadata.options
+                    .filter((option) => option.default !== undefined)
+                    .map((option) => [option.name, option.default]),
+            ),
+        } as ModelOptions;
+        const payload = getGeminiPayload({ model, model_options }, { contents: [] });
+        expect(payload.config?.thinkingConfig).toEqual({ includeThoughts });
+        if (model === 'gemini-3.8-flash') {
+            expect(payload.config?.candidateCount).toBeUndefined();
+            expect(payload.config?.temperature).toBeUndefined();
+            expect(payload.config?.presencePenalty).toBeUndefined();
+            expect(payload.config?.frequencyPenalty).toBeUndefined();
+        }
     });
 });

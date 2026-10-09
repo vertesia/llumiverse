@@ -23,7 +23,7 @@ import {
     buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction, isOpenAIGptVersionGTE } from './version-parsing.js';
+import { hasSamplingParameterRestriction, isOpenAIGptVersionGTE, supportsNovaReasoning } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -391,6 +391,14 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         description: 'Limits token sampling to the top k tokens',
                     },
                 ];
+                if (supportsNovaReasoning(model)) {
+                    novaConverseOptions.push({
+                        name: 'effort',
+                        type: OptionType.enum,
+                        enum: { None: 'none', Low: 'low', Medium: 'medium', High: 'high' },
+                        description: 'Enable extended thinking at the selected effort, or disable it with none.',
+                    });
+                }
                 return {
                     _option_id: 'bedrock-nova',
                     options: [...baseConverseOptions, ...novaConverseOptions],

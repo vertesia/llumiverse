@@ -456,3 +456,20 @@ describe('Bedrock Converse GPT options', () => {
         },
     );
 });
+
+describe('Bedrock Nova reasoning metadata', () => {
+    it.each(['amazon.nova-lite-1-5-v1:0', 'us.amazon.nova-2-lite-v1:0', 'global.amazon.nova-3-lite-v1:0'])(
+        'exposes extended thinking for %s',
+        (model) => {
+            expect(getOptions(model, Providers.bedrock).options.find((item) => item.name === 'effort')).toMatchObject({
+                enum: { None: 'none', Low: 'low', Medium: 'medium', High: 'high' },
+            });
+        },
+    );
+    it.each(['amazon.nova-lite-v1:0', 'amazon.nova-pro-v1:0', 'amazon.nova-micro-v1:0'])(
+        'keeps older models without reasoning controls for %s',
+        (model) => {
+            expect(getOptions(model, Providers.bedrock).options.find((item) => item.name === 'effort')).toBeUndefined();
+        },
+    );
+});

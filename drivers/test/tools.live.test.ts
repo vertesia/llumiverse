@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
 import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
-import { completionResultToString } from './utils.js';
+import { completionResultToString, getAdvertisedTestOptions } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 
@@ -204,7 +204,7 @@ function getTestOptions(model: string): ExecutionOptions {
 
 describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
     test.each(models)(`${name}: generation with tools for %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
-        const options = getTestOptions(model);
+        const options = getAdvertisedTestOptions(getTestOptions(model), driver.provider);
         let r = await driver.execute(PROMPT_WITH_GET_NAME_TOOL, options);
         const tool_use = r.tool_use;
         expect(tool_use).toBeDefined();

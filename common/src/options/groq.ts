@@ -1,13 +1,16 @@
 import type { z } from 'zod';
+import { resolveModelProfile } from '../model-directory.js';
 import type { GroqOptionsSchema } from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
     type ModelOptions,
     type ModelOptionsInfo,
     OptionType,
+    Providers,
     SharedOptions,
 } from '../types.js';
 import { textOptionsFallback } from './fallback.js';
+import { getOpenAiCompatibleOptions } from './openai.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -72,5 +75,19 @@ export function getGroqOptions(model: string, _option?: ModelOptions): ModelOpti
             options: commonOptions,
         };
     }
-    return textOptionsFallback;
+    const profile = resolveModelProfile(model, Providers.groq);
+    if (profile.reasoning_effort_levels?.length) {
+        const compatible = getOpenAiCompatibleOptions(model, _option, profile);
+        return {
+            ...compatible,
+            options: [
+                ...compatible.options,
+                ...textOptionsFallback.options.filter((item) => item.name === 'include_thoughts'),
+            ],
+        };
+    }
+    return {
+        ...textOptionsFallback,
+        options: textOptionsFallback.options.filter((item) => item.name !== SharedOptions.top_k),
+    };
 }

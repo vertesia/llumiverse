@@ -3,9 +3,12 @@ import {
     type AnthropicClaudeOptions,
     hasSamplingParameterRestriction,
     isClaudeVersionGTE,
+    type Logger,
     parseClaudeVersion,
     supportsAdaptiveThinking,
 } from '@llumiverse/core';
+
+import { logModelOptionException } from './model-option-exceptions.js';
 
 /**
  * Common Claude model options relevant to thinking/effort configuration.
@@ -44,7 +47,11 @@ export interface ClaudeThinkingResult {
  * @param model - The model identifier string
  * @param options - User-provided Claude options (thinking_budget_tokens, effort, include_thoughts)
  */
-export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInput): ClaudeThinkingResult {
+export function resolveClaudeThinking(
+    model: string,
+    options?: ClaudeThinkingInput,
+    logger?: Logger,
+): ClaudeThinkingResult {
     const supportsAdaptive = supportsAdaptiveThinking(model);
     const samplingRestriction = hasSamplingParameterRestriction(model);
     const supportsThinking = isClaudeVersionGTE(model, 3, 7);
@@ -90,6 +97,15 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
         // Older thinking models (3.7, 4.5): no adaptive support, thinking is always disabled
         // unless an explicit budget is provided (handled above).
         thinking = { type: 'disabled' as const };
+    }
+
+    // Compatibility exception: existing Claude mode selection can discard a legacy thinking budget.
+    if (thinking?.type !== 'enabled') {
+        logModelOptionException(logger, model, options, ['thinking_budget_tokens'], 'claude_thinking_mode');
+    }
+    if (thinking?.type === 'between_tools') {
+        // Compatibility exception: between-tools mode has no caller-controlled display setting.
+        logModelOptionException(logger, model, options, ['include_thoughts'], 'claude_between_tools_display');
     }
 
     // Output config for effort parameter (Opus 4.5+, Sonnet 4.6+, all 4.7+)

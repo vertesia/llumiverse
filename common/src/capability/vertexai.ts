@@ -6,6 +6,21 @@ const RECORD_MODEL_CAPABILITIES: Record<
     string,
     { input: ModelModalities; output: ModelModalities; tool_support?: boolean }
 > = {
+    'mistral-small-2503': {
+        input: { text: true, image: true },
+        output: { text: true },
+        tool_support: true,
+    },
+    'mistral-medium-3': {
+        input: { text: true, image: true },
+        output: { text: true },
+        tool_support: true,
+    },
+    'codestral-2': {
+        input: { text: true, image: false },
+        output: { text: true },
+        tool_support: false,
+    },
     'gemini-2.0-flash-lite-001': {
         input: { text: true, image: true, video: true, audio: true, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
@@ -14,7 +29,7 @@ const RECORD_MODEL_CAPABILITIES: Record<
     'gemma-4-26b-a4b-it-maas': {
         input: { text: true, image: true, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
-        tool_support: false,
+        tool_support: true,
     },
 };
 
@@ -33,6 +48,21 @@ const RECORD_FAMILY_CAPABILITIES: Record<
     'gemini-nano-banana': {
         input: { text: true, image: true, video: true, audio: false, embed: false },
         output: { text: true, image: true, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
+    'gemini-3-pro-image': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: true, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
+    'gemini-3.1-flash-lite-image': {
+        input: { text: true, image: true, video: true, audio: false, embed: false },
+        output: { text: true, image: true, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
+    'gemini-transcribe': {
+        input: { text: false, image: false, video: false, audio: true, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: false,
     },
     'gemini-3.1-flash-image': {
@@ -200,11 +230,32 @@ export function getModelCapabilitiesVertexAI(model: string): {
     const normalized = normalizeVertexAIModelName(model);
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
+    // Later generations inherit the latest known Vertex capabilities, including hosted-model differences.
+    if (isModelFamilyVersionGTE(normalized, 'gemma-', 4, 0))
+        return RECORD_MODEL_CAPABILITIES['gemma-4-26b-a4b-it-maas'];
+    if (isModelFamilyVersionGTE(normalized, 'mistral-small-', 2503, 0))
+        return RECORD_MODEL_CAPABILITIES['mistral-small-2503'];
+    if (isModelFamilyVersionGTE(normalized, 'mistral-medium-', 3, 0))
+        return RECORD_MODEL_CAPABILITIES['mistral-medium-3'];
+    if (isModelFamilyVersionGTE(normalized, 'codestral-', 2, 0)) return RECORD_MODEL_CAPABILITIES['codestral-2'];
     if (isModelFamilyVersionGTE(normalized, 'llama-', 4, 0) || isModelFamilyVersionGTE(normalized, 'llama', 4, 0)) {
         // New Llama generations inherit the latest known MaaS family capabilities until a model-specific exception
         // is documented above.
         return RECORD_FAMILY_CAPABILITIES['llama-4'];
     }
+    // Dedicated Gemini variants must not inherit the general chat model's modalities or tools.
+    if (/^gemini-\d+(?:\.\d+)?-transcribe(?:-|$)/.test(normalized))
+        return RECORD_FAMILY_CAPABILITIES['gemini-transcribe'];
+    if (
+        /^gemini-\d+(?:\.\d+)?-pro-image(?:-|$)/.test(normalized) &&
+        isModelFamilyVersionGTE(normalized, 'gemini-', 3, 0)
+    )
+        return RECORD_FAMILY_CAPABILITIES['gemini-3-pro-image'];
+    if (
+        /^gemini-\d+(?:\.\d+)?-flash-lite-image(?:-|$)/.test(normalized) &&
+        isModelFamilyVersionGTE(normalized, 'gemini-', 3, 1)
+    )
+        return RECORD_FAMILY_CAPABILITIES['gemini-3.1-flash-lite-image'];
     let bestFamilyKey: string | undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {

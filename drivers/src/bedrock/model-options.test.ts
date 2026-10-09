@@ -1,5 +1,5 @@
 import type { ModelOptions } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
 describe('Bedrock provider-specific model options', () => {
@@ -58,6 +58,21 @@ describe('Bedrock provider-specific model options', () => {
 });
 
 describe('Bedrock Converse closed-weight GPT options', () => {
+    it('warns when canonical GPT effort overrides a conflicting alias', () => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const driver = new BedrockDriver({ region: 'us-east-1', logger });
+        const model = 'openai.gpt-6.1-sol';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-converse', effort: 'low', reasoning_effort: 'high' } },
+        );
+        expect(request.additionalModelRequestFields).toMatchObject({ reasoning: { effort: 'low' } });
+        expect(logger.warn).toHaveBeenCalledWith(
+            { model, option_names: ['reasoning_effort'], reason: 'openai_effort_alias_precedence' },
+            'Model option compatibility exception changed caller input',
+        );
+    });
+
     it.each(['openai.gpt-5.5', 'us.openai.gpt-5.6-sol', 'global.openai.gpt-6-luna', 'us.openai.gpt-6.1-sol'])(
         'transports effort and strict output together for %s',
         (model) => {
@@ -111,5 +126,60 @@ describe('Bedrock Converse closed-weight GPT options', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const request = driver.preparePayload({ modelId: undefined, messages: [] }, { model: 'us.openai.gpt-6.1-sol' });
         expect(request.additionalModelRequestFields).toBeUndefined();
+    });
+});
+
+describe('Bedrock Nova extended thinking', () => {
+    it.each(['none', 'low', 'medium', 'high'] as const)('transports %s effort', (effort) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const request = driver.preparePayload(
+            { modelId: undefined, messages: [] },
+            {
+                model: 'us.amazon.nova-2-lite-v1:0',
+                model_options: { _option_id: 'bedrock-nova', effort, max_tokens: 1000, temperature: 0.7, top_k: 12 },
+            },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            inferenceConfig: { topK: 12 },
+            reasoningConfig: effort === 'none' ? { type: 'disabled' } : { type: 'enabled', maxReasoningEffort: effort },
+        });
+        expect(request.inferenceConfig).toEqual({ maxTokens: 1000, temperature: 0.7 });
+    });
+
+    it('passes explicit effort through for Nova versions without known reasoning support', () => {
+        const request = new BedrockDriver({ region: 'us-east-1' }).preparePayload(
+            { modelId: undefined, messages: [] },
+            { model: 'amazon.nova-pro-v1:0', model_options: { _option_id: 'bedrock-nova', effort: 'high' } },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            reasoningConfig: { type: 'enabled', maxReasoningEffort: 'high' },
+        });
+    });
+
+    it('preserves Nova 1.5 high-effort output and sampling controls', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const request = driver.preparePayload(
+            { modelId: undefined, messages: [] },
+            {
+                model: 'amazon.nova-lite-1-5-v1:0',
+                model_options: { _option_id: 'bedrock-nova', effort: 'high', max_tokens: 40000, temperature: 0 },
+            },
+        );
+        expect(request.additionalModelRequestFields).toMatchObject({
+            reasoningConfig: { type: 'enabled', maxReasoningEffort: 'high' },
+        });
+        expect(request.inferenceConfig).toEqual({ maxTokens: 40000, temperature: 0 });
+    });
+
+    it('preserves provider defaults when effort is unset', () => {
+        const request = new BedrockDriver({ region: 'us-east-1' }).preparePayload(
+            { modelId: undefined, messages: [] },
+            {
+                model: 'amazon.nova-2-lite-v1:0',
+                model_options: { _option_id: 'bedrock-nova', max_tokens: 1000 },
+            },
+        );
+        expect(request.additionalModelRequestFields).toBeUndefined();
+        expect(request.inferenceConfig).toEqual({ maxTokens: 1000 });
     });
 });

@@ -1,3 +1,4 @@
+import { isVertexMistralChatModel } from '@llumiverse/common';
 import type {
     AIModel,
     Completion,
@@ -68,6 +69,18 @@ export function getModelDefinition(model: string): ModelDefinition {
         modelName = trimModelName(splits[splits.length - 1]);
     }
 
+    if (isVertexMistralChatModel(publisher, modelName)) {
+        const endpoint = `publishers/mistralai/models/${modelName}`;
+        return new OpenAIChatCompletionsModelDefinition({
+            modelName,
+            // Without a model-path location, use the driver's configured region.
+            region,
+            flattenExtraBody: true,
+            endpointPath: `${endpoint}:rawPredict`,
+            streamingEndpointPath: `${endpoint}:streamRawPredict`,
+        });
+    }
+
     if (publisher?.includes('anthropic')) {
         return new ClaudeModelDefinition(modelName);
     } else {
@@ -86,12 +99,6 @@ export function getModelDefinition(model: string): ModelDefinition {
 
     if (isGeminiOmniVideoModel(modelName)) {
         return new GeminiOmniVideoModelDefinition(modelName);
-    }
-
-    if (publisher === 'xai') {
-        // Use OpenAI-compatible endpoint for xAI Grok models via Vertex AI's openapi endpoint
-        // xAI/Grok models only exist in the "global" region, not regional endpoints
-        return new OpenAIChatCompletionsModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
     }
 
     if (publisher?.includes('google') && modelName.includes('gemini')) {
