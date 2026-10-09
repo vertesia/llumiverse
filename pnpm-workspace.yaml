@@ -66,3 +66,6 @@ overrides:
   # GHSA path traversal in sourceMappingURL auto-loading. Reached via vitest > vite > postcss.
   "postcss@<8.5.18": ^8.5.18
   protobufjs@<=7.6.4: 7.6.5
+
+# Share package directories across local worktrees.
+virtualStoreType: global
