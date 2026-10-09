@@ -13,6 +13,7 @@ import type {
     TwelvelabsPegasusOptionsSchema,
 } from '../schemas/model-options.js';
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
+import { getBedrockMantleOptions } from './bedrock_mantle.js';
 import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
@@ -22,7 +23,7 @@ import {
     buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction } from './version-parsing.js';
+import { hasSamplingParameterRestriction, isOpenAIGptVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -153,6 +154,14 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
 }
 
 export function getBedrockOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    if (isOpenAIGptVersionGTE(model, 5, 0)) {
+        // Closed-weight GPT models use the same reasoning controls across Bedrock transports.
+        const options = getBedrockMantleOptions(model);
+        return {
+            _option_id: 'bedrock-converse',
+            options: options.options.filter((item) => item.name !== 'image_detail'),
+        };
+    }
     if (model.includes('canvas')) {
         const taskTypeList: ModelOptionInfoItem = {
             name: 'taskType',

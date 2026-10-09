@@ -142,6 +142,9 @@ export const BedrockConverseOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        effort: ReasoningEffortSchema.optional(),
+        reasoning_effort: ReasoningEffortSchema.optional(),
+        verbosity: z.enum(['low', 'medium', 'high']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
     })
