@@ -45,6 +45,7 @@ import {
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { logModelOptionException } from '../shared/model-option-exceptions.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -355,6 +356,16 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
+        // Compatibility exception: existing Responses reasoning requests omit sampling controls.
+        if (isReasoningModel) {
+            logModelOptionException(
+                driver.logger,
+                options.model,
+                model_options,
+                ['temperature', 'top_p'],
+                'openai_reasoning_sampling',
+            );
+        }
         const requestOptions = this.getRequestOptions(driver, options, signal);
         const stream = requestOptions
             ? await driver.getResponsesService(options).responses.create(request, requestOptions)
@@ -458,6 +469,16 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
+        // Compatibility exception: existing Responses reasoning requests omit sampling controls.
+        if (isReasoningModel) {
+            logModelOptionException(
+                driver.logger,
+                options.model,
+                model_options,
+                ['temperature', 'top_p'],
+                'openai_reasoning_sampling',
+            );
+        }
         const requestOptions = this.getRequestOptions(driver, options, signal);
         const res = requestOptions
             ? await driver.getResponsesService(options).responses.create(request, requestOptions)

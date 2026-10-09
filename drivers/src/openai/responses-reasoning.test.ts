@@ -56,6 +56,21 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it('warns about existing reasoning-model sampling omissions', async () => {
+        const driver = new TestResponsesDriver(vi.fn(async () => response()));
+        const warn = vi.fn();
+        driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+        const model_options = { temperature: 0, top_p: 0.8 };
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5',
+            model_options,
+        });
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+            { model: 'gpt-5', option_names: ['temperature', 'top_p'], reason: 'openai_reasoning_sampling' },
+            'Model option compatibility exception changed caller input',
+        );
+    });
+
     it('returns the processing tier reported by OpenAI', async () => {
         const driver = new TestResponsesDriver(vi.fn(async () => response()));
 

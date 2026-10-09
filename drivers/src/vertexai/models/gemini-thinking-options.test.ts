@@ -55,6 +55,17 @@ describe('explicit Gemini thinking controls', () => {
         ).toEqual({ includeThoughts: false, thinkingBudget: thinking_budget_tokens });
     });
 
+    it('preserves explicit thought inclusion with a zero budget for provider validation', () => {
+        expect(
+            geminiThinkingConfig(
+                options('gemini-2.5-flash', {
+                    thinking_budget_tokens: 0,
+                    include_thoughts: true,
+                }),
+            ),
+        ).toEqual({ includeThoughts: true, thinkingBudget: 0 });
+    });
+
     it('honors thought exclusion with an explicit thinking level', () => {
         expect(
             geminiThinkingConfig(
@@ -69,7 +80,7 @@ describe('explicit Gemini thinking controls', () => {
 
 describe('Gemini Flash generation parameters', () => {
     it.each(['gemini-3.7-flash', 'publishers/google/models/gemini-3.8-flash-cyber', 'gemini-4.0-flash'])(
-        'omits unsupported parameters for %s',
+        'preserves caller parameters for provider validation on %s',
         (model) => {
             const payload = getGeminiPayload(
                 options(model, {
@@ -84,16 +95,14 @@ describe('Gemini Flash generation parameters', () => {
                 { contents: [{ role: 'user', parts: [{ text: 'Hello' }] }] },
             );
             const config = JSON.parse(JSON.stringify(payload.config));
-            for (const key of [
-                'candidateCount',
-                'temperature',
-                'topP',
-                'topK',
-                'presencePenalty',
-                'frequencyPenalty',
-            ]) {
-                expect(config).not.toHaveProperty(key);
-            }
+            expect(config).not.toHaveProperty('candidateCount');
+            expect(config).toMatchObject({
+                temperature: 0.7,
+                topP: 0.9,
+                topK: 10,
+                presencePenalty: 0.5,
+                frequencyPenalty: 0.5,
+            });
             expect(config).toMatchObject({ maxOutputTokens: 512, thinkingConfig: { thinkingLevel: 'LOW' } });
         },
     );

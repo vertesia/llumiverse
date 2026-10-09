@@ -34,6 +34,7 @@ import {
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
+    type Logger,
     ModelType,
     type PromptOptions,
     PromptRole,
@@ -50,6 +51,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
+import { logModelOptionException } from '../../shared/model-option-exceptions.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
@@ -228,7 +230,11 @@ function getProminentPeopleOption(
     }
 }
 
-export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
+export function getGeminiPayload(
+    options: ExecutionOptions,
+    prompt: GenerateContentPrompt,
+    logger?: Logger,
+): GenerateContentParameters {
     const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
 
@@ -251,6 +257,10 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
     const isNanoBanana = options.model.toLowerCase().includes('gemini-nano-banana');
+    // Compatibility exception: existing Nano Banana requests omit sampling controls.
+    if (isNanoBanana) {
+        logModelOptionException(logger, options.model, model_options, ['temperature', 'top_p'], 'nano_banana_sampling');
+    }
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -274,6 +284,7 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
         },
     };
 
+    // Restrict only our generated candidate count; explicit sampling options pass through for provider validation.
     const restrictSampling = hasGeminiSamplingRestriction(options.model);
     const config: GenerateContentConfig = {
         systemInstruction: prompt.system,
@@ -291,13 +302,13 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
         responseMimeType: useStructuredOutput ? 'application/json' : undefined,
         responseJsonSchema: useStructuredOutput ? options.result_schema : undefined,
         //Model options
-        temperature: restrictSampling ? undefined : model_options?.temperature,
-        topP: restrictSampling ? undefined : model_options?.top_p,
-        topK: restrictSampling ? undefined : model_options?.top_k,
+        temperature: model_options?.temperature,
+        topP: model_options?.top_p,
+        topK: model_options?.top_k,
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
-        presencePenalty: restrictSampling ? undefined : model_options?.presence_penalty,
-        frequencyPenalty: restrictSampling ? undefined : model_options?.frequency_penalty,
+        presencePenalty: model_options?.presence_penalty,
+        frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
         thinkingConfig: geminiThinkingConfig(options),
         labels: options.labels,
@@ -559,8 +570,8 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions): Thinkin
     const include_thoughts = model_options?.include_thoughts !== false;
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
         return {
-            // Vertex rejects thought summaries when thinking is explicitly disabled.
-            includeThoughts: model_options.thinking_budget_tokens === 0 ? false : include_thoughts,
+            // Default summaries off for a zero budget; preserve explicit caller choices for provider validation.
+            includeThoughts: model_options.include_thoughts ?? model_options.thinking_budget_tokens !== 0,
             ...(model_options.thinking_budget_tokens !== undefined && {
                 thinkingBudget: model_options.thinking_budget_tokens,
             }),
@@ -800,7 +811,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt);
+        const payload = getGeminiPayload(options, prompt, driver.logger);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
@@ -915,7 +926,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt);
+        const payload = getGeminiPayload(options, prompt, driver.logger);
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,

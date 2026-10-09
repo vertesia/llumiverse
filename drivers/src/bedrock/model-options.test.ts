@@ -125,10 +125,20 @@ describe('Bedrock Nova extended thinking', () => {
             },
         );
         expect(request.additionalModelRequestFields).toEqual({
-            ...(effort !== 'high' && { inferenceConfig: { topK: 12 } }),
+            inferenceConfig: { topK: 12 },
             reasoningConfig: effort === 'none' ? { type: 'disabled' } : { type: 'enabled', maxReasoningEffort: effort },
         });
-        expect(request.inferenceConfig).toEqual(effort === 'high' ? undefined : { maxTokens: 1000, temperature: 0.7 });
+        expect(request.inferenceConfig).toEqual({ maxTokens: 1000, temperature: 0.7 });
+    });
+
+    it('passes explicit effort through for Nova versions without known reasoning support', () => {
+        const request = new BedrockDriver({ region: 'us-east-1' }).preparePayload(
+            { modelId: undefined, messages: [] },
+            { model: 'amazon.nova-pro-v1:0', model_options: { _option_id: 'bedrock-nova', effort: 'high' } },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            reasoningConfig: { type: 'enabled', maxReasoningEffort: 'high' },
+        });
     });
 
     it('preserves Nova 1.5 high-effort output and sampling controls', () => {
