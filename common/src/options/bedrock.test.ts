@@ -438,3 +438,21 @@ describe('current Bedrock GPT families', () => {
         }
     });
 });
+
+describe('Bedrock Converse GPT options', () => {
+    it.each(['openai.gpt-5.5', 'us.openai.gpt-5.6-sol', 'global.openai.gpt-6-luna', 'us.openai.gpt-6.1-sol'])(
+        'exposes model-specific effort and verbosity for %s',
+        (model) => {
+            const runtime = getOptions(model, Providers.bedrock);
+            const mantle = getOptions(model, Providers.bedrock_mantle);
+            expect(runtime._option_id).toBe('bedrock-converse');
+            expect(runtime.options).toEqual(mantle.options.filter((item) => item.name !== 'image_detail'));
+            expect(runtime.options.map((item) => item.name)).not.toEqual(
+                expect.arrayContaining(['temperature', 'top_p', 'stop_sequence']),
+            );
+            expect(resolveModelProfile(model, Providers.bedrock).reasoning_effort_levels).toEqual(
+                resolveModelProfile(model, Providers.bedrock_mantle).reasoning_effort_levels,
+            );
+        },
+    );
+});
