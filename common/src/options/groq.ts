@@ -76,7 +76,16 @@ export function getGroqOptions(model: string, _option?: ModelOptions): ModelOpti
         };
     }
     const profile = resolveModelProfile(model, Providers.groq);
-    if (profile.reasoning_effort_levels?.length) return getOpenAiCompatibleOptions(model, _option, profile);
+    if (profile.reasoning_effort_levels?.length) {
+        const compatible = getOpenAiCompatibleOptions(model, _option, profile);
+        return {
+            ...compatible,
+            options: [
+                ...compatible.options,
+                ...textOptionsFallback.options.filter((item) => item.name === 'include_thoughts'),
+            ],
+        };
+    }
     return {
         ...textOptionsFallback,
         options: textOptionsFallback.options.filter((item) => item.name !== SharedOptions.top_k),

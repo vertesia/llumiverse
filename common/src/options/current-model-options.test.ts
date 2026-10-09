@@ -10,6 +10,18 @@ function effortValues(model: string, provider: Providers): string[] {
 }
 
 describe('current reasoning model options', () => {
+    it.each(['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3-32b', 'qwen/qwen3.8-27b'])(
+        'retains the thought-visibility control alongside Groq effort for %s',
+        (model) => {
+            const options = getOptions(model, Providers.groq).options;
+            expect(options.find((item) => item.name === 'include_thoughts')).toMatchObject({
+                type: OptionType.boolean,
+                default: true,
+            });
+            expect(options.filter((item) => item.name === 'include_thoughts')).toHaveLength(1);
+            expect(options.find((item) => item.name === 'effort')).toBeDefined();
+        },
+    );
     it.each(['grok-4.6', 'grok-4.7'])('exposes xAI xhigh effort for %s', (model) => {
         expect(effortValues(model, Providers.xai)).toEqual(['low', 'medium', 'high', 'xhigh']);
     });

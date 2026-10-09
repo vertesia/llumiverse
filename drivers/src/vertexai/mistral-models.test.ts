@@ -5,7 +5,7 @@ import type { VertexAIDriver } from './index.js';
 import { getListedVertexMistralModels, VERTEX_MISTRAL_CHAT_MODELS } from './mistral-models.js';
 import { getModelDefinition } from './models.js';
 
-function createDriverStub() {
+function createDriverStub(region = 'us-central1') {
     const post = vi.fn(async (_endpoint: string, options: { reader?: string; payload: Record<string, unknown> }) => {
         if (options.reader === 'sse')
             return new ReadableStream({
@@ -18,10 +18,11 @@ function createDriverStub() {
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         };
     });
-    const getFetchClientForRegion = vi.fn(() => ({ post }));
+    const getFetchClientForRegion = vi.fn((_region: string, _apiVersion?: string) => ({ post }));
+    const getFetchClient = vi.fn(() => getFetchClientForRegion(region));
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     return {
-        driver: { getFetchClientForRegion, logger } as unknown as VertexAIDriver,
+        driver: { getFetchClient, getFetchClientForRegion, logger } as unknown as VertexAIDriver,
         post,
         getFetchClientForRegion,
         logger,
@@ -29,6 +30,25 @@ function createDriverStub() {
 }
 
 describe('Vertex regional Mistral chat models', () => {
+    it.each(VERTEX_MISTRAL_CHAT_MODELS)(
+        'uses the configured region for unqualified %s in both execution paths',
+        async (model) => {
+            const modelId = `publishers/mistralai/models/${model}`;
+            const definition = getModelDefinition(modelId);
+            const stub = createDriverStub('europe-west4');
+            const options = { model: modelId };
+            const prompt = await definition.createPrompt(
+                stub.driver,
+                [{ role: PromptRole.user, content: 'hello' }],
+                options,
+            );
+            await definition.requestTextCompletion(stub.driver, prompt, options);
+            await definition.requestTextCompletionStream(stub.driver, prompt, options);
+            expect(stub.getFetchClientForRegion).toHaveBeenCalledTimes(2);
+            expect(stub.getFetchClientForRegion).toHaveBeenNthCalledWith(1, 'europe-west4');
+            expect(stub.getFetchClientForRegion).toHaveBeenNthCalledWith(2, 'europe-west4');
+        },
+    );
     it.each(['mistral-ocr-2505', 'mistral-embed', 'voxtral-small-2507'])(
         'excludes the special-purpose model %s from the chat route',
         (model) => expect(isVertexMistralChatModel('mistralai', model)).toBe(false),

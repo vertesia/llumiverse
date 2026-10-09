@@ -73,7 +73,8 @@ export function getModelDefinition(model: string): ModelDefinition {
         const endpoint = `publishers/mistralai/models/${modelName}`;
         return new OpenAIChatCompletionsModelDefinition({
             modelName,
-            region: region ?? 'us-central1',
+            // Without a model-path location, use the driver's configured region.
+            region,
             flattenExtraBody: true,
             endpointPath: `${endpoint}:rawPredict`,
             streamingEndpointPath: `${endpoint}:streamRawPredict`,
