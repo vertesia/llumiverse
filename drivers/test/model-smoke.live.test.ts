@@ -287,19 +287,23 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         },
     );
 
-    test.each(models)(
+    test.for(models)(
         `${name}: max_tokens at documented limit on %s`,
         {
             timeout: TIMEOUT,
             retry: 1,
         },
-        async (model) => {
-            // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
+        async (model, context) => {
+            // Use provider-specific limits where available; unknown Vertex limits must remain unknown.
             let limit: number | undefined;
             if (driver.provider === 'bedrock') {
                 limit = getMaxTokensLimitBedrock(model);
             } else if (driver.provider === 'vertexai') {
                 limit = getMaxTokensLimitVertexAi(model);
+                if (limit === undefined) {
+                    context.skip();
+                    return;
+                }
             }
             // Fallback to conservative provider-agnostic limit for all other providers
             if (!limit) {

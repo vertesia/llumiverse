@@ -210,6 +210,22 @@ describe('Vertex regional Mistral chat metadata', () => {
             expect(capabilities.tool_support).toBe(model !== 'codestral-2');
         },
     );
+    it.each(['mistral-small-2603', 'publishers/google/models/mistral-small-2603'])(
+        'does not advertise regional Mistral transport options for %s',
+        (model) => expect(getVertexAiOptions(model)._option_id).toBe('text-fallback'),
+    );
+    it.each([
+        'locations/global/publishers/xai/models/grok-4.7',
+        'publishers/mistralai/models/mistral-small-2503',
+        'publishers/mistralai/models/mistral-medium-3',
+        'publishers/mistralai/models/codestral-2',
+        'publishers/mistralai/models/mistral-small-2603',
+    ])('keeps unknown Vertex output limits unknown for %s', (model) => {
+        expect(getMaxTokensLimitVertexAi(model)).toBeUndefined();
+        expect(getVertexAiOptions(model).options.find((option) => option.name === 'max_tokens')).not.toHaveProperty(
+            'max',
+        );
+    });
     it('excludes OCR from the compatible chat option surface', () => {
         expect(getVertexAiOptions('publishers/mistralai/models/mistral-ocr-2505')._option_id).toBe('text-fallback');
     });

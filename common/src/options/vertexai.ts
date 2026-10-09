@@ -15,7 +15,6 @@ import {
     Providers,
     SharedOptions,
 } from '../types.js';
-import { getMaxOutputTokens } from './context-windows.js';
 import { textOptionsFallback } from './fallback.js';
 import { getOpenAiCompatibleOptions } from './openai.js';
 import {
@@ -157,7 +156,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getGeminiOptions(model, option);
     } else if (model.includes('claude')) {
         return getClaudeOptions(model, option);
-    } else if (isOpenMaaSChatModel(model) || isVertexMistralChatModel('mistralai', model)) {
+    } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
         return getOpenMaaSChatOptions(model);
     }
     return textOptionsFallback;
@@ -735,6 +734,13 @@ export function isVertexMistralChatModel(publisher: string | undefined, model: s
     return publisher === 'mistralai' && /^(?:mistral-(?:small|medium)|codestral)-\d/.test(modelName);
 }
 
+function isVertexMistralResource(model: string): boolean {
+    const segments = model.split('/');
+    const publisherIndex = segments.indexOf('publishers');
+    const publisher = publisherIndex === -1 ? segments[1] : segments[publisherIndex + 1];
+    return isVertexMistralChatModel(publisher, model);
+}
+
 function isOpenMaaSChatModel(model: string): boolean {
     const normalized = model.toLowerCase();
     // Open MaaS chat option support is family-based on purpose: new model releases inherit the
@@ -795,15 +801,15 @@ function getGeminiMaxTokensLimit(model: string): number {
     return 8192;
 }
 
-export function getMaxTokensLimitVertexAi(model: string): number {
+export function getMaxTokensLimitVertexAi(model: string): number | undefined {
     if (model.includes('imagen-')) {
         return 0; // Imagen models do not have a max tokens limit in the same way as text models
     } else if (model.includes('claude')) {
         return getClaudeMaxTokensLimit(model);
     } else if (model.includes('gemini')) {
         return getGeminiMaxTokensLimit(model);
-    } else if (isOpenMaaSChatModel(model) || isVertexMistralChatModel('mistralai', model)) {
-        return resolveModelProfile(model, Providers.vertexai).max_output_tokens ?? getMaxOutputTokens(model);
+    } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
+        return resolveModelProfile(model, Providers.vertexai).max_output_tokens;
     }
     return 8192; // Default fallback limit
 }
