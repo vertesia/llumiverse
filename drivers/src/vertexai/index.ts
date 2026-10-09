@@ -37,6 +37,7 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 
 export * from './embeddings/batch.js';
 
+import { getListedVertexMistralModels } from './mistral-models.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import {
@@ -780,7 +781,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             ...publisherPromises,
         ]);
 
-        models = models.concat(getListedVertexOpenMaaSModels(this.options.region));
+        models = models.concat(getListedVertexOpenMaaSModels(this.options.region), getListedVertexMistralModels());
 
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
@@ -1031,10 +1032,16 @@ export function createFetchClient({
     fetchImpl?: FETCH_FN;
 }): FetchClient {
     // For the "global" region, use aiplatform.googleapis.com without any prefix.
+    // The US multi-region uses the dedicated aiplatform.us.rep.googleapis.com hostname.
     // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
     const hostRegion = endpointRegion ?? region;
     const vertexBaseEndpoint =
-        apiEndpoint ?? (hostRegion === 'global' ? API_BASE_PATH : `${hostRegion}-${API_BASE_PATH}`);
+        apiEndpoint ??
+        (hostRegion === 'global'
+            ? API_BASE_PATH
+            : hostRegion === 'us'
+              ? 'aiplatform.us.rep.googleapis.com'
+              : `${hostRegion}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,

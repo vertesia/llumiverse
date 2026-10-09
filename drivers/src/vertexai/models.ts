@@ -8,6 +8,7 @@ import type {
     PromptSegment,
 } from '@llumiverse/core';
 import type { VertexAIDriver, VertexAIPrompt } from './index.js';
+import { isVertexMistralChatModel } from './mistral-models.js';
 import { ClaudeModelDefinition } from './models/claude.js';
 import { GeminiModelDefinition } from './models/gemini.js';
 import { GeminiOmniVideoModelDefinition, isGeminiOmniVideoModel } from './models/omni-video.js';
@@ -66,6 +67,16 @@ export function getModelDefinition(model: string): ModelDefinition {
         // Fallback to old logic for backward compatibility
         publisher = splits[1];
         modelName = trimModelName(splits[splits.length - 1]);
+    }
+
+    if (isVertexMistralChatModel(publisher, modelName)) {
+        const endpoint = `publishers/mistralai/models/${modelName}`;
+        return new OpenAIChatCompletionsModelDefinition({
+            modelName,
+            region: region ?? 'us-central1',
+            endpointPath: `${endpoint}:rawPredict`,
+            streamingEndpointPath: `${endpoint}:streamRawPredict`,
+        });
     }
 
     if (publisher?.includes('anthropic')) {

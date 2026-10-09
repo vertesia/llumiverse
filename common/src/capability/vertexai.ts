@@ -6,6 +6,21 @@ const RECORD_MODEL_CAPABILITIES: Record<
     string,
     { input: ModelModalities; output: ModelModalities; tool_support?: boolean }
 > = {
+    'mistral-small-2503': {
+        input: { text: true, image: true },
+        output: { text: true },
+        tool_support: true,
+    },
+    'mistral-medium-3': {
+        input: { text: true, image: true },
+        output: { text: true },
+        tool_support: true,
+    },
+    'codestral-2': {
+        input: { text: true, image: false },
+        output: { text: true },
+        tool_support: false,
+    },
     'gemini-2.0-flash-lite-001': {
         input: { text: true, image: true, video: true, audio: true, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },

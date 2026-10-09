@@ -16,6 +16,8 @@ export interface VertexOpenAIChatCompletionsOptions extends OpenAIChatCompletion
     modelName: string;
     /** Custom endpoint path override (defaults to "endpoints/openapi/chat/completions") */
     endpointPath?: string;
+    /** Streaming endpoint path when it differs from the unary endpoint. */
+    streamingEndpointPath?: string;
     /** Region override for the Vertex AI endpoint. Useful when a model only exists in a specific region. */
     region?: string;
     /** Vertex API version for this OpenAI-compatible endpoint. */
@@ -67,7 +69,7 @@ export class OpenAIChatCompletionsModelDefinition
         payload: OpenAIChatCompletionsPayload,
     ): Promise<ReadableStream> {
         const client = this.getClient(driver);
-        return (await client.post(this.endpoint, {
+        return (await client.post(this.vertexOptions.streamingEndpointPath ?? this.endpoint, {
             payload,
             reader: 'sse',
         })) as ReadableStream;

@@ -1,6 +1,6 @@
 import { type Completion, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
-import type { VertexAIDriver } from './index.js';
+import { createFetchClient, type VertexAIDriver } from './index.js';
 import { getModelDefinition } from './models.js';
 import {
     getListedVertexOpenMaaSModels,
@@ -61,7 +61,7 @@ async function requestForModel(model: string): Promise<{
 }
 
 describe('Vertex open MaaS catalog', () => {
-    it('catalogs the manually verified MaaS model and region matrix', () => {
+    it('catalogs the documented MaaS model and region matrix', () => {
         const catalog = Object.fromEntries(
             VERTEX_OPEN_MAAS_MODELS.map((entry) => [`${entry.publisher}/${entry.model}`, entry.regions]),
         );
@@ -83,6 +83,12 @@ describe('Vertex open MaaS catalog', () => {
             'qwen/qwen3-next-80b-a3b-thinking-maas': ['global'],
             'zai-org/glm-4.7-maas': ['global'],
             'zai-org/glm-5-maas': ['global'],
+            'zai-org/glm-5.2-maas': ['global'],
+            'xai/grok-4.7': ['global', 'us'],
+            'xai/grok-4.6': ['global', 'us'],
+            'xai/grok-4.3': ['global'],
+            'xai/grok-4.20-reasoning': ['global'],
+            'xai/grok-4.20-non-reasoning': ['global'],
         });
     });
 
@@ -239,6 +245,28 @@ describe('Vertex open MaaS catalog', () => {
 });
 
 describe('Vertex MaaS forward routing', () => {
+    it('uses the documented US multi-region hostname', async () => {
+        const fetchImpl = vi.fn(async (input: RequestInfo) => {
+            expect(new Request(input).url).toBe(
+                'https://aiplatform.us.rep.googleapis.com/v1/projects/example/locations/us/endpoints/openapi/chat/completions',
+            );
+            return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
+        });
+        const client = createFetchClient({ region: 'us', project: 'example', fetchImpl });
+        await client.post('endpoints/openapi/chat/completions', { payload: {} });
+        expect(fetchImpl).toHaveBeenCalledOnce();
+    });
+    it.each(['glm-5.2-maas', 'grok-4.7', 'grok-4.6', 'grok-4.3', 'grok-4.20-reasoning', 'grok-4.20-non-reasoning'])(
+        'routes the documented %s model explicitly through its global endpoint',
+        async (model) => {
+            const publisher = model.startsWith('glm') ? 'zai-org' : 'xai';
+            const { post, getFetchClientForRegion } = await requestForModel(`publishers/${publisher}/models/${model}`);
+            expect(getFetchClientForRegion).toHaveBeenCalledWith('global', undefined);
+            expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+                payload: expect.objectContaining({ model: `${publisher}/${model}` }),
+            });
+        },
+    );
     it('inherits Meta transport settings when no location is specified', async () => {
         const model = 'llama-5-new-instruct-maas';
         const request = getVertexOpenMaaSRequestModel('meta', model);

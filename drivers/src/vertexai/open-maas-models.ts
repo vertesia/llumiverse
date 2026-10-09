@@ -61,9 +61,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
-    // DeepSeek OCR is intentionally omitted: the documented regional model currently requires the
-    // global endpoint but did not return reliably through raw curl or the OpenAI-compatible driver.
-    // DeepSeek V3.1 is also omitted because Vertex returns FAILED_PRECONDITION for its documented region.
+    // DeepSeek OCR requires separate OCR validation before advertising support.
+    // DeepSeek V3.1 is omitted because Vertex returns FAILED_PRECONDITION for its documented region.
     {
         publisher: 'deepseek-ai',
         model: 'deepseek-v3.2-maas',
@@ -100,6 +99,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         model: 'qwen3-235b-a22b-instruct-2507-maas',
         requestPublisher: 'qwen',
         regions: US_SOUTH1_AND_GLOBAL_REGIONS,
+    },
+    {
+        publisher: 'zai-org',
+        model: 'glm-5.2-maas',
+        requestPublisher: 'zai-org',
+        regions: GLOBAL_REGIONS,
     },
     {
         publisher: 'zai-org',
@@ -147,6 +152,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         requestPublisher: 'google',
         regions: GLOBAL_REGIONS,
     },
+    ...['grok-4.7', 'grok-4.6', 'grok-4.3', 'grok-4.20-reasoning', 'grok-4.20-non-reasoning'].map((model) => ({
+        publisher: 'xai',
+        model,
+        requestPublisher: 'xai',
+        regions: model === 'grok-4.7' || model === 'grok-4.6' ? ['global', 'us'] : GLOBAL_REGIONS,
+    })),
 ] as const;
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {

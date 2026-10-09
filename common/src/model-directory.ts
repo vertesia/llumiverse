@@ -4,6 +4,7 @@ import { getBedrockModelCapabilities, getBedrockModelKnowledge } from './capabil
 import { getMistralModelKnowledge } from './capability/mistral.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
 import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
+import { getVertexAIModelLimits } from './capability/vertexai-limits.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
 import {
     getOpenAIReasoningEffortLevels,
@@ -334,6 +335,13 @@ function applyProviderOverlay(
         const bedrock = getBedrockModelCapabilities(model, 'mantle');
         const knowledge = getBedrockModelKnowledge(model);
         return { capabilities: bedrock, ...knowledge };
+    }
+    if (provider === Providers.vertexai) {
+        return {
+            capabilities,
+            ...getCanonicalLimits(sourceModel, family),
+            ...getVertexAIModelLimits(model),
+        };
     }
 
     // OpenRouter and other OpenAI-compatible transports retain the source model's semantic
