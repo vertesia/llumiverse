@@ -32,6 +32,7 @@ import {
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
+import { getAdvertisedTestOptions } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 
@@ -262,7 +263,10 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     });
 
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, getTestOptions(model));
+        const r = await driver.execute(
+            testPrompt_color,
+            getAdvertisedTestOptions(getTestOptions(model), driver.provider),
+        );
         console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
     });
@@ -275,7 +279,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         },
         async (model) => {
             const r = await driver.stream(testPrompt_color, {
-                ...getTestOptions(model),
+                ...getAdvertisedTestOptions(getTestOptions(model), driver.provider),
                 result_schema: testSchema_color,
             });
             const out = await assertStreamingCompletionOk(r, true);
