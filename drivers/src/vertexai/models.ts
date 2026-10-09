@@ -74,6 +74,7 @@ export function getModelDefinition(model: string): ModelDefinition {
         return new OpenAIChatCompletionsModelDefinition({
             modelName,
             region: region ?? 'us-central1',
+            flattenExtraBody: true,
             endpointPath: `${endpoint}:rawPredict`,
             streamingEndpointPath: `${endpoint}:streamRawPredict`,
         });

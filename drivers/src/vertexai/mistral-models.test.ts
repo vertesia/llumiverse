@@ -6,7 +6,7 @@ import { getListedVertexMistralModels, VERTEX_MISTRAL_CHAT_MODELS } from './mist
 import { getModelDefinition } from './models.js';
 
 function createDriverStub() {
-    const post = vi.fn(async (_endpoint: string, options: { reader?: string }) => {
+    const post = vi.fn(async (_endpoint: string, options: { reader?: string; payload: Record<string, unknown> }) => {
         if (options.reader === 'sse')
             return new ReadableStream({
                 start(controller) {
@@ -19,7 +19,13 @@ function createDriverStub() {
         };
     });
     const getFetchClientForRegion = vi.fn(() => ({ post }));
-    return { driver: { getFetchClientForRegion } as unknown as VertexAIDriver, post, getFetchClientForRegion };
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    return {
+        driver: { getFetchClientForRegion, logger } as unknown as VertexAIDriver,
+        post,
+        getFetchClientForRegion,
+        logger,
+    };
 }
 
 describe('Vertex regional Mistral chat models', () => {
@@ -41,6 +47,34 @@ describe('Vertex regional Mistral chat models', () => {
         );
         expect(models.every((model) => model.owner === 'mistralai' && model.can_stream)).toBe(true);
         expect(models.some((model) => model.id.includes('ocr'))).toBe(false);
+    });
+
+    it.each([false, true])('flattens provider extensions and logs collisions when streaming=%s', async (streaming) => {
+        const model = 'locations/europe-west4/publishers/mistralai/models/mistral-medium-3';
+        const definition = getModelDefinition(model);
+        const stub = createDriverStub();
+        const options = {
+            model,
+            model_options: {
+                _option_id: 'openai-text' as const,
+                extra_body: { random_seed: 42, model: 'conflicting-model' },
+            },
+        };
+        const prompt = await definition.createPrompt(
+            stub.driver,
+            [{ role: PromptRole.user, content: 'hello' }],
+            options,
+        );
+        if (streaming) await definition.requestTextCompletionStream(stub.driver, prompt, options);
+        else await definition.requestTextCompletion(stub.driver, prompt, options);
+        const request = stub.post.mock.calls[0][1].payload;
+        expect(request).toMatchObject({ model: 'mistral-medium-3', random_seed: 42, stream: streaming });
+        expect(request).not.toHaveProperty('extra_body');
+        expect(stub.logger.warn).toHaveBeenCalledExactlyOnceWith(
+            { model: 'mistral-medium-3', option_names: ['model'], reason: 'openai_extra_body_precedence' },
+            'Model option compatibility exception changed caller input',
+        );
+        expect(options.model_options.extra_body).toEqual({ random_seed: 42, model: 'conflicting-model' });
     });
 
     it.each([...VERTEX_MISTRAL_CHAT_MODELS, 'mistral-small-2603', 'mistral-medium-4', 'codestral-3'])(

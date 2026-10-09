@@ -1,4 +1,5 @@
 import { type AIModel, ModelType } from '@llumiverse/core';
+import { mergeOpenAIExtraBody } from '../../openai/extra_body.js';
 import {
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
@@ -18,6 +19,8 @@ export interface VertexOpenAIChatCompletionsOptions extends OpenAIChatCompletion
     endpointPath?: string;
     /** Streaming endpoint path when it differs from the unary endpoint. */
     streamingEndpointPath?: string;
+    /** Regional publisher APIs such as Mistral take extension fields at the body root; MaaS retains the wrapper. */
+    flattenExtraBody?: boolean;
     /** Region override for the Vertex AI endpoint. Useful when a model only exists in a specific region. */
     region?: string;
     /** Vertex API version for this OpenAI-compatible endpoint. */
@@ -60,7 +63,7 @@ export class OpenAIChatCompletionsModelDefinition
     ): Promise<OpenAIChatCompletionsResponse> {
         const client = this.getClient(driver);
         return (await client.post(this.endpoint, {
-            payload,
+            payload: this.preparePayload(driver, payload),
         })) as OpenAIChatCompletionsResponse;
     }
 
@@ -70,9 +73,18 @@ export class OpenAIChatCompletionsModelDefinition
     ): Promise<ReadableStream> {
         const client = this.getClient(driver);
         return (await client.post(this.vertexOptions.streamingEndpointPath ?? this.endpoint, {
-            payload,
+            payload: this.preparePayload(driver, payload),
             reader: 'sse',
         })) as ReadableStream;
+    }
+
+    private preparePayload(
+        driver: VertexAIDriver,
+        payload: OpenAIChatCompletionsPayload,
+    ): OpenAIChatCompletionsPayload {
+        if (!this.vertexOptions.flattenExtraBody) return payload;
+        const { extra_body, ...request } = payload;
+        return mergeOpenAIExtraBody(request, extra_body, driver.logger, payload.model);
     }
 
     private getClient(driver: VertexAIDriver) {
