@@ -235,6 +235,12 @@ export function finalizeStreamingToolUse(
             delete tool._actual_id;
         }
         if (typeof tool.tool_input === 'string') {
+            // Claude streams a call with no arguments as a single empty `partial_json`, so the
+            // accumulated buffer is empty rather than "{}". That is a complete, valid call.
+            if (tool.tool_input.trim() === '') {
+                tool.tool_input = {};
+                continue;
+            }
             try {
                 tool.tool_input = JSON.parse(tool.tool_input);
             } catch (error: unknown) {

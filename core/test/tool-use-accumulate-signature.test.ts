@@ -104,8 +104,20 @@ describe('streaming tool_use argument finalization', () => {
         ]);
     });
 
+    test('normalizes empty streamed arguments for parameterless tools', () => {
+        const tools: StreamingToolUse[] = [
+            { id: 'learn', tool_name: 'learn_code_execution', tool_input: '' },
+            { id: 'time', tool_name: 'get_time', tool_input: '  ' },
+        ];
+
+        expect(finalizeStreamingToolUse(tools, 'tool_use', context)).toEqual([
+            { id: 'learn', tool_name: 'learn_code_execution', tool_input: {} },
+            { id: 'time', tool_name: 'get_time', tool_input: {} },
+        ]);
+    });
+
     test('rejects malformed arguments as retryable when the stream has no finish reason', () => {
-        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '' }];
+        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '{' }];
 
         try {
             finalizeStreamingToolUse(tools, undefined, context);
