@@ -191,7 +191,7 @@ describe('Bedrock Mantle metadata', () => {
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
             enum: { none: 'none', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
         });
-        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 131_072 });
     });
 
     it('carries modern Claude limits forward to newer Claude families', () => {
@@ -209,8 +209,8 @@ describe('Bedrock Mantle metadata', () => {
         expect(capabilities.output.text).toBe(true);
         expect(capabilities.tool_support).toBe(true);
         expect(capabilities.tool_support_streaming).toBe(true);
-        expect(resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle).context_window).toBe(272_000);
-        expect(resolveModelProfile('openai.gpt-6.1', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle).context_window).toBe(1_050_000);
+        expect(resolveModelProfile('openai.gpt-6.1', Providers.bedrock_mantle).context_window).toBe(1_000_000);
         expect(getContextWindowSize('openai.gpt-5.5')).toBe(1_050_000);
     });
 
@@ -383,7 +383,7 @@ describe('Bedrock Mantle metadata', () => {
             max_output_tokens: 127_999,
         });
         expect(getBedrockModelKnowledge('eu.openai.gpt-5.6-sol-v1:0')).toMatchObject({
-            context_window: 272_000,
+            context_window: 1_000_000,
             input: { image: true },
         });
         expect(getBedrockModelKnowledge('apac.amazon.nova-pro-v1:0').context_window).toBe(300_000);
@@ -391,7 +391,7 @@ describe('Bedrock Mantle metadata', () => {
     });
 
     it('inherits Mantle GPT context limits for later majors', () => {
-        expect(getBedrockModelKnowledge('openai.gpt-6-v1:0').context_window).toBe(272_000);
+        expect(getBedrockModelKnowledge('openai.gpt-6-v1:0').context_window).toBe(1_050_000);
         expect(getBedrockModelKnowledge('openai.gpt-oss-120b')).toMatchObject({
             context_window: 128_000,
             max_output_tokens: 16_384,
@@ -408,5 +408,33 @@ describe('Bedrock Mantle metadata', () => {
 
         expect(runtimeMaxTokens).toMatchObject({ type: OptionType.numeric, max: 40_960 });
         expect(mantleMaxTokens).toMatchObject({ type: OptionType.numeric, max: 8_192 });
+    });
+});
+
+describe('current Bedrock GPT families', () => {
+    it.each([
+        ['openai.gpt-5.5', 1_050_000, 128_000, true],
+        ['openai.gpt-5.6-sol', 1_000_000, 128_000, true],
+        ['openai.gpt-5.6-terra', 1_050_000, 128_000, true],
+        ['openai.gpt-5.6-luna', 1_050_000, 128_000, true],
+        ['openai.gpt-6-astra', 1_050_000, 128_000, false],
+        ['openai.gpt-6-sol', 1_050_000, 128_000, true],
+        ['openai.gpt-6-luna', 1_050_000, 128_000, true],
+        ['openai.gpt-6.1-sol', 1_000_000, 131_072, false],
+        ['openai.gpt-7-sol', 1_000_000, 131_072, false],
+    ])('resolves limits and Mantle effort for %s', (model, context_window, max_output_tokens, allowsNone) => {
+        for (const id of [model, `us.${model}`, `global.${model}`]) {
+            expect(getBedrockModelKnowledge(id)).toMatchObject({ context_window, max_output_tokens });
+            const options = getOptions(id, Providers.bedrock_mantle);
+            expect(options._option_id).toBe('bedrock-mantle-responses');
+            const effort = options.options.find((item) => item.name === 'effort');
+            expect(effort).toMatchObject({ default: 'medium' });
+            if (effort?.type !== OptionType.enum) throw new Error('Missing effort options');
+            expect(Object.values(effort.enum)).toContain('xhigh');
+            expect(Object.values(effort.enum).includes('none')).toBe(allowsNone);
+            expect(options.options.find((item) => item.name === 'reasoning_effort')).toMatchObject({
+                enum: effort.enum,
+            });
+        }
     });
 });
