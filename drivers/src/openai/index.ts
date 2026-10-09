@@ -321,13 +321,6 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
-                ...(model_options?.stop_sequence !== undefined && { stop: model_options.stop_sequence }),
-                ...(model_options?.presence_penalty !== undefined && {
-                    presence_penalty: model_options.presence_penalty,
-                }),
-                ...(model_options?.frequency_penalty !== undefined && {
-                    frequency_penalty: model_options.frequency_penalty,
-                }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
                 tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
@@ -341,6 +334,15 @@ export class OpenAIResponsesProtocol {
             model_options?.extra_body,
             driver.logger,
             options.model,
+        );
+        // Compatibility exception: retain historical omissions so saved Chat options do not break Responses callers.
+        // Revisit only after reviewing these warnings and agreeing a migration with callers.
+        logModelOptionException(
+            driver.logger,
+            options.model,
+            model_options,
+            ['stop_sequence', 'presence_penalty', 'frequency_penalty'],
+            'openai_responses_chat_options',
         );
         // Compatibility exception: existing Responses reasoning requests omit sampling controls.
         if (isReasoningModel) {
@@ -440,13 +442,6 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
-                ...(model_options?.stop_sequence !== undefined && { stop: model_options.stop_sequence }),
-                ...(model_options?.presence_penalty !== undefined && {
-                    presence_penalty: model_options.presence_penalty,
-                }),
-                ...(model_options?.frequency_penalty !== undefined && {
-                    frequency_penalty: model_options.frequency_penalty,
-                }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
                 tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
@@ -460,6 +455,15 @@ export class OpenAIResponsesProtocol {
             model_options?.extra_body,
             driver.logger,
             options.model,
+        );
+        // Compatibility exception: retain historical omissions so saved Chat options do not break Responses callers.
+        // Revisit only after reviewing these warnings and agreeing a migration with callers.
+        logModelOptionException(
+            driver.logger,
+            options.model,
+            model_options,
+            ['stop_sequence', 'presence_penalty', 'frequency_penalty'],
+            'openai_responses_chat_options',
         );
         // Compatibility exception: existing Responses reasoning requests omit sampling controls.
         if (isReasoningModel) {

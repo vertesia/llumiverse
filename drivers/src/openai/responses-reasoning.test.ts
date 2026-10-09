@@ -66,21 +66,73 @@ describe('OpenAI Responses reasoning', () => {
         expect(create).toHaveBeenCalledWith(expect.objectContaining({ temperature: 0, reasoning: undefined }));
     });
 
-    it('passes explicit Chat-only controls to the provider instead of dropping them', async () => {
-        const create = vi.fn(async (_request: unknown) => response());
-        const driver = new TestResponsesDriver(create);
-        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
-            model: 'gpt-4.1',
-            model_options: {
-                _option_id: 'openai-text',
+    it.each(
+        ([Providers.openai, Providers.azure_openai, Providers.openai_compatible] as const).flatMap((provider) =>
+            ['gpt-4o', 'gpt-4o-mini', 'gpt-5.4-mini'].flatMap((model) =>
+                [false, true].map((streaming) => ({ provider, model, streaming })),
+            ),
+        ),
+    )(
+        'preserves saved Chat-option compatibility for $provider/$model when streaming=$streaming',
+        async ({ provider, model, streaming }) => {
+            const create = vi.fn(async (request: unknown) =>
+                (request as { stream?: boolean }).stream
+                    ? (async function* () {
+                          yield { type: 'response.completed', sequence_number: 1, response: response() };
+                      })()
+                    : response(),
+            );
+            const driver = new TestResponsesDriver(create, provider);
+            const warn = vi.fn();
+            driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+            const model_options = {
+                _option_id: 'openai-text' as const,
                 stop_sequence: ['END'],
                 presence_penalty: 0,
                 frequency_penalty: 0.3,
-            },
+                max_tokens: 2048,
+            };
+            const original = structuredClone(model_options);
+            const options = { model, model_options };
+            const prompt = [{ type: 'message' as const, role: 'user' as const, content: 'question' }];
+            if (streaming) {
+                for await (const _chunk of await driver.requestTextCompletionStream(prompt, options)) {
+                    /* Consume stream. */
+                }
+            } else {
+                await driver.requestTextCompletion(prompt, options);
+            }
+            const request = create.mock.calls[0][0];
+            expect(request).not.toHaveProperty('stop');
+            expect(request).not.toHaveProperty('presence_penalty');
+            expect(request).not.toHaveProperty('frequency_penalty');
+            expect(request).toMatchObject({ max_output_tokens: 2048 });
+            expect(model_options).toEqual(original);
+            expect(warn).toHaveBeenCalledExactlyOnceWith(
+                {
+                    model,
+                    option_names: ['stop_sequence', 'presence_penalty', 'frequency_penalty'],
+                    reason: 'openai_responses_chat_options',
+                },
+                'Model option compatibility exception changed caller input',
+            );
+        },
+    );
+
+    it('leaves omitted Chat controls absent without warning', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+        const warn = vi.fn();
+        driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-4o',
         });
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({ stop: ['END'], presence_penalty: 0, frequency_penalty: 0.3 }),
-        );
+        const request = create.mock.calls[0][0];
+        expect(request).not.toHaveProperty('stop');
+        expect(request).not.toHaveProperty('presence_penalty');
+        expect(request).not.toHaveProperty('frequency_penalty');
+        expect(request).toMatchObject({ max_output_tokens: undefined });
+        expect(warn).not.toHaveBeenCalled();
     });
 
     it.each([false, true])(
