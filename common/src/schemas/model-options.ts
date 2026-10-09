@@ -380,6 +380,7 @@ export const OpenAiTextOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-text').optional(),
         image_generation: OpenAiImageGenerationOptionsSchema.optional(),
+        seed: z.number().optional(),
         max_tokens: z.number().optional(),
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),

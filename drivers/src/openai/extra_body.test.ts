@@ -5,16 +5,30 @@ describe('OpenAI-compatible extra body', () => {
     it('warns only for supplied extension fields changed by the request contract', () => {
         const warn = vi.fn();
         const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() };
-        mergeOpenAIExtraBody(
+        const result = mergeOpenAIExtraBody(
             { model: 'actual-model', temperature: undefined, stream: false },
             { model: 'override', temperature: 0, stream: false, provider: { sort: 'price' } },
             logger,
             'actual-model',
         );
         expect(warn).toHaveBeenCalledExactlyOnceWith(
-            { model: 'actual-model', option_names: ['model', 'temperature'], reason: 'openai_extra_body_precedence' },
+            { model: 'actual-model', option_names: ['model'], reason: 'openai_extra_body_precedence' },
             'Model option compatibility exception changed caller input',
         );
+        expect(result.temperature).toBe(0);
+    });
+
+    it('preserves supplied zero, false, and null while leaving the caller objects unchanged', () => {
+        const request = { temperature: 0, stream: false, stop: null, reasoning_effort: undefined };
+        const extra = { temperature: 1, stream: true, stop: ['END'], reasoning_effort: 'low' };
+        expect(mergeOpenAIExtraBody(request, extra)).toEqual({
+            temperature: 0,
+            stream: false,
+            stop: null,
+            reasoning_effort: 'low',
+        });
+        expect(request).toHaveProperty('reasoning_effort', undefined);
+        expect(extra).toEqual({ temperature: 1, stream: true, stop: ['END'], reasoning_effort: 'low' });
     });
 
     it('does not warn when nested extension values equal the generated request', () => {

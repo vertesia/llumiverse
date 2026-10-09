@@ -1,9 +1,65 @@
+import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import { ModelType, PromptRole, Providers } from '@llumiverse/core';
 import { APIConnectionTimeoutError } from 'together-ai/error';
 import { describe, expect, it, vi } from 'vitest';
 import { TogetherAIDriver } from './index.js';
 
 describe('TogetherAIDriver', () => {
+    it.each([
+        [false, false],
+        [false, true],
+        [true, false],
+        [true, true],
+    ])('preserves extensions with streaming=%s and supplied options=%s', async (streaming, supplied) => {
+        const extraBody = { reasoning_effort: 'low', service_tier: 'flex', temperature: 0.5 };
+        const modelOptions = ModelOptionsSchema.parse({
+            _option_id: 'openai-text',
+            seed: 0,
+            ...(supplied ? { effort: 'high', service_tier: 'priority', temperature: 0 } : {}),
+            extra_body: extraBody,
+        });
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        async function* chunks() {
+            yield {
+                id: 'chunk-1',
+                object: 'chat.completion.chunk',
+                created: 1,
+                model: 'test-model',
+                choices: [{ index: 0, finish_reason: 'stop', delta: { content: 'ok' } }],
+            };
+        }
+        const create = vi.fn(async () =>
+            streaming
+                ? chunks()
+                : {
+                      id: 'completion-1',
+                      object: 'chat.completion',
+                      created: 1,
+                      model: 'test-model',
+                      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+                  },
+        );
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+        const options = { model: 'openai/gpt-oss-120b', model_options: modelOptions };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], options);
+        if (streaming) {
+            const result = await driver.requestTextCompletionStream(prompt, options);
+            for await (const _chunk of result) {
+                /* Consume the mocked provider stream. */
+            }
+        } else await driver.requestTextCompletion(prompt, options);
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                reasoning_effort: supplied ? 'high' : 'low',
+                service_tier: supplied ? 'priority' : 'flex',
+                temperature: supplied ? 0 : 0.5,
+                seed: 0,
+                stream: streaming,
+            }),
+        );
+        expect(extraBody).toEqual({ reasoning_effort: 'low', service_tier: 'flex', temperature: 0.5 });
+    });
+
     it.each(['high', 'max', 'none'] as const)(
         'passes explicit effort %s and seed through the Together transport',
         async (effort) => {
