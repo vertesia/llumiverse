@@ -309,6 +309,7 @@ export function getGeminiPayload(
                   },
               }
             : undefined,
+        // Compatibility exception: retain the single-candidate contract on models that accept it.
         candidateCount: restrictSampling ? undefined : 1,
         //JSON/Structured output
         responseMimeType: useStructuredOutput ? 'application/json' : undefined,
@@ -578,8 +579,9 @@ function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGemini
 export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?: Logger): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
 
-    // Compatibility exception: native thinking controls take precedence over generic effort.
+    // Compatibility exception: preserve summary output by default when thinking is explicitly configured.
     const include_thoughts = model_options?.include_thoughts !== false;
+    // Compatibility exception: native thinking controls take precedence over generic effort.
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
         logModelOptionException(logger, option.model, model_options, ['effort'], 'gemini_native_thinking_precedence');
         return {

@@ -24,16 +24,24 @@ describe('Vertex AI model limits', () => {
         expect(getVertexAIModelLimits(model)).toEqual({ context_window });
     });
 
+    it.each([
+        ['grok-4.8', 'grok-4.7'],
+        ['grok-5', 'grok-4.7'],
+        ['glm-5.3-maas', 'glm-5.2-maas'],
+        ['mistral-small-2603', 'mistral-small-2503'],
+        ['mistral-medium-3.6', 'mistral-medium-3'],
+        ['codestral-3', 'codestral-2'],
+    ])('inherits Vertex limits for %s from %s', (model, latestKnown) => {
+        expect(getVertexAIModelLimits(model)).toEqual(getVertexAIModelLimits(latestKnown));
+    });
+
     it('normalizes a complete Vertex resource name', () => {
         expect(
             getVertexAIModelLimits('projects/example/locations/global/publishers/zai-org/models/GLM-5.2-MAAS'),
         ).toEqual({ context_window: 1_000_000, max_output_tokens: 64_000 });
     });
 
-    it.each(['grok-4.8', 'glm-5.3-maas', 'deepseek-v3.1', 'mistral-medium-3.6', ''])(
-        'leaves unknown model %s to canonical family limits',
-        (model) => {
-            expect(getVertexAIModelLimits(model)).toEqual({});
-        },
-    );
+    it.each(['deepseek-v3.1', 'unknown-model', ''])('leaves unrelated model %s unchanged', (model) => {
+        expect(getVertexAIModelLimits(model)).toEqual({});
+    });
 });

@@ -1187,13 +1187,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
             messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
-            // Some OpenAI-compatible providers return empty/truncated completions unless a
+            // Compatibility exception: some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
             temperature: modelOptions?.temperature,
             top_p: modelOptions?.top_p,
             presence_penalty: modelOptions?.presence_penalty,
             frequency_penalty: modelOptions?.frequency_penalty,
+            // Compatibility exception: the completion interface consumes one generated choice.
             n: 1,
             stop: modelOptions?.stop_sequence,
             seed: modelOptions?.seed,

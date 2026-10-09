@@ -61,6 +61,22 @@ describe('central model directory', () => {
         expect(mantle.max_output_tokens).toBe(128_000);
     });
 
+    it.each([
+        ['gemma-5-27b-it-maas', 'gemma-4-26b-a4b-it-maas'],
+        ['mistral-small-2703', 'mistral-small-2503'],
+        ['mistral-medium-4', 'mistral-medium-3'],
+        ['codestral-3', 'codestral-2'],
+    ])('inherits Vertex capabilities for %s from %s', (model, latestKnown) => {
+        expect(resolveModelProfile(model, Providers.vertexai).capabilities).toEqual(
+            resolveModelProfile(latestKnown, Providers.vertexai).capabilities,
+        );
+    });
+
+    it('keeps future hosted Grok limits separate from direct xAI limits', () => {
+        expect(resolveModelProfile('grok-4.8', Providers.vertexai).context_window).toBe(524_288);
+        expect(resolveModelProfile('grok-4.8', Providers.xai).context_window).toBe(500_000);
+    });
+
     it('carries version rules into future model releases', () => {
         expect(resolveModelProfile('gpt-6.1', Providers.openai).reasoning_effort_levels).toEqual([
             'none',

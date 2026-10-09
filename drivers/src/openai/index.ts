@@ -119,6 +119,7 @@ function openAIReasoning(
     if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
+        // Compatibility exception: retain reasoning summaries for the existing completion projection.
         summary: 'auto',
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];

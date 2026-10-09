@@ -60,16 +60,43 @@ Prefer sparse, change-scoped verification in llumiverse unless the user explicit
 - Error handling: use proper error types and propagation, especially with async code
 - Formatting: follows `biome.json` in this repository
 
+## External Input and Provider Defaults
+
+External input means anything supplied to llumiverse by its caller, including values supplied by an application or UI.
+
+- Preserve supplied values. Do not silently drop, clamp, replace, or otherwise repair an option merely because
+  llumiverse's metadata says it is unsupported or outside a known limit. When llumiverse can construct and transport
+  the request, let the provider validate it and return a clear error.
+- Preserve omission. Leave omitted options undefined and omit them from the provider request wherever possible,
+  so provider defaults apply. Do not fill them from option metadata, model limits, recommended values, or copied
+  provider defaults. This lets provider defaults evolve without requiring a llumiverse release.
+- Option and capability metadata describe known support; they are not runtime allowlists. An option's metadata
+  default must not become an implicitly supplied value during execution. Use defaults in metadata only when they
+  accurately describe an intentional llumiverse default, not to prescribe a caller's choice.
+- Translating llumiverse options into provider field names and formats is expected; preserve their meaning and the
+  distinction between an omitted value and an explicit value such as `0` or `false`.
+- New exceptions must be narrow and necessary, such as a required provider field or a model workaround.
+  Label each exception in a nearby code comment, explain why it is needed and when it applies, and test its scope.
+  A default added for omission must not overwrite a supplied value unless that overwrite is itself an explicit exception.
+- Preserve existing exceptions unless changing or removing them has been discussed with the user. These rules alone
+  are not authorization to remove established compatibility behavior.
+- When an exception removes or changes supplied input, log which options were affected and why through the existing
+  logger. Keep logs free of prompts, credentials, and other sensitive content. Do not make input changes opaque.
+
 ## Model Compatibility and Forward Compatibility
 
 Provider model catalogs evolve independently of llumiverse releases. Model support must therefore be expressed through
-stable routing rules rather than duplicated catalog snapshots.
+stable routing rules rather than duplicated catalog snapshots. A model should not require an explicit catalog entry
+or a llumiverse release to have a reasonable chance of working on its first day of provider availability.
 
 - Classify models by provider, publisher, model family, and generation markers. Do not use an exhaustive list of model
   IDs as a production allowlist when a family-level rule can describe the behavior.
 - A newly discovered model in a known family should inherit the protocol, options, capabilities, and execution behavior
-  of the newest understood generation in that family. For version-dependent behavior, use parsed versions and
+  of the newest understood generation in that family **on that provider**, while preserving provider defaults and
+  external input as described above. For version-dependent behavior, use parsed versions and
   greater-than-or-equal comparisons so later generations receive the latest behavior by default.
+- The same model can have different options, limits, capabilities, and transports on different providers. Resolve
+  support in the target provider's context; do not assume direct-provider support or limits apply to a hosted version.
 - Keep exact-ID exceptions only for documented model-specific behavior that cannot be represented by a family or
   version rule. Explain the exception next to the code.
 - Treat the provider's model-discovery API as the source of regional and account availability. Llumiverse should filter

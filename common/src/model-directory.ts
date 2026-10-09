@@ -10,6 +10,7 @@ import {
     getOpenAIReasoningEffortLevels,
     isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
+    isSingleDigitGrokVersionGte,
 } from './options/version-parsing.js';
 import type { ModelCapabilities } from './types.js';
 import { Providers } from './types.js';
@@ -445,14 +446,6 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
     }
     return undefined;
-}
-
-function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
-    const match = model.match(/grok-(\d+)(?:\.(\d))?(?:[-_.]|$)/);
-    if (!match) return false;
-    const major = Number(match[1]);
-    const minor = Number(match[2] ?? 0);
-    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
 export function resolveModelProfile(model: string, provider: Providers): ModelProfile {
