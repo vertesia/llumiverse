@@ -257,6 +257,17 @@ export function getGeminiPayload(
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
     const isNanoBanana = options.model.toLowerCase().includes('gemini-nano-banana');
+    const isImageModel = options.model.toLowerCase().includes('image') || isNanoBanana;
+    // Compatibility exception: existing image requests omit these generation controls.
+    if (isImageModel) {
+        logModelOptionException(
+            logger,
+            options.model,
+            model_options,
+            ['top_k', 'seed', 'presence_penalty', 'frequency_penalty'],
+            'gemini_image_generation_options',
+        );
+    }
     // Compatibility exception: existing Nano Banana requests omit sampling controls.
     if (isNanoBanana) {
         logModelOptionException(logger, options.model, model_options, ['temperature', 'top_p'], 'nano_banana_sampling');
@@ -317,7 +328,7 @@ export function getGeminiPayload(
     return {
         model: options.model,
         contents: payloadContents,
-        config: options.model.toLowerCase().includes('image') || isNanoBanana ? configNanoBanana : config,
+        config: isImageModel ? configNanoBanana : config,
     };
 }
 

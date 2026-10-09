@@ -2,7 +2,11 @@ import { type Completion, type ExecutionOptions, PromptRole } from '@llumiverse/
 import { describe, expect, it, vi } from 'vitest';
 import type { VertexAIDriver } from './index.js';
 import { getModelDefinition } from './models.js';
-import { getListedVertexOpenMaaSModels, VERTEX_OPEN_MAAS_MODELS } from './open-maas-models.js';
+import {
+    getListedVertexOpenMaaSModels,
+    getVertexOpenMaaSRequestModel,
+    VERTEX_OPEN_MAAS_MODELS,
+} from './open-maas-models.js';
 
 function createDriverStub() {
     const post = vi.fn(async () => ({
@@ -235,6 +239,31 @@ describe('Vertex open MaaS catalog', () => {
 });
 
 describe('Vertex MaaS forward routing', () => {
+    it('inherits Meta transport settings when no location is specified', async () => {
+        const model = 'llama-5-new-instruct-maas';
+        const request = getVertexOpenMaaSRequestModel('meta', model);
+        expect(request).toMatchObject({
+            modelName: `meta/${model}`,
+            region: 'us-east5',
+            apiVersion: 'v1beta1',
+            extraBody: {
+                google: { model_safety_settings: { enabled: false, llama_guard_settings: {} } },
+            },
+        });
+        const { getFetchClientForRegion } = await requestForModel(`publishers/meta/models/${model}`);
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-east5', 'v1beta1');
+    });
+
+    it('does not inherit an exact model token-limit workaround', async () => {
+        const model = 'gpt-oss-200b-maas';
+        const request = getVertexOpenMaaSRequestModel('openai', model);
+        expect(request?.region).toBe('global');
+        expect(request).not.toHaveProperty('defaultMaxTokens');
+        const { post, getFetchClientForRegion } = await requestForModel(`publishers/openai/models/${model}`);
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('global', undefined);
+        expect(post.mock.calls[0][1].payload.max_tokens).toBeUndefined();
+    });
+
     it.each([
         ['qwen', 'qwen4-new-instruct-maas'],
         ['zaiorg', 'glm-6-maas'],

@@ -137,4 +137,37 @@ describe('model option compatibility exceptions', () => {
             expect.any(String),
         );
     });
+
+    it.each(['gemini-3.1-flash-image', 'gemini-nano-banana-2.1'])(
+        'reports existing image generation option omissions for %s',
+        (model) => {
+            const log = logger();
+            const { config } = getGeminiPayload(
+                {
+                    model,
+                    model_options: {
+                        _option_id: 'vertexai-gemini',
+                        top_k: 5,
+                        seed: 0,
+                        presence_penalty: 0,
+                        frequency_penalty: 0,
+                    },
+                },
+                { contents: [] },
+                log,
+            );
+            expect(config?.topK).toBeUndefined();
+            expect(config?.seed).toBeUndefined();
+            expect(config?.presencePenalty).toBeUndefined();
+            expect(config?.frequencyPenalty).toBeUndefined();
+            expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+                {
+                    model,
+                    option_names: ['top_k', 'seed', 'presence_penalty', 'frequency_penalty'],
+                    reason: 'gemini_image_generation_options',
+                },
+                'Model option compatibility exception changed caller input',
+            );
+        },
+    );
 });
