@@ -446,47 +446,50 @@ class TestResponsesDriver extends OpenAIResponsesDriverBase {
 }
 
 describe('Bedrock Mantle Responses options', () => {
-    it('forwards verbosity alongside structured output format', async () => {
-        const create = vi.fn<ResponsesCreate>(async () => createResponse());
-        const driver = new TestResponsesDriver(create);
-        const prompt = [
-            { type: 'message', role: 'user', content: 'hello' },
-        ] satisfies OpenAI.Responses.ResponseInputItem[];
-        const result_schema = {
-            type: 'object' as const,
-            properties: { answer: { type: 'string' as const } },
-            required: ['answer'],
-        };
+    it.each(['openai.gpt-5.5', 'openai.gpt-5.6-sol', 'openai.gpt-6-astra', 'openai.gpt-6-luna', 'openai.gpt-6.1-sol'])(
+        'forwards effort and verbosity alongside structured output for %s',
+        async (model) => {
+            const create = vi.fn<ResponsesCreate>(async () => createResponse());
+            const driver = new TestResponsesDriver(create);
+            const prompt = [
+                { type: 'message', role: 'user', content: 'hello' },
+            ] satisfies OpenAI.Responses.ResponseInputItem[];
+            const result_schema = {
+                type: 'object' as const,
+                properties: { answer: { type: 'string' as const } },
+                required: ['answer'],
+            };
 
-        await driver.requestTextCompletion(prompt, {
-            model: 'openai.gpt-5.5',
-            model_options: {
-                _option_id: 'bedrock-mantle-responses',
-                max_tokens: 100,
-                effort: 'low',
-                verbosity: 'low',
-            },
-            result_schema,
-        });
-
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({
-                model: 'openai.gpt-5.5',
-                max_output_tokens: 100,
-                reasoning: { effort: 'low', summary: 'auto' },
-                include: ['reasoning.encrypted_content'],
-                text: expect.objectContaining({
+            await driver.requestTextCompletion(prompt, {
+                model,
+                model_options: {
+                    _option_id: 'bedrock-mantle-responses',
+                    max_tokens: 100,
+                    effort: 'low',
                     verbosity: 'low',
-                    format: {
-                        type: 'json_schema',
-                        name: 'format_output',
-                        strict: false,
-                        schema: result_schema,
-                    },
+                },
+                result_schema,
+            });
+
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    model,
+                    max_output_tokens: 100,
+                    reasoning: { effort: 'low', summary: 'auto' },
+                    include: ['reasoning.encrypted_content'],
+                    text: expect.objectContaining({
+                        verbosity: 'low',
+                        format: {
+                            type: 'json_schema',
+                            name: 'format_output',
+                            strict: false,
+                            schema: result_schema,
+                        },
+                    }),
                 }),
-            }),
-        );
-    });
+            );
+        },
+    );
 
     it('forwards Grok reasoning effort through the Responses API', async () => {
         const create = vi.fn<ResponsesCreate>(async () => createResponse());

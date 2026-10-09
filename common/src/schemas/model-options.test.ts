@@ -37,6 +37,17 @@ const union = emitted.$defs.ModelOptions;
 const MEMBERS = (union.oneOf ?? union.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
+    it('accepts and publishes Converse GPT reasoning controls', () => {
+        const options = { _option_id: 'bedrock-converse', effort: 'max', reasoning_effort: 'low', verbosity: 'high' };
+        expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        expect(emitted.$defs.BedrockConverseOptions.properties).toMatchObject({
+            effort: { $ref: '#/$defs/ReasoningEffort' },
+            reasoning_effort: { $ref: '#/$defs/ReasoningEffort' },
+            verbosity: { type: 'string', enum: ['low', 'medium', 'high'] },
+        });
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'bedrock-converse', effort: 'invalid' }).success).toBe(false);
+    });
+
     it.each(['anthropic-claude', 'bedrock-claude', 'bedrock-mantle-claude', 'vertexai-claude'])(
         'accepts and publishes optional thinking mode for %s',
         (_option_id) => {

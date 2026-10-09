@@ -360,8 +360,10 @@ export function getOpenAIReasoningEffortLevels(modelString: string): Record<stri
             'Extra High': 'xhigh',
             Max: 'max',
         };
-        // GPT-6 Astra rejects `none`; GPT-6 Sol and Luna accept it.
-        if (!isOpenAIGptAstraModel(modelString)) {
+        // Astra and GPT-6.1+ Sol reject `none`; GPT-6.0 Sol and Luna accept it.
+        const isReasoningSol =
+            isOpenAIGptVersionGTE(modelString, 6, 1) && /(?:^|[-_.])sol(?:[-_.]|$)/i.test(modelString);
+        if (!isOpenAIGptAstraModel(modelString) && !isReasoningSol) {
             return { None: 'none', ...levels };
         }
         return levels;

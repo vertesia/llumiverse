@@ -25,6 +25,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import {
     type AIModel,
     type BedrockClaudeOptions,
+    type BedrockConverseOptions,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
     type Completion,
@@ -42,6 +43,7 @@ import {
     type HttpTimeoutOptions,
     incrementConversationTurn,
     isEmbeddingModel,
+    isOpenAIGptVersionGTE,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -1379,6 +1381,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model,
             options.model_options as BedrockClaudeOptions | undefined,
         );
+<<<<<<< HEAD
         const claudeVersion = parseClaudeVersion(options.model);
         const onlySupportsAdaptiveThinking = claudeVersion?.variant === 'fable' || claudeVersion?.variant === 'mythos';
         const useAutomaticToolChoiceForAdaptiveClaude =
@@ -1394,6 +1397,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             claudeThinking.supportsThinking &&
             !useAutomaticToolChoiceForAdaptiveClaude;
         const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
+=======
+        const isGpt = isOpenAIGptVersionGTE(options.model, 5, 0);
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction || isGpt;
+>>>>>>> 2e358b9 (fix: complete Bedrock GPT reasoning options and metadata (#758))
 
         if (options.model.includes('amazon')) {
             supportsJSONPrefill = true;
@@ -1512,6 +1519,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             // DeepSeek models: no additional options, no stopSequences, only one of temperature/top_p
             model_options.stop_sequence = undefined;
             model_options.top_p = undefined;
+        } else if (isGpt) {
+            const gptOptions = options.model_options as BedrockConverseOptions | undefined;
+            const effort = gptOptions?.effort ?? gptOptions?.reasoning_effort;
+            additionalField = {
+                ...(effort !== undefined && { reasoning: { effort } }),
+                text: {
+                    verbosity: gptOptions?.verbosity,
+                    // Bedrock's OpenAI Converse adapter requires strict in addition to outputConfig.
+                    ...(options.result_schema && { format: { strict: true } }),
+                },
+            };
         } else if (options.model.includes('gpt-oss')) {
             const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
             additionalField = {
@@ -1554,7 +1572,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                       temperature: model_options.temperature,
                       topP: model_options.temperature != null ? undefined : model_options.top_p,
                   }),
-            stopSequences: model_options.stop_sequence,
+            stopSequences: isGpt ? undefined : model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
         //Construct the final request payload
