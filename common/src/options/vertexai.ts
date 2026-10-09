@@ -656,7 +656,8 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             {
                 name: 'include_thoughts',
                 type: OptionType.boolean,
-                default: true,
+                // Flash-Lite defaults to no thinking, so requesting summaries by default causes a provider error.
+                default: !model.includes('flash-lite'),
                 description: "Include the model's reasoning process in the response",
             },
             {

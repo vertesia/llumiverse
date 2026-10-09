@@ -1,5 +1,5 @@
 import { ThinkingLevel } from '@google/genai';
-import type { StatelessExecutionOptions } from '@llumiverse/core';
+import { getOptions, type ModelOptions, Providers, type StatelessExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import { geminiThinkingConfig, getGeminiPayload } from './gemini.js';
 
@@ -112,5 +112,31 @@ describe('Gemini Flash generation parameters', () => {
             contents: [],
         });
         expect(payload.config).toMatchObject({ candidateCount: 1, temperature: 0.7, topP: 0.9 });
+    });
+});
+
+describe('Gemini metadata-derived defaults', () => {
+    it.each([
+        ['gemini-2.5-flash-lite', false],
+        ['gemini-2.5-flash', true],
+        ['gemini-3.8-flash', true],
+    ])('preserves provider thinking defaults for %s', (model, includeThoughts) => {
+        const metadata = getOptions(model, Providers.vertexai);
+        const model_options = {
+            _option_id: metadata._option_id,
+            ...Object.fromEntries(
+                metadata.options
+                    .filter((option) => option.default !== undefined)
+                    .map((option) => [option.name, option.default]),
+            ),
+        } as ModelOptions;
+        const payload = getGeminiPayload({ model, model_options }, { contents: [] });
+        expect(payload.config?.thinkingConfig).toEqual({ includeThoughts });
+        if (model === 'gemini-3.8-flash') {
+            expect(payload.config?.candidateCount).toBeUndefined();
+            expect(payload.config?.temperature).toBeUndefined();
+            expect(payload.config?.presencePenalty).toBeUndefined();
+            expect(payload.config?.frequencyPenalty).toBeUndefined();
+        }
     });
 });

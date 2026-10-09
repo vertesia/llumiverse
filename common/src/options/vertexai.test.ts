@@ -162,3 +162,16 @@ describe('Vertex Gemini reasoning metadata', () => {
         },
     );
 });
+
+describe('Gemini 2.5 thinking defaults', () => {
+    it.each([
+        ['gemini-2.5-flash-lite', false],
+        ['gemini-2.5-flash', true],
+        ['gemini-2.5-pro', true],
+    ])('uses a compatible summary default for %s', (model, includeThoughts) => {
+        const options = getVertexAiOptions(model).options;
+        expect(options.find((option) => option.name === 'include_thoughts')?.default).toBe(includeThoughts);
+        expect(options.find((option) => option.name === 'thinking_budget_tokens')?.default).toBeUndefined();
+        expect(options.find((option) => option.name === 'effort')?.default).toBeUndefined();
+    });
+});
