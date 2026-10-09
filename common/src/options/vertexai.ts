@@ -745,7 +745,8 @@ function isOpenMaaSChatModel(model: string): boolean {
 }
 
 function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
-    const compatible = getOpenAiCompatibleOptions(model, undefined, resolveModelProfile(model, Providers.vertexai));
+    const profile = resolveModelProfile(model, Providers.vertexai);
+    const compatible = getOpenAiCompatibleOptions(model, undefined, profile);
     const commonOptions = compatible.options
         // Vertex Open MaaS does not offer these OpenAI-native penalty fields consistently across source families.
         .filter(
@@ -753,6 +754,15 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
                 option.name !== SharedOptions.presence_penalty && option.name !== SharedOptions.frequency_penalty,
         )
         .map((commonOption) => {
+            if (
+                commonOption.name === SharedOptions.max_tokens &&
+                commonOption.type === OptionType.numeric &&
+                profile.max_output_tokens === undefined
+            ) {
+                // An OpenAI-compatible transport does not establish a provider-specific output limit.
+                const { max: _unverifiedMax, ...withoutMax } = commonOption;
+                return withoutMax;
+            }
             if (
                 model.includes('llama') &&
                 commonOption.name === SharedOptions.temperature &&

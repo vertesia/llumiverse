@@ -122,6 +122,9 @@ describe('Vertex AI MaaS metadata', () => {
 
     it('uses model-specific MaaS output token limits where known', () => {
         expect(getMaxTokensLimitVertexAi('qwen3-next-80b-a3b-thinking-maas')).toBe(262144);
+        expect(
+            getVertexAiOptions('qwen3-next-80b-a3b-thinking-maas').options.find((item) => item.name === 'max_tokens'),
+        ).toMatchObject({ max: 262144 });
     });
 
     it('uses Claude Sonnet 4.6 128K output limit on Vertex AI', () => {
@@ -194,6 +197,10 @@ describe('Vertex regional Mistral chat metadata', () => {
         expect(options.options.map((option) => option.name)).not.toContain('presence_penalty');
         expect(options.options.map((option) => option.name)).not.toContain('frequency_penalty');
         expect(options.options.map((option) => option.name)).not.toContain('effort');
+        const maxTokens = options.options.find((option) => option.name === 'max_tokens');
+        expect(maxTokens).toBeDefined();
+        expect(maxTokens).not.toHaveProperty('max');
+        expect(maxTokens?.default).toBeUndefined();
     });
     it.each(['mistral-small-2503', 'mistral-medium-3', 'codestral-2'])(
         'preserves documented capabilities for %s',
