@@ -1381,7 +1381,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model,
             options.model_options as BedrockClaudeOptions | undefined,
         );
-<<<<<<< HEAD
         const claudeVersion = parseClaudeVersion(options.model);
         const onlySupportsAdaptiveThinking = claudeVersion?.variant === 'fable' || claudeVersion?.variant === 'mythos';
         const useAutomaticToolChoiceForAdaptiveClaude =
@@ -1396,11 +1395,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             forcedToolRequested &&
             claudeThinking.supportsThinking &&
             !useAutomaticToolChoiceForAdaptiveClaude;
-        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
-=======
         const isGpt = isOpenAIGptVersionGTE(options.model, 5, 0);
         const hasSamplingRestriction = claudeThinking.hasSamplingRestriction || isGpt;
->>>>>>> 2e358b9 (fix: complete Bedrock GPT reasoning options and metadata (#758))
 
         if (options.model.includes('amazon')) {
             supportsJSONPrefill = true;
