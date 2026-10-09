@@ -47,7 +47,7 @@ export function isFlexSupportedOpenAIModel(model: string): boolean {
     if (unsupportedVariant) return false;
 
     return (
-        /^gpt-5(?:[.-]|$)/.test(modelName) ||
+        isOpenAIGptVersionGTE(modelName, 5, 0) ||
         /^o3(?:-\d{4}|$)/.test(modelName) ||
         /^o4-mini(?:-\d{4}|$)/.test(modelName)
     );
@@ -79,6 +79,12 @@ export function getOpenAiOptions(
         Default: 'default',
         Priority: 'priority',
     };
+    if (provider === Providers.openai && isOpenAIGptVersionGTE(model, 6, 0)) {
+        serviceTiers.Fast = 'fast';
+        if (model.includes('astra') || (model.includes('sol') && isOpenAIGptVersionGTE(model, 6, 1))) {
+            serviceTiers.Ultrafast = 'ultrafast';
+        }
+    }
     if (isFlexSupportedOpenAIModel(model)) {
         serviceTiers.Flex = 'flex';
     }
@@ -310,7 +316,9 @@ export function getOpenAiOptions(
         return {
             _option_id: 'openai-thinking',
             options: [
-                ...commonOptions,
+                ...commonOptions.filter(
+                    (item) => provider === Providers.openai_compatible || item.name !== SharedOptions.stop_sequence,
+                ),
                 ...reasoningOptions,
                 ...reasoningContextOptions,
                 ...visionOptions,
@@ -399,7 +407,15 @@ export function getOpenAiOptions(
         return {
             _option_id: 'openai-text',
             options: [
-                ...commonOptions,
+                ...commonOptions.filter(
+                    (item) =>
+                        provider === Providers.openai_compatible ||
+                        ![
+                            SharedOptions.stop_sequence,
+                            SharedOptions.presence_penalty,
+                            SharedOptions.frequency_penalty,
+                        ].includes(item.name as SharedOptions),
+                ),
                 ...visionOptions,
                 ...serviceTierOptions,
                 {

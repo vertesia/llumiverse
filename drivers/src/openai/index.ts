@@ -18,6 +18,7 @@ import {
     isOpenAIImageVersionGTE,
     type JSONSchema,
     LlumiverseError,
+    type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
@@ -107,12 +108,7 @@ function hasNumericStatus(error: unknown): boolean {
 
 function isOpenAIReasoningModel(model: string): boolean {
     const normalized = model.toLowerCase();
-    return (
-        normalized.includes('o1') ||
-        normalized.includes('o3') ||
-        normalized.includes('o4') ||
-        isOpenAIGptVersionGTE(model, 5, 0)
-    );
+    return /(?:^|[/:.])o(?:1|3|4)(?:-|$)/.test(normalized) || isOpenAIGptVersionGTE(model, 5, 0);
 }
 
 function openAIReasoning(
@@ -120,30 +116,12 @@ function openAIReasoning(
     isReasoningModel: boolean,
     context: OpenAIRequestOptions['reasoning_context'],
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
-    if (!effort && !isReasoningModel) return undefined;
+    if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
         summary: 'auto',
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
-}
-
-function supportsOpenAIReasoningContext(provider: Providers, model: string): boolean {
-    if (provider !== Providers.openai) return false;
-    const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return isOpenAIGptVersionGTE(modelId, 5, 6);
-}
-
-function openAIReasoningContext(
-    provider: Providers,
-    model: string,
-    requestedContext: OpenAIRequestOptions['reasoning_context'],
-): OpenAIRequestOptions['reasoning_context'] {
-    if (requestedContext === undefined) return undefined;
-    if (!supportsOpenAIReasoningContext(provider, model)) {
-        throw new Error(`reasoning_context is not supported for model ${model} through provider ${provider}`);
-    }
-    return requestedContext;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -205,22 +183,23 @@ function getPromptCacheRequestOptions(
     model: string,
     retention: OpenAIRequestOptions['prompt_cache_retention'],
     options: OpenAIPromptCacheConfig['options'],
+    logger?: Logger,
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
     if (isOpenAIGptVersionGTE(model, 5, 6)) {
-        if (retention === 'in_memory') {
-            throw new Error(
-                'GPT-5.6 and later do not support in_memory prompt cache retention; configure 24h or remove the override.',
+        // Compatibility exception: legacy 24h cache retention maps to the newer API's 30m TTL.
+        if (retention === '24h') {
+            logModelOptionException(
+                logger,
+                model,
+                { prompt_cache_retention: retention },
+                ['prompt_cache_retention'],
+                'openai_cache_retention',
             );
         }
         return {
             prompt_cache_retention: retention,
             prompt_cache_options: retention === '24h' ? { ...options, ttl: '30m' } : options,
         };
-    }
-    if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {
-        throw new Error(
-            'GPT-5.5 does not support in_memory prompt cache retention; configure 24h or remove the override.',
-        );
     }
     return { prompt_cache_retention: retention, prompt_cache_options: options };
 }
@@ -311,12 +290,22 @@ export class OpenAIResponsesProtocol {
         }
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
+        // Compatibility exception: the canonical effort option wins over its legacy alias.
+        if (
+            model_options?.effort !== undefined &&
+            model_options.reasoning_effort !== undefined &&
+            model_options.effort !== model_options.reasoning_effort
+        ) {
+            logModelOptionException(
+                driver.logger,
+                options.model,
+                model_options,
+                ['reasoning_effort'],
+                'openai_effort_alias_precedence',
+            );
+        }
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoningContext = openAIReasoningContext(
-            driver.provider,
-            options.model,
-            model_options?.reasoning_context,
-        );
+        const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
@@ -331,6 +320,7 @@ export class OpenAIResponsesProtocol {
             options.model,
             promptCacheRetention,
             promptCache.options,
+            driver.logger,
         );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
@@ -344,6 +334,13 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
+                ...(model_options?.stop_sequence !== undefined && { stop: model_options.stop_sequence }),
+                ...(model_options?.presence_penalty !== undefined && {
+                    presence_penalty: model_options.presence_penalty,
+                }),
+                ...(model_options?.frequency_penalty !== undefined && {
+                    frequency_penalty: model_options.frequency_penalty,
+                }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
                 tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
@@ -355,6 +352,8 @@ export class OpenAIResponsesProtocol {
                 ),
             },
             model_options?.extra_body,
+            driver.logger,
+            options.model,
         );
         // Compatibility exception: existing Responses reasoning requests omit sampling controls.
         if (isReasoningModel) {
@@ -425,12 +424,22 @@ export class OpenAIResponsesProtocol {
         }
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
+        // Compatibility exception: the canonical effort option wins over its legacy alias.
+        if (
+            model_options?.effort !== undefined &&
+            model_options.reasoning_effort !== undefined &&
+            model_options.effort !== model_options.reasoning_effort
+        ) {
+            logModelOptionException(
+                driver.logger,
+                options.model,
+                model_options,
+                ['reasoning_effort'],
+                'openai_effort_alias_precedence',
+            );
+        }
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoningContext = openAIReasoningContext(
-            driver.provider,
-            options.model,
-            model_options?.reasoning_context,
-        );
+        const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
@@ -444,6 +453,7 @@ export class OpenAIResponsesProtocol {
             options.model,
             promptCacheRetention,
             promptCache.options,
+            driver.logger,
         );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
@@ -457,6 +467,13 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
+                ...(model_options?.stop_sequence !== undefined && { stop: model_options.stop_sequence }),
+                ...(model_options?.presence_penalty !== undefined && {
+                    presence_penalty: model_options.presence_penalty,
+                }),
+                ...(model_options?.frequency_penalty !== undefined && {
+                    frequency_penalty: model_options.frequency_penalty,
+                }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
                 tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
@@ -468,6 +485,8 @@ export class OpenAIResponsesProtocol {
                 ),
             },
             model_options?.extra_body,
+            driver.logger,
+            options.model,
         );
         // Compatibility exception: existing Responses reasoning requests omit sampling controls.
         if (isReasoningModel) {

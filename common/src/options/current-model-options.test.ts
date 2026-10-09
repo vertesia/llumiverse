@@ -10,6 +10,64 @@ function effortValues(model: string, provider: Providers): string[] {
 }
 
 describe('current reasoning model options', () => {
+    it.each(['grok-4.6', 'grok-4.7'])('exposes xAI xhigh effort for %s', (model) => {
+        expect(effortValues(model, Providers.xai)).toEqual(['low', 'medium', 'high', 'xhigh']);
+    });
+
+    it('uses xAI Grok 4.7 limits without a guessed output cap', () => {
+        expect(resolveModelProfile('grok-4.7', Providers.xai)).toMatchObject({ context_window: 500_000 });
+        const options = getOptions('grok-4.7', Providers.xai).options;
+        expect(options.find((option) => option.name === 'max_tokens')).not.toHaveProperty('max');
+        for (const name of ['stop_sequence', 'presence_penalty', 'frequency_penalty'])
+            expect(options.map((option) => option.name)).not.toContain(name);
+    });
+
+    it('keeps Chat-only controls out of direct Responses metadata', () => {
+        for (const provider of [Providers.openai, Providers.azure_openai]) {
+            const names = getOptions('gpt-4.1', provider).options.map((option) => option.name);
+            for (const name of ['stop_sequence', 'presence_penalty', 'frequency_penalty'])
+                expect(names).not.toContain(name);
+        }
+        expect(getOptions('gpt-4.1', Providers.openai_compatible).options.map((option) => option.name)).toEqual(
+            expect.arrayContaining(['stop_sequence', 'presence_penalty', 'frequency_penalty']),
+        );
+    });
+
+    it.each(['openai/gpt-oss-20b', 'openai/gpt-oss-120b'])(
+        'exposes Groq effort for %s without injecting a default',
+        (model) => {
+            expect(effortValues(model, Providers.groq)).toEqual(['low', 'medium', 'high']);
+            expect(resolveModelProfile(model, Providers.groq)).toMatchObject({
+                context_window: 131_072,
+                max_output_tokens: 65_536,
+            });
+            expect(
+                getOptions(model, Providers.groq).options.find((option) => option.name === 'max_tokens'),
+            ).toMatchObject({ max: 65_536 });
+            expect(
+                getOptions(model, Providers.groq).options.find((option) => option.name === 'effort'),
+            ).not.toHaveProperty('default');
+        },
+    );
+
+    it('exposes current Groq Qwen effort and Together DeepSeek effort', () => {
+        expect(resolveModelProfile('qwen/qwen3.8-27b', Providers.groq)).toMatchObject({
+            context_window: 131_072,
+            max_output_tokens: 16_384,
+        });
+        expect(effortValues('qwen/qwen3.8-27b', Providers.groq)).toEqual(['none', 'low', 'medium', 'high']);
+        expect(effortValues('deepseek-ai/DeepSeek-V4-Pro-0813', Providers.togetherai)).toEqual(['high', 'max']);
+    });
+
+    it.each(['gpt-6-astra', 'gpt-6.1-sol'])('advertises current OpenAI processing tiers for %s', (model) => {
+        expect(
+            getOptions(model, Providers.openai).options.find((option) => option.name === 'service_tier'),
+        ).toMatchObject({
+            default: 'auto',
+            enum: { Fast: 'fast', Ultrafast: 'ultrafast' },
+        });
+    });
+
     it.each([
         [Providers.anthropic, 'claude-haiku-5-5'],
         [Providers.bedrock, 'anthropic.claude-haiku-5-5'],

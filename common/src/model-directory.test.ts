@@ -5,7 +5,7 @@ import { getOptions } from './options.js';
 import { Providers } from './types.js';
 
 describe('central model directory', () => {
-    it('applies documented Vertex MaaS limits without changing other providers', () => {
+    it('keeps documented Vertex MaaS limits distinct from direct provider limits', () => {
         const model = 'locations/global/publishers/zai-org/models/glm-5.2-maas';
         expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
             context_window: 1_000_000,
@@ -17,7 +17,7 @@ describe('central model directory', () => {
             max: 64_000,
         });
         expect(resolveModelProfile('grok-4.7', Providers.vertexai).context_window).toBe(524_288);
-        expect(resolveModelProfile('grok-4.7', Providers.xai).context_window).toBe(1_000_000);
+        expect(resolveModelProfile('grok-4.7', Providers.xai).context_window).toBe(500_000);
     });
 
     it('resolves provider-qualified Gemini models through OpenAI-compatible transport', () => {
