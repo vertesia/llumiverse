@@ -59,7 +59,7 @@ describe('Vertex AI MaaS metadata', () => {
         expect(capabilities.tool_support).toBe(true);
     });
 
-    it('keeps model-specific MaaS capability exceptions', () => {
+    it('exposes Gemma 4 MaaS tool support', () => {
         const gemma = getModelCapabilities(
             'locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas',
             Providers.vertexai,
@@ -67,7 +67,7 @@ describe('Vertex AI MaaS metadata', () => {
         expect(gemma.input.text).toBe(true);
         expect(gemma.input.image).toBe(true);
         expect(gemma.output.text).toBe(true);
-        expect(gemma.tool_support).toBe(false);
+        expect(gemma.tool_support).toBe(true);
     });
 
     it('uses MaaS modality and tool-support metadata for key model families', () => {
