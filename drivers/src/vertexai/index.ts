@@ -736,7 +736,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'imagen-product-recontext-preview',
                     'embedding',
                     'embed',
+                    // Special-purpose Gemini APIs are excluded even when they advertise generateContent.
                     '-live',
+                    '-robotics',
                     'native-audio',
                     '-tts',
                     'computer-use-preview',

@@ -31,6 +31,8 @@ class TestVertexAIDriver extends VertexAIDriver {
                             { name: 'publishers/google/models/gemini-live-future' },
                             { name: 'publishers/google/models/gemini-3.8-live' },
                             { name: 'publishers/google/models/gemini-4-live-preview' },
+                            { name: 'publishers/google/models/gemini-robotics-er-1.5-preview' },
+                            { name: 'publishers/google/models/gemini-4-robotics-preview' },
                             { name: 'publishers/google/models/gemini-nano-banana-2.1' },
                             { name: 'publishers/google/models/gemini-4-tts' },
                         ],
@@ -89,6 +91,20 @@ describe('VertexAIDriver listModels', () => {
             ]),
         );
         expect(models.some((model) => model.id === 'publishers/google/models/gemini-nano-banana-2.1')).toBe(false);
+    });
+
+    it.each([
+        'gemini-robotics-er-1.5-preview',
+        'gemini-4-robotics-preview',
+        'gemini-live-future',
+        'gemini-4-live-preview',
+    ])('excludes special-purpose %s from regional and global listings', async (name) => {
+        const models = await new TestVertexAIDriver([
+            { name: `models/${name}`, supportedActions: ['generateContent'] },
+            { name: 'models/gemini-4-future', supportedActions: ['generateContent'] },
+        ]).listModels();
+        expect(models.some((model) => model.id.split('/').pop() === name)).toBe(false);
+        expect(models.some((model) => model.id === 'locations/global/models/gemini-4-future')).toBe(true);
     });
 
     it('uses supported actions to keep only models executable by the implemented Google paths', async () => {
