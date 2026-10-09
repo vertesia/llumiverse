@@ -1,6 +1,6 @@
 import { ThinkingLevel } from '@google/genai';
 import { getOptions, type ModelOptions, Providers, type StatelessExecutionOptions } from '@llumiverse/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { geminiThinkingConfig, getGeminiPayload } from './gemini.js';
 
 function options(model: string, model_options?: Record<string, unknown>): StatelessExecutionOptions {
@@ -8,6 +8,23 @@ function options(model: string, model_options?: Record<string, unknown>): Statel
 }
 
 describe('Gemini thinking configuration', () => {
+    it('warns when native thinking controls take precedence over generic effort', () => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const model = 'gemini-3.5-flash';
+        expect(
+            getGeminiPayload(options(model, { effort: 'high', thinking_level: 'low' }), { contents: [] }, logger).config
+                ?.thinkingConfig,
+        ).toMatchObject({ thinkingLevel: 'low' });
+        expect(logger.warn).toHaveBeenCalledOnce();
+        expect(logger.warn).toHaveBeenCalledWith(
+            { model, option_names: ['effort'], reason: 'gemini_native_thinking_precedence' },
+            'Model option compatibility exception changed caller input',
+        );
+        logger.warn.mockClear();
+        geminiThinkingConfig(options(model, { thinking_level: 'low' }), logger);
+        expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it('leaves thinking undefined when the caller did not configure it', () => {
         expect(geminiThinkingConfig(options('gemini-3.5-flash'))).toBeUndefined();
         expect(geminiThinkingConfig(options('gemini-2.5-pro'))).toBeUndefined();

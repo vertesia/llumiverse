@@ -200,6 +200,7 @@ function toTogetherRequest(
         max_tokens: payload.max_tokens ?? undefined,
         temperature: payload.temperature ?? undefined,
         top_p: payload.top_p ?? undefined,
+        ...(payload.seed !== undefined && { seed: payload.seed as CompletionCreateParamsNonStreaming['seed'] }),
         presence_penalty: payload.presence_penalty ?? undefined,
         frequency_penalty: payload.frequency_penalty ?? undefined,
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,

@@ -73,7 +73,7 @@ import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { logModelOptionException } from '../shared/model-option-exceptions.js';
+import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -1536,7 +1536,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             model_options.top_p = undefined;
         } else if (isGpt) {
             const gptOptions = options.model_options as BedrockConverseOptions | undefined;
-            const effort = gptOptions?.effort ?? gptOptions?.reasoning_effort;
+            const effort = resolveOpenAIEffort(gptOptions, this.logger, options.model);
             additionalField = {
                 ...(effort !== undefined && { reasoning: { effort } }),
                 text: {

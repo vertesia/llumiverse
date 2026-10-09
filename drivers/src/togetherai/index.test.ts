@@ -5,8 +5,15 @@ import { TogetherAIDriver } from './index.js';
 
 describe('TogetherAIDriver', () => {
     it.each(['high', 'max', 'none'] as const)(
-        'passes explicit effort %s through the Together transport',
+        'passes explicit effort %s and seed through the Together transport',
         async (effort) => {
+            const seed = effort === 'high' ? 42 : effort === 'max' ? 0 : undefined;
+            const modelOptions = {
+                _option_id: 'openai-text' as const,
+                effort,
+                seed,
+                extra_body: { reasoning: { enabled: true }, seed: 27 },
+            };
             const driver = new TogetherAIDriver({ apiKey: 'test-key' });
             const create = vi.fn(async () => ({
                 id: 'reasoning-1',
@@ -21,12 +28,12 @@ describe('TogetherAIDriver', () => {
                 { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'Think' }] },
                 {
                     model: 'openai/gpt-oss-120b',
-                    model_options: { _option_id: 'openai-text', effort, extra_body: { reasoning: { enabled: true } } },
+                    model_options: modelOptions,
                 },
             );
 
             expect(create).toHaveBeenCalledWith(
-                expect.objectContaining({ reasoning_effort: effort, reasoning: { enabled: true } }),
+                expect.objectContaining({ reasoning_effort: effort, seed: seed ?? 27, reasoning: { enabled: true } }),
             );
         },
     );

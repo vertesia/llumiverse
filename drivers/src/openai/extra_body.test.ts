@@ -17,6 +17,17 @@ describe('OpenAI-compatible extra body', () => {
         );
     });
 
+    it('does not warn when nested extension values equal the generated request', () => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        mergeOpenAIExtraBody(
+            { stream_options: { include_usage: true }, stop: ['one', 'two'] },
+            { stop: ['one', 'two'], stream_options: { include_usage: true } },
+            logger,
+            'model',
+        );
+        expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it('extracts only object-shaped extension fields', () => {
         expect(getOpenAIExtraBody({ extra_body: { provider: { sort: 'price' } } })).toEqual({
             provider: { sort: 'price' },

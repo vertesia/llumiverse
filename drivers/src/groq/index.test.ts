@@ -8,31 +8,37 @@ function setGroqCreate(driver: GroqDriver, create: ReturnType<typeof vi.fn>): vo
 }
 
 describe('GroqDriver shared Chat Completions transport', () => {
-    it.each(['high', 'none', 'max'] as const)('forwards explicit effort %s without local filtering', async (effort) => {
-        const driver = new GroqDriver({ apiKey: 'test-key' });
-        const create = vi.fn(async (_request: unknown) => ({
-            id: 'groq-1',
-            object: 'chat.completion',
-            created: 1,
-            model: 'test-model',
-            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
-        }));
-        setGroqCreate(driver, create);
-        await driver.requestTextCompletion(
-            { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'hello' }] },
-            {
-                model: 'openai/gpt-oss-120b',
-                model_options: {
-                    _option_id: 'openai-text',
-                    effort,
-                    extra_body: { include_reasoning: false },
+    it.each(['high', 'none', 'max'] as const)(
+        'forwards explicit effort %s and seed without local filtering',
+        async (effort) => {
+            const seed = effort === 'high' ? 42 : effort === 'none' ? 0 : undefined;
+            const modelOptions = {
+                _option_id: 'openai-text' as const,
+                effort,
+                seed,
+                extra_body: { include_reasoning: false, seed: 27 },
+            };
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async (_request: unknown) => ({
+                id: 'groq-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test-model',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+            }));
+            setGroqCreate(driver, create);
+            await driver.requestTextCompletion(
+                { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'hello' }] },
+                {
+                    model: 'openai/gpt-oss-120b',
+                    model_options: modelOptions,
                 },
-            },
-        );
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({ reasoning_effort: effort, include_reasoning: false }),
-        );
-    });
+            );
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({ reasoning_effort: effort, seed: seed ?? 27, include_reasoning: false }),
+            );
+        },
+    );
 
     it('forwards a longer per-execution timeout to the SDK request', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });

@@ -385,6 +385,32 @@ describe('BedrockMantleDriver protocol execution', () => {
         );
     });
 
+    it.each([false, true])('logs Claude sampling exceptions before transport (stream=%s)', async (streaming) => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const driver = new BedrockMantleDriver({ region: 'us-west-2', logger });
+        const transportError = new Error('test transport stopped');
+        const stream = vi.fn(() => {
+            throw transportError;
+        });
+        Reflect.set(driver, 'anthropicService', { messages: { stream } });
+        const model = 'anthropic.claude-haiku-5-5';
+        const options = {
+            model,
+            model_options: { _option_id: 'bedrock-mantle-claude' as const, temperature: 0.5, top_p: 0.8 },
+        };
+        const prompt = await driver.createPrompt(promptSegments, options);
+        await expect(
+            streaming
+                ? driver.requestTextCompletionStream(prompt, options)
+                : driver.requestTextCompletion(prompt, options),
+        ).rejects.toThrow(transportError);
+        expect(stream).toHaveBeenCalledOnce();
+        expect(logger.warn).toHaveBeenCalledWith(
+            { model, option_names: ['temperature', 'top_p'], reason: 'claude_sampling_restriction' },
+            'Model option compatibility exception changed caller input',
+        );
+    });
+
     it('executes Claude through the shared Messages helpers', async () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const message = {

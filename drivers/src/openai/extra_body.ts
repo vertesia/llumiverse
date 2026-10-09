@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { Logger } from '@llumiverse/core';
 import { logModelOptionException } from '../shared/model-option-exceptions.js';
 
@@ -20,7 +21,7 @@ export function mergeOpenAIExtraBody<RequestT extends object>(
 ): RequestT {
     // Compatibility exception: transport-owned fields take precedence over extra_body extensions.
     const overridden = Object.keys(extraBody ?? {}).filter(
-        (key) => Object.hasOwn(request, key) && extraBody?.[key] !== (request as OpenAIExtraBody)[key],
+        (key) => Object.hasOwn(request, key) && !isDeepStrictEqual(extraBody?.[key], (request as OpenAIExtraBody)[key]),
     );
     logModelOptionException(logger, model ?? '', extraBody, overridden, 'openai_extra_body_precedence');
     return extraBody ? ({ ...extraBody, ...request } as RequestT) : request;

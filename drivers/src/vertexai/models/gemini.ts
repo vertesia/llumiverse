@@ -272,6 +272,7 @@ export function getGeminiPayload(
     if (isNanoBanana) {
         logModelOptionException(logger, options.model, model_options, ['temperature', 'top_p'], 'nano_banana_sampling');
     }
+    const thinkingConfig = geminiThinkingConfig(options, logger);
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -283,7 +284,7 @@ export function getGeminiPayload(
         topP: isNanoBanana ? undefined : model_options?.top_p,
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
-        thinkingConfig: geminiThinkingConfig(options),
+        thinkingConfig,
         labels: options.labels,
         imageConfig: {
             imageSize: model_options?.image_size,
@@ -321,7 +322,7 @@ export function getGeminiPayload(
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
-        thinkingConfig: geminiThinkingConfig(options),
+        thinkingConfig,
         labels: options.labels,
     };
 
@@ -574,12 +575,13 @@ function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGemini
     return 8192;
 }
 
-export function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
+export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?: Logger): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
 
-    // If thinking options are explicitly set in model options, use them directly
+    // Compatibility exception: native thinking controls take precedence over generic effort.
     const include_thoughts = model_options?.include_thoughts !== false;
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
+        logModelOptionException(logger, option.model, model_options, ['effort'], 'gemini_native_thinking_precedence');
         return {
             // Default summaries off for a zero budget; preserve explicit caller choices for provider validation.
             includeThoughts: model_options.include_thoughts ?? model_options.thinking_budget_tokens !== 0,

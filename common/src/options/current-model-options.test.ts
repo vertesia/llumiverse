@@ -33,6 +33,50 @@ describe('current reasoning model options', () => {
         );
     });
 
+    it.each(['gpt-6.1-sol', 'deployment::gpt-6.1-sol'])(
+        'keeps direct OpenAI controls out of Azure Foundry metadata for %s',
+        (model) => {
+            const options = getOptions(model, Providers.azure_foundry).options;
+            expect(options.find((option) => option.name === 'service_tier')).toMatchObject({
+                enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
+                default: 'auto',
+            });
+            const tier = options.find((option) => option.name === 'service_tier');
+            expect(tier?.type === OptionType.enum && tier.enum).toEqual({
+                Auto: 'auto',
+                Default: 'default',
+                Priority: 'priority',
+            });
+            expect(options.map((option) => option.name)).not.toContain('reasoning_context');
+        },
+    );
+
+    it.each([Providers.azure_openai, Providers.azure_foundry])(
+        'offers Azure Flex only for documented model versions through %s',
+        (provider) => {
+            for (const model of [
+                'gpt-5.6-sol',
+                'gpt-5.6-luna',
+                'gpt-5.6-terra',
+                'gpt-6-astra',
+                'gpt-6-astra-2026-09-03',
+                'deployment::gpt-6-astra',
+            ]) {
+                const id =
+                    provider === Providers.azure_foundry && !model.includes('::') ? `deployment::${model}` : model;
+                expect(getOptions(id, provider).options.find((option) => option.name === 'service_tier')).toMatchObject(
+                    { enum: { Flex: 'flex' }, default: 'auto' },
+                );
+            }
+            const tier = getOptions('gpt-6.1-sol', provider).options.find((option) => option.name === 'service_tier');
+            expect(tier?.type === OptionType.enum && tier.enum).toEqual({
+                Auto: 'auto',
+                Default: 'default',
+                Priority: 'priority',
+            });
+        },
+    );
+
     it.each(['openai/gpt-oss-20b', 'openai/gpt-oss-120b'])(
         'exposes Groq effort for %s without injecting a default',
         (model) => {
@@ -225,7 +269,7 @@ describe('current reasoning model options', () => {
             default: 'auto',
             enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
         });
-        expect((azureOpenAiTier as { enum?: Record<string, string> }).enum?.Flex).toBeUndefined();
+        expect((azureOpenAiTier as { enum?: Record<string, string> }).enum?.Flex).toBe('flex');
 
         const bedrockTier = getOptions('anthropic.claude-sonnet-4-6-v1:0', Providers.bedrock).options.find(
             (option) => option.name === 'service_tier',

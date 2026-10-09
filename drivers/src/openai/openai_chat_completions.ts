@@ -35,7 +35,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { logModelOptionException } from '../shared/model-option-exceptions.js';
+import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -1184,20 +1184,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             seed?: number;
             service_tier?: string;
         };
-        // Compatibility exception: the canonical effort option wins over its legacy alias.
-        if (
-            modelOptions?.effort !== undefined &&
-            modelOptions.reasoning_effort !== undefined &&
-            modelOptions.effort !== modelOptions.reasoning_effort
-        ) {
-            logModelOptionException(
-                logger,
-                options.model,
-                modelOptions,
-                ['reasoning_effort'],
-                'openai_effort_alias_precedence',
-            );
-        }
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
             messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
@@ -1211,7 +1197,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             n: 1,
             stop: modelOptions?.stop_sequence,
             seed: modelOptions?.seed,
-            reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
+            reasoning_effort: resolveOpenAIEffort(modelOptions, logger, options.model),
             service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
             stream,
         };

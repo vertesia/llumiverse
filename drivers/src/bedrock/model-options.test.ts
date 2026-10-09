@@ -1,5 +1,5 @@
 import type { ModelOptions } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
 describe('Bedrock provider-specific model options', () => {
@@ -58,6 +58,21 @@ describe('Bedrock provider-specific model options', () => {
 });
 
 describe('Bedrock Converse closed-weight GPT options', () => {
+    it('warns when canonical GPT effort overrides a conflicting alias', () => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const driver = new BedrockDriver({ region: 'us-east-1', logger });
+        const model = 'openai.gpt-6.1-sol';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-converse', effort: 'low', reasoning_effort: 'high' } },
+        );
+        expect(request.additionalModelRequestFields).toMatchObject({ reasoning: { effort: 'low' } });
+        expect(logger.warn).toHaveBeenCalledWith(
+            { model, option_names: ['reasoning_effort'], reason: 'openai_effort_alias_precedence' },
+            'Model option compatibility exception changed caller input',
+        );
+    });
+
     it.each(['openai.gpt-5.5', 'us.openai.gpt-5.6-sol', 'global.openai.gpt-6-luna', 'us.openai.gpt-6.1-sol'])(
         'transports effort and strict output together for %s',
         (model) => {

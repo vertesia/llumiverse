@@ -46,7 +46,7 @@ import {
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { logModelOptionException } from '../shared/model-option-exceptions.js';
+import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -289,21 +289,7 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
-        // Compatibility exception: the canonical effort option wins over its legacy alias.
-        if (
-            model_options?.effort !== undefined &&
-            model_options.reasoning_effort !== undefined &&
-            model_options.effort !== model_options.reasoning_effort
-        ) {
-            logModelOptionException(
-                driver.logger,
-                options.model,
-                model_options,
-                ['reasoning_effort'],
-                'openai_effort_alias_precedence',
-            );
-        }
+        const requestedEffort = resolveOpenAIEffort(model_options, driver.logger, options.model);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
@@ -423,21 +409,7 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
-        // Compatibility exception: the canonical effort option wins over its legacy alias.
-        if (
-            model_options?.effort !== undefined &&
-            model_options.reasoning_effort !== undefined &&
-            model_options.effort !== model_options.reasoning_effort
-        ) {
-            logModelOptionException(
-                driver.logger,
-                options.model,
-                model_options,
-                ['reasoning_effort'],
-                'openai_effort_alias_precedence',
-            );
-        }
+        const requestedEffort = resolveOpenAIEffort(model_options, driver.logger, options.model);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
