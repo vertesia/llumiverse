@@ -61,7 +61,7 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
-    // DeepSeek OCR requires separate OCR validation before advertising support.
+    // DeepSeek OCR is intentionally skipped as a special-purpose model.
     // DeepSeek V3.1 is omitted because Vertex returns FAILED_PRECONDITION for its documented region.
     {
         publisher: 'deepseek-ai',
