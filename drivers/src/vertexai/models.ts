@@ -101,12 +101,6 @@ export function getModelDefinition(model: string): ModelDefinition {
         return new GeminiOmniVideoModelDefinition(modelName);
     }
 
-    if (publisher === 'xai') {
-        // Use OpenAI-compatible endpoint for xAI Grok models via Vertex AI's openapi endpoint
-        // xAI/Grok models only exist in the "global" region, not regional endpoints
-        return new OpenAIChatCompletionsModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
-    }
-
     if (publisher?.includes('google') && modelName.includes('gemini')) {
         return new GeminiModelDefinition(modelName);
     } else if (publisher?.includes('google')) {
