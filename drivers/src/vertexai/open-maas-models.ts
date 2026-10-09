@@ -1,4 +1,4 @@
-import { getMaxOutputTokens } from '@llumiverse/common';
+import { getMaxOutputTokens, resolveModelProfile } from '@llumiverse/common';
 import { type AIModel, Providers } from '@llumiverse/core';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
@@ -184,6 +184,25 @@ export function getVertexOpenMaaSRequestModel(
 
     if (publisher === 'xai') {
         return { modelName: `xai/${model}` };
+    }
+
+    // Catalog entries retain exact aliases and endpoint workarounds, but are not a routing allowlist.
+    // Newly discovered MaaS models from a supported publisher use the same OpenAI-compatible protocol.
+    const normalizedPublisher = publisher === 'zaiorg' ? 'zai-org' : publisher;
+    const family = resolveModelProfile(model, Providers.vertexai).family;
+    const publisherModel = VERTEX_OPEN_MAAS_MODELS.find(
+        (entry) =>
+            entry.publisher === normalizedPublisher &&
+            resolveModelProfile(entry.model, Providers.vertexai).family === family,
+    );
+    if (publisherModel && model.endsWith('-maas')) {
+        return {
+            modelName: `${publisherModel.requestPublisher}/${model}`,
+            region: publisherModel.regions[0],
+            apiVersion: publisherModel.apiVersion,
+            endpointRegion: publisherModel.endpointRegion,
+            extraBody: publisherModel.extraBody,
+        };
     }
 
     return undefined;

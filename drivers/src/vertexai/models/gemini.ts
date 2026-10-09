@@ -28,6 +28,7 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    hasGeminiSamplingRestriction,
     incrementConversationTurn,
     isGeminiModelVersionGte,
     type JSONObject,
@@ -273,6 +274,7 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
         },
     };
 
+    const restrictSampling = hasGeminiSamplingRestriction(options.model);
     const config: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -284,18 +286,18 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
                   },
               }
             : undefined,
-        candidateCount: 1,
+        candidateCount: restrictSampling ? undefined : 1,
         //JSON/Structured output
         responseMimeType: useStructuredOutput ? 'application/json' : undefined,
         responseJsonSchema: useStructuredOutput ? options.result_schema : undefined,
         //Model options
-        temperature: model_options?.temperature,
-        topP: model_options?.top_p,
-        topK: model_options?.top_k,
+        temperature: restrictSampling ? undefined : model_options?.temperature,
+        topP: restrictSampling ? undefined : model_options?.top_p,
+        topK: restrictSampling ? undefined : model_options?.top_k,
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
-        presencePenalty: model_options?.presence_penalty,
-        frequencyPenalty: model_options?.frequency_penalty,
+        presencePenalty: restrictSampling ? undefined : model_options?.presence_penalty,
+        frequencyPenalty: restrictSampling ? undefined : model_options?.frequency_penalty,
         seed: model_options?.seed,
         thinkingConfig: geminiThinkingConfig(options),
         labels: options.labels,
@@ -556,9 +558,9 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions): Thinkin
     // If thinking options are explicitly set in model options, use them directly
     const include_thoughts = model_options?.include_thoughts !== false;
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
-        if (model_options.thinking_budget_tokens === 0 && !model_options.thinking_level) return undefined;
         return {
-            includeThoughts: true,
+            // Vertex rejects thought summaries when thinking is explicitly disabled.
+            includeThoughts: model_options.thinking_budget_tokens === 0 ? false : include_thoughts,
             ...(model_options.thinking_budget_tokens !== undefined && {
                 thinkingBudget: model_options.thinking_budget_tokens,
             }),

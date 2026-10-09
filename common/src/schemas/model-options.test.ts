@@ -28,6 +28,15 @@ const emitted = rawEmitted.$ref
 const MEMBERS = (emitted.oneOf ?? emitted.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
+    it('accepts and publishes Nova reasoning effort', () => {
+        const options = { _option_id: 'bedrock-nova', effort: 'high' };
+        expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        expect(emitted.$defs.BedrockNovaOptions.properties?.effort).toEqual({
+            $ref: '#/$defs/ReasoningEffort',
+        });
+        expect(ModelOptionsSchema.safeParse({ ...options, effort: 'invalid' }).success).toBe(false);
+    });
+
     it('accepts and publishes Converse GPT reasoning controls', () => {
         const options = { _option_id: 'bedrock-converse', effort: 'max', reasoning_effort: 'low', verbosity: 'high' };
         expect(ModelOptionsSchema.parse(options)).toEqual(options);

@@ -233,3 +233,21 @@ describe('Vertex open MaaS catalog', () => {
         expect(payload).not.toHaveProperty('chat_template_kwargs');
     });
 });
+
+describe('Vertex MaaS forward routing', () => {
+    it.each([
+        ['qwen', 'qwen4-new-instruct-maas'],
+        ['zaiorg', 'glm-6-maas'],
+        ['google', 'gemma-5-27b-it-maas'],
+        ['openai', 'gpt-oss-200b-maas'],
+        ['deepseek-ai', 'deepseek-v4-maas'],
+    ])('routes a new %s MaaS model without falling back to Gemini', async (publisher, model) => {
+        const { post, getFetchClientForRegion } = await requestForModel(
+            `locations/us-central1/publishers/${publisher}/models/${model}`,
+        );
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-central1', undefined);
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({ model: `${publisher === 'zaiorg' ? 'zai-org' : publisher}/${model}` }),
+        });
+    });
+});

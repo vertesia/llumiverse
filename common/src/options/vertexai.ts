@@ -27,7 +27,12 @@ import {
     buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './version-parsing.js';
+import {
+    hasGeminiSamplingRestriction,
+    hasSamplingParameterRestriction,
+    isGeminiModelVersionGte,
+    isModelFamilyVersionGTE,
+} from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -394,11 +399,21 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
     if (model.includes('gemini-3-pro-image')) {
         return { High: 'high' };
     }
-    if (model.includes('gemini-3.1-flash-image') || model.includes('gemini-nano-banana')) {
+    if (isModelFamilyVersionGTE(model, 'gemini-nano-banana-', 2, 1)) {
+        return { Minimal: 'minimal', Medium: 'medium', High: 'high' };
+    }
+    if (
+        model.includes('gemini-3.1-flash-image') ||
+        model.includes('gemini-3.1-flash-lite-image') ||
+        model.includes('gemini-nano-banana')
+    ) {
         return { Minimal: 'minimal', High: 'high' };
     }
-    if (model.includes('pro') && isGeminiModelVersionGte(model, '3.1')) {
+    if (hasGeminiSamplingRestriction(model) || (model.includes('pro') && isGeminiModelVersionGte(model, '3.1'))) {
         return { Low: 'low', Medium: 'medium', High: 'high' };
+    }
+    if (model.includes('pro') && isGeminiModelVersionGte(model, '3.0')) {
+        return { Low: 'low', High: 'high' };
     }
     return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
 }
@@ -556,6 +571,9 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
     }
     const max_tokens_limit = getGeminiMaxTokensLimit(model);
     const excludeOptions = ['max_tokens', 'include_thoughts'];
+    if (hasGeminiSamplingRestriction(model)) {
+        excludeOptions.push('temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty');
+    }
     const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
     const max_tokens: ModelOptionInfoItem[] = [

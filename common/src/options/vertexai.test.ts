@@ -131,3 +131,34 @@ describe('Vertex AI MaaS metadata', () => {
         expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
     });
 });
+
+describe('Vertex Gemini reasoning metadata', () => {
+    it.each([
+        ['gemini-3.6-flash', ['minimal', 'low', 'medium', 'high']],
+        ['gemini-3.7-flash', ['low', 'medium', 'high']],
+        ['gemini-3.8-flash-cyber', ['low', 'medium', 'high']],
+        ['gemini-4.0-flash', ['low', 'medium', 'high']],
+        ['gemini-3-pro-preview', ['low', 'high']],
+        ['gemini-3.1-pro-preview', ['low', 'medium', 'high']],
+        ['gemini-3.1-flash-lite-image', ['minimal', 'high']],
+        ['gemini-nano-banana-2.1', ['minimal', 'medium', 'high']],
+        ['gemini-nano-banana-3.0', ['minimal', 'medium', 'high']],
+    ])('offers supported effort levels for %s', (model, values) => {
+        const effort = getVertexAiOptions(`publishers/google/models/${model}`).options.find(
+            (item) => item.name === 'effort',
+        );
+        expect(effort?.type).toBe('enum');
+        if (effort?.type !== 'enum') throw new Error('Missing effort option');
+        expect(Object.values(effort.enum)).toEqual(values);
+    });
+
+    it.each(['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4.0-flash'])(
+        'hides unsupported sampling options for %s',
+        (model) => {
+            const names = getVertexAiOptions(model).options.map((item) => item.name);
+            for (const name of ['temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty']) {
+                expect(names).not.toContain(name);
+            }
+        },
+    );
+});

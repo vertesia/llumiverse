@@ -113,3 +113,48 @@ describe('Bedrock Converse closed-weight GPT options', () => {
         expect(request.additionalModelRequestFields).toBeUndefined();
     });
 });
+
+describe('Bedrock Nova extended thinking', () => {
+    it.each(['none', 'low', 'medium', 'high'] as const)('transports %s effort', (effort) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const request = driver.preparePayload(
+            { modelId: undefined, messages: [] },
+            {
+                model: 'us.amazon.nova-2-lite-v1:0',
+                model_options: { _option_id: 'bedrock-nova', effort, max_tokens: 1000, temperature: 0.7, top_k: 12 },
+            },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            ...(effort !== 'high' && { inferenceConfig: { topK: 12 } }),
+            reasoningConfig: effort === 'none' ? { type: 'disabled' } : { type: 'enabled', maxReasoningEffort: effort },
+        });
+        expect(request.inferenceConfig).toEqual(effort === 'high' ? undefined : { maxTokens: 1000, temperature: 0.7 });
+    });
+
+    it('preserves Nova 1.5 high-effort output and sampling controls', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const request = driver.preparePayload(
+            { modelId: undefined, messages: [] },
+            {
+                model: 'amazon.nova-lite-1-5-v1:0',
+                model_options: { _option_id: 'bedrock-nova', effort: 'high', max_tokens: 40000, temperature: 0 },
+            },
+        );
+        expect(request.additionalModelRequestFields).toMatchObject({
+            reasoningConfig: { type: 'enabled', maxReasoningEffort: 'high' },
+        });
+        expect(request.inferenceConfig).toEqual({ maxTokens: 40000, temperature: 0 });
+    });
+
+    it('preserves provider defaults when effort is unset', () => {
+        const request = new BedrockDriver({ region: 'us-east-1' }).preparePayload(
+            { modelId: undefined, messages: [] },
+            {
+                model: 'amazon.nova-2-lite-v1:0',
+                model_options: { _option_id: 'bedrock-nova', max_tokens: 1000 },
+            },
+        );
+        expect(request.additionalModelRequestFields).toBeUndefined();
+        expect(request.inferenceConfig).toEqual({ maxTokens: 1000 });
+    });
+});

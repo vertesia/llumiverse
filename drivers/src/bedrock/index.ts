@@ -27,6 +27,7 @@ import {
     type BedrockClaudeOptions,
     type BedrockConverseOptions,
     type BedrockGptOssOptions,
+    type BedrockNovaOptions,
     type BedrockPalmyraOptions,
     type Completion,
     type CompletionChunkObject,
@@ -44,6 +45,7 @@ import {
     type HttpTimeoutOptions,
     incrementConversationTurn,
     isEmbeddingModel,
+    isModelFamilyVersionGTE,
     isOpenAIGptVersionGTE,
     type JSONObject,
     LlumiverseError,
@@ -55,6 +57,7 @@ import {
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
+    supportsNovaReasoning,
     type TextFallbackOptions,
     type ToolDefinition,
     type ToolUse,
@@ -1385,13 +1388,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model_options as BedrockClaudeOptions | undefined,
         );
         const isGpt = isOpenAIGptVersionGTE(options.model, 5, 0);
-        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction || isGpt;
+        const novaEffort = supportsNovaReasoning(options.model)
+            ? (options.model_options as BedrockNovaOptions | undefined)?.effort
+            : undefined;
+        const isNova2HighEffort = novaEffort === 'high' && isModelFamilyVersionGTE(options.model, 'amazon.nova-', 2, 0);
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction || isGpt || isNova2HighEffort;
 
         if (options.model.includes('amazon')) {
-            supportsJSONPrefill = true;
+            supportsJSONPrefill = novaEffort === undefined || novaEffort === 'none';
             //Titan models also exists but does not support any additional options
             if (options.model.includes('nova')) {
-                additionalField = { inferenceConfig: { topK: model_options.top_k } };
+                additionalField = {
+                    inferenceConfig: { topK: isNova2HighEffort ? undefined : model_options.top_k },
+                    ...(novaEffort !== undefined && {
+                        reasoningConfig:
+                            novaEffort === 'none'
+                                ? { type: 'disabled' }
+                                : { type: 'enabled', maxReasoningEffort: novaEffort },
+                    }),
+                };
             }
         } else if (options.model.includes('claude')) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
@@ -1549,7 +1564,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
         // Models with sampling parameter restrictions don't support temperature/top_p - exclude them from inference config
         const cleanedModelOptions = removeUndefinedValues({
-            maxTokens: model_options.max_tokens,
+            maxTokens: isNova2HighEffort ? undefined : model_options.max_tokens,
             ...(hasSamplingRestriction
                 ? {}
                 : {

@@ -1,7 +1,7 @@
 import { ThinkingLevel } from '@google/genai';
 import type { StatelessExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
-import { geminiThinkingConfig } from './gemini.js';
+import { geminiThinkingConfig, getGeminiPayload } from './gemini.js';
 
 function options(model: string, model_options?: Record<string, unknown>): StatelessExecutionOptions {
     return { model, model_options } as StatelessExecutionOptions;
@@ -39,5 +39,69 @@ describe('Gemini thinking configuration', () => {
         expect(geminiThinkingConfig(options('gemini-3.5-flash', { include_thoughts: true }))).toEqual({
             includeThoughts: true,
         });
+    });
+});
+
+describe('explicit Gemini thinking controls', () => {
+    it.each([0, -1, 8192])('preserves budget %s and disabled thought inclusion', (thinking_budget_tokens) => {
+        expect(
+            geminiThinkingConfig(
+                options('gemini-2.5-flash', {
+                    thinking_budget_tokens,
+                    include_thoughts: false,
+                    effort: 'high',
+                }),
+            ),
+        ).toEqual({ includeThoughts: false, thinkingBudget: thinking_budget_tokens });
+    });
+
+    it('honors thought exclusion with an explicit thinking level', () => {
+        expect(
+            geminiThinkingConfig(
+                options('gemini-3.8-flash', {
+                    thinking_level: ThinkingLevel.LOW,
+                    include_thoughts: false,
+                }),
+            ),
+        ).toEqual({ includeThoughts: false, thinkingLevel: ThinkingLevel.LOW });
+    });
+});
+
+describe('Gemini Flash generation parameters', () => {
+    it.each(['gemini-3.7-flash', 'publishers/google/models/gemini-3.8-flash-cyber', 'gemini-4.0-flash'])(
+        'omits unsupported parameters for %s',
+        (model) => {
+            const payload = getGeminiPayload(
+                options(model, {
+                    temperature: 0.7,
+                    top_p: 0.9,
+                    top_k: 10,
+                    presence_penalty: 0.5,
+                    frequency_penalty: 0.5,
+                    max_tokens: 512,
+                    effort: 'low',
+                }),
+                { contents: [{ role: 'user', parts: [{ text: 'Hello' }] }] },
+            );
+            const config = JSON.parse(JSON.stringify(payload.config));
+            for (const key of [
+                'candidateCount',
+                'temperature',
+                'topP',
+                'topK',
+                'presencePenalty',
+                'frequencyPenalty',
+            ]) {
+                expect(config).not.toHaveProperty(key);
+            }
+            expect(config).toMatchObject({ maxOutputTokens: 512, thinkingConfig: { thinkingLevel: 'LOW' } });
+        },
+    );
+
+    it('preserves sampling for earlier Flash models', () => {
+        const payload = getGeminiPayload(options('gemini-3.6-flash', { temperature: 0.7, top_p: 0.9 }), {
+            contents: [],
+        });
+        expect(payload.config).toMatchObject({ candidateCount: 1, temperature: 0.7, topP: 0.9 });
     });
 });

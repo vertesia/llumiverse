@@ -153,6 +153,7 @@ export const BedrockConverseOptionsSchema = z
 export const BedrockNovaOptionsSchema = z
     .strictObject({
         _option_id: z.literal('bedrock-nova').optional(),
+        effort: ReasoningEffortSchema.optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),

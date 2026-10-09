@@ -41,6 +41,21 @@ export function isModelFamilyVersionGTE(
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** Gemini Flash 3.7+ rejects candidate count and penalties and no longer uses sampling controls. */
+export function hasGeminiSamplingRestriction(model: string): boolean {
+    return (
+        model.includes('flash') && !/(?:image|tts|transcribe|live)/.test(model) && isGeminiModelVersionGte(model, '3.7')
+    );
+}
+
+/** Nova Lite reasoning starts with 1.5; numbered Nova 2+ Lite models inherit it. */
+export function supportsNovaReasoning(model: string): boolean {
+    return (
+        isModelFamilyVersionGTE(model, 'amazon.nova-lite-', 1, 5) ||
+        (isModelFamilyVersionGTE(model, 'amazon.nova-', 2, 0) && /-lite(?:[-.:]|$)/.test(model))
+    );
+}
+
 // ============================================================================
 // Claude Version Parsing
 // ============================================================================
