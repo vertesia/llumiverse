@@ -136,4 +136,15 @@ describe('streaming tool_use argument finalization', () => {
 
         expect(finalizeStreamingToolUse(tools, 'length', context)).toBeUndefined();
     });
+
+    test('drops a call cut off before any argument fragment on a length stop', () => {
+        const tools: StreamingToolUse[] = [
+            { id: 'time', tool_name: 'get_time', tool_input: '{}' },
+            { id: 'write', tool_name: 'write_artifact', tool_input: '' },
+        ];
+
+        expect(finalizeStreamingToolUse(tools, 'length', context)).toEqual([
+            { id: 'time', tool_name: 'get_time', tool_input: {} },
+        ]);
+    });
 });

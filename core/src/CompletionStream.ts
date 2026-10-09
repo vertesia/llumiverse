@@ -236,9 +236,14 @@ export function finalizeStreamingToolUse(
         }
         if (typeof tool.tool_input === 'string') {
             // Claude streams a call with no arguments as a single empty `partial_json`, so the
-            // accumulated buffer is empty rather than "{}". That is a complete, valid call.
+            // accumulated buffer is empty rather than "{}". That is a complete, valid call, unless
+            // a length stop cut the call off before its first argument fragment arrived.
             if (tool.tool_input.trim() === '') {
-                tool.tool_input = {};
+                if (finishReason === 'length') {
+                    malformedToolIds.add(tool.id);
+                } else {
+                    tool.tool_input = {};
+                }
                 continue;
             }
             try {
