@@ -50,6 +50,21 @@ const RECORD_FAMILY_CAPABILITIES: Record<
         output: { text: true, image: true, video: false, audio: false, embed: false },
         tool_support: false,
     },
+    'gemini-3-pro-image': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: true, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
+    'gemini-3.1-flash-lite-image': {
+        input: { text: true, image: true, video: true, audio: false, embed: false },
+        output: { text: true, image: true, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
+    'gemini-transcribe': {
+        input: { text: false, image: false, video: false, audio: true, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
     'gemini-3.1-flash-image': {
         input: { text: true, image: true, video: true, audio: false, embed: false },
         output: { text: true, image: true, video: false, audio: false, embed: false },
@@ -228,6 +243,19 @@ export function getModelCapabilitiesVertexAI(model: string): {
         // is documented above.
         return RECORD_FAMILY_CAPABILITIES['llama-4'];
     }
+    // Dedicated Gemini variants must not inherit the general chat model's modalities or tools.
+    if (/^gemini-\d+(?:\.\d+)?-transcribe(?:-|$)/.test(normalized))
+        return RECORD_FAMILY_CAPABILITIES['gemini-transcribe'];
+    if (
+        /^gemini-\d+(?:\.\d+)?-pro-image(?:-|$)/.test(normalized) &&
+        isModelFamilyVersionGTE(normalized, 'gemini-', 3, 0)
+    )
+        return RECORD_FAMILY_CAPABILITIES['gemini-3-pro-image'];
+    if (
+        /^gemini-\d+(?:\.\d+)?-flash-lite-image(?:-|$)/.test(normalized) &&
+        isModelFamilyVersionGTE(normalized, 'gemini-', 3, 1)
+    )
+        return RECORD_FAMILY_CAPABILITIES['gemini-3.1-flash-lite-image'];
     let bestFamilyKey: string | undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {

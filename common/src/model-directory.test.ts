@@ -314,6 +314,34 @@ describe('central model directory', () => {
         });
     });
 
+    it.each([
+        ['gemini-3-pro-image', false],
+        ['gemini-3-pro-image-preview', false],
+        ['gemini-4-pro-image', false],
+        ['gemini-3.1-flash-lite-image', true],
+        ['gemini-3.1-flash-lite-image-preview', true],
+        ['gemini-4-flash-lite-image', true],
+    ])('uses image-generation capabilities for Vertex %s', (model, video) => {
+        const id = `locations/global/publishers/google/models/${model}`;
+        expect(getModelCapabilities(id, Providers.vertexai)).toMatchObject({
+            input: { text: true, image: true, video, audio: false },
+            output: { text: true, image: true, video: false, audio: false },
+            tool_support: false,
+        });
+    });
+
+    it.each(['gemini-3.5-transcribe', 'gemini-3.5-transcribe-preview', 'gemini-4-transcribe'])(
+        'uses audio-only input and no tools for Vertex %s',
+        (model) => {
+            const id = `locations/global/publishers/google/models/${model}`;
+            expect(getModelCapabilities(id, Providers.vertexai)).toMatchObject({
+                input: { text: false, image: false, video: false, audio: true },
+                output: { text: true, image: false, video: false, audio: false },
+                tool_support: false,
+            });
+        },
+    );
+
     it('uses image-generation metadata for Gemini 3.1 Flash Image', () => {
         expect(resolveModelProfile('gemini-3.1-flash-image-preview', Providers.vertexai)).toMatchObject({
             context_window: 131_072,

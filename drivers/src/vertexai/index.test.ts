@@ -107,6 +107,27 @@ describe('VertexAIDriver listModels', () => {
         expect(models.some((model) => model.id === 'locations/global/models/gemini-4-future')).toBe(true);
     });
 
+    it('lists image generation and transcription with their own modalities and no tools', async () => {
+        const models = await new TestVertexAIDriver([
+            { name: 'models/gemini-3-pro-image', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-3.1-flash-lite-image', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-3.5-transcribe-preview', supportedActions: ['generateContent'] },
+        ]).listModels();
+        for (const model of ['gemini-3-pro-image', 'gemini-3.1-flash-lite-image']) {
+            expect(models.find((entry) => entry.id === `locations/global/models/${model}`)).toMatchObject({
+                output_modalities: ['text', 'image'],
+                tool_support: false,
+            });
+        }
+        expect(
+            models.find((entry) => entry.id === 'locations/global/models/gemini-3.5-transcribe-preview'),
+        ).toMatchObject({
+            input_modalities: ['audio'],
+            output_modalities: ['text'],
+            tool_support: false,
+        });
+    });
+
     it('uses supported actions to keep only models executable by the implemented Google paths', async () => {
         const driver = new TestVertexAIDriver([
             { name: 'models/gemini-4-future', supportedActions: ['generateContent'] },
