@@ -350,10 +350,11 @@ function applyProviderOverlay(
         }
     }
     if (provider === Providers.vertexai) {
+        const vertexLimits = getVertexAIModelLimits(model);
         return {
             capabilities,
-            ...getCanonicalLimits(sourceModel, family),
-            ...getVertexAIModelLimits(model),
+            // A documented hosted profile is authoritative, including an unknown output limit.
+            ...(vertexLimits.context_window !== undefined ? vertexLimits : getCanonicalLimits(sourceModel, family)),
         };
     }
 

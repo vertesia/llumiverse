@@ -25,6 +25,7 @@ import {
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
     type OpenAiImageGenerationOptions,
+    type OpenAiTextOptions,
     type PromptOptions,
     type PromptSegment,
     Providers,
@@ -58,6 +59,7 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type OpenAIResponseServiceTier = OpenAI.Responses.ResponseCreateParams['service_tier'];
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
+    seed?: OpenAiTextOptions['seed'];
     image_generation?: OpenAiImageGenerationOptions;
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
@@ -321,6 +323,8 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
+                // Preserve supplied compatible options even when the Responses SDK does not declare them.
+                ...(model_options?.seed !== undefined && { seed: model_options.seed }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
                 tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,
@@ -442,6 +446,8 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
+                // Preserve supplied compatible options even when the Responses SDK does not declare them.
+                ...(model_options?.seed !== undefined && { seed: model_options.seed }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
                 tool_choice: model_options?.image_generation?.force ? { type: 'image_generation' } : undefined,

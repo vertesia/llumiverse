@@ -1,3 +1,4 @@
+import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,6 +57,37 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it.each(
+        ([Providers.openai, Providers.azure_openai, Providers.openai_compatible] as const).flatMap((provider) =>
+            [42, 0, undefined].flatMap((seed) => [false, true].map((streaming) => ({ provider, seed, streaming }))),
+        ),
+    )('preserves seed=$seed for $provider when streaming=$streaming', async ({ provider, seed, streaming }) => {
+        const create = vi.fn(async (request: unknown) =>
+            (request as { stream?: boolean }).stream
+                ? (async function* () {
+                      yield { type: 'response.completed', sequence_number: 1, response: response() };
+                  })()
+                : response(),
+        );
+        const driver = new TestResponsesDriver(create, provider);
+        const warn = vi.fn();
+        driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+        const model_options = ModelOptionsSchema.parse({ _option_id: 'openai-text', seed });
+        const original = structuredClone(model_options);
+        const options = { model: 'gpt-4o', model_options };
+        const prompt = [{ type: 'message' as const, role: 'user' as const, content: 'question' }];
+        if (streaming) {
+            for await (const _chunk of await driver.requestTextCompletionStream(prompt, options)) {
+                /* Consume stream. */
+            }
+        } else await driver.requestTextCompletion(prompt, options);
+        const request = create.mock.calls[0][0];
+        if (seed === undefined) expect(request).not.toHaveProperty('seed');
+        else expect(request).toHaveProperty('seed', seed);
+        expect(model_options).toEqual(original);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
     it('does not mistake an embedded o-series substring for an OpenAI reasoning model', async () => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create, Providers.openai_compatible);

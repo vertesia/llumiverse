@@ -5,6 +5,24 @@ import { getOptions } from './options.js';
 import { Providers } from './types.js';
 
 describe('central model directory', () => {
+    it.each([
+        'grok-4.3',
+        'grok-4.6',
+        'grok-4.7',
+        'grok-4.20-reasoning',
+        'grok-4.20-non-reasoning',
+        'grok-4.1-fast-reasoning',
+        'grok-4.1-fast-non-reasoning',
+        'grok-4.8',
+        'grok-5',
+    ])('preserves unknown Vertex output limits for %s in profiles and option metadata', (model) => {
+        const id = `locations/global/publishers/xai/models/${model}`;
+        expect(resolveModelProfile(id, Providers.vertexai).max_output_tokens).toBeUndefined();
+        const maxTokens = getOptions(id, Providers.vertexai).options.find((item) => item.name === 'max_tokens');
+        expect(maxTokens).toBeDefined();
+        expect(maxTokens).not.toHaveProperty('max');
+    });
+
     it('keeps documented Vertex MaaS limits distinct from direct provider limits', () => {
         const model = 'locations/global/publishers/zai-org/models/glm-5.2-maas';
         expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
