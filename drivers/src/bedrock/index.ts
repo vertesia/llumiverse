@@ -946,10 +946,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const requestOptions = signal ? { abortSignal: signal } : undefined;
         if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getFoundationModel(
-                    { modelIdentifier: model },
-                    requestOptions,
-                );
+                // Regionless foundation-model references are portable catalog IDs, but AWS's
+                // discovery endpoint requires a regional ARN or the bare foundation-model ID.
+                const modelIdentifier = model.replace(/^arn:aws[^:]*:bedrock:::foundation-model\//, '');
+                const response = await this.getService(region).getFoundationModel({ modelIdentifier }, requestOptions);
                 canStream = response.modelDetails?.responseStreamingSupported ?? false;
                 return canStream;
             } catch (e) {
@@ -1003,7 +1003,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         //     return true;
         // }
 
-        let canStream = supportStreamingCache.get(options.model);
+        const cacheKey = `${this.extractRegion(options.model, this.options.region)}:${options.model}`;
+        let canStream = supportStreamingCache.get(cacheKey);
         if (canStream == null) {
             let type = BedrockModelType.Unknown;
             if (options.model.includes('foundation-model')) {
@@ -1015,7 +1016,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             canStream = await this.getCanStream(options.model, type, signal);
             signal?.throwIfAborted();
-            supportStreamingCache.set(options.model, canStream);
+            supportStreamingCache.set(cacheKey, canStream);
         }
         return canStream;
     }
