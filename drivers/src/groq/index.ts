@@ -21,12 +21,9 @@ import type {
     ChatCompletionMessageParam,
     ChatCompletionTool,
 } from 'groq-sdk/resources/chat/completions';
-<<<<<<< HEAD
 import type { CompletionUsage } from 'groq-sdk/resources/completions';
 import type { GroqDriverOptions } from '../driver-options.js';
-=======
 import { mergeOpenAIExtraBody } from '../openai/extra_body.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 import {
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsPayload,

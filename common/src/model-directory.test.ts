@@ -5,7 +5,6 @@ import { getOptions } from './options.js';
 import { Providers } from './types.js';
 
 describe('central model directory', () => {
-<<<<<<< HEAD
     it('preserves source-model semantics through the native OpenRouter transport', () => {
         const profile = resolveModelProfile('google/gemini-3.5-flash', Providers.openrouter);
         const options = getOptions(profile.model_id, Providers.openrouter);
@@ -20,7 +19,8 @@ describe('central model directory', () => {
             expect.arrayContaining(['provider_sort', 'provider_order', 'provider_allow_fallbacks']),
         );
         expect(options.options.map((option) => option.name)).not.toContain('extra_body');
-=======
+    });
+
     it.each([
         'grok-4.3',
         'grok-4.6',
@@ -52,7 +52,6 @@ describe('central model directory', () => {
         });
         expect(resolveModelProfile('grok-4.7', Providers.vertexai).context_window).toBe(524_288);
         expect(resolveModelProfile('grok-4.7', Providers.xai).context_window).toBe(500_000);
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     });
 
     it('resolves provider-qualified Gemini models through OpenAI-compatible transport', () => {
@@ -70,12 +69,7 @@ describe('central model directory', () => {
         expect(options.options.find((option) => option.name === 'extra_body')).toMatchObject({
             type: 'json_object',
         });
-<<<<<<< HEAD
-        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_535 });
-=======
-        expect(options.options.map((option) => option.name)).not.toContain('thinking_level');
         expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_536 });
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
             enum: { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high' },
         });
@@ -340,7 +334,6 @@ describe('central model directory', () => {
         });
     });
 
-<<<<<<< HEAD
     it('keeps Vertex file transcription and speech modalities distinct from generic Gemini', () => {
         expect(getModelCapabilities('gemini-3.5-transcribe-preview', Providers.vertexai)).toMatchObject({
             input: { audio: true, text: false, image: false, video: false },
@@ -350,7 +343,9 @@ describe('central model directory', () => {
         expect(getModelCapabilities('gemini-3.1-flash-tts-preview', Providers.vertexai)).toMatchObject({
             input: { text: true, audio: false, image: false, video: false },
             output: { audio: true, text: false },
-=======
+        });
+    });
+
     it.each([
         ['gemini-3-pro-image', false],
         ['gemini-3-pro-image-preview', false],
@@ -363,13 +358,10 @@ describe('central model directory', () => {
         expect(getModelCapabilities(id, Providers.vertexai)).toMatchObject({
             input: { text: true, image: true, video, audio: false },
             output: { text: true, image: true, video: false, audio: false },
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
             tool_support: false,
         });
     });
 
-<<<<<<< HEAD
-=======
     it.each(['gemini-3.5-transcribe', 'gemini-3.5-transcribe-preview', 'gemini-4-transcribe'])(
         'uses audio-only input and no tools for Vertex %s',
         (model) => {
@@ -382,7 +374,6 @@ describe('central model directory', () => {
         },
     );
 
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     it('uses image-generation metadata for Gemini 3.1 Flash Image', () => {
         expect(resolveModelProfile('gemini-3.1-flash-image-preview', Providers.vertexai)).toMatchObject({
             context_window: 131_072,

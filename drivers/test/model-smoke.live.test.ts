@@ -33,11 +33,7 @@ import {
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
-<<<<<<< HEAD
-import { retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
-=======
-import { getAdvertisedTestOptions } from './utils.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+import { getAdvertisedTestOptions, retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 60 * 1000;
 
@@ -269,13 +265,14 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
             expect(p).toBeDefined();
         });
 
-<<<<<<< HEAD
         test(`${name}: execute prompt on ${model}`, {
             timeout: TIMEOUT,
             retry: retryUnlessRateLimited(2),
             concurrent: false,
         }, async () => {
-            const r = await withRateLimitBackoff(() => driver.execute(testPrompt_color, getTestOptions(model)));
+            const r = await withRateLimitBackoff(() =>
+                driver.execute(testPrompt_color, getAdvertisedTestOptions(getTestOptions(model), driver.provider)),
+            );
             console.log(`Result for execute ${model}`, JSON.stringify(r));
             assertCompletionOk(r, model, driver);
             assertProviderCostReported(r, driver);
@@ -288,53 +285,21 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
         }, async () => {
             const { r, out } = await withRateLimitBackoff(async () => {
                 const stream = await driver.stream(testPrompt_color, {
-                    ...getTestOptions(model),
+                    ...getAdvertisedTestOptions(getTestOptions(model), driver.provider),
                     result_schema: testSchema_color,
                 });
                 return { r: stream, out: await assertStreamingCompletionOk(stream, true) };
-=======
-    test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await driver.execute(
-            testPrompt_color,
-            getAdvertisedTestOptions(getTestOptions(model), driver.provider),
-        );
-        console.log(`Result for execute ${model}`, JSON.stringify(r));
-        assertCompletionOk(r, model, driver);
-    });
-
-    test.each(models)(
-        `${name}: execute prompt with streaming and schema on %s`,
-        {
-            timeout: TIMEOUT,
-            retry: 2,
-        },
-        async (model) => {
-            const r = await driver.stream(testPrompt_color, {
-                ...getAdvertisedTestOptions(getTestOptions(model), driver.provider),
-                result_schema: testSchema_color,
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
             });
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
             assertProviderCostReported(r.completion as ExecutionResponse, driver);
         });
 
-<<<<<<< HEAD
         test(`${name}: max_tokens at documented limit on ${model}`, {
             timeout: TIMEOUT,
             retry: retryUnlessRateLimited(1),
             concurrent: false,
-        }, async () => {
-            // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
-=======
-    test.for(models)(
-        `${name}: max_tokens at documented limit on %s`,
-        {
-            timeout: TIMEOUT,
-            retry: 1,
-        },
-        async (model, context) => {
+        }, async (context) => {
             // Use provider-specific limits where available; unknown Vertex limits must remain unknown.
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
             let limit: number | undefined;
             if (driver.provider === 'bedrock') {
                 limit = getMaxTokensLimitBedrock(model);

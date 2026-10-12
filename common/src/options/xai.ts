@@ -27,13 +27,10 @@ export function getXAIOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.xai),
 ): ModelOptionsInfo {
     if (!isXAIGrokImageModel(model)) {
-<<<<<<< HEAD
-        const textOptions = getOpenAiCompatibleOptions(model, options, profile);
-        if (!XAI_TIERED_OPTION_IDS.has(textOptions._option_id)) return textOptions;
-        // xAI serves text requests at a priority tier, confirmed by the response's `service_tier`.
-        return { ...textOptions, options: [...textOptions.options, XAI_SERVICE_TIER_OPTION] };
-=======
         const compatible = getOpenAiCompatibleOptions(model, options, profile);
+        if (XAI_TIERED_OPTION_IDS.has(compatible._option_id)) {
+            compatible.options = [...compatible.options, XAI_SERVICE_TIER_OPTION];
+        }
         return {
             ...compatible,
             options: compatible.options
@@ -51,7 +48,6 @@ export function getXAIOptions(
                     return item;
                 }),
         };
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     }
 
     const imageOptions: ModelOptionInfoItem[] = [

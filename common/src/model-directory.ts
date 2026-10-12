@@ -407,15 +407,10 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     if (provider === Providers.groq && /qwen3(?:\.6-27b|-32b)(?:-|$)/.test(model)) return ['none'];
     if (family === 'gpt') {
         if (model.includes('gpt-oss')) {
-<<<<<<< HEAD
-            return provider === Providers.togetherai ||
-                isOpenAICompatibleTransport(provider) ||
-=======
             if (provider === Providers.groq && model.includes('safeguard')) return undefined;
             return provider === Providers.groq ||
                 provider === Providers.togetherai ||
-                provider === Providers.openai_compatible ||
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+                isOpenAICompatibleTransport(provider) ||
                 provider === Providers.vertexai ||
                 provider === Providers.bedrock ||
                 provider === Providers.bedrock_mantle ||
@@ -454,21 +449,10 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     return undefined;
 }
 
-<<<<<<< HEAD
 function isOpenAICompatibleTransport(provider: Providers): boolean {
     return provider === Providers.openai_compatible || provider === Providers.openrouter;
 }
 
-function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
-    const match = model.match(/grok-(\d+)(?:\.(\d))?(?:[-_.]|$)/);
-    if (!match) return false;
-    const major = Number(match[1]);
-    const minor = Number(match[2] ?? 0);
-    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
-}
-
-=======
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 export function resolveModelProfile(model: string, provider: Providers): ModelProfile {
     const canonical_id = normalizeSourceModelId(model);
     const exactOverride = EXACT_MODEL_OVERRIDES[canonical_id];

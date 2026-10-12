@@ -86,8 +86,7 @@ describe('Vertex AI MaaS metadata', () => {
             expect(getMaxTokensLimitVertexAi(model)).toBeUndefined();
             expect(resolveModelProfile(model, Providers.vertexai).context_window).toBeUndefined();
             expect(resolveModelProfile(model, Providers.vertexai).max_output_tokens).toBeUndefined();
-            const maxTokens = getVertexAiOptions(model).options.find((item) => item.name === 'max_tokens');
-            expect(maxTokens?.type === 'numeric' && maxTokens.max).toBeUndefined();
+            expect(getVertexAiOptions(model).options.map((item) => item.name)).not.toContain('max_tokens');
         },
     );
 

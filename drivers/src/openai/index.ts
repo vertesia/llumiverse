@@ -50,12 +50,9 @@ import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-<<<<<<< HEAD
+import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
-=======
-import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';

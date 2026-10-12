@@ -53,11 +53,8 @@ import {
 import { asyncMap } from '@llumiverse/core/async';
 import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
-<<<<<<< HEAD
-import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
-=======
 import { logModelOptionException } from '../../shared/model-option-exceptions.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
@@ -239,8 +236,8 @@ function getProminentPeopleOption(
 export function getGeminiPayload(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
-<<<<<<< HEAD
     operation: LlumiverseErrorContext['operation'] = 'execute',
+    logger?: Logger,
 ): GenerateContentParameters {
     const model_options = options.model_options as
         | (VertexAIGeminiOptions & {
@@ -248,11 +245,6 @@ export function getGeminiPayload(
               required_tool_name?: string;
           })
         | undefined;
-=======
-    logger?: Logger,
-): GenerateContentParameters {
-    const model_options = options.model_options as VertexAIGeminiOptions | undefined;
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     const tools = getToolDefinitions(options.tools);
     const forcedToolRequested =
         model_options?.required_tool_name !== undefined ||
@@ -1031,11 +1023,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-<<<<<<< HEAD
-        const payload = getGeminiPayload(options, prompt, 'execute');
-=======
-        const payload = getGeminiPayload(options, prompt, driver.logger);
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+        const payload = getGeminiPayload(options, prompt, 'execute', driver.logger);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
@@ -1141,11 +1129,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-<<<<<<< HEAD
-        const payload = getGeminiPayload(options, prompt, 'stream');
-=======
-        const payload = getGeminiPayload(options, prompt, driver.logger);
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+        const payload = getGeminiPayload(options, prompt, 'stream', driver.logger);
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,

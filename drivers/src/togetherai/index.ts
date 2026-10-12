@@ -23,11 +23,8 @@ import type {
     CompletionCreateParamsStreaming,
 } from 'together-ai/resources/chat/completions';
 import type { Embedding, EmbeddingCreateParams } from 'together-ai/resources/embeddings';
-<<<<<<< HEAD
 import type { TogetherAIDriverOptions } from '../driver-options.js';
-=======
 import { mergeOpenAIExtraBody } from '../openai/extra_body.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 import {
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsPayload,

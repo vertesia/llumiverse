@@ -67,11 +67,8 @@ import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
-<<<<<<< HEAD
-import { createToolChoiceConfigurationError } from './tool-choice-error.js';
-=======
 import { logModelOptionException } from './model-option-exceptions.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
 // ============================================================================
 // Types
@@ -764,12 +761,9 @@ function stripClaudeCacheControlFromTools(
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
-<<<<<<< HEAD
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
-=======
     logger?: Logger,
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -1140,11 +1134,7 @@ export async function executeClaudeCompletion(
 
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-<<<<<<< HEAD
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
-=======
-    const { payload, requestOptions } = getClaudePayload(options, conversation, logger);
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', logger);
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1187,11 +1177,7 @@ export async function streamClaudeCompletion(
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-<<<<<<< HEAD
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
-=======
-    const { payload, requestOptions } = getClaudePayload(options, conversation, logger);
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', logger);
     const streamingPayload: MessageStreamParams = { ...payload, model: requestModel ?? payload.model, stream: true };
 
     const response_stream = await streamClaudeMessages(

@@ -46,6 +46,8 @@ describe('model option compatibility exceptions', () => {
                 },
             },
             { messages: [{ role: 'user', content: 'hello' }] },
+            'anthropic',
+            'stream',
             log,
         );
         expect(payload.temperature).toBeUndefined();
@@ -130,6 +132,7 @@ describe('model option compatibility exceptions', () => {
                 model_options: { _option_id: 'vertexai-gemini', temperature: 0, top_p: 0.8 },
             },
             { contents: [] },
+            'execute',
             log,
         );
         expect(log.warn).toHaveBeenCalledExactlyOnceWith(
@@ -154,6 +157,7 @@ describe('model option compatibility exceptions', () => {
                     },
                 },
                 { contents: [] },
+                'execute',
                 log,
             );
             expect(config?.topK).toBeUndefined();

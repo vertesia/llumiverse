@@ -12,8 +12,12 @@ describe('Gemini thinking configuration', () => {
         const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
         const model = 'gemini-3.5-flash';
         expect(
-            getGeminiPayload(options(model, { effort: 'high', thinking_level: 'low' }), { contents: [] }, logger).config
-                ?.thinkingConfig,
+            getGeminiPayload(
+                options(model, { effort: 'high', thinking_level: 'low' }),
+                { contents: [] },
+                'execute',
+                logger,
+            ).config?.thinkingConfig,
         ).toMatchObject({ thinkingLevel: 'low' });
         expect(logger.warn).toHaveBeenCalledOnce();
         expect(logger.warn).toHaveBeenCalledWith(

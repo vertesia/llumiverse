@@ -717,12 +717,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'embed',
                     // Special-purpose Gemini APIs are excluded even when they advertise generateContent.
                     '-live',
-<<<<<<< HEAD
                     'live-',
                     'transcribe-live',
-=======
                     '-robotics',
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
                     'native-audio',
                     'robotics',
                     'computer-use-preview',

@@ -57,7 +57,6 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
-<<<<<<< HEAD
     it('uses prompt-schema fallback for GLM 5.3 on OpenAI-compatible Responses', async () => {
         const create = vi.fn(async () => ({
             ...response(),
@@ -155,7 +154,6 @@ describe('OpenAI Responses reasoning', () => {
         expect(create).not.toHaveBeenCalled();
     });
 
-=======
     it.each(
         ([Providers.openai, Providers.azure_openai, Providers.openai_compatible] as const).flatMap((provider) =>
             [42, 0, undefined].flatMap((seed) => [false, true].map((streaming) => ({ provider, seed, streaming }))),
@@ -320,7 +318,6 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     it('returns the processing tier reported by OpenAI', async () => {
         const driver = new TestResponsesDriver(vi.fn(async () => response()));
 

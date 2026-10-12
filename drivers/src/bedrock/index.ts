@@ -74,11 +74,8 @@ import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-<<<<<<< HEAD
-import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-=======
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
+import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
     converseConcatMessages,
     converseJSONprefill,

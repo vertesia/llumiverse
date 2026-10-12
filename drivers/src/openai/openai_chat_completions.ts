@@ -37,12 +37,9 @@ import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-<<<<<<< HEAD
+import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
-=======
-import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -994,16 +991,13 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-<<<<<<< HEAD
-        const payload = this.buildPayload(conversation, options, false, getOpenAIChatDriverProvider(driver));
-=======
         const payload = this.buildPayload(
             conversation,
             options,
             false,
+            getOpenAIChatDriverProvider(driver),
             (driver as { logger?: Logger } | undefined)?.logger,
         );
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1062,16 +1056,13 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-<<<<<<< HEAD
-        const payload = this.buildPayload(conversation, options, true, getOpenAIChatDriverProvider(driver));
-=======
         const payload = this.buildPayload(
             conversation,
             options,
             true,
+            getOpenAIChatDriverProvider(driver),
             (driver as { logger?: Logger } | undefined)?.logger,
         );
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
@@ -1171,11 +1162,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         stream: boolean,
-<<<<<<< HEAD
         provider: string = Providers.openai_compatible,
-=======
         logger?: Logger,
->>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
