@@ -1392,7 +1392,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const novaEffort = options.model.includes('nova')
             ? (options.model_options as BedrockNovaOptions | undefined)?.effort
             : undefined;
-        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction || isGpt;
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
             supportsJSONPrefill = novaEffort === undefined || novaEffort === 'none';
@@ -1588,31 +1588,27 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
         // and will throw an exception for unrecognized parameters
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
-        // Compatibility exception: retain existing Claude/GPT sampling omissions and temperature-over-top_p precedence.
+        // Compatibility exception: retain existing Claude sampling omissions and non-GPT temperature-over-top_p precedence.
         logModelOptionException(
             this.logger,
             options.model,
             model_options,
             hasSamplingRestriction
                 ? ['temperature', 'top_p', ...(options.model.includes('claude') ? ['top_k'] : [])]
-                : model_options.temperature != null
+                : !isGpt && model_options.temperature != null
                   ? ['top_p']
                   : [],
             hasSamplingRestriction ? 'converse_sampling_restriction' : 'converse_sampling_precedence',
         );
-        if (isGpt) {
-            // Compatibility exception: the existing GPT Converse adapter omits stop sequences.
-            logModelOptionException(this.logger, options.model, model_options, ['stop_sequence'], 'gpt_converse_stop');
-        }
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
             ...(hasSamplingRestriction
                 ? {}
                 : {
                       temperature: model_options.temperature,
-                      topP: model_options.temperature != null ? undefined : model_options.top_p,
+                      topP: isGpt || model_options.temperature == null ? model_options.top_p : undefined,
                   }),
-            stopSequences: isGpt ? undefined : model_options.stop_sequence,
+            stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
         //Construct the final request payload

@@ -73,42 +73,72 @@ describe('Bedrock Converse closed-weight GPT options', () => {
         );
     });
 
-    it.each(['openai.gpt-5.5', 'us.openai.gpt-5.6-sol', 'global.openai.gpt-6-luna', 'us.openai.gpt-6.1-sol'])(
-        'transports effort and strict output together for %s',
-        (model) => {
-            const driver = new BedrockDriver({ region: 'us-east-1' });
-            const result_schema = {
-                type: 'object' as const,
-                properties: { answer: { type: 'string' as const } },
-                required: ['answer'],
-                additionalProperties: false,
-            };
-            const request = driver.preparePayload(
-                { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
-                {
-                    model,
-                    result_schema,
-                    model_options: {
-                        _option_id: 'bedrock-converse',
-                        effort: 'high',
-                        reasoning_effort: 'low',
-                        verbosity: 'low',
-                        temperature: 0.7,
-                        top_p: 0.9,
-                        stop_sequence: ['STOP'],
-                        max_tokens: 100,
-                    },
+    it.each([
+        'openai.gpt-5.5',
+        'us.openai.gpt-5.6-sol',
+        'global.openai.gpt-6-luna',
+        'us.openai.gpt-6.1-sol',
+        'arn:aws:bedrock:us-east-1:000000000000:inference-profile/global.openai.gpt-6-luna',
+    ])('transports effort and strict output together for %s', (model) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const result_schema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'string' as const } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            {
+                model,
+                result_schema,
+                model_options: {
+                    _option_id: 'bedrock-converse',
+                    effort: 'high',
+                    reasoning_effort: 'low',
+                    verbosity: 'low',
+                    temperature: 0.7,
+                    top_p: 0.9,
+                    stop_sequence: ['STOP'],
+                    max_tokens: 100,
                 },
-            );
-            expect(request.modelId).toBe(model);
-            expect(request.inferenceConfig).toEqual({ maxTokens: 100 });
-            expect(request.additionalModelRequestFields).toEqual({
-                reasoning: { effort: 'high' },
-                text: { verbosity: 'low', format: { strict: true } },
-            });
-            expect(request.outputConfig?.textFormat?.structure?.jsonSchema?.schema).toBe(JSON.stringify(result_schema));
-        },
-    );
+            },
+        );
+        expect(request.modelId).toBe(model);
+        expect(request.inferenceConfig).toEqual({
+            maxTokens: 100,
+            temperature: 0.7,
+            topP: 0.9,
+            stopSequences: ['STOP'],
+        });
+        expect(request.additionalModelRequestFields).toEqual({
+            reasoning: { effort: 'high' },
+            text: { verbosity: 'low', format: { strict: true } },
+        });
+        expect(request.outputConfig?.textFormat?.structure?.jsonSchema?.schema).toBe(JSON.stringify(result_schema));
+    });
+
+    it.each([undefined, 0])('preserves omitted and zero GPT sampling values (%s) without warnings', (value) => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const driver = new BedrockDriver({ region: 'us-east-1', logger });
+        const model = 'global.openai.gpt-6-luna';
+        const model_options: ModelOptions = {
+            _option_id: 'bedrock-converse',
+            temperature: value,
+            top_p: value,
+            stop_sequence: value === undefined ? undefined : ['STOP'],
+        };
+        const original = { ...model_options };
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options },
+        );
+        expect(request.inferenceConfig).toEqual(
+            value === undefined ? undefined : { temperature: 0, topP: 0, stopSequences: ['STOP'] },
+        );
+        expect(model_options).toEqual(original);
+        expect(logger.warn).not.toHaveBeenCalled();
+    });
 
     it.each(['none', 'max'] as const)('preserves the reasoning_effort alias value %s', (reasoning_effort) => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
