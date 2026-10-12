@@ -61,7 +61,7 @@ export function isFlexSupportedOpenAIModel(model: string): boolean {
     if (unsupportedVariant) return false;
 
     return (
-        /^gpt-5(?:[.-]|$)/.test(modelName) ||
+        isOpenAIGptVersionGTE(modelName, 5, 0) ||
         /^o3(?:-\d{4}|$)/.test(modelName) ||
         /^o4-mini(?:-\d{4}|$)/.test(modelName)
     );
@@ -144,6 +144,12 @@ export function getOpenAiOptions(
         Default: 'default',
         Priority: 'priority',
     };
+    if (provider === Providers.openai && isOpenAIGptVersionGTE(model, 6, 0)) {
+        serviceTiers.Fast = 'fast';
+        if (model.includes('astra') || (model.includes('sol') && isOpenAIGptVersionGTE(model, 6, 1))) {
+            serviceTiers.Ultrafast = 'ultrafast';
+        }
+    }
     if (isFlexSupportedOpenAIModel(model)) {
         serviceTiers.Flex = 'flex';
     }
@@ -313,7 +319,7 @@ export function getOpenAiOptions(
 
     if (isReasoningModel(model)) {
         //Is thinking text model
-        let max_tokens_limit = 4096;
+        let max_tokens_limit: number | undefined = 4096;
         if (model.includes('o1')) {
             if (model.includes('preview')) {
                 max_tokens_limit = 32768;
@@ -375,7 +381,9 @@ export function getOpenAiOptions(
         return {
             _option_id: 'openai-thinking',
             options: [
-                ...commonOptions,
+                ...commonOptions.filter(
+                    (item) => provider === Providers.openai_compatible || item.name !== SharedOptions.stop_sequence,
+                ),
                 ...reasoningOptions,
                 ...reasoningContextOptions,
                 ...visionOptions,
@@ -388,7 +396,7 @@ export function getOpenAiOptions(
             ],
         };
     } else {
-        let max_tokens_limit = 4096;
+        let max_tokens_limit: number | undefined = 4096;
         if (model.includes('gpt-4o')) {
             max_tokens_limit = 16384;
             if (model.includes('gpt-4o-2024-05-13') || model.includes('realtime')) {
@@ -464,7 +472,15 @@ export function getOpenAiOptions(
         return {
             _option_id: 'openai-text',
             options: [
-                ...commonOptions,
+                ...commonOptions.filter(
+                    (item) =>
+                        provider === Providers.openai_compatible ||
+                        ![
+                            SharedOptions.stop_sequence,
+                            SharedOptions.presence_penalty,
+                            SharedOptions.frequency_penalty,
+                        ].includes(item.name as SharedOptions),
+                ),
                 ...visionOptions,
                 ...serviceTierOptions,
                 {
@@ -484,13 +500,23 @@ export function getAzureOpenAiOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.azure_openai),
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile, Providers.azure_openai);
+    // Azure Flex availability is model-specific; do not inherit direct OpenAI tier support.
+    // https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/flex-processing
+    const supportsAzureFlex = /^gpt-(?:5\.6-(?:sol|luna|terra)|6-astra)(?:$|-\d{4}-\d{2}-\d{2}$)/i.test(
+        profile.canonical_id,
+    );
     return {
         ...options,
         options: options.options.map((item) =>
             item.name === 'service_tier' && item.type === OptionType.enum
                 ? {
                       ...item,
-                      enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
+                      enum: {
+                          Auto: 'auto',
+                          Default: 'default',
+                          Priority: 'priority',
+                          ...(supportsAzureFlex ? { Flex: 'flex' } : {}),
+                      },
                       description: 'Select the Azure OpenAI processing tier for this request.',
                   }
                 : item,

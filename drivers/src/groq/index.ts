@@ -6,6 +6,7 @@ import {
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
+    type Logger,
     ModelType,
     modelModalitiesToArray,
     Providers,
@@ -22,6 +23,7 @@ import type {
 } from 'groq-sdk/resources/chat/completions';
 import type { CompletionUsage } from 'groq-sdk/resources/completions';
 import type { GroqDriverOptions } from '../driver-options.js';
+import { mergeOpenAIExtraBody } from '../openai/extra_body.js';
 import {
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsPayload,
@@ -82,7 +84,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toGroqRequest(payload, options, false);
+        const request = toGroqRequest(payload, options, false, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const response = requestOptions
             ? await this.client.chat.completions.create(request, requestOptions)
@@ -95,7 +97,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toGroqRequest(payload, options, true);
+        const request = toGroqRequest(payload, options, true, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const stream = requestOptions
             ? await this.client.chat.completions.create(request, requestOptions)
@@ -163,16 +165,19 @@ function toGroqRequest(
     payload: OpenAIChatCompletionsPayload,
     options: ExecutionOptions,
     stream: false,
+    logger?: Logger,
 ): ChatCompletionCreateParamsNonStreaming;
 function toGroqRequest(
     payload: OpenAIChatCompletionsPayload,
     options: ExecutionOptions,
     stream: true,
+    logger?: Logger,
 ): ChatCompletionCreateParamsStreaming;
 function toGroqRequest(
     payload: OpenAIChatCompletionsPayload,
     options: ExecutionOptions,
     stream: boolean,
+    logger?: Logger,
 ): ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming {
     const modelOptions = options.model_options;
     const reasoningFormat =
@@ -185,18 +190,18 @@ function toGroqRequest(
         max_completion_tokens: payload.max_tokens ?? undefined,
         temperature: payload.temperature ?? undefined,
         top_p: payload.top_p ?? undefined,
+        ...(payload.seed !== undefined && { seed: payload.seed }),
         presence_penalty: payload.presence_penalty ?? undefined,
         frequency_penalty: payload.frequency_penalty ?? undefined,
         stop: payload.stop ?? undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toGroqTool),
         reasoning_format: reasoningFormat,
-        extra_body: payload.extra_body,
+        reasoning_effort: payload.reasoning_effort as ChatCompletionCreateParamsNonStreaming['reasoning_effort'],
+        service_tier: payload.service_tier as ChatCompletionCreateParamsNonStreaming['service_tier'],
         stream,
-    } satisfies (ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming) & {
-        extra_body?: Record<string, unknown>;
-    };
-    return request;
+    } satisfies ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming;
+    return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
 }
 
 function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {

@@ -5,6 +5,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     getModelCapabilities,
+    type Logger,
     ModelType,
     modelModalitiesToArray,
     normalizeEmbeddingsOptions,
@@ -23,6 +24,7 @@ import type {
 } from 'together-ai/resources/chat/completions';
 import type { Embedding, EmbeddingCreateParams } from 'together-ai/resources/embeddings';
 import type { TogetherAIDriverOptions } from '../driver-options.js';
+import { mergeOpenAIExtraBody } from '../openai/extra_body.js';
 import {
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsPayload,
@@ -60,7 +62,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toTogetherRequest(payload, false);
+        const request = toTogetherRequest(payload, false, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const response = requestOptions
             ? await this.service.chat.completions.create(request, requestOptions)
@@ -73,7 +75,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toTogetherRequest(payload, true);
+        const request = toTogetherRequest(payload, true, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const stream = requestOptions
             ? await this.service.chat.completions.create(request, requestOptions)
@@ -174,11 +176,20 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
     }
 }
 
-function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: false): CompletionCreateParamsNonStreaming;
-function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: true): CompletionCreateParamsStreaming;
+function toTogetherRequest(
+    payload: OpenAIChatCompletionsPayload,
+    stream: false,
+    logger?: Logger,
+): CompletionCreateParamsNonStreaming;
+function toTogetherRequest(
+    payload: OpenAIChatCompletionsPayload,
+    stream: true,
+    logger?: Logger,
+): CompletionCreateParamsStreaming;
 function toTogetherRequest(
     payload: OpenAIChatCompletionsPayload,
     stream: boolean,
+    logger?: Logger,
 ): CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming {
     const request = {
         model: payload.model,
@@ -186,24 +197,20 @@ function toTogetherRequest(
         max_tokens: payload.max_tokens ?? undefined,
         temperature: payload.temperature ?? undefined,
         top_p: payload.top_p ?? undefined,
+        ...(payload.seed !== undefined && { seed: payload.seed as CompletionCreateParamsNonStreaming['seed'] }),
         presence_penalty: payload.presence_penalty ?? undefined,
         frequency_penalty: payload.frequency_penalty ?? undefined,
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toTogetherTool),
-        reasoning_effort:
-            payload.reasoning_effort === 'low' ||
-            payload.reasoning_effort === 'medium' ||
-            payload.reasoning_effort === 'high'
-                ? payload.reasoning_effort
-                : undefined,
-        extra_body: payload.extra_body,
+        // SDK enums lag provider releases; preserve explicit effort for provider validation.
+        reasoning_effort: payload.reasoning_effort as CompletionCreateParamsNonStreaming['reasoning_effort'],
+        service_tier: payload.service_tier ?? undefined,
         stream,
     } satisfies (CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming) & {
-        extra_body?: Record<string, unknown>;
-        reasoning_effort?: 'low' | 'medium' | 'high';
+        service_tier?: string;
     };
-    return request;
+    return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
 }
 
 function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {

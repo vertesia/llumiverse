@@ -67,6 +67,7 @@ import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
+import { logModelOptionException } from './model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
 // ============================================================================
@@ -762,6 +763,7 @@ export function getClaudePayload(
     prompt: ClaudePrompt,
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
+    logger?: Logger,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -888,6 +890,7 @@ export function getClaudePayload(
     const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(
         modelName,
         model_options as Parameters<typeof resolveClaudeThinking>[1],
+        logger,
     );
     const forcedToolChoice = model_options?.required_tool_name
         ? ({ type: 'tool', name: model_options.required_tool_name } as const)
@@ -918,6 +921,18 @@ export function getClaudePayload(
               ? ({ type: 'auto' } as const)
               : undefined;
 
+    // Compatibility exception: preserve existing Claude sampling omissions and temperature-over-top_p precedence.
+    logModelOptionException(
+        logger,
+        modelName,
+        model_options,
+        hasSamplingRestriction
+            ? ['temperature', 'top_p', 'top_k']
+            : model_options?.temperature != null
+              ? ['top_p']
+              : [],
+        hasSamplingRestriction ? 'claude_sampling_restriction' : 'claude_sampling_precedence',
+    );
     const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
@@ -1119,7 +1134,7 @@ export async function executeClaudeCompletion(
 
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', logger);
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1162,7 +1177,7 @@ export async function streamClaudeCompletion(
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', logger);
     const streamingPayload: MessageStreamParams = { ...payload, model: requestModel ?? payload.model, stream: true };
 
     const response_stream = await streamClaudeMessages(

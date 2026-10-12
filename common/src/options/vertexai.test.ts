@@ -1,9 +1,95 @@
 import { describe, expect, it } from 'vitest';
 import { getModelCapabilities } from '../capability.js';
+import { resolveModelProfile } from '../model-directory.js';
 import { Providers } from '../types.js';
+import { getContextWindowSize, getMaxOutputTokens } from './context-windows.js';
 import { getMaxTokensLimitVertexAi, getVertexAiOptions, isFlexSupportedGeminiModel } from './vertexai.js';
 
 describe('Vertex AI MaaS metadata', () => {
+    it.each([
+        'gemini-3.1-flash-lite-image',
+        'gemini-3.1-flash-lite-image-preview',
+        'locations/global/publishers/google/models/gemini-3.1-flash-lite-image',
+        'gemini-4.0-flash-lite-image',
+    ])('keeps documented Flash-Lite Image limits consistent for %s', (model) => {
+        expect(getContextWindowSize(model)).toBe(65_536);
+        expect(getMaxOutputTokens(model)).toBe(4_096);
+        expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+            context_window: 65_536,
+            max_output_tokens: 4_096,
+        });
+        expect(getMaxTokensLimitVertexAi(model)).toBe(4_096);
+        const maxTokens = getVertexAiOptions(model).options.find((item) => item.name === 'max_tokens');
+        expect(maxTokens).toMatchObject({ max: 4_096 });
+        expect(maxTokens).not.toHaveProperty('default');
+    });
+
+    it.each([
+        ['gemini-2.0-flash-001', 1_048_576, 8_192],
+        ['gemini-2.0-flash-lite-001', 1_048_576, 8_192],
+        ['gemini-2.0-flash-thinking-exp-01-21', 1_048_576, 65_535],
+        ['gemini-2.5-pro', 1_048_576, 65_536],
+        ['gemini-2.5-flash', 1_048_576, 65_536],
+        ['gemini-2.5-flash-lite', 1_048_576, 65_536],
+        ['gemini-3-pro-preview', 1_048_576, 65_536],
+        ['gemini-3-flash-preview', 1_048_576, 65_536],
+        ['gemini-3.1-pro-preview', 1_048_576, 65_536],
+        ['gemini-3.1-flash-lite', 1_048_576, 65_536],
+        ['gemini-3.5-flash', 1_048_576, 65_536],
+        ['gemini-3.5-flash-lite', 1_048_576, 65_536],
+        ['gemini-3.6-flash', 1_048_576, 65_536],
+        ['gemini-3.7-flash', 1_048_576, 65_536],
+        ['gemini-3.8-flash', 1_048_576, 65_536],
+        ['gemini-3.8-flash-cyber', 1_048_576, 65_536],
+        ['gemini-2.5-flash-image', 32_768, 32_768],
+        ['gemini-3-pro-image-preview', 65_536, 32_768],
+        ['gemini-3.1-flash-image-preview', 131_072, 32_768],
+        ['gemini-nano-banana-2.1', 131_072, 32_768],
+        ['gemini-4-pro-image', 65_536, 32_768],
+        ['gemini-4-flash-image', 131_072, 32_768],
+        ['gemini-4-flash', 1_048_576, 65_536],
+    ] as const)('aligns Gemini limits across public metadata for %s', (model, context, output) => {
+        const qualified = `locations/global/publishers/google/models/${model}`;
+        for (const id of [model, qualified]) {
+            expect(getContextWindowSize(id)).toBe(context);
+            expect(getMaxOutputTokens(id)).toBe(output);
+            expect(getMaxTokensLimitVertexAi(id)).toBe(output);
+            expect(resolveModelProfile(id, Providers.vertexai)).toMatchObject({
+                context_window: context,
+                max_output_tokens: output,
+            });
+            expect(getVertexAiOptions(id).options.find((item) => item.name === 'max_tokens')).toMatchObject({
+                max: output,
+            });
+        }
+    });
+
+    it.each(['gemini-omni-flash-preview', 'gemini-omni-1.1-flash-preview'])(
+        'uses dedicated video limits without adding a chat max_tokens control for %s',
+        (model) => {
+            expect(getContextWindowSize(model)).toBe(131_072);
+            expect(getMaxOutputTokens(model)).toBe(57_920);
+            expect(getMaxTokensLimitVertexAi(model)).toBe(57_920);
+            expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+                context_window: 131_072,
+                max_output_tokens: 57_920,
+            });
+            expect(getVertexAiOptions(model).options.map((item) => item.name)).not.toContain('max_tokens');
+        },
+    );
+
+    it.each(['gemini-3.5-transcribe', 'gemini-3.5-transcribe-preview', 'gemini-4-transcribe'])(
+        'leaves unpublished Transcribe limits unknown for %s',
+        (model) => {
+            expect(getContextWindowSize(model)).toBeUndefined();
+            expect(getMaxOutputTokens(model)).toBeUndefined();
+            expect(getMaxTokensLimitVertexAi(model)).toBeUndefined();
+            expect(resolveModelProfile(model, Providers.vertexai).context_window).toBeUndefined();
+            expect(resolveModelProfile(model, Providers.vertexai).max_output_tokens).toBeUndefined();
+            expect(getVertexAiOptions(model).options.map((item) => item.name)).not.toContain('max_tokens');
+        },
+    );
+
     it('exposes model-specific Gemini Omni tasks and resolutions', () => {
         const omni10 = getVertexAiOptions('gemini-omni-flash-preview');
         const omni11 = getVertexAiOptions('locations/global/publishers/google/models/gemini-omni-1.1-flash-preview');
@@ -59,7 +145,7 @@ describe('Vertex AI MaaS metadata', () => {
         expect(capabilities.tool_support).toBe(true);
     });
 
-    it('keeps model-specific MaaS capability exceptions', () => {
+    it('exposes Gemma 4 MaaS tool support', () => {
         const gemma = getModelCapabilities(
             'locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas',
             Providers.vertexai,
@@ -67,7 +153,7 @@ describe('Vertex AI MaaS metadata', () => {
         expect(gemma.input.text).toBe(true);
         expect(gemma.input.image).toBe(true);
         expect(gemma.output.text).toBe(true);
-        expect(gemma.tool_support).toBe(false);
+        expect(gemma.tool_support).toBe(true);
     });
 
     it('uses MaaS modality and tool-support metadata for key model families', () => {
@@ -122,6 +208,9 @@ describe('Vertex AI MaaS metadata', () => {
 
     it('uses model-specific MaaS output token limits where known', () => {
         expect(getMaxTokensLimitVertexAi('qwen3-next-80b-a3b-thinking-maas')).toBe(262144);
+        expect(
+            getVertexAiOptions('qwen3-next-80b-a3b-thinking-maas').options.find((item) => item.name === 'max_tokens'),
+        ).toMatchObject({ max: 262144 });
     });
 
     it('uses Claude Sonnet 4.6 128K output limit on Vertex AI', () => {
@@ -129,5 +218,101 @@ describe('Vertex AI MaaS metadata', () => {
 
         expect(getMaxTokensLimitVertexAi('claude-sonnet-4-6')).toBe(128_000);
         expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
+    });
+});
+
+describe('Vertex Gemini reasoning metadata', () => {
+    it.each([
+        ['gemini-3.6-flash', ['minimal', 'low', 'medium', 'high']],
+        ['gemini-3.7-flash', ['low', 'medium', 'high']],
+        ['gemini-3.8-flash-cyber', ['low', 'medium', 'high']],
+        ['gemini-4.0-flash', ['low', 'medium', 'high']],
+        ['gemini-3-pro-preview', ['low', 'high']],
+        ['gemini-3.1-pro-preview', ['low', 'medium', 'high']],
+        ['gemini-3.1-flash-lite-image', ['minimal', 'high']],
+        ['gemini-nano-banana-2.1', ['minimal', 'medium', 'high']],
+        ['gemini-nano-banana-3.0', ['minimal', 'medium', 'high']],
+    ])('offers supported effort levels for %s', (model, values) => {
+        const effort = getVertexAiOptions(`publishers/google/models/${model}`).options.find(
+            (item) => item.name === 'effort',
+        );
+        expect(effort?.type).toBe('enum');
+        if (effort?.type !== 'enum') throw new Error('Missing effort option');
+        expect(Object.values(effort.enum)).toEqual(values);
+    });
+
+    it.each(['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4.0-flash'])(
+        'hides unsupported sampling options for %s',
+        (model) => {
+            const names = getVertexAiOptions(model).options.map((item) => item.name);
+            for (const name of ['temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty']) {
+                expect(names).not.toContain(name);
+            }
+        },
+    );
+});
+
+describe('Gemini 2.5 thinking defaults', () => {
+    it.each([
+        ['gemini-2.5-flash-lite', false],
+        ['gemini-2.5-flash', true],
+        ['gemini-2.5-pro', true],
+    ])('uses a compatible summary default for %s', (model, includeThoughts) => {
+        const options = getVertexAiOptions(model).options;
+        expect(options.find((option) => option.name === 'include_thoughts')?.default).toBe(includeThoughts);
+        expect(options.find((option) => option.name === 'thinking_budget_tokens')?.default).toBeUndefined();
+        expect(options.find((option) => option.name === 'effort')?.default).toBeUndefined();
+    });
+});
+
+describe('Vertex regional Mistral chat metadata', () => {
+    it.each([
+        'mistral-small-2503',
+        'mistral-medium-3',
+        'codestral-2',
+        'mistral-small-2603',
+        'mistral-medium-4',
+        'codestral-3',
+    ])('uses compatible chat options without reasoning defaults for %s', (model) => {
+        const options = getVertexAiOptions(`locations/europe-west4/publishers/mistralai/models/${model}`);
+        expect(options._option_id).toBe('openai-text');
+        expect(options.options.map((option) => option.name)).toEqual(
+            expect.arrayContaining(['temperature', 'top_p', 'max_tokens', 'stop_sequence', 'extra_body']),
+        );
+        expect(options.options.map((option) => option.name)).not.toContain('top_k');
+        expect(options.options.map((option) => option.name)).not.toContain('presence_penalty');
+        expect(options.options.map((option) => option.name)).not.toContain('frequency_penalty');
+        expect(options.options.map((option) => option.name)).not.toContain('effort');
+        const maxTokens = options.options.find((option) => option.name === 'max_tokens');
+        expect(maxTokens).toBeDefined();
+        expect(maxTokens).not.toHaveProperty('max');
+        expect(maxTokens?.default).toBeUndefined();
+    });
+    it.each(['mistral-small-2503', 'mistral-medium-3', 'codestral-2'])(
+        'preserves documented capabilities for %s',
+        (model) => {
+            const capabilities = getModelCapabilities(model, Providers.vertexai);
+            expect(capabilities.input).toMatchObject({ text: true, image: model !== 'codestral-2' });
+            expect(capabilities.tool_support).toBe(model !== 'codestral-2');
+        },
+    );
+    it.each(['mistral-small-2603', 'publishers/google/models/mistral-small-2603'])(
+        'does not advertise regional Mistral transport options for %s',
+        (model) => expect(getVertexAiOptions(model)._option_id).toBe('text-fallback'),
+    );
+    it.each([
+        'locations/global/publishers/xai/models/grok-4.7',
+        'publishers/mistralai/models/mistral-small-2503',
+        'publishers/mistralai/models/mistral-medium-3',
+        'publishers/mistralai/models/codestral-2',
+        'publishers/mistralai/models/mistral-small-2603',
+    ])('keeps unknown Vertex output limits unknown for %s', (model) => {
+        expect(getMaxTokensLimitVertexAi(model)).toBeUndefined();
+        expect(getVertexAiOptions(model).options.find((option) => option.name === 'max_tokens')).not.toHaveProperty(
+            'max',
+        );
+    });
+    it('excludes OCR from the compatible chat option surface', () => {
+        expect(getVertexAiOptions('publishers/mistralai/models/mistral-ocr-2505')._option_id).toBe('text-fallback');
     });
 });

@@ -29,11 +29,13 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    hasGeminiSamplingRestriction,
     incrementConversationTurn,
     isGeminiModelVersionGte,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
+    type Logger,
     ModelType,
     type PromptOptions,
     PromptRole,
@@ -51,6 +53,7 @@ import {
 import { asyncMap } from '@llumiverse/core/async';
 import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
+import { logModelOptionException } from '../../shared/model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -234,6 +237,7 @@ export function getGeminiPayload(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
     operation: LlumiverseErrorContext['operation'] = 'execute',
+    logger?: Logger,
 ): GenerateContentParameters {
     const model_options = options.model_options as
         | (VertexAIGeminiOptions & {
@@ -272,6 +276,22 @@ export function getGeminiPayload(
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
     const isNanoBanana = options.model.toLowerCase().includes('gemini-nano-banana');
+    const isImageModel = options.model.toLowerCase().includes('image') || isNanoBanana;
+    // Compatibility exception: existing image requests omit these generation controls.
+    if (isImageModel) {
+        logModelOptionException(
+            logger,
+            options.model,
+            model_options,
+            ['top_k', 'seed', 'presence_penalty', 'frequency_penalty'],
+            'gemini_image_generation_options',
+        );
+    }
+    // Compatibility exception: existing Nano Banana requests omit sampling controls.
+    if (isNanoBanana) {
+        logModelOptionException(logger, options.model, model_options, ['temperature', 'top_p'], 'nano_banana_sampling');
+    }
+    const thinkingConfig = geminiThinkingConfig(options, logger);
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -283,7 +303,7 @@ export function getGeminiPayload(
         topP: isNanoBanana ? undefined : model_options?.top_p,
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
-        thinkingConfig: geminiThinkingConfig(options),
+        thinkingConfig,
         labels: options.labels,
         imageConfig: {
             imageSize: model_options?.image_size,
@@ -295,6 +315,8 @@ export function getGeminiPayload(
         },
     };
 
+    // Restrict only our generated candidate count; explicit sampling options pass through for provider validation.
+    const restrictSampling = hasGeminiSamplingRestriction(options.model);
     const config: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -314,7 +336,8 @@ export function getGeminiPayload(
                   },
               }
             : undefined,
-        candidateCount: 1,
+        // Compatibility exception: retain the single-candidate contract on models that accept it.
+        candidateCount: restrictSampling ? undefined : 1,
         //JSON/Structured output
         responseMimeType: useStructuredOutput ? 'application/json' : undefined,
         responseJsonSchema: useStructuredOutput ? options.result_schema : undefined,
@@ -327,14 +350,14 @@ export function getGeminiPayload(
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
-        thinkingConfig: geminiThinkingConfig(options),
+        thinkingConfig,
         labels: options.labels,
     };
 
     return {
         model: options.model,
         contents: payloadContents,
-        config: options.model.toLowerCase().includes('image') || isNanoBanana ? configNanoBanana : config,
+        config: isImageModel ? configNanoBanana : config,
     };
 }
 
@@ -603,15 +626,17 @@ function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGemini
     return 8192;
 }
 
-export function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
+export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?: Logger): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
 
-    // If thinking options are explicitly set in model options, use them directly
+    // Compatibility exception: preserve summary output by default when thinking is explicitly configured.
     const include_thoughts = model_options?.include_thoughts !== false;
+    // Compatibility exception: native thinking controls take precedence over generic effort.
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
-        if (model_options.thinking_budget_tokens === 0 && !model_options.thinking_level) return undefined;
+        logModelOptionException(logger, option.model, model_options, ['effort'], 'gemini_native_thinking_precedence');
         return {
-            includeThoughts: true,
+            // Default summaries off for a zero budget; preserve explicit caller choices for provider validation.
+            includeThoughts: model_options.include_thoughts ?? model_options.thinking_budget_tokens !== 0,
             ...(model_options.thinking_budget_tokens !== undefined && {
                 thinkingBudget: model_options.thinking_budget_tokens,
             }),
@@ -998,7 +1023,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'execute');
+        const payload = getGeminiPayload(options, prompt, 'execute', driver.logger);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
@@ -1104,7 +1129,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'stream');
+        const payload = getGeminiPayload(options, prompt, 'stream', driver.logger);
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,

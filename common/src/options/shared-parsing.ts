@@ -30,7 +30,8 @@ import {
 export function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes('-3-7')) return 128000;
     if (isClaudeVersionGTE(model, 4, 7)) return 128000;
-    return getMaxOutputTokens(model);
+    // Every Claude generation has a numeric canonical limit; unknown dedicated Gemini APIs do not.
+    return getMaxOutputTokens(model) as number;
 }
 
 // ============================================================================

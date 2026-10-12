@@ -33,7 +33,7 @@ import {
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
-import { retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
+import { getAdvertisedTestOptions, retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 60 * 1000;
 
@@ -270,7 +270,9 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
             retry: retryUnlessRateLimited(2),
             concurrent: false,
         }, async () => {
-            const r = await withRateLimitBackoff(() => driver.execute(testPrompt_color, getTestOptions(model)));
+            const r = await withRateLimitBackoff(() =>
+                driver.execute(testPrompt_color, getAdvertisedTestOptions(getTestOptions(model), driver.provider)),
+            );
             console.log(`Result for execute ${model}`, JSON.stringify(r));
             assertCompletionOk(r, model, driver);
             assertProviderCostReported(r, driver);
@@ -283,7 +285,7 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
         }, async () => {
             const { r, out } = await withRateLimitBackoff(async () => {
                 const stream = await driver.stream(testPrompt_color, {
-                    ...getTestOptions(model),
+                    ...getAdvertisedTestOptions(getTestOptions(model), driver.provider),
                     result_schema: testSchema_color,
                 });
                 return { r: stream, out: await assertStreamingCompletionOk(stream, true) };
@@ -296,13 +298,17 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
             timeout: TIMEOUT,
             retry: retryUnlessRateLimited(1),
             concurrent: false,
-        }, async () => {
-            // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
+        }, async (context) => {
+            // Use provider-specific limits where available; unknown Vertex limits must remain unknown.
             let limit: number | undefined;
             if (driver.provider === 'bedrock') {
                 limit = getMaxTokensLimitBedrock(model);
             } else if (driver.provider === 'vertexai') {
                 limit = getMaxTokensLimitVertexAi(model);
+                if (limit === undefined) {
+                    context.skip();
+                    return;
+                }
             }
             // Fallback to conservative provider-agnostic limit for all other providers
             if (!limit) {
