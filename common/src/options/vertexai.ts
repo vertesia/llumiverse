@@ -15,6 +15,7 @@ import {
     Providers,
     SharedOptions,
 } from '../types.js';
+import { getMaxOutputTokens } from './context-windows.js';
 import { textOptionsFallback } from './fallback.js';
 import { getOpenAiCompatibleOptions } from './openai.js';
 import {
@@ -789,6 +790,9 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
 }
 
 function getGeminiMaxTokensLimit(model: string): number {
+    if (model.includes('-flash-lite-image') && isGeminiModelVersionGte(model, '3.1')) {
+        return getMaxOutputTokens(model);
+    }
     if (model.includes('image') || model.includes('gemini-nano-banana')) {
         return model.includes('gemini-nano-banana') || isGeminiModelVersionGte(model, '2.5') ? 32768 : 8192;
     }

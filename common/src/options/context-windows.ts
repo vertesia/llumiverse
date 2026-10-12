@@ -1,6 +1,7 @@
 import { getMistralModelKnowledge } from '../capability/mistral.js';
 import {
     isClaudeVersionGTE,
+    isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
     isOpenAIGptProModel,
     isOpenAIGptVersionGTE,
@@ -32,6 +33,9 @@ export function getMaxOutputTokens(model: string): number {
     }
     // Gemini models
     if (model.includes('gemini')) {
+        // Flash-Lite Image has its own limits, distinct from the general Gemini chat/image families.
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-1-flash-lite-image
+        if (model.includes('-flash-lite-image') && isGeminiModelVersionGte(model, '3.1')) return 4_096;
         if (model.includes('-1.0-')) return 2_048;
         if (model.includes('flash-image') || model.includes('pro-image') || model.includes('gemini-nano-banana'))
             return 32_768;
@@ -105,6 +109,7 @@ export function getContextWindowSize(model: string): number | undefined {
     }
     // Gemini models
     if (model.includes('gemini')) {
+        if (model.includes('-flash-lite-image') && isGeminiModelVersionGte(model, '3.1')) return 65_536;
         if (model.includes('-1.0-')) return 32_000;
         if (model.includes('gemini-nano-banana')) return 131_072;
         return 1_000_000; // Gemini 1.5, 2.0, 2.5, 3 all support 1M

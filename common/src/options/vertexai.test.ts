@@ -1,9 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import { getModelCapabilities } from '../capability.js';
+import { resolveModelProfile } from '../model-directory.js';
 import { Providers } from '../types.js';
+import { getContextWindowSize, getMaxOutputTokens } from './context-windows.js';
 import { getMaxTokensLimitVertexAi, getVertexAiOptions, isFlexSupportedGeminiModel } from './vertexai.js';
 
 describe('Vertex AI MaaS metadata', () => {
+    it.each([
+        'gemini-3.1-flash-lite-image',
+        'gemini-3.1-flash-lite-image-preview',
+        'locations/global/publishers/google/models/gemini-3.1-flash-lite-image',
+        'gemini-4.0-flash-lite-image',
+    ])('keeps documented Flash-Lite Image limits consistent for %s', (model) => {
+        expect(getContextWindowSize(model)).toBe(65_536);
+        expect(getMaxOutputTokens(model)).toBe(4_096);
+        expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+            context_window: 65_536,
+            max_output_tokens: 4_096,
+        });
+        expect(getMaxTokensLimitVertexAi(model)).toBe(4_096);
+        const maxTokens = getVertexAiOptions(model).options.find((item) => item.name === 'max_tokens');
+        expect(maxTokens).toMatchObject({ max: 4_096 });
+        expect(maxTokens).not.toHaveProperty('default');
+    });
+
+    it.each(['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-3.1-flash-lite'])(
+        'preserves the limits of neighboring Gemini variants for %s',
+        (model) => {
+            expect(getContextWindowSize(model)).toBe(1_000_000);
+            expect(getMaxTokensLimitVertexAi(model)).toBe(model.includes('image') ? 32_768 : 65_535);
+        },
+    );
+
     it('exposes model-specific Gemini Omni tasks and resolutions', () => {
         const omni10 = getVertexAiOptions('gemini-omni-flash-preview');
         const omni11 = getVertexAiOptions('locations/global/publishers/google/models/gemini-omni-1.1-flash-preview');
