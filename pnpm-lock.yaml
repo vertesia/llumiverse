@@ -244,8 +244,8 @@ importers:
         version: 7.30.0
     devDependencies:
       '@vertesia/api-fetch-client':
-        specifier: ^1.5.0
-        version: 1.5.0
+        specifier: ^1.5.1
+        version: 1.5.1
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -322,8 +322,8 @@ importers:
         specifier: ^1.4.10
         version: 1.4.21
       '@vertesia/api-fetch-client':
-        specifier: ^1.5.0
-        version: 1.5.0
+        specifier: ^1.5.1
+        version: 1.5.1
       eventsource:
         specifier: ^5.1.2
         version: 5.1.2
@@ -1307,8 +1307,8 @@ packages:
     resolution: {integrity: sha512-SnbaqayTVFEA6/tYumdF0UmybY0KHyKwGPBXnyckFlrrKdhWFrL3a2HIPXHjht5ZOElKGcXfD2D63P36btb+ww==}
     engines: {node: '>=20.0.0'}
 
-  '@vertesia/api-fetch-client@1.5.0':
-    resolution: {integrity: sha512-JYAJiO5pl2DwSxp2ckKp8lQqRAAmbKFb5Ruji42i+ivb87MXqlxqOosqjl2LSRcTpv7i1DMDdurhoDBfEzAzew==}
+  '@vertesia/api-fetch-client@1.5.1':
+    resolution: {integrity: sha512-P/zpxgKFovFn1ItJhqbNdTIjx/k65HZeONzeg4QfpkdmW2FuIg6DRKmQ1uYbGIBwa7lnkwC3LSb/tiXctOeRAw==}
 
   '@vitest/mocker@5.0.3':
     resolution: {integrity: sha512-T8sWAIbkSyAjkwTcaEc3Iu0o9A27X1/kdXrizhZkGuSKScRQtRzclfAMpOTcGdXCsqxeWlpGy3XjqaW8CpLORg==}
@@ -1459,10 +1459,6 @@ packages:
   events@3.3.0:
     resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
     engines: {node: '>=0.8.x'}
-
-  eventsource-parser@4.1.0:
-    resolution: {integrity: sha512-+DHvQ1wLO//MK+1OZgcuXCbZFKgu3YjKPJt7n98rxX8vezL0ni+7s3ZQiM8bJkUEOk7MsuCycrPLj0FzUNf7Og==}
-    engines: {node: '>=22.12'}
 
   eventsource-parser@4.1.1:
     resolution: {integrity: sha512-zaWNqeSLeyzEAAt2Q6aDBRDRk/VnPmsKqvToyGvv6aahvLv71A4Jw7jG93Hckf11zXurbqgsffvpSgKPoeU1Qw==}
@@ -3313,9 +3309,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vertesia/api-fetch-client@1.5.0':
+  '@vertesia/api-fetch-client@1.5.1':
     dependencies:
-      eventsource-parser: 4.1.0
+      eventsource-parser: 4.1.1
 
   '@vitest/mocker@5.0.3(vite@8.0.16(@types/node@24.19.1))':
     dependencies:
@@ -3443,8 +3439,6 @@ snapshots:
     optional: true
 
   events@3.3.0: {}
-
-  eventsource-parser@4.1.0: {}
 
   eventsource-parser@4.1.1: {}
 
