@@ -1,4 +1,5 @@
 import { getMistralModelKnowledge } from '../capability/mistral.js';
+import { getGeminiModelLimits } from './gemini-limits.js';
 import {
     isClaudeVersionGTE,
     isModelFamilyVersionGTE,
@@ -12,10 +13,10 @@ function isDeepSeekV32OrLater(model: string): boolean {
 }
 
 /**
- * Returns the canonical max output tokens for a model.
+ * Returns the canonical max output tokens for a model, or undefined for dedicated APIs without published limits.
  * Provider-specific limits must be applied by the provider option/capability layer.
  */
-export function getMaxOutputTokens(model: string): number {
+export function getMaxOutputTokens(model: string): number | undefined {
     model = model.toLowerCase();
     // Claude models
     if (model.includes('claude')) {
@@ -31,12 +32,7 @@ export function getMaxOutputTokens(model: string): number {
         return 4_096; // Claude 3 older
     }
     // Gemini models
-    if (model.includes('gemini')) {
-        if (model.includes('-1.0-')) return 2_048;
-        if (model.includes('flash-image') || model.includes('pro-image') || model.includes('gemini-nano-banana'))
-            return 32_768;
-        return 65_535; // Gemini 1.5, 2.0, 2.5, 3 — API upper bound is exclusive
-    }
+    if (model.includes('gemini')) return getGeminiModelLimits(model).max_output_tokens;
     // OpenAI o-series
     if (model.includes('o1-mini')) return 65_536;
     if (model.includes('o1')) return 100_000;
@@ -87,7 +83,8 @@ export function getMaxOutputTokens(model: string): number {
  */
 export function getMaxInputTokens(model: string): number | undefined {
     const contextWindow = getContextWindowSize(model);
-    return contextWindow === undefined ? undefined : contextWindow - getMaxOutputTokens(model);
+    const maxOutput = getMaxOutputTokens(model);
+    return contextWindow === undefined || maxOutput === undefined ? undefined : contextWindow - maxOutput;
 }
 
 /**
@@ -104,11 +101,7 @@ export function getContextWindowSize(model: string): number | undefined {
         return 200_000;
     }
     // Gemini models
-    if (model.includes('gemini')) {
-        if (model.includes('-1.0-')) return 32_000;
-        if (model.includes('gemini-nano-banana')) return 131_072;
-        return 1_000_000; // Gemini 1.5, 2.0, 2.5, 3 all support 1M
-    }
+    if (model.includes('gemini')) return getGeminiModelLimits(model).context_window;
     // OpenAI o-series (check before gpt-4 to avoid false matches)
     if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 200_000;
     // GPT models — provider-specific limits are applied by the provider overlay.

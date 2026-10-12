@@ -27,10 +27,31 @@ export function getXAIOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.xai),
 ): ModelOptionsInfo {
     if (!isXAIGrokImageModel(model)) {
+<<<<<<< HEAD
         const textOptions = getOpenAiCompatibleOptions(model, options, profile);
         if (!XAI_TIERED_OPTION_IDS.has(textOptions._option_id)) return textOptions;
         // xAI serves text requests at a priority tier, confirmed by the response's `service_tier`.
         return { ...textOptions, options: [...textOptions.options, XAI_SERVICE_TIER_OPTION] };
+=======
+        const compatible = getOpenAiCompatibleOptions(model, options, profile);
+        return {
+            ...compatible,
+            options: compatible.options
+                // The xAI driver uses Responses, which does not support these Chat controls.
+                .filter((item) => !['stop_sequence', 'presence_penalty', 'frequency_penalty'].includes(item.name))
+                .map((item) => {
+                    if (
+                        item.name === 'max_tokens' &&
+                        item.type === OptionType.numeric &&
+                        profile.max_output_tokens === undefined
+                    ) {
+                        const { max: _max, ...uncapped } = item;
+                        return uncapped;
+                    }
+                    return item;
+                }),
+        };
+>>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
     }
 
     const imageOptions: ModelOptionInfoItem[] = [

@@ -27,6 +27,7 @@ import {
     type BedrockClaudeOptions,
     type BedrockConverseOptions,
     type BedrockGptOssOptions,
+    type BedrockNovaOptions,
     type BedrockPalmyraOptions,
     type Completion,
     type CompletionChunkObject,
@@ -73,7 +74,11 @@ import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+<<<<<<< HEAD
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
+=======
+import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+>>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -1381,6 +1386,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const claudeThinking = resolveClaudeThinking(
             options.model,
             options.model_options as BedrockClaudeOptions | undefined,
+            options.model.includes('claude') ? this.logger : undefined,
         );
         const claudeVersion = parseClaudeVersion(options.model);
         const onlySupportsAdaptiveThinking = claudeVersion?.variant === 'fable' || claudeVersion?.variant === 'mythos';
@@ -1397,13 +1403,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             claudeThinking.supportsThinking &&
             !useAutomaticToolChoiceForAdaptiveClaude;
         const isGpt = isOpenAIGptVersionGTE(options.model, 5, 0);
-        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction || isGpt;
+        // Option metadata describes known support; it must not discard explicit caller effort on other Nova versions.
+        const novaEffort = options.model.includes('nova')
+            ? (options.model_options as BedrockNovaOptions | undefined)?.effort
+            : undefined;
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
-            supportsJSONPrefill = true;
+            supportsJSONPrefill = novaEffort === undefined || novaEffort === 'none';
             //Titan models also exists but does not support any additional options
             if (options.model.includes('nova')) {
-                additionalField = { inferenceConfig: { topK: model_options.top_k } };
+                additionalField = {
+                    inferenceConfig: { topK: model_options.top_k },
+                    ...(novaEffort !== undefined && {
+                        reasoningConfig:
+                            novaEffort === 'none'
+                                ? { type: 'disabled' }
+                                : { type: 'enabled', maxReasoningEffort: novaEffort },
+                    }),
+                };
             }
         } else if (options.model.includes('claude')) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
@@ -1445,7 +1463,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             // Needs max_tokens to be set — and caller-provided values clamped to
             // the model's output limit (both handled by maxTokenFallbackClaude).
-            model_options.max_tokens = maxTokenFallbackClaude(options);
+            // Compatibility exception: retain the existing Claude output-limit clamp.
+            const maxTokens = maxTokenFallbackClaude(options);
+            if (model_options.max_tokens !== undefined && model_options.max_tokens !== maxTokens) {
+                logModelOptionException(
+                    this.logger,
+                    options.model,
+                    model_options,
+                    ['max_tokens'],
+                    'claude_output_limit',
+                );
+            }
+            model_options.max_tokens = maxTokens;
             // Only models without sampling restrictions support top_k
             if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
@@ -1513,12 +1542,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 min_tokens: palmyraOptions?.min_tokens,
             };
         } else if (options.model.includes('deepseek')) {
-            // DeepSeek models: no additional options, no stopSequences, only one of temperature/top_p
+            // Compatibility exception: preserve existing DeepSeek stop/sampling omissions.
+            logModelOptionException(
+                this.logger,
+                options.model,
+                model_options,
+                ['stop_sequence', 'top_p'],
+                'deepseek_converse_options',
+            );
             model_options.stop_sequence = undefined;
             model_options.top_p = undefined;
         } else if (isGpt) {
             const gptOptions = options.model_options as BedrockConverseOptions | undefined;
-            const effort = gptOptions?.effort ?? gptOptions?.reasoning_effort;
+            const effort = resolveOpenAIEffort(gptOptions, this.logger, options.model);
             additionalField = {
                 ...(effort !== undefined && { reasoning: { effort } }),
                 text: {
@@ -1541,6 +1577,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 if (!stopSeq) {
                     model_options.stop_sequence = ['```'];
                 } else if (!stopSeq.includes('```')) {
+                    // Compatibility exception: existing JSON-prefill handling augments supplied stop sequences.
+                    logModelOptionException(
+                        this.logger,
+                        options.model,
+                        model_options,
+                        ['stop_sequence'],
+                        'json_prefill_stop_sequence',
+                    );
                     stopSeq.push('```');
                     model_options.stop_sequence = stopSeq;
                 }
@@ -1560,16 +1604,27 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
         // and will throw an exception for unrecognized parameters
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
-        // Models with sampling parameter restrictions don't support temperature/top_p - exclude them from inference config
+        // Compatibility exception: retain existing Claude sampling omissions and non-GPT temperature-over-top_p precedence.
+        logModelOptionException(
+            this.logger,
+            options.model,
+            model_options,
+            hasSamplingRestriction
+                ? ['temperature', 'top_p', ...(options.model.includes('claude') ? ['top_k'] : [])]
+                : !isGpt && model_options.temperature != null
+                  ? ['top_p']
+                  : [],
+            hasSamplingRestriction ? 'converse_sampling_restriction' : 'converse_sampling_precedence',
+        );
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
             ...(hasSamplingRestriction
                 ? {}
                 : {
                       temperature: model_options.temperature,
-                      topP: model_options.temperature != null ? undefined : model_options.top_p,
+                      topP: isGpt || model_options.temperature == null ? model_options.top_p : undefined,
                   }),
-            stopSequences: isGpt ? undefined : model_options.stop_sequence,
+            stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
         //Construct the final request payload

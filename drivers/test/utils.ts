@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+<<<<<<< HEAD
 import { setTimeout as sleep } from 'node:timers/promises';
 import { type CompletionResult, LlumiverseError } from '@llumiverse/common';
 import type { TestOptions } from 'vitest';
+=======
+import { type CompletionResult, type ExecutionOptions, getOptions, type Providers } from '@llumiverse/common';
+>>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 
 const dataDir = join(dirname(new URL(import.meta.url).pathname), 'data');
 const dataFile = (file: string) => join(dataDir, file);
@@ -70,6 +74,7 @@ export function parseCompletionResults(result: CompletionResult[], separator: st
     }
 }
 
+<<<<<<< HEAD
 const RATE_LIMIT_BACKOFF_MS = [3_000, 6_000, 12_000];
 const RATE_LIMIT_EXHAUSTED = 'Provider still rate limited after';
 
@@ -102,4 +107,17 @@ export async function withRateLimitBackoff<T>(call: () => Promise<T>): Promise<T
  */
 export function retryUnlessRateLimited(count: number): TestOptions['retry'] {
     return { count, condition: new RegExp(`^(?!${RATE_LIMIT_EXHAUSTED})`) };
+=======
+/** Success smokes use advertised controls; unsupported caller input is covered by protocol regressions. */
+export function getAdvertisedTestOptions(options: ExecutionOptions, provider: string): ExecutionOptions {
+    const advertised = new Set(getOptions(options.model, provider as Providers).options.map((option) => option.name));
+    return {
+        ...options,
+        model_options: Object.fromEntries(
+            Object.entries(options.model_options ?? {}).filter(
+                ([name]) => name === '_option_id' || advertised.has(name),
+            ),
+        ),
+    };
+>>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 }

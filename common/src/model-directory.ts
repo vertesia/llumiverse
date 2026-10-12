@@ -4,11 +4,14 @@ import { getBedrockModelCapabilities, getBedrockModelKnowledge } from './capabil
 import { getMistralModelKnowledge } from './capability/mistral.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
 import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
+import { getVertexAIModelLimits } from './capability/vertexai-limits.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
+import { getGeminiModelLimits } from './options/gemini-limits.js';
 import {
     getOpenAIReasoningEffortLevels,
     isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
+    isSingleDigitGrokVersionGte,
 } from './options/version-parsing.js';
 import type { ModelCapabilities } from './types.js';
 import { Providers } from './types.js';
@@ -294,9 +297,7 @@ function getCanonicalLimits(
         // Future Realtime generations inherit the latest documented family limits until a narrower rule is known.
         return { context_window: 128_000, max_output_tokens: 32_000 };
     }
-    if (family === 'gemini' && sourceModel.includes('gemini-3.1-flash-image')) {
-        return { context_window: 131_072, max_output_tokens: 32_768 };
-    }
+    if (sourceModel.includes('gemini')) return getGeminiModelLimits(sourceModel);
     if (family === 'nemotron') {
         if (sourceModel.includes('nemotron-super-')) return { context_window: 256_000, max_output_tokens: 32_768 };
         const generation = sourceModel.match(/nemotron-nano-(\d+)-/)?.[1];
@@ -335,6 +336,26 @@ function applyProviderOverlay(
         const bedrock = getBedrockModelCapabilities(model, 'mantle');
         const knowledge = getBedrockModelKnowledge(model);
         return { capabilities: bedrock, ...knowledge };
+    }
+    if (provider === Providers.xai && isSingleDigitGrokVersionGte(sourceModel, 4, 7)) {
+        return { capabilities, context_window: 500_000 };
+    }
+    if (provider === Providers.groq) {
+        // Groq publishes different completion limits from the canonical open-weight models.
+        if (/gpt-oss-(?:20b|120b)(?:-|$)/.test(sourceModel)) {
+            return { capabilities, context_window: 131_072, max_output_tokens: 65_536 };
+        }
+        if (isModelFamilyVersionGTE(sourceModel, 'qwen', 3, 8) && sourceModel.includes('-27b')) {
+            return { capabilities, context_window: 131_072, max_output_tokens: 16_384 };
+        }
+    }
+    if (provider === Providers.vertexai) {
+        const vertexLimits = getVertexAIModelLimits(model);
+        return {
+            capabilities,
+            // A documented hosted profile is authoritative, including an unknown output limit.
+            ...(vertexLimits.context_window !== undefined ? vertexLimits : getCanonicalLimits(sourceModel, family)),
+        };
     }
 
     // OpenRouter and other OpenAI-compatible transports retain the source model's semantic
@@ -378,10 +399,23 @@ function applyProviderOverlay(
 }
 
 function getReasoningEffortLevels(model: string, family: string, provider: Providers): readonly string[] | undefined {
+    if (provider === Providers.groq && !model.includes('coder') && isModelFamilyVersionGTE(model, 'qwen', 3, 8)) {
+        return ['none', 'low', 'medium', 'high'];
+    }
+    // The 0813 release changed DeepSeek V4 Pro effort levels; earlier snapshots keep their own defaults.
+    if (provider === Providers.togetherai && model.includes('deepseek-v4-pro-0813')) return ['high', 'max'];
+    if (provider === Providers.groq && /qwen3(?:\.6-27b|-32b)(?:-|$)/.test(model)) return ['none'];
     if (family === 'gpt') {
         if (model.includes('gpt-oss')) {
+<<<<<<< HEAD
             return provider === Providers.togetherai ||
                 isOpenAICompatibleTransport(provider) ||
+=======
+            if (provider === Providers.groq && model.includes('safeguard')) return undefined;
+            return provider === Providers.groq ||
+                provider === Providers.togetherai ||
+                provider === Providers.openai_compatible ||
+>>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
                 provider === Providers.vertexai ||
                 provider === Providers.bedrock ||
                 provider === Providers.bedrock_mantle ||
@@ -413,12 +447,14 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
             return ['low', 'medium', 'high', 'xhigh'];
         }
+        if (isSingleDigitGrokVersionGte(model, 4, 6)) return ['low', 'medium', 'high', 'xhigh'];
         if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
         if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
     }
     return undefined;
 }
 
+<<<<<<< HEAD
 function isOpenAICompatibleTransport(provider: Providers): boolean {
     return provider === Providers.openai_compatible || provider === Providers.openrouter;
 }
@@ -431,6 +467,8 @@ function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetM
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+=======
+>>>>>>> 7bbb8d8 (fix: align provider options, limits, and input handling (#760))
 export function resolveModelProfile(model: string, provider: Providers): ModelProfile {
     const canonical_id = normalizeSourceModelId(model);
     const exactOverride = EXACT_MODEL_OVERRIDES[canonical_id];
