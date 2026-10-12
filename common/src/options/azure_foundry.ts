@@ -11,7 +11,7 @@ import {
 } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getOpenAiOptions } from './openai.js';
+import { getAzureOpenAiOptions } from './openai.js';
 import { isOpenAIGptVersionGTE } from './version-parsing.js';
 
 // Helper function to parse composite model IDs
@@ -135,7 +135,7 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
     const profile = resolveModelProfile(model, Providers.azure_foundry);
     if (profile.family === 'claude') return getAnthropicOptions(baseModel, _option);
     if (modelLower.includes('gpt-') || modelLower.includes('dall-e') || /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)) {
-        return getOpenAiOptions(baseModel, _option, profile);
+        return getAzureOpenAiOptions(baseModel, _option, profile);
     }
     // Vision model options
     const visionOptions: ModelOptionInfoItem[] =

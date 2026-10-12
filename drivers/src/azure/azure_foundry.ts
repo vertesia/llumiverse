@@ -114,7 +114,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const response = await this.service.chat.completions.create(
-            toOpenAINonStreamingPayload(payload),
+            toOpenAINonStreamingPayload(payload, this.logger),
             this.getDriverRequestOptions(_options, signal),
         );
         return preserveOpenAIChatCompletionsOriginalResponse(
@@ -128,7 +128,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toOpenAIStreamingPayload(payload);
+        const request = toOpenAIStreamingPayload(payload, this.logger);
         // Preserve the inference transport contract: some Foundry models reject OpenAI usage options.
         delete request.stream_options;
         const stream = await this.service.chat.completions.create(

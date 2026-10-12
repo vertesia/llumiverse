@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { CompletionResult } from '@llumiverse/common';
+import { type CompletionResult, type ExecutionOptions, getOptions, type Providers } from '@llumiverse/common';
 
 const dataDir = join(dirname(new URL(import.meta.url).pathname), 'data');
 const dataFile = (file: string) => join(dataDir, file);
@@ -65,4 +65,17 @@ export function parseCompletionResults(result: CompletionResult[], separator: st
     } catch {
         return result.map(completionResultToString).join(separator);
     }
+}
+
+/** Success smokes use advertised controls; unsupported caller input is covered by protocol regressions. */
+export function getAdvertisedTestOptions(options: ExecutionOptions, provider: string): ExecutionOptions {
+    const advertised = new Set(getOptions(options.model, provider as Providers).options.map((option) => option.name));
+    return {
+        ...options,
+        model_options: Object.fromEntries(
+            Object.entries(options.model_options ?? {}).filter(
+                ([name]) => name === '_option_id' || advertised.has(name),
+            ),
+        ),
+    };
 }

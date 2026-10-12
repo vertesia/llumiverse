@@ -138,7 +138,7 @@ describe('Gemini thinking configuration', () => {
         expect(payload.config?.thinkingConfig).toBeUndefined();
     });
 
-    it('omits thinkingConfig when an explicit zero budget disables thinking', () => {
+    it('sends a zero thinking budget to disable thinking', () => {
         const payload = getGeminiPayload(
             {
                 model: 'publishers/google/models/gemini-2.5-flash',
@@ -150,7 +150,7 @@ describe('Gemini thinking configuration', () => {
             prompt,
         );
 
-        expect(payload.config?.thinkingConfig).toBeUndefined();
+        expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: false, thinkingBudget: 0 });
     });
 
     it('includes thought summaries when Gemini thinking is enabled', () => {
