@@ -6,6 +6,7 @@ import { getModelCapabilitiesOpenAI } from './capability/openai.js';
 import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
 import { getVertexAIModelLimits } from './capability/vertexai-limits.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
+import { getGeminiModelLimits } from './options/gemini-limits.js';
 import {
     getOpenAIReasoningEffortLevels,
     isGeminiModelVersionGte,
@@ -295,9 +296,7 @@ function getCanonicalLimits(
         // Future Realtime generations inherit the latest documented family limits until a narrower rule is known.
         return { context_window: 128_000, max_output_tokens: 32_000 };
     }
-    if (family === 'gemini' && sourceModel.includes('gemini-3.1-flash-image')) {
-        return { context_window: 131_072, max_output_tokens: 32_768 };
-    }
+    if (sourceModel.includes('gemini')) return getGeminiModelLimits(sourceModel);
     if (family === 'nemotron') {
         if (sourceModel.includes('nemotron-super-')) return { context_window: 256_000, max_output_tokens: 32_768 };
         const generation = sourceModel.match(/nemotron-nano-(\d+)-/)?.[1];

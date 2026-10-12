@@ -789,20 +789,14 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
     };
 }
 
-function getGeminiMaxTokensLimit(model: string): number {
-    if (model.includes('-flash-lite-image') && isGeminiModelVersionGte(model, '3.1')) {
+function getGeminiMaxTokensLimit(model: string): number | undefined {
+    if (isGeminiModelVersionGte(model, '2.0') || /(?:nano-banana|omni|transcribe|live|robotics|tts)/.test(model)) {
         return getMaxOutputTokens(model);
     }
-    if (model.includes('image') || model.includes('gemini-nano-banana')) {
-        return model.includes('gemini-nano-banana') || isGeminiModelVersionGte(model, '2.5') ? 32768 : 8192;
-    }
-    if (model.includes('thinking') || isGeminiModelVersionGte(model, '2.5')) {
-        return 65535; // API upper bound is exclusive
-    }
-    if (model.includes('ultra') || model.includes('vision')) {
-        return 2048;
-    }
-    return 8192;
+    // Preserve the older option limits outside the current family audit.
+    if (model.includes('thinking')) return 65_535;
+    if (model.includes('ultra') || model.includes('vision')) return 2_048;
+    return 8_192;
 }
 
 export function getMaxTokensLimitVertexAi(model: string): number | undefined {

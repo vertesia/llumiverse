@@ -254,7 +254,7 @@ export function getOpenAiOptions(
 
     if (isReasoningModel(model)) {
         //Is thinking text model
-        let max_tokens_limit = 4096;
+        let max_tokens_limit: number | undefined = 4096;
         if (model.includes('o1')) {
             if (model.includes('preview')) {
                 max_tokens_limit = 32768;
@@ -331,7 +331,7 @@ export function getOpenAiOptions(
             ],
         };
     } else {
-        let max_tokens_limit = 4096;
+        let max_tokens_limit: number | undefined = 4096;
         if (model.includes('gpt-4o')) {
             max_tokens_limit = 16384;
             if (model.includes('gpt-4o-2024-05-13') || model.includes('realtime')) {

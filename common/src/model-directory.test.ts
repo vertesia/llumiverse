@@ -53,7 +53,7 @@ describe('central model directory', () => {
             type: 'json_object',
         });
         expect(options.options.map((option) => option.name)).not.toContain('thinking_level');
-        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_535 });
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_536 });
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
             enum: { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high' },
         });
