@@ -483,6 +483,40 @@ describe('Gemini refusal logging', () => {
         );
     });
 
+    it('logs a refusal on a later candidate of a stream chunk', async () => {
+        const logger = testLogger();
+        const driver = driverReturning(logger, {
+            candidates: [
+                { finishReason: FinishReason.STOP, content: { role: 'model', parts: [{ text: 'ok' }] } },
+                { index: 1, finishReason: FinishReason.SAFETY },
+            ],
+        });
+
+        await drain(await modelDef.requestTextCompletionStream(driver, structuredClone(prompt), options)).catch(
+            () => undefined,
+        );
+        expect(logger.info).toHaveBeenCalledWith(
+            expect.objectContaining({ streaming: true, provider_finish_reason: FinishReason.SAFETY }),
+            MODEL_REFUSAL_LOG_MESSAGE,
+        );
+    });
+
+    it('logs a safety stop from a speech model', async () => {
+        const logger = testLogger();
+        const driver = driverReturning(logger, { candidates: [{ finishReason: FinishReason.SAFETY }] });
+        const ttsModel = new GeminiModelDefinition('gemini-2.5-flash-preview-tts');
+
+        await expect(
+            ttsModel.requestTextCompletion(driver, structuredClone(prompt), {
+                model: 'publishers/google/models/gemini-2.5-flash-preview-tts',
+            }),
+        ).rejects.toThrow('Audio model returned no usable result');
+        expect(logger.info).toHaveBeenCalledWith(
+            expect.objectContaining({ streaming: false, provider_finish_reason: FinishReason.SAFETY }),
+            MODEL_REFUSAL_LOG_MESSAGE,
+        );
+    });
+
     it('does not log a normal stop', async () => {
         const logger = testLogger();
         const driver = driverReturning(logger, {

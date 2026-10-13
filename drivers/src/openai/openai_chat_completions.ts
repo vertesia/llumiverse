@@ -1088,6 +1088,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         );
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
+        const refusalLogger = getOpenAIChatDriverLogger(driver);
+        const refusalProvider = getOpenAIChatDriverProvider(driver);
         const projector = new OpenAIThinkStreamProjector();
         let refusal = '';
         let refusalLogged = false;
@@ -1158,8 +1160,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             if (!refusalLogged && choice?.finish_reason && (refusal || choice.finish_reason === 'content_filter')) {
                 // Some providers repeat finish_reason on a trailing usage chunk; log the refusal once.
                 refusalLogged = true;
-                logModelRefusal(getOpenAIChatDriverLogger(driver), {
-                    provider: getOpenAIChatDriverProvider(driver),
+                logModelRefusal(refusalLogger, {
+                    provider: refusalProvider,
                     model: options.model,
                     streaming: true,
                     finish_reason,

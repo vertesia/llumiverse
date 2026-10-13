@@ -648,13 +648,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
+        const finish_reason = responseFinishReason(result, tools);
         const refusalDetails = responseRefusalDetails(result);
         if (refusalDetails) {
             logModelRefusal(this.logger, {
                 provider: this.provider,
                 model: _options.model,
                 streaming: false,
-                finish_reason: responseFinishReason(result, tools),
+                finish_reason,
                 provider_finish_reason: result.incomplete_details?.reason ?? result.status,
                 response_id: result.id,
                 details: refusalDetails,
@@ -678,7 +679,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             result: allResults,
             token_usage: tokenInfo,
             service_tier: result.service_tier ?? undefined,
-            finish_reason: responseFinishReason(result, tools),
+            finish_reason,
             tool_use: tools,
         };
     }
@@ -1259,10 +1260,11 @@ export function mapResponseStream(
                 ) {
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
+                    const finish_reason = responseFinishReason(event.response, finalTools);
                     const refusalDetails = responseRefusalDetails(event.response);
                     if (refusalDetails) {
                         logRefusal({
-                            finish_reason: responseFinishReason(event.response, finalTools),
+                            finish_reason,
                             provider_finish_reason: event.response.incomplete_details?.reason ?? event.response.status,
                             response_id: event.response.id,
                             details: refusalDetails,
@@ -1275,7 +1277,7 @@ export function mapResponseStream(
                             if (results.length) emittedImages.add(item.id);
                             return results;
                         }),
-                        finish_reason: responseFinishReason(event.response, finalTools),
+                        finish_reason,
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
