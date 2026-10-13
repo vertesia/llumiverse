@@ -68,6 +68,7 @@ import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js
 import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
+import { logModelRefusal } from './refusal-log.js';
 import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
 // ============================================================================
@@ -1143,6 +1144,17 @@ export async function executeClaudeCompletion(
     );
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
+    if (result.stop_reason === 'refusal') {
+        logModelRefusal(logger, {
+            provider,
+            model: options.model,
+            streaming: false,
+            finish_reason: claudeFinishReason(result.stop_reason),
+            provider_finish_reason: result.stop_reason,
+            response_id: result.id,
+            details: result.stop_details,
+        });
+    }
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
@@ -1188,10 +1200,12 @@ export async function streamClaudeCompletion(
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
+    let responseId: string | undefined;
 
     const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
         switch (streamEvent.type) {
             case 'message_start':
+                responseId = streamEvent.message.id;
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
@@ -1199,6 +1213,17 @@ export async function streamClaudeCompletion(
                 } satisfies CompletionChunkObject;
             case 'message_delta':
                 logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });
+                if (streamEvent.delta.stop_reason === 'refusal') {
+                    logModelRefusal(logger, {
+                        provider,
+                        model: options.model,
+                        streaming: true,
+                        finish_reason: claudeFinishReason(streamEvent.delta.stop_reason),
+                        provider_finish_reason: streamEvent.delta.stop_reason,
+                        response_id: responseId,
+                        details: streamEvent.delta.stop_details,
+                    });
+                }
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },
