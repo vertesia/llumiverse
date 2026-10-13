@@ -28,9 +28,15 @@ function message(): Anthropic.Message {
     } as unknown as Anthropic.Message;
 }
 
+/** An InvokeModel response reporting the tier Bedrock applied. */
+const tierResponse = () => new Response(null, { headers: { 'x-amzn-bedrock-service-tier': 'priority' } });
+
 function driverWithClaudeClient(logger?: ConstructorParameters<typeof BedrockDriver>[0]['logger']) {
     const driver = new BedrockDriver({ region: 'us-east-1', logger });
-    const stream = vi.fn((_payload: unknown, _options?: unknown) => ({ finalMessage: async () => message() }));
+    const stream = vi.fn((_payload: unknown, _options?: unknown) => ({
+        finalMessage: async () => message(),
+        withResponse: async () => ({ response: tierResponse() }),
+    }));
     Reflect.set(driver, '_anthropicService', { messages: { stream } });
     return { driver, stream };
 }
@@ -92,6 +98,7 @@ describe('Bedrock Claude on the Messages API', () => {
             expect.any(String),
         );
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
+        expect(completion.service_tier).toBe('priority');
         expect(completion.conversation).toMatchObject({ messages: [{ role: 'user' }, { role: 'assistant' }] });
     });
 
@@ -101,7 +108,10 @@ describe('Bedrock Claude on the Messages API', () => {
             messages: {
                 stream: (...args: [unknown, unknown?]) => {
                     stream(...args);
-                    return Object.assign((async function* () {})(), { finalMessage: async () => message() });
+                    return Object.assign((async function* () {})(), {
+                        finalMessage: async () => message(),
+                        withResponse: async () => ({ response: tierResponse() }),
+                    });
                 },
             },
         });
@@ -172,6 +182,26 @@ describe('Bedrock Claude on the Messages API', () => {
         const { driver, stream } = driverWithClaudeClient();
         await driver.requestTextCompletion({ messages: [] }, { model: MODEL });
         expect(stream).toHaveBeenCalledOnce();
+    });
+
+    it('recognises errors from another copy of the Anthropic SDK', () => {
+        // Platform SDKs can resolve their own Anthropic SDK copy, whose classes fail instanceof checks here.
+        class AnthropicError extends Error {}
+        class APIError extends AnthropicError {
+            status = 429;
+            error = { error: { type: 'rate_limit_error', message: 'slow down' } };
+            headers = new Headers();
+            requestID = 'req-1';
+        }
+        class RateLimitError extends APIError {}
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const formatted = driver.formatLlumiverseError(new RateLimitError('slow down'), {
+            provider: 'bedrock',
+            model: MODEL,
+            operation: 'execute',
+        });
+        expect(formatted.retryable).toBe(true);
+        expect(formatted.message).toContain('slow down');
     });
 
     it('formats Claude prompts for debugging', async () => {

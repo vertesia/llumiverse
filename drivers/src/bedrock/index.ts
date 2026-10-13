@@ -1,5 +1,6 @@
 import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
-import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
+import type { AnthropicError } from '@anthropic-ai/sdk/error';
+
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
@@ -82,6 +83,7 @@ import {
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    isAnthropicSdkError,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
@@ -371,6 +373,40 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
+/**
+ * Reports the service tier Bedrock applied, which InvokeModel returns in a response header rather than in the
+ * message usage. Wraps the client the shared Claude helpers call, setting `usage.service_tier` from the header.
+ */
+function withBedrockServiceTier(client: AnthropicBedrock) {
+    type StreamArgs = Parameters<AnthropicBedrock['messages']['stream']>;
+    type BedrockMessage = Awaited<ReturnType<ReturnType<AnthropicBedrock['messages']['stream']>['finalMessage']>>;
+    const applyTier = <T extends { usage: object }>(message: T, tier: string | undefined): T =>
+        tier ? { ...message, usage: { ...message.usage, service_tier: tier } } : message;
+    return {
+        messages: {
+            stream(payload: StreamArgs[0], options?: StreamArgs[1]) {
+                const stream = client.messages.stream(payload, options);
+                const tier = stream.withResponse().then(
+                    ({ response }) => response.headers.get('x-amzn-bedrock-service-tier') ?? undefined,
+                    () => undefined,
+                );
+                return {
+                    abort: () => stream.abort(),
+                    finalMessage: async (): Promise<BedrockMessage> =>
+                        applyTier(await stream.finalMessage(), await tier),
+                    async *[Symbol.asyncIterator]() {
+                        for await (const event of stream) {
+                            yield event.type === 'message_start'
+                                ? { ...event, message: applyTier(event.message, await tier) }
+                                : event;
+                        }
+                    },
+                };
+            },
+        },
+    };
+}
+
 export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest | ClaudePrompt;
 
 function isBedrockClaudeModel(model: string): boolean {
@@ -396,6 +432,7 @@ function isClaudeMessagesPrompt(prompt: BedrockPrompt, model: string): prompt is
 /** For debug output only, where the model is unknown: Nova content blocks carry no `type`. */
 function looksLikeClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
     if ('modelId' in prompt || 'mediaSource' in prompt) return false;
+    if (prompt.system?.some((block) => 'type' in block)) return true;
     return prompt.messages.some(
         (message) =>
             typeof message.content === 'string' ||
@@ -644,7 +681,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const credentials = this.options.credentials;
             const base = {
                 awsRegion: this.options.region,
-                baseURL: `https://bedrock-runtime.${this.options.region}.amazonaws.com`,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
             };
@@ -737,7 +773,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Claude on the Messages API fails with Anthropic SDK errors.
-        if (error instanceof AnthropicError) {
+        if (isAnthropicSdkError(error)) {
             return this.formatClaudeMessagesError(error, context);
         }
         // Check if it's an AWS SDK error with $metadata
@@ -803,8 +839,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      */
     private formatClaudeMessagesError(error: AnthropicError, context: LlumiverseErrorContext): LlumiverseError {
         const formatted = formatAnthropicLlumiverseError(error, context);
-        if (formatted.retryable !== undefined || !(error instanceof APIError)) return formatted;
-        const type = (error.error as { error?: { type?: unknown } } | undefined)?.error?.type;
+        if (formatted.retryable !== undefined) return formatted;
+        const type = ((error as { error?: unknown }).error as { error?: { type?: unknown } } | undefined)?.error?.type;
         if (typeof type !== 'string' || type.length === 0) return formatted;
         const exceptionName = type.charAt(0).toUpperCase() + type.slice(1);
         const retryable =
@@ -1286,7 +1322,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         if (isClaudeMessagesPrompt(prompt, options.model)) {
             return executeClaudeCompletion(
-                this.getAnthropicService(),
+                withBedrockServiceTier(this.getAnthropicService()),
                 prompt,
                 this.claudeMessagesOptions(options),
                 this.logger,
@@ -1479,7 +1515,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         if (isClaudeMessagesPrompt(prompt, options.model)) {
             return streamClaudeCompletion(
-                this.getAnthropicService(),
+                withBedrockServiceTier(this.getAnthropicService()),
                 prompt,
                 this.claudeMessagesOptions(options),
                 this.logger,
