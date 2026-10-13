@@ -314,7 +314,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 const rawCode = getObjectProperty(error, 'code');
                 const code = rawCode === 'json_error' || rawCode === 'validation_error' ? rawCode : undefined;
                 const errorMessage = `[${this.provider}] [${options.model}] ${code ? `[${code}] ` : ''}Result validation error: ${validationError.message}`;
-                this.logger.error({ err: error, data: result.result }, errorMessage);
+                // The model's output did not match the caller's schema. That is an outcome of the run,
+                // returned on `result.error`, not a fault of this library or its host.
+                this.logger.info({ err: error }, errorMessage);
+                this.logger.debug({ data: result.result }, `${errorMessage} (invalid result)`);
                 result.error = {
                     code: code || 'validation_error',
                     message: validationError.message,

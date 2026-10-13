@@ -639,6 +639,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let system: Content | undefined = { role: 'user', parts: [] }; // Single content block for system messages
 
         const safety: Content[] = [];
+        // Media an earlier turn inlined is still in the history sent with this request.
+        const inlineBudget: InlineMediaBudget = { bytes: conversationInlineBytes(options.conversation) };
 
         for (const msg of segments) {
             // Role specific handling
@@ -665,7 +667,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // what it just asked for.
                 const responseParts: FunctionResponsePart[] = [];
                 for (const f of msg.files ?? []) {
-                    responseParts.push(await fileToMediaPart(f));
+                    responseParts.push(await fileToMediaPart(f, inlineBudget));
                 }
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
@@ -694,7 +696,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        parts.push(await fileToMediaPart(f));
+                        parts.push(await fileToMediaPart(f, inlineBudget));
                     }
                 }
 
@@ -1328,20 +1330,61 @@ type GeminiMediaPart =
  */
 export const GEMINI_INLINE_MEDIA_MAX_BYTES = 100_000_000;
 
-/** Stop reading, and cancel the source, as soon as it passes the inline budget. */
+/**
+ * Largest total of inline media read for one request. The per-file cap alone does not bound the heap:
+ * every inlined file is held as base64 (4/3 of its size) until the request is sent, and serializing the
+ * request copies it again. A handful of files under the per-file cap can pass V8's maximum string length
+ * or exhaust the host process, so past this total the remaining files must be gs:// URIs. The total counts
+ * the inline media still in the conversation history, which is sent with the request too.
+ */
+export const GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES = 150_000_000;
+
+/** Decoded size of the base64 inline media earlier turns left in a conversation's history. */
+export function conversationInlineBytes(value: unknown, seen: Set<object> = new Set()): number {
+    // Binary buffers hold no base64 parts, and walking one would visit every byte.
+    if (!value || typeof value !== 'object' || ArrayBuffer.isView(value) || seen.has(value)) {
+        return 0;
+    }
+    seen.add(value);
+    const data = (value as { inlineData?: { data?: unknown } }).inlineData?.data;
+    if (typeof data === 'string') {
+        return Math.floor((data.length * 3) / 4);
+    }
+    let bytes = 0;
+    for (const child of Array.isArray(value) ? value : Object.values(value)) {
+        bytes += conversationInlineBytes(child, seen);
+    }
+    return bytes;
+}
+
+/** Inline bytes read so far for one request. */
+interface InlineMediaBudget {
+    bytes: number;
+}
+
+/** Stop reading, and cancel the source, as soon as it passes the per-file or per-request inline budget. */
 function boundedInlineStream(
     source: ReadableStream<Uint8Array | string>,
     name: string,
+    budget: InlineMediaBudget,
 ): ReadableStream<Uint8Array | string> {
     let bytes = 0;
     return source.pipeThrough(
         new TransformStream<Uint8Array | string, Uint8Array | string>({
             transform(chunk, controller) {
-                bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+                const size = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+                bytes += size;
+                budget.bytes += size;
                 if (bytes > GEMINI_INLINE_MEDIA_MAX_BYTES) {
                     throw new Error(
                         `Media file ${name} exceeds the ${GEMINI_INLINE_MEDIA_MAX_BYTES} byte limit for inline ` +
                             'Gemini input; provide it as a gs:// URI instead',
+                    );
+                }
+                if (budget.bytes > GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES) {
+                    throw new Error(
+                        `Inline media for this request exceeds the ${GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES} byte ` +
+                            `limit at ${name}; provide the larger files as gs:// URIs instead`,
                     );
                 }
                 controller.enqueue(chunk);
@@ -1350,12 +1393,12 @@ function boundedInlineStream(
     );
 }
 
-async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
+async function fileToMediaPart(file: DataSource, budget: InlineMediaBudget): Promise<GeminiMediaPart> {
     const fileUri = await file.getURI();
     if (fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/')) {
         return { fileData: { fileUri, mimeType: file.mime_type } };
     }
-    const data = await readStreamAsBase64(boundedInlineStream(await file.getStream(), file.name));
+    const data = await readStreamAsBase64(boundedInlineStream(await file.getStream(), file.name, budget));
     return { inlineData: { data, mimeType: file.mime_type } };
 }
 
