@@ -577,3 +577,20 @@ export async function formatConversePrompt(
         system: system,
     };
 }
+
+/**
+ * Whether a stored conversation was built for the Converse API: its content blocks are single-key objects
+ * (`{ text }`, `{ toolUse }`, `{ reasoningContent }`, ...) rather than Anthropic Messages blocks with a `type`.
+ * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse.
+ */
+export function isConverseConversation(conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    if (!Array.isArray(messages)) return false;
+    return messages.some((message) => {
+        const content = (message as { content?: unknown } | null)?.content;
+        return (
+            Array.isArray(content) &&
+            content.some((block) => !!block && typeof block === 'object' && !('type' in (block as object)))
+        );
+    });
+}

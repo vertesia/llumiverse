@@ -1,3 +1,5 @@
+import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
+import { AnthropicError } from '@anthropic-ai/sdk/error';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
@@ -73,6 +75,15 @@ import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/form
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'lru-cache';
 import type { BedrockDriverOptions } from '../driver-options.js';
+import {
+    buildClaudeStreamingConversation,
+    type ClaudePrompt,
+    executeClaudeCompletion,
+    formatAnthropicLlumiverseError,
+    formatClaudeDebugPrompt,
+    formatClaudePrompt,
+    streamClaudeCompletion,
+} from '../shared/claude-messages.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
@@ -85,6 +96,7 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    isConverseConversation,
     relocateConverseToolImages,
     sanitizeConverseMessages,
     shouldIncludeSchemaInConversePrompt,
@@ -359,7 +371,33 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
-export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest | ClaudePrompt;
+
+function isBedrockClaudeModel(model: string): boolean {
+    return model.toLowerCase().includes('claude');
+}
+
+/**
+ * Claude runs on the Anthropic Messages API over InvokeModel. Conversations started on the Converse API (before
+ * this change) continue there, because their stored turns are Converse-shaped.
+ */
+function usesClaudeMessagesApi(options: Pick<ExecutionOptions, 'model' | 'conversation'>): boolean {
+    return isBedrockClaudeModel(options.model) && !isConverseConversation(options.conversation);
+}
+
+/**
+ * Whether a formatted prompt is a Claude Messages prompt. {@link usesClaudeMessagesApi} picks the format in
+ * `formatPrompt`; the request methods follow the prompt they receive. A Converse prompt always has `modelId`,
+ * a TwelveLabs prompt `mediaSource`, and Nova content blocks carry no `type`.
+ */
+function isClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
+    if ('modelId' in prompt || 'mediaSource' in prompt) return false;
+    return prompt.messages.some(
+        (message) =>
+            typeof message.content === 'string' ||
+            (Array.isArray(message.content) && message.content.some((block) => 'type' in block)),
+    );
+}
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
 type BedrockToolEntry = NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>[number];
@@ -535,6 +573,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     provider = BedrockDriver.PROVIDER;
 
     private _executor?: BedrockRuntime;
+    private _anthropicService?: AnthropicBedrock;
     private _service?: Bedrock;
     private _service_region?: string;
     constructor(options: BedrockDriverOptions) {
@@ -595,6 +634,52 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
     }
 
+    /** Anthropic SDK client for Claude on the Messages API (InvokeModel). */
+    private getAnthropicService(): AnthropicBedrock {
+        if (!this._anthropicService) {
+            const credentials = this.options.credentials;
+            const base = {
+                awsRegion: this.options.region,
+                baseURL: `https://bedrock-runtime.${this.options.region}.amazonaws.com`,
+                fetch: this.getDriverFetch(),
+                timeout: this.getDriverRequestTimeoutMs(),
+            };
+            this._anthropicService =
+                credentials && typeof credentials !== 'function'
+                    ? new AnthropicBedrock({
+                          ...base,
+                          awsAccessKey: credentials.accessKeyId,
+                          awsSecretKey: credentials.secretAccessKey,
+                          awsSessionToken: credentials.sessionToken,
+                      })
+                    : new AnthropicBedrock({
+                          ...base,
+                          ...(credentials && { providerChainResolver: async () => credentials }),
+                      });
+        }
+        return this._anthropicService;
+    }
+
+    /** Execution options for the Claude Messages route, with the Bedrock output-limit clamp applied. */
+    private claudeMessagesOptions(options: ExecutionOptions): ExecutionOptions {
+        const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
+        // Compatibility exception: retain the existing Claude output-limit clamp (see maxTokenFallbackClaude).
+        const maxTokens = maxTokenFallbackClaude(options);
+        if (modelOptions?.max_tokens !== undefined && modelOptions.max_tokens !== maxTokens) {
+            logModelOptionException(this.logger, options.model, modelOptions, ['max_tokens'], 'claude_output_limit');
+        }
+        return { ...options, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
+    }
+
+    /** Transport options for the Claude Messages route; the service tier is an InvokeModel header. */
+    private claudeTransportOptions(options: ExecutionOptions, signal?: AbortSignal) {
+        const serviceTier = getBedrockServiceTier(options.model_options);
+        return {
+            ...this.getDriverRequestOptions(options, signal),
+            ...(serviceTier && { headers: { 'X-Amzn-Bedrock-Service-Tier': serviceTier } }),
+        };
+    }
+
     getService(region: string = this.options.region) {
         if (!this._service || this._service_region !== region) {
             this._service = new Bedrock({
@@ -614,6 +699,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (opts.model.includes('twelvelabs.pegasus')) {
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
+        if (usesClaudeMessagesApi(opts)) {
+            return await formatClaudePrompt(segments, opts, this.logger);
+        }
         return await formatConversePrompt(segments, opts);
     }
 
@@ -623,6 +711,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         if ('modelId' in prompt) {
             return formatConversePromptForDebug(prompt);
+        }
+        if (isClaudeMessagesPrompt(prompt)) {
+            return formatClaudeDebugPrompt(prompt);
         }
         return formatNovaPromptForDebug(prompt);
     }
@@ -641,6 +732,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * @returns A standardized LlumiverseError
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        // Claude on the Messages API fails with Anthropic SDK errors.
+        if (error instanceof AnthropicError) {
+            return formatAnthropicLlumiverseError(error, context);
+        }
         // Check if it's an AWS SDK error with $metadata
         const awsError = error as AwsSdkError;
         const hasMetadata = awsError?.$metadata !== undefined;
@@ -1067,7 +1162,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
-    ): ConverseRequest | undefined {
+    ): ConverseRequest | ClaudePrompt | undefined {
+        if (isClaudeMessagesPrompt(prompt)) {
+            return buildClaudeStreamingConversation(prompt, result, toolUse, options);
+        }
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
         if (options.model.includes('canvas') || options.model.includes('twelvelabs.pegasus')) {
             return undefined;
@@ -1162,6 +1260,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
+        }
+        if (isClaudeMessagesPrompt(prompt)) {
+            return executeClaudeCompletion(
+                this.getAnthropicService(),
+                prompt,
+                this.claudeMessagesOptions(options),
+                this.logger,
+                this.provider,
+                this.claudeTransportOptions(options, signal),
+            );
         }
 
         // Handle other Bedrock models that use Converse API
@@ -1345,6 +1453,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options, signal);
+        }
+        if (isClaudeMessagesPrompt(prompt)) {
+            return streamClaudeCompletion(
+                this.getAnthropicService(),
+                prompt,
+                this.claudeMessagesOptions(options),
+                this.logger,
+                this.provider,
+                this.claudeTransportOptions(options, signal),
+            );
         }
 
         // Handle other Bedrock models that use Converse API

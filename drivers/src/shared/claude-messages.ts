@@ -251,6 +251,19 @@ type ClaudeMessagesClient = {
     };
 };
 
+/** Combine payload request options with the driver's transport options, keeping headers from both. */
+function mergeRequestOptions(
+    requestOptions: RequestOptions | undefined,
+    transportOptions: RequestOptions | undefined,
+): RequestOptions | undefined {
+    if (!transportOptions) return requestOptions;
+    const headers =
+        requestOptions?.headers || transportOptions.headers
+            ? { ...requestOptions?.headers, ...transportOptions.headers }
+            : undefined;
+    return { ...requestOptions, ...transportOptions, ...(headers && { headers }) };
+}
+
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
     payload: MessageStreamParams,
@@ -1176,7 +1189,7 @@ export async function executeClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
-    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout' | 'headers'>,
     requestModel?: string,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -1188,7 +1201,7 @@ export async function executeClaudeCompletion(
     const responseStream = await streamClaudeMessages(
         client,
         { ...payload, model: requestModel ?? payload.model } as MessageStreamParams,
-        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+        mergeRequestOptions(requestOptions, transportOptions),
     );
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
@@ -1227,7 +1240,7 @@ export async function streamClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
-    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout' | 'headers'>,
     requestModel?: string,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -1239,7 +1252,7 @@ export async function streamClaudeCompletion(
     const response_stream = await streamClaudeMessages(
         client,
         streamingPayload,
-        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+        mergeRequestOptions(requestOptions, transportOptions),
     );
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
