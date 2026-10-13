@@ -38,6 +38,7 @@ import OpenAI from 'openai';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { logModelRefusal } from '../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
@@ -128,6 +129,7 @@ export type OpenAIChatCompletionsResponse = Omit<OpenAI.Chat.ChatCompletion, 'ch
 type OpenAIChatCompletionsStreamChoiceDelta = {
     role?: string;
     content?: string | null | OpenAIChatCompletionsContentPart[];
+    refusal?: OpenAI.Chat.ChatCompletionChunk.Choice.Delta['refusal'];
     reasoning_content?: string | null;
     reasoning?: string | null;
     tool_calls?: Array<{
@@ -192,6 +194,7 @@ export function normalizeOpenAIChatCompletionsResponse(
             message: {
                 role: choice.message.role,
                 content: choice.message.content,
+                refusal: choice.message.refusal,
                 reasoning_content: getOptionalString(choice.message, 'reasoning_content'),
                 reasoning: getOptionalString(choice.message, 'reasoning'),
                 tool_calls: choice.message.tool_calls?.flatMap((toolCall) =>
@@ -221,6 +224,7 @@ export async function* normalizeOpenAIChatCompletionsStream(
                 delta: {
                     role: choice.delta.role,
                     content: choice.delta.content,
+                    refusal: choice.delta.refusal,
                     reasoning_content: getOptionalString(choice.delta, 'reasoning_content'),
                     reasoning: getOptionalString(choice.delta, 'reasoning'),
                     tool_calls: choice.delta.tool_calls?.map((toolCall) => ({
@@ -1002,6 +1006,17 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
 
         const choice = result?.choices?.[0];
         const message = choice?.message;
+        if (message?.refusal || choice?.finish_reason === 'content_filter') {
+            logModelRefusal((driver as { logger?: Logger } | undefined)?.logger, {
+                provider: getOpenAIChatDriverProvider(driver),
+                model: options.model,
+                streaming: false,
+                finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, false),
+                provider_finish_reason: choice?.finish_reason ?? undefined,
+                response_id: result.id,
+                details: { refusal: message?.refusal, finish_reason: choice?.finish_reason },
+            });
+        }
         const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
         const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
         if (
@@ -1066,6 +1081,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
+        let refusal = '';
         let nativeContent = '';
         let nativeReasoningContent: string | undefined;
         let nativeReasoning: string | undefined;
@@ -1078,6 +1094,18 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
+            if (delta?.refusal) refusal += delta.refusal;
+            if (choice?.finish_reason && (refusal || choice.finish_reason === 'content_filter')) {
+                logModelRefusal((driver as { logger?: Logger } | undefined)?.logger, {
+                    provider: getOpenAIChatDriverProvider(driver),
+                    model: options.model,
+                    streaming: true,
+                    finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice.finish_reason, false),
+                    provider_finish_reason: choice.finish_reason,
+                    response_id: json.id,
+                    details: { refusal: refusal || null, finish_reason: choice.finish_reason },
+                });
+            }
             const chunkResults: CompletionResult[] = [];
             const content = extractOpenAIChatCompletionsContentText(delta?.content);
             if (content) {
