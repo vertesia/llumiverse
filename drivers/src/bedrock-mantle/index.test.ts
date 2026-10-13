@@ -459,6 +459,54 @@ describe('BedrockMantleDriver protocol execution', () => {
         );
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
     });
+
+    it('labels Claude refusal logs with the Bedrock Mantle provider', async () => {
+        const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const driver = new BedrockMantleDriver({ region: 'us-west-2', logger });
+        const stopDetails = { type: 'refusal', category: 'cyber', explanation: 'Declined.' } as const;
+        const message = {
+            id: 'msg-refusal',
+            type: 'message',
+            role: 'assistant',
+            model: 'anthropic.claude-haiku-4-5',
+            content: [],
+            stop_details: stopDetails,
+            stop_reason: 'refusal',
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 0 },
+        } as unknown as Anthropic.Message;
+        const events = [
+            { type: 'message_start', message: { ...message, stop_reason: null, stop_details: null } },
+            {
+                type: 'message_delta',
+                delta: { stop_reason: 'refusal', stop_sequence: null, stop_details: stopDetails },
+                usage: { output_tokens: 0 },
+            },
+        ];
+        const stream = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                for (const event of events) yield event;
+            },
+            finalMessage: async () => message,
+        }));
+        Reflect.set(driver, 'anthropicService', { messages: { stream } });
+        const options = { model: 'anthropic.claude-haiku-4-5' };
+
+        await driver.requestTextCompletion(await driver.createPrompt(promptSegments, options), options);
+        for await (const _chunk of await driver.requestTextCompletionStream(
+            await driver.createPrompt(promptSegments, options),
+            options,
+        )) {
+            // drain
+        }
+
+        for (const streaming of [false, true]) {
+            expect(logger.info).toHaveBeenCalledWith(
+                expect.objectContaining({ provider: Providers.bedrock_mantle, streaming, details: stopDetails }),
+                '[Llumiverse] Model response refused or content-filtered',
+            );
+        }
+    });
 });
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {

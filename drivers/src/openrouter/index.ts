@@ -384,6 +384,7 @@ function normalizeOpenRouterResponse(response: ChatResult): OpenAIChatCompletion
             message: {
                 role: choice.message.role,
                 content: fromOpenRouterContent(choice.message.content),
+                refusal: choice.message.refusal,
                 reasoning: choice.message.reasoning,
                 tool_calls: choice.message.toolCalls?.map((toolCall) => ({
                     id: toolCall.id,
@@ -417,6 +418,7 @@ async function* normalizeOpenRouterStream(
                 delta: {
                     role: choice.delta.role,
                     content: choice.delta.content,
+                    refusal: choice.delta.refusal,
                     reasoning: choice.delta.reasoning,
                     tool_calls: choice.delta.toolCalls?.map((toolCall) => ({
                         index: toolCall.index,
