@@ -78,6 +78,7 @@ async function turn(
     return { payload, requestOptions, conversation: JSON.parse(JSON.stringify(completion.conversation)) };
 }
 
+const start = (): ClaudePrompt => ({ messages: [{ role: 'user', content: 'hi' }] });
 const firstPrompt: ClaudePrompt = { messages: [{ role: 'user', content: 'Audit the project.' }] };
 
 describe('append-only Claude tool changes', () => {
@@ -135,9 +136,7 @@ describe('append-only Claude tool changes', () => {
     });
 
     it('replaces a tool whose definition changed under the same name', () => {
-        const declared = applyClaudeToolChanges({ messages: [{ role: 'user', content: 'hi' }] }, [
-            tool('mcp_search', 'v1') as Tool,
-        ]);
+        const declared = applyClaudeToolChanges(start(), [tool('mcp_search', 'v1') as Tool]);
         const next = applyClaudeToolChanges(
             { ...declared, messages: [...declared.messages, { role: 'user', content: 'again' }] },
             [tool('mcp_search', 'v2') as Tool],
@@ -147,7 +146,7 @@ describe('append-only Claude tool changes', () => {
     });
 
     it('ignores key order when comparing definitions', () => {
-        const declared = applyClaudeToolChanges({ messages: [{ role: 'user', content: 'hi' }] }, [tool('a') as Tool]);
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const reordered = { input_schema: schema, description: 'a tool', name: 'a' } as Tool;
         const next = applyClaudeToolChanges(declared, [reordered]);
         expect(getClaudeToolState(next)?.declared[0].definition).toEqual(tool('a'));
@@ -185,7 +184,7 @@ describe('append-only Claude tool changes', () => {
     });
 
     it('waits for a user turn before announcing a change', () => {
-        const declared = applyClaudeToolChanges({ messages: [{ role: 'user', content: 'hi' }] }, [tool('a') as Tool]);
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const afterAssistant = { ...declared, messages: [...declared.messages, { role: 'assistant', content: 'ok' }] };
         const next = applyClaudeToolChanges(afterAssistant as ClaudePrompt, [tool('a') as Tool, tool('b') as Tool]);
         expect(next).toBe(afterAssistant);
@@ -193,9 +192,7 @@ describe('append-only Claude tool changes', () => {
 
     it('caches the last tool loaded up front and never marks the caller tools', () => {
         const callerTools = [tool('a'), tool('b')];
-        const declared = applyClaudeToolChanges({ messages: [{ role: 'user', content: 'hi' }] }, [
-            callerTools[0] as Tool,
-        ]);
+        const declared = applyClaudeToolChanges(start(), [callerTools[0] as Tool]);
         const prompt = applyClaudeToolChanges(
             { ...declared, messages: [...declared.messages, { role: 'user', content: 'more' }] },
             callerTools as Tool[],
