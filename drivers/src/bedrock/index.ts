@@ -16,7 +16,9 @@ import {
     type InferenceConfiguration,
     type InvokeModelCommandOutput,
     type Message,
+    type MessageStopEvent,
     type ServiceTierType,
+    StopReason,
     type TokenUsage,
     type Tool,
     type ToolResultContentBlock,
@@ -75,6 +77,7 @@ import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { logModelRefusal } from '../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
     converseConcatMessages,
@@ -169,6 +172,9 @@ function converseFinishReason(reason: string | undefined) {
             return reason;
     }
 }
+
+/** Converse stop reasons that mean the provider refused or filtered the response. */
+const CONVERSE_REFUSAL_STOP_REASONS = new Set<string>([StopReason.CONTENT_FILTERED, StopReason.GUARDRAIL_INTERVENED]);
 
 export function excludesBedrockReasoningReplay(model: string): boolean {
     const modelId = model.toLowerCase().split('/').pop() ?? '';
@@ -765,6 +771,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options?.model.toLowerCase().includes('claude')) {
             logClaudeTruncation(this.logger, result.stopReason, { provider: this.provider, model: options.model });
         }
+        if (options && result.stopReason && CONVERSE_REFUSAL_STOP_REASONS.has(result.stopReason)) {
+            logModelRefusal(this.logger, {
+                provider: this.provider,
+                model: options.model,
+                streaming: false,
+                finish_reason: converseFinishReason(result.stopReason),
+                provider_finish_reason: result.stopReason,
+                details: {
+                    additionalModelResponseFields: result.additionalModelResponseFields,
+                } satisfies Pick<ConverseResponse, 'additionalModelResponseFields'>,
+            });
+        }
 
         if (result.output?.message?.content) {
             for (const content of result.output.message.content) {
@@ -905,6 +923,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             stop_reason = result.messageStop.stopReason ?? '';
             if (options?.model.toLowerCase().includes('claude')) {
                 logClaudeTruncation(this.logger, stop_reason, { provider: this.provider, model: options.model });
+            }
+            if (options && CONVERSE_REFUSAL_STOP_REASONS.has(stop_reason)) {
+                logModelRefusal(this.logger, {
+                    provider: this.provider,
+                    model: options.model,
+                    streaming: true,
+                    finish_reason: converseFinishReason(stop_reason),
+                    provider_finish_reason: stop_reason,
+                    details: {
+                        additionalModelResponseFields: result.messageStop.additionalModelResponseFields,
+                    } satisfies Pick<MessageStopEvent, 'additionalModelResponseFields'>,
+                });
             }
         }
 
