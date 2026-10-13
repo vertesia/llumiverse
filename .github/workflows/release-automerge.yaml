@@ -1,14 +1,14 @@
 name: (release) automerge eligible release-cut bump PRs
 run-name: >-
   ${{
-    github.event.workflow_run.pull_requests[0].number
+    (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
     && format(
       '(release) automerge bump PR #{0}',
-      github.event.workflow_run.pull_requests[0].number
+      (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
     )
     || format(
       '(release) automerge bump ({0})',
-      github.event.workflow_run.head_branch
+      github.event.workflow_run.head_branch || github.event.client_payload.head_branch
     )
   }}
 
@@ -23,26 +23,41 @@ on:
       - completed
     branches:
       - "release-bump-*"
+  # Unlike workflow_dispatch, repository_dispatch always loads workflow code from the default branch.
+  repository_dispatch:
+    types: [ci-approved-release]
 
 permissions:
   actions: read # inspect workflow run status for the exact bump head SHA
   contents: read # repository metadata access through gh
+  statuses: read # confirm the PR approval gate status on a dispatched head
   pull-requests: read # inspect PR metadata, labels, and changed files
 
 jobs:
   approve-and-merge:
-    name: Approve and merge eligible release-cut bump PR
+    name: >-
+      ${{
+        (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
+        && format(
+          'Approve and merge eligible release-cut bump PR #{0}',
+          (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
+        )
+        || format(
+          'Approve and merge eligible release-cut bump PR for {0}',
+          github.event.workflow_run.head_branch || github.event.client_payload.head_branch
+        )
+      }}
     if: |
-      github.event.workflow_run.event == 'pull_request' &&
-      startsWith(github.event.workflow_run.head_branch, 'release-bump-')
+      (github.event_name == 'repository_dispatch' || github.event.workflow_run.event == 'pull_request') &&
+      startsWith(github.event.workflow_run.head_branch || github.event.client_payload.head_branch, 'release-bump-')
     runs-on: ubuntu-slim
     environment: renovate-automerge
     timeout-minutes: 10
     concurrency:
-      group: release-automerge-${{ github.event.workflow_run.head_branch }}
+      group: release-automerge-${{ github.event.workflow_run.head_branch || github.event.client_payload.head_branch }}
       cancel-in-progress: false
     steps:
-      # workflow_run is privileged: execute policy only from the trusted workflow commit.
+      # Both triggers execute default-branch workflow code; pin policy checkout to that workflow commit.
       - name: Checkout trusted CI policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,13 +69,25 @@ jobs:
         with:
           node-version: 24.21.0
           package-manager-cache: false
-      - name: Check automerge eligibility
-        id: eligibility
+      - name: Verify the dispatched revision
+        id: dispatched
+        if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          HEAD_BRANCH: ${{ github.event.client_payload.head_branch }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          BASE_SHA: ${{ github.event.client_payload.base_sha }}
+        run: node .github/bin/automerge-dispatch.mjs
+      - name: Check automerge eligibility
+        id: eligibility
+        if: github.event_name != 'repository_dispatch' || steps.dispatched.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.event.client_payload.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.client_payload.head_sha }}
         run: |
           set -euo pipefail
 
@@ -193,8 +220,11 @@ jobs:
             echo "pr_url=$pr_url"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Leave the merge to the approval gate hand-off
+        if: github.event_name != 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'
+        run: echo "Eligible. ci-approve.yaml starts the merge once the PR approval gate succeeds for this head."
       - name: Generate automerge token
-        if: steps.eligibility.outputs.should_merge == 'true'
+        if: github.event_name == 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'
         id: generate-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -205,11 +235,11 @@ jobs:
           permission-pull-requests: write
 
       - name: Approve and merge eligible release-cut bump PR
-        if: steps.eligibility.outputs.should_merge == 'true'
+        if: github.event_name == 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.client_payload.head_sha }}
           PR_URL: ${{ steps.eligibility.outputs.pr_url }}
         run: |
           set -euo pipefail

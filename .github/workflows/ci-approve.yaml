@@ -55,7 +55,7 @@ jobs:
         branch: ${{ fromJSON(needs.discover.outputs.branches) }}
     permissions:
       contents: read # Read the trusted approval policy at the workflow commit.
-      actions: read # Inspect workflow runs, jobs and required test steps.
+      actions: read # Inspect CI runs and jobs; the hand-off uses a separately scoped App token.
       pull-requests: read # Read PR metadata, changed files and existing reviews.
       statuses: write # Publish the approval gate status on the evaluated PR head.
     if: needs.discover.outputs.branches != '[]'
@@ -90,9 +90,21 @@ jobs:
           client-id: ${{ vars.APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID }}
           private-key: ${{ secrets.APP_VERTESIA_RENOVATE_AUTOMERGE_PEM }}
           permission-members: read
+      - name: Generate automerge hand-off token
+        if: >-
+          startsWith(matrix.branch, 'renovate/') ||
+          startsWith(matrix.branch, 'backport-') ||
+          startsWith(matrix.branch, 'release-bump-')
+        id: handoff-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_RENOVATE_AUTOMERGE_PEM }}
+          permission-contents: write # Create a default-branch-only repository_dispatch event.
       - name: Reconcile approvals
         env:
           CI_APPROVAL_BRANCH: ${{ matrix.branch }}
+          GH_HANDOFF_TOKEN: ${{ steps.handoff-token.outputs.token }}
           GH_MEMBERS_TOKEN: ${{ steps.membership-token.outputs.token }}
           GH_TOKEN: ${{ github.token }}
           GH_REVIEW_TOKEN: ${{ steps.review-token.outputs.token }}

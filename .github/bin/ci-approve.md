@@ -68,6 +68,28 @@ PRs from authors outside `@vertesia/engineering`, bot-authored PRs, and
 `deployment` PRs retain their existing review route.
 These PRs still receive the CI status when tests pass. Fork PRs are not approved.
 
+## Specialized automerge hand-off
+
+The Renovate, backport and release-bump automerge workflows merge only after this
+gate has published a successful `PR approval gate` status. Instead of letting them
+race the gate on the same CI completion, the gate starts them: after publishing
+success for a PR whose head branch matches a prefix in
+`ci-approve-handoffs.json`, it sends a `repository_dispatch` event with the PR
+number, head branch, head commit and base commit it evaluated. A push, a pending
+or error result, or a PR change during evaluation hands off nothing. A failed
+dispatch fails the job without changing the status or any approval; manually
+dispatch this workflow to retry.
+
+The dispatched workflow first runs `automerge-dispatch.mjs`, which stops unless
+the PR is still open with that head branch, head commit and base commit, and the
+latest `PR approval gate` status on the head is the Actions-published success.
+Its own eligibility checks follow unchanged, and only a dispatched run uses the
+merge-capable token to approve and merge. CI-completion runs keep their lockfile
+repair and notifications but leave merging to the hand-off. The hand-off uses a
+separate App token with `contents: write`, which GitHub requires to create
+`repository_dispatch`; that event executes workflow code only from the default
+branch.
+
 ## Permissions and trusted code
 
 The workflow checks out `github.workflow_sha`, never PR code, and installs no
@@ -75,7 +97,8 @@ packages. Node 24 on `ubuntu-slim` runs the dependency-free scripts directly.
 `GITHUB_TOKEN` reads PR/CI metadata and writes the `PR approval gate` commit status.
 Engineering-team membership reads and review creation and dismissal use separate
 App tokens. The membership token requests `members: read`; the review token is
-scoped to the current repository with `pull-requests: write`. If membership-token
+scoped to the current repository with `pull-requests: write`; the short-lived
+hand-off token requests `contents: write` only for repository dispatch. If membership-token
 creation fails, reconciliation continues, fails eligibility closed, and uses the
 independent review token to withdraw owned approvals. The App must remain a
 distinct identity from the PR author.
@@ -121,9 +144,11 @@ while GitHub's APIs are unavailable.
 
 ## Validation
 
-The lint workflow runs `node --test .github/bin/ci-approve.test.mjs` in its existing
+The lint workflow runs `node --test .github/bin/ci-approve.test.mjs` and
+`.github/bin/automerge-dispatch.test.mjs` in its existing
 CI-policy test step. Tests cover human-review preservation, stale heads, reruns,
-publication races, opt-out, file-list completeness, and API failures. Run
+publication races, opt-out, file-list completeness, API failures, and the
+automerge hand-off. Run
 `pnpm lint:actions` to validate workflows. The narrowly scoped actionlint exception
 for `concurrency.queue` follows GitHub's supported queue syntax until actionlint
 understands that key.

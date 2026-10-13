@@ -10,6 +10,8 @@ import {
     ENGINEERING_TEAM_SLUG,
     evaluate,
     githubApi,
+    handOff,
+    handoffFor,
     isAmbiguousApprovalError,
     isTransientApiError,
     MARKER,
@@ -666,7 +668,8 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.match(workflow, /synchronize/);
     assert.match(workflow, /converted_to_draft/);
     assert.match(workflow, /permission-pull-requests: write/);
-    assert.doesNotMatch(workflow, /permission-contents: write|pull_request_review|checkout.*head|npm install/);
+    assert.match(workflow, /Generate automerge hand-off token[\s\S]*permission-contents: write/);
+    assert.doesNotMatch(workflow, /pull_request_review|checkout.*head|npm install/);
     assert.match(workflow, /cancel-in-progress: false/);
     assert.match(workflow, /queue: max/);
     assert.match(workflow, /matrix\.branch/);
@@ -966,6 +969,113 @@ test('no-op runs with changed or missing base metadata cannot fall back to older
         assert.equal(
             verifyWorkflow([ciRun, sameBase], (id) => (id === 2 ? jobs : [job('Tests', 'success')]), policy, context),
             true,
+        );
+    }
+});
+
+const handoffs = JSON.parse(readFileSync(new URL('./ci-approve-handoffs.json', import.meta.url), 'utf8'));
+const renovate = { ...pr, head: { ...pr.head, ref: 'renovate/main-node-dependencies' } };
+
+test('a successful gate hands the exact published revision to the specialized automerge workflow', async () => {
+    const api = fixture({ pulls: [renovate] });
+    const result = await reconcile(api, 12, () => true, { handoffs });
+    assert.equal(api.writes.at(-1)[2], 'success');
+    assert.deepEqual(result.handoff, {
+        workflow: 'renovate-automerge.yaml',
+        eventType: 'ci-approved-renovate',
+        inputs: { pr_number: '12', head_branch: renovate.head.ref, head_sha: sha, base_sha: 'base' },
+    });
+});
+
+test('bot PRs routed to a specialized gate are handed off without this gate approving', async () => {
+    const backport = {
+        ...pr,
+        user: { type: 'Bot', login: 'vertesia-release-bot[bot]' },
+        head: { ...pr.head, ref: 'backport-800-to-release-1.5' },
+    };
+    const api = fixture({ pulls: [backport] });
+    const result = await reconcile(api, 12, () => true, { handoffs });
+    assert.equal(result.approve, false);
+    assert.equal(result.handoff.workflow, 'backport-automerge.yaml');
+    assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+});
+
+test('no hand-off without a successful status, on a push, or for an unrouted branch', async () => {
+    assert.equal((await reconcile(fixture({ pulls: [renovate] }), 12, () => false, { handoffs })).handoff, undefined);
+    const pushed = await reconcile(fixture({ pulls: [renovate] }), 12, () => true, { handoffs, pushed: true });
+    assert.equal(pushed.handoff, undefined);
+    assert.equal((await reconcile(fixture(), 12, () => true, { handoffs })).handoff, undefined);
+    assert.equal((await reconcile(fixture({ pulls: [renovate] }), 12, () => true)).handoff, undefined);
+});
+
+test('hand-off routing matches head-branch prefixes only', () => {
+    assert.equal(handoffFor({ ...pr, head: { ...pr.head, ref: 'feat-renovate/x' } }, handoffs), undefined);
+    assert.equal(handoffFor(renovate, {}), undefined);
+});
+
+test('the hand-off dispatches a default-branch event with the published revision', async () => {
+    const calls = [];
+    const handoff = handoffFor(renovate, handoffs);
+    await handOff({ dispatch: async (...args) => calls.push(args) }, handoff);
+    assert.deepEqual(calls, [['ci-approved-renovate', handoff.inputs]]);
+});
+
+test('dispatch transport uses the scoped hand-off token and cannot select a workflow ref', async () => {
+    const calls = [];
+    const api = githubApi(
+        {
+            GITHUB_REPOSITORY: 'vertesia/llumiverse',
+            GH_TOKEN: 'actions',
+            GH_REVIEW_TOKEN: 'review-app',
+            GH_HANDOFF_TOKEN: 'handoff-app',
+        },
+        (_cmd, args, options) => {
+            calls.push({ args, options });
+            return '';
+        },
+    );
+    const inputs = handoffFor(renovate, handoffs).inputs;
+    assert.equal(await api.dispatch('ci-approved-renovate', inputs), null);
+    assert.equal(calls[0].args[1], 'repos/vertesia/llumiverse/dispatches');
+    assert.equal(calls[0].options.env.GH_TOKEN, 'handoff-app');
+    assert.deepEqual(JSON.parse(calls[0].options.input), {
+        event_type: 'ci-approved-renovate',
+        client_payload: inputs,
+    });
+    assert.throws(() => api.dispatch('../workflow', inputs), /Invalid automerge hand-off event/);
+});
+
+test('every hand-off target runs from the default branch and verifies the revision before merging', () => {
+    const eventTypes = {
+        'renovate-automerge.yaml': 'ci-approved-renovate',
+        'backport-automerge.yaml': 'ci-approved-backport',
+        'release-automerge.yaml': 'ci-approved-release',
+    };
+    for (const [prefix, file] of Object.entries(handoffs)) {
+        const workflow = readFileSync(new URL(`../workflows/${file}`, import.meta.url), 'utf8');
+        for (const input of ['pr_number', 'head_branch', 'head_sha', 'base_sha']) {
+            assert.match(workflow, new RegExp(`github\\.event\\.client_payload\\.${input}`), `${file} ${input}`);
+        }
+        assert.match(workflow, new RegExp(`repository_dispatch:\\n    types: \\[${eventTypes[file]}\\]`), file);
+        assert.doesNotMatch(workflow, /^\s+workflow_dispatch:/m, file);
+        assert.ok(
+            workflow.includes(
+                `startsWith(github.event.workflow_run.head_branch || github.event.client_payload.head_branch, '${prefix}')`,
+            ),
+            file,
+        );
+        assert.match(workflow, /run: node \.github\/bin\/automerge-dispatch\.mjs/, file);
+        assert.match(
+            workflow,
+            /if: github\.event_name != 'repository_dispatch' \|\| steps\.dispatched\.outputs\.current == 'true'/,
+            file,
+        );
+        assert.match(workflow, /statuses: read/, file);
+        const merge = workflow.split(/\n {6}- name: Approve and merge[^\n]*\n/)[1].split('\n')[0];
+        assert.equal(
+            merge,
+            "        if: github.event_name == 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'",
+            file,
         );
     }
 });
