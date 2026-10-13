@@ -1013,7 +1013,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
         if (error) {
-            console.warn(`Error on canStream check for model: ${model} region detected: ${region}`, error);
+            // The caller's model ARN or access is the usual cause; streaming is simply not used.
+            this.logger.warn({ err: error, model, region }, 'Error on canStream check; not streaming');
         }
         return canStream;
     }

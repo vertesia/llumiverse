@@ -1,5 +1,5 @@
 import type { CompletionResult } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateResult } from './validation.js';
 
 describe('validateResult', () => {
@@ -46,5 +46,20 @@ describe('validateResult', () => {
         expect(() => validateResult(result, { $id: id, type: 'object', required: ['missing'] })).toThrow(
             /must have required property/,
         );
+    });
+
+    describe('unknown formats', () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it('ignores a format nobody registered without writing to the console', () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+            const schema = { type: 'object', properties: { id: { type: 'string', format: 'string' } } };
+            const result: CompletionResult[] = [{ type: 'text', value: '{"id":"a1"}' }];
+
+            expect(validateResult(result, schema)).toEqual([{ type: 'json', value: { id: 'a1' } }]);
+            expect(warn).not.toHaveBeenCalled();
+        });
     });
 });
