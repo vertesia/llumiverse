@@ -999,13 +999,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(
-            conversation,
-            options,
-            false,
-            getOpenAIChatDriverProvider(driver),
-            getOpenAIChatDriverLogger(driver),
-        );
+        const provider = getOpenAIChatDriverProvider(driver);
+        const logger = getOpenAIChatDriverLogger(driver);
+        const payload = this.buildPayload(conversation, options, false, provider, logger);
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1014,8 +1010,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
         const finish_reason = normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length);
         if (message?.refusal || choice?.finish_reason === 'content_filter') {
-            logModelRefusal(getOpenAIChatDriverLogger(driver), {
-                provider: getOpenAIChatDriverProvider(driver),
+            logModelRefusal(logger, {
+                provider,
                 model: options.model,
                 streaming: false,
                 finish_reason,
@@ -1079,17 +1075,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(
-            conversation,
-            options,
-            true,
-            getOpenAIChatDriverProvider(driver),
-            getOpenAIChatDriverLogger(driver),
-        );
+        const provider = getOpenAIChatDriverProvider(driver);
+        const logger = getOpenAIChatDriverLogger(driver);
+        const payload = this.buildPayload(conversation, options, true, provider, logger);
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
-        const refusalLogger = getOpenAIChatDriverLogger(driver);
-        const refusalProvider = getOpenAIChatDriverProvider(driver);
         const projector = new OpenAIThinkStreamProjector();
         let refusal = '';
         let refusalLogged = false;
@@ -1160,8 +1150,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             if (!refusalLogged && choice?.finish_reason && (refusal || choice.finish_reason === 'content_filter')) {
                 // Some providers repeat finish_reason on a trailing usage chunk; log the refusal once.
                 refusalLogged = true;
-                logModelRefusal(refusalLogger, {
-                    provider: refusalProvider,
+                logModelRefusal(logger, {
+                    provider,
                     model: options.model,
                     streaming: true,
                     finish_reason,
