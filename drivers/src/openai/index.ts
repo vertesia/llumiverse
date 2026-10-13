@@ -48,6 +48,7 @@ import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -368,6 +369,7 @@ export class OpenAIResponsesProtocol {
             includeThoughts,
             (response) => finalizeOpenAIResponsesConversation(conversation, response.output, options),
             model_options?.image_generation?.output_format,
+            { logger: driver.logger, provider: driver.provider, model: options.model },
         );
     }
 
@@ -549,6 +551,19 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
+        const finish_reason = responseFinishReason(result, tools);
+        const refusalDetails = responseRefusalDetails(result);
+        if (refusalDetails) {
+            logModelRefusal(this.logger, {
+                provider: this.provider,
+                model: _options.model,
+                streaming: false,
+                finish_reason,
+                provider_finish_reason: result.incomplete_details?.reason ?? result.status,
+                response_id: result.id,
+                details: refusalDetails,
+            });
+        }
         // Collect all parts in order (text and images)
         const includeThoughts =
             (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
@@ -567,7 +582,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             result: allResults,
             token_usage: tokenInfo,
             service_tier: result.service_tier ?? undefined,
-            finish_reason: responseFinishReason(result, tools),
+            finish_reason,
             tool_use: tools,
         };
     }
@@ -1040,7 +1055,18 @@ export function mapResponseStream(
     includeThoughts = false,
     finalize?: (response: OpenAI.Responses.Response) => unknown | Promise<unknown>,
     requestedFormat?: string,
+    refusalLog?: { logger: Logger; provider: string; model: string },
 ): DriverCompletionStream {
+    const logRefusal = (context: Omit<RefusalLogContext, 'provider' | 'model' | 'streaming'>) => {
+        if (refusalLog) {
+            logModelRefusal(refusalLog.logger, {
+                provider: refusalLog.provider,
+                model: refusalLog.model,
+                streaming: true,
+                ...context,
+            });
+        }
+    };
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
     let finalResponse: OpenAI.Responses.Response | undefined;
 
@@ -1048,8 +1074,12 @@ export function mapResponseStream(
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';
+            let responseId: string | undefined;
             const emittedImages = new Set<string>();
             for await (const event of stream) {
+                if (event.type === 'response.created') {
+                    responseId = event.response.id;
+                }
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
                     const callId = event.item.call_id ?? event.item.id;
@@ -1126,6 +1156,13 @@ export function mapResponseStream(
                 } else if (event.type === 'response.refusal.delta') {
                     refusalText += event.delta;
                 } else if (event.type === 'response.refusal.done') {
+                    logRefusal({
+                        response_id: responseId,
+                        details: {
+                            type: 'refusal',
+                            refusal: event.refusal || refusalText,
+                        } satisfies OpenAI.Responses.ResponseOutputRefusal,
+                    });
                     throw new Error(`[OpenAI] Model refused: ${event.refusal || refusalText}`);
                 } else if ((event as { type: string }).type === 'response.error') {
                     const errEvent = event as unknown as { message: string; code?: string | null };
@@ -1139,6 +1176,16 @@ export function mapResponseStream(
                 ) {
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
+                    const finish_reason = responseFinishReason(event.response, finalTools);
+                    const refusalDetails = responseRefusalDetails(event.response);
+                    if (refusalDetails) {
+                        logRefusal({
+                            finish_reason,
+                            provider_finish_reason: event.response.incomplete_details?.reason ?? event.response.status,
+                            response_id: event.response.id,
+                            details: refusalDetails,
+                        });
+                    }
                     yield {
                         result: event.response.output.flatMap((item): CompletionResult[] => {
                             if (item.type !== 'image_generation_call' || emittedImages.has(item.id)) return [];
@@ -1146,7 +1193,7 @@ export function mapResponseStream(
                             if (results.length) emittedImages.add(item.id);
                             return results;
                         }),
-                        finish_reason: responseFinishReason(event.response, finalTools),
+                        finish_reason,
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
@@ -1405,6 +1452,26 @@ function extractCompletionResults(
         }
     }
     return results;
+}
+
+/** Refusal parts and content-filter details from a Responses API response. */
+type ResponseRefusalDetails = {
+    refusals?: OpenAI.Responses.ResponseOutputRefusal[];
+    incomplete_details?: OpenAI.Responses.Response['incomplete_details'];
+};
+
+function responseRefusalDetails(response: OpenAI.Responses.Response): ResponseRefusalDetails | undefined {
+    const refusals = response.output.flatMap((item) =>
+        item.type === 'message'
+            ? item.content.filter((part): part is OpenAI.Responses.ResponseOutputRefusal => part.type === 'refusal')
+            : [],
+    );
+    const contentFiltered = response.incomplete_details?.reason === 'content_filter';
+    if (!refusals.length && !contentFiltered) return undefined;
+    return {
+        ...(refusals.length ? { refusals } : {}),
+        ...(contentFiltered ? { incomplete_details: response.incomplete_details } : {}),
+    };
 }
 
 function responseFinishReason(

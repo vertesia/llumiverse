@@ -1,5 +1,6 @@
 import type { ApiError } from '@google/genai';
 import {
+    type Candidate,
     type Content,
     FinishReason,
     FunctionCallingConfigMode,
@@ -7,6 +8,8 @@ import {
     type FunctionResponsePart,
     type GenerateContentConfig,
     type GenerateContentParameters,
+    type GenerateContentResponse,
+    type GenerateContentResponsePromptFeedback,
     type GenerateContentResponseUsageMetadata,
     HarmBlockThreshold,
     HarmCategory,
@@ -52,6 +55,7 @@ import {
 import { asyncMap } from '@llumiverse/core/async';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { logModelOptionException } from '../../shared/model-option-exceptions.js';
+import { logModelRefusal } from '../../shared/refusal-log.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
@@ -633,6 +637,86 @@ export function resolveGeminiRegion(model: string, explicitRegion: string | unde
     return explicitRegion;
 }
 
+/** Finish reasons where Gemini refused or filtered the response on policy grounds. */
+const geminiRefusalFinishReasons = new Set<FinishReason>([
+    FinishReason.SAFETY,
+    FinishReason.RECITATION,
+    FinishReason.BLOCKLIST,
+    FinishReason.PROHIBITED_CONTENT,
+    FinishReason.SPII,
+    FinishReason.IMAGE_SAFETY,
+    FinishReason.IMAGE_PROHIBITED_CONTENT,
+    FinishReason.IMAGE_RECITATION,
+]);
+
+type GeminiRefusalLogContext = { logger: Logger; provider: string; model: string; streaming: boolean };
+
+function logGeminiCandidateRefusal(
+    context: GeminiRefusalLogContext,
+    candidate: Candidate,
+    responseId: string | undefined,
+): void {
+    if (!candidate.finishReason || !geminiRefusalFinishReasons.has(candidate.finishReason)) return;
+    // Keep the provider's safety metadata, but not generated output or request-derived grounding data.
+    const {
+        content: _content,
+        groundingMetadata: _grounding,
+        logprobsResult: _logprobs,
+        urlContextMetadata: _urlContext,
+        ...details
+    } = candidate;
+    const { logger, ...logContext } = context;
+    logModelRefusal(logger, {
+        ...logContext,
+        finish_reason: normalizeGeminiFinishReason(candidate.finishReason),
+        provider_finish_reason: candidate.finishReason,
+        response_id: responseId,
+        details,
+    });
+}
+
+function logGeminiPromptBlocked(
+    context: GeminiRefusalLogContext,
+    promptFeedback: GenerateContentResponsePromptFeedback | undefined,
+    responseId: string | undefined,
+): void {
+    if (!promptFeedback?.blockReason) return;
+    const { logger, ...logContext } = context;
+    logModelRefusal(logger, {
+        ...logContext,
+        // The stream returns blockReason as its finish reason; execute returns none.
+        finish_reason: logContext.streaming ? promptFeedback.blockReason : undefined,
+        provider_finish_reason: promptFeedback.blockReason,
+        response_id: responseId,
+        details: promptFeedback,
+    });
+}
+
+/** Log refusals for every candidate, or the prompt block when the response has no candidates. */
+function logGeminiResponseRefusals(
+    context: GeminiRefusalLogContext,
+    response: Pick<GenerateContentResponse, 'candidates' | 'promptFeedback' | 'responseId'>,
+): void {
+    if (!response.candidates?.length) {
+        logGeminiPromptBlocked(context, response.promptFeedback, response.responseId);
+        return;
+    }
+    for (const candidate of response.candidates) {
+        logGeminiCandidateRefusal(context, candidate, response.responseId);
+    }
+}
+
+function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): string | undefined {
+    switch (finishReason) {
+        case FinishReason.MAX_TOKENS:
+            return 'length';
+        case FinishReason.STOP:
+            return 'stop';
+        default:
+            return finishReason;
+    }
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
     model: AIModel;
 
@@ -867,6 +951,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let finalContent: Content | undefined;
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
         const candidate = response.candidates?.[0];
+        const refusalLogContext = {
+            logger: driver.logger,
+            provider: driver.provider,
+            model: options.model,
+            streaming: false,
+        };
+        logGeminiResponseRefusals(refusalLogContext, response);
         if (candidate) {
             switch (candidate.finishReason) {
                 case FinishReason.MAX_TOKENS:
@@ -973,8 +1064,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const response = cacheExecution.value;
 
         const nativeParts: Part[] = [];
+        const refusalLogContext = {
+            logger: driver.logger,
+            provider: driver.provider,
+            model: options.model,
+            streaming: true,
+        };
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
+            logGeminiResponseRefusals(refusalLogContext, item);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
                     let tool_use: ToolUse[] | undefined;

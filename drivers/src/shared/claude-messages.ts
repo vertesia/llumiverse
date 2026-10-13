@@ -66,7 +66,7 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
+import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
@@ -1106,6 +1106,13 @@ export async function executeClaudeCompletion(
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
     logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
+    logClaudeRefusal(logger, result.stop_reason, {
+        provider,
+        model: options.model,
+        streaming: false,
+        response_id: result.id,
+        details: result.stop_details,
+    });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
@@ -1151,11 +1158,13 @@ export async function streamClaudeCompletion(
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
     let transformations: InputTransformations;
+    let responseId: string | undefined;
 
     const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
         transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
+                responseId = streamEvent.message.id;
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
@@ -1163,6 +1172,13 @@ export async function streamClaudeCompletion(
             case 'message_delta':
                 logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });
                 logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
+                logClaudeRefusal(logger, streamEvent.delta.stop_reason, {
+                    provider,
+                    model: options.model,
+                    streaming: true,
+                    response_id: responseId,
+                    details: streamEvent.delta.stop_details,
+                });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },
