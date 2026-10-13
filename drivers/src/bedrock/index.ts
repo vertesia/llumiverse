@@ -374,6 +374,19 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
 }
 
 /**
+ * The Bedrock exception behind an Anthropic SDK error: the `x-amzn-errortype` response header for HTTP errors
+ * (`Name:namespace`), or the camel-cased error type of an exception raised mid-stream (`throttlingException`).
+ */
+function bedrockExceptionName(error: AnthropicError): string | undefined {
+    const headers = (error as { headers?: Headers | null }).headers;
+    const fromHeader = headers?.get('x-amzn-errortype')?.split(':')[0];
+    if (fromHeader) return fromHeader;
+    const type = ((error as { error?: unknown }).error as { error?: { type?: unknown } } | undefined)?.error?.type;
+    if (typeof type !== 'string' || !type.endsWith('Exception')) return undefined;
+    return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+/**
  * Reports the service tier Bedrock applied, which InvokeModel returns in a response header rather than in the
  * message usage. Wraps the client the shared Claude helpers call, setting `usage.service_tier` from the header.
  */
@@ -691,10 +704,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                           awsAccessKey: credentials.accessKeyId,
                           awsSecretKey: credentials.secretAccessKey,
                           awsSessionToken: credentials.sessionToken,
+                          // Without this the SDK would prefer an AWS_BEARER_TOKEN_BEDROCK environment token over
+                          // the driver's own credentials. The SDK only types the field as a string.
+                          apiKey: null as unknown as undefined,
                       })
                     : new AnthropicBedrock({
                           ...base,
-                          ...(credentials && { providerChainResolver: async () => credentials }),
+                          // Reuse the AWS SDK client's credential provider (the configured one or the default
+                          // chain), which caches resolved credentials across requests.
+                          providerChainResolver: async () => this.getExecutor().config.credentials,
                       });
         }
         return this._anthropicService;
@@ -833,21 +851,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     /**
-     * Format an Anthropic SDK error from the Messages API route. Bedrock exceptions raised mid-stream arrive as
-     * errors typed by the camel-cased exception name (e.g. `throttlingException`) with no HTTP status; apply the
-     * Bedrock retry rules to those.
+     * Format an Anthropic SDK error from the Messages API route, applying the Bedrock retry rules when Bedrock
+     * names the exception (e.g. ServiceQuotaExceededException arrives as an HTTP 400).
      */
     private formatClaudeMessagesError(error: AnthropicError, context: LlumiverseErrorContext): LlumiverseError {
         const formatted = formatAnthropicLlumiverseError(error, context);
-        if (formatted.retryable !== undefined) return formatted;
-        const type = ((error as { error?: unknown }).error as { error?: { type?: unknown } } | undefined)?.error?.type;
-        if (typeof type !== 'string' || type.length === 0) return formatted;
-        const exceptionName = type.charAt(0).toUpperCase() + type.slice(1);
+        const exceptionName = bedrockExceptionName(error);
+        if (!exceptionName) return formatted;
         const retryable =
             exceptionName === 'ModelStreamErrorException'
                 ? true
                 : this.isBedrockErrorRetryable(exceptionName, undefined, undefined);
-        if (retryable === undefined) return formatted;
+        if (retryable === undefined || retryable === formatted.retryable) return formatted;
         return new LlumiverseError(formatted.message, retryable, context, error, formatted.code, formatted.name);
     }
 

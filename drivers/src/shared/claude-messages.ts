@@ -57,6 +57,7 @@ import {
     applyClaudeToolChanges,
     type ClaudeToolState,
     canUseClaudeToolChanges,
+    claudeContinueTurn,
     getClaudeToolState,
     isClaudeToolChangeBlock,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
@@ -854,7 +855,7 @@ export function getClaudePayload(
         if (sanitizedMessages[insertAt - 1]?.role === 'assistant') {
             sanitizedMessages = [
                 ...sanitizedMessages.slice(0, insertAt),
-                { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
+                claudeContinueTurn(),
                 ...sanitizedMessages.slice(insertAt),
             ];
         }
@@ -1378,7 +1379,9 @@ export function isAnthropicSdkError(error: unknown): error is AnthropicError {
 }
 
 function isAnthropicApiError(error: unknown): error is APIError {
-    return error instanceof APIError || errorClassNames(error).has('APIError');
+    if (error instanceof APIError) return true;
+    const classes = errorClassNames(error);
+    return classes.has('APIError') && classes.has('AnthropicError');
 }
 
 export function formatAnthropicLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
@@ -1445,7 +1448,9 @@ export function isClaudeErrorRetryable(
     if (shouldRetryHeader === 'true') return true;
     if (shouldRetryHeader === 'false') return false;
 
-    const classes = errorClassNames(error);
+    // Class names only count for Anthropic SDK errors; other SDKs reuse names such as APIError.
+    const names = errorClassNames(error);
+    const classes = names.has('AnthropicError') ? names : new Set<string>();
 
     if (classes.has('APIUserAbortError')) return false;
     if (classes.has('RateLimitError')) return true;

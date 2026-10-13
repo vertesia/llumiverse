@@ -2,6 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { APIError, BadRequestError } from '@anthropic-ai/sdk/error';
 import { type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
+import { formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
 import { isConverseConversation } from './converse.js';
 import { BedrockDriver } from './index.js';
 
@@ -143,11 +144,56 @@ describe('Bedrock Claude on the Messages API', () => {
         });
     });
 
-    it('resolves a credential provider through the SDK provider chain', async () => {
+    it('resolves credentials through the AWS SDK client provider, which caches them', async () => {
         const credentials = vi.fn(async () => ({ accessKeyId: 'k', secretAccessKey: 's' }));
         const driver = new BedrockDriver({ region: 'us-east-1', credentials });
         const service = Reflect.get(driver, 'getAnthropicService').call(driver);
-        expect(await service.providerChainResolver()).toBe(credentials);
+        const provider = await service.providerChainResolver();
+        expect(provider).toBe(driver.getExecutor().config.credentials);
+        await expect(provider()).resolves.toMatchObject({ accessKeyId: 'k' });
+        expect(credentials).toHaveBeenCalled();
+    });
+
+    it('keeps explicit credentials when a Bedrock bearer token is set in the environment', () => {
+        vi.stubEnv('AWS_BEARER_TOKEN_BEDROCK', 'env-token');
+        try {
+            const driver = new BedrockDriver({
+                region: 'us-east-1',
+                credentials: { accessKeyId: 'test-key', secretAccessKey: 'test-secret' },
+            });
+            const service = Reflect.get(driver, 'getAnthropicService').call(driver);
+            expect(service.authToken).toBeNull();
+            expect(service.awsAccessKey).toBe('test-key');
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it('applies the Bedrock retry rules to the exception named in x-amzn-errortype', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const error = new BadRequestError(
+            400,
+            { message: 'quota' },
+            'quota',
+            new Headers({ 'x-amzn-errortype': 'ServiceQuotaExceededException:http://internal.amazon.com/coral/' }),
+        );
+        const formatted = driver.formatLlumiverseError(error, {
+            provider: 'bedrock',
+            model: MODEL,
+            operation: 'execute',
+        });
+        expect(formatted.retryable).toBe(true);
+    });
+
+    it('does not treat another SDK error named APIError as an Anthropic error', () => {
+        class APIError extends Error {
+            status = 429;
+        }
+        const error = new APIError('other sdk');
+        expect(isAnthropicSdkError(error)).toBe(false);
+        expect(() =>
+            formatAnthropicLlumiverseError(error, { provider: 'bedrock', model: MODEL, operation: 'execute' }),
+        ).toThrow(error);
     });
 
     it('formats Anthropic SDK errors', () => {

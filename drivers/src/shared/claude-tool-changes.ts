@@ -21,6 +21,14 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages.js';
 import { Providers, supportsMidConversationToolChanges } from '@llumiverse/core';
 
+/**
+ * The user turn added after a trailing assistant turn, which Claude 4.6+ would otherwise treat as prefill. A new
+ * object each time: cache breakpoints are written onto message blocks.
+ */
+export function claudeContinueTurn(): MessageParam {
+    return { role: 'user', content: [{ type: 'text', text: 'Continue.' }] };
+}
+
 export const MID_CONVERSATION_TOOL_CHANGES_BETA: AnthropicBeta = 'mid-conversation-tool-changes-2026-07-01';
 
 /** Providers whose Claude endpoint accepts mid-conversation tool changes (not Microsoft Foundry). */
@@ -152,8 +160,7 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     // A system message must follow a user turn. A resumed run can end with an assistant turn; add the same
     // continuation turn getClaudePayload would, so the change is announced on this request.
     const lastRole = conversation.messages[conversation.messages.length - 1]?.role;
-    const continuation: MessageParam[] =
-        lastRole === 'user' ? [] : [{ role: 'user', content: [{ type: 'text', text: 'Continue.' }] }];
+    const continuation: MessageParam[] = lastRole === 'user' ? [] : [claudeContinueTurn()];
     return setClaudeToolState(
         { ...conversation, messages: [...conversation.messages, ...continuation, changeMessage] },
         nextState,
