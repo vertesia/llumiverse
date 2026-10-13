@@ -21,6 +21,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from '@anthropic-ai/sdk/error';
+import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -32,7 +33,7 @@ import type {
     ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources/index.js';
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
-import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
+import type { MessageCreateParamsBase, RawMessageStreamEvent, Tool } from '@anthropic-ai/sdk/resources/messages.js';
 import {
     AGENT_PROMPT_CACHE_KEY_PREFIX,
     getClaudeMaxTokensLimit,
@@ -66,6 +67,16 @@ import {
 import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
 import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
+import {
+    applyClaudeToolChanges,
+    type ClaudeToolState,
+    canUseClaudeToolChanges,
+    getClaudeToolState,
+    isClaudeToolChangeBlock,
+    MID_CONVERSATION_TOOL_CHANGES_BETA,
+    renderClaudeTools,
+    stripClaudeToolChanges,
+} from './claude-tool-changes.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from './tool-choice-error.js';
@@ -145,6 +156,8 @@ interface WarnLogger {
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
+    /** Conversation metadata; `claude_tools` keeps the declared tools for append-only tool changes. */
+    _llumiverse_meta?: { turnNumber: number; claude_tools?: ClaudeToolState };
 }
 
 function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBlockParam {
@@ -218,13 +231,14 @@ export interface ClaudeBaseOptions {
     parallel_tool_calls?: boolean;
 }
 
+type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+
 interface RequestOptions {
     headers?: Record<string, string>;
     signal?: AbortSignal;
     timeout?: number;
 }
 
-type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
 type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     abort(): void;
     finalMessage(): Promise<Message>;
@@ -551,7 +565,10 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
             );
 
             if (toolUseBlocks.length > 0) {
-                const nextMessage = messages[i + 1];
+                // A system message (e.g. a tool change) may sit between the tool_use and its results.
+                let nextIndex = i + 1;
+                while (messages[nextIndex]?.role === 'system') nextIndex++;
+                const nextMessage = messages[nextIndex];
 
                 if (nextMessage && nextMessage.role === 'user' && Array.isArray(nextMessage.content)) {
                     const toolResultIds = new Set(
@@ -566,7 +583,10 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                             tool_use_id: block.id,
                             content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`,
                         }));
-                        messages[i + 1] = { ...nextMessage, content: [...syntheticResults, ...nextMessage.content] };
+                        messages[nextIndex] = {
+                            ...nextMessage,
+                            content: [...syntheticResults, ...nextMessage.content],
+                        };
                     }
                 } else if (nextMessage && nextMessage.role === 'user') {
                     const syntheticResults: ToolResultBlockParam[] = toolUseBlocks.map((block) => ({
@@ -578,7 +598,7 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                         typeof nextMessage.content === 'string'
                             ? { type: 'text', text: nextMessage.content }
                             : { type: 'text', text: '' };
-                    messages[i + 1] = { role: 'user', content: [...syntheticResults, textContent] };
+                    messages[nextIndex] = { role: 'user', content: [...syntheticResults, textContent] };
                 }
             }
         }
@@ -619,8 +639,10 @@ export function fixOrphanedToolResults(messages: MessageParam[]): MessageParam[]
             result.push(message);
             continue;
         }
-        // Collect the tool_use ids declared by the immediately preceding assistant message.
-        const prev = messages[i - 1];
+        // Collect the tool_use ids declared by the preceding assistant message, looking past system messages.
+        let prevIndex = i - 1;
+        while (messages[prevIndex]?.role === 'system') prevIndex--;
+        const prev = messages[prevIndex];
         const allowedIds = new Set<string>();
         if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
             for (const block of prev.content) {
@@ -647,9 +669,12 @@ export function updateClaudeConversation(
     const system = mergeClaudeSystemBlocks(baseSystemMessages, prompt.system || []);
     const combined = sanitizeMessages(baseMessages.concat(prompt.messages || []));
     const mergedMessages = mergeConsecutiveUserMessages(combined);
+    const toolState = getClaudeToolState(conversation);
     return {
         messages: mergedMessages,
         system: system.length > 0 ? system : undefined,
+        // Only the declared tools are carried forward; the turn number restarts as it always has here.
+        ...(toolState && { _llumiverse_meta: { turnNumber: 0, claude_tools: toolState } }),
     };
 }
 
@@ -746,11 +771,8 @@ function stripClaudeCacheControlFromTools(
 ): MessageCreateParamsBase['tools'] | undefined {
     if (!tools) return undefined;
     return tools.map((tool) => {
-        if ('cache_control' in tool) {
-            const { cache_control: _cc, ...rest } = tool as ClaudeTool & { cache_control: unknown };
-            return rest as ClaudeTool;
-        }
-        return tool;
+        const { cache_control: _cc, ...rest } = tool as ClaudeTool & { cache_control?: unknown };
+        return rest as ClaudeTool;
     });
 }
 
@@ -768,27 +790,26 @@ export function getClaudePayload(
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    let requestOptions: RequestOptions | undefined;
+    const betas: AnthropicBeta[] = [];
     if (
         modelName.includes('claude-3-7-sonnet') &&
         ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)
     ) {
-        requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
+        betas.push('output-128k-2025-02-19');
     }
     const fastMode = model_options?.speed === 'fast';
-    if (fastMode) {
-        const betas = [requestOptions?.headers?.['anthropic-beta'], CLAUDE_FAST_MODE_BETA].filter(Boolean);
-        requestOptions = {
-            ...requestOptions,
-            headers: { ...requestOptions?.headers, 'anthropic-beta': betas.join(',') },
-        };
-    }
+    if (fastMode) betas.push(CLAUDE_FAST_MODE_BETA);
+
+    // Append-only tool changes (see claude-tool-changes.ts). Where they are not supported, send this request's
+    // tools the old way and leave out any tool-change blocks recorded while the conversation ran elsewhere.
+    const toolState = canUseClaudeToolChanges(modelName, provider) ? getClaudeToolState(prompt) : undefined;
+    const promptMessages = toolState ? prompt.messages : stripClaudeToolChanges(prompt.messages);
 
     // Merge first so parallel tool results split across user messages are recombined
     // into the single user turn after their assistant tool_use message; then fix both
     // orphan directions (tool_use without result, and result without tool_use) so the
     // request can never trip Anthropic/Vertex's tool_use/tool_result pairing validation.
-    const mergedMessages = mergeConsecutiveUserMessages(prompt.messages);
+    const mergedMessages = mergeConsecutiveUserMessages(promptMessages);
     const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 
@@ -802,7 +823,14 @@ export function getClaudePayload(
         }
     }
 
-    const hasTools = options.tools && options.tools.length > 0;
+    const hasRequestedTools = !!options.tools && options.tools.length > 0;
+    // Compatibility exception: a conversation with declared tools keeps sending them, even on a request with
+    // no tools (a final answer turn, a summary), so earlier thinking and the prompt cache stay valid. The model
+    // cannot call them: tool_choice is set to none below.
+    const hasTools = hasRequestedTools || toolState !== undefined;
+    if (toolState && (toolState.declared.some((tool) => tool.deferred) || containsToolChanges(sanitizedMessages))) {
+        betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
+    }
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
     }
@@ -827,9 +855,11 @@ export function getClaudePayload(
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
-    const sanitizedTools = hasTools
-        ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
-        : undefined;
+    const sanitizedTools = toolState
+        ? renderClaudeTools(toolState)
+        : hasTools
+          ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
+          : undefined;
 
     const cacheEnabled = isClaudePromptCacheEnabled(options);
     if (cacheEnabled) {
@@ -852,12 +882,15 @@ export function getClaudePayload(
             };
             lastBlock.cache_control = cacheControl;
         }
-        if (!hasAgentMessageBreakpoints && sanitizedTools && sanitizedTools.length > 0) {
-            const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
-            lastTool.cache_control = cacheControl;
+        // Deferred tools cannot carry cache_control, so mark the last tool loaded up front.
+        const lastLoadedTool = sanitizedTools?.findLast((tool) => !(tool as { defer_loading?: boolean }).defer_loading);
+        if (!hasAgentMessageBreakpoints && lastLoadedTool) {
+            (lastLoadedTool as ClaudeTool & { cache_control?: unknown }).cache_control = cacheControl;
         }
+        // Breakpoints below go on conversation turns, not on a trailing tool-change system message.
+        const turns = sanitizedMessages.filter((message) => message.role !== 'system');
         if (!hasAgentMessageBreakpoints && options.prompt_cache_key !== undefined) {
-            const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
+            const lastMessage = turns[turns.length - 1];
             if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length >= 2) {
                 const stablePrefixBlock = lastMessage.content[lastMessage.content.length - 2];
                 if (
@@ -870,8 +903,8 @@ export function getClaudePayload(
                     stablePrefixBlock.cache_control = cacheControl;
                 }
             }
-        } else if (!hasAgentMessageBreakpoints && sanitizedMessages.length >= 4) {
-            const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
+        } else if (!hasAgentMessageBreakpoints && turns.length >= 4) {
+            const pivotMsg = turns[turns.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
                 if (
@@ -897,7 +930,7 @@ export function getClaudePayload(
         : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
           ? ({ type: 'any' } as const)
           : undefined;
-    if (forcedToolChoice && !hasTools) {
+    if (forcedToolChoice && !hasRequestedTools) {
         throw createToolChoiceConfigurationError('A forced Claude tool turn requires at least one tool definition.', {
             provider,
             model: modelName,
@@ -915,7 +948,7 @@ export function getClaudePayload(
         ? undefined
         : forcedToolChoice
           ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
-          : model_options?.tool_choice === 'none'
+          : model_options?.tool_choice === 'none' || !hasRequestedTools
             ? ({ type: 'none' } as const)
             : model_options?.tool_choice === 'auto'
               ? ({ type: 'auto' } as const)
@@ -955,7 +988,15 @@ export function getClaudePayload(
         ...(fastMode && ({ speed: 'fast' } as Partial<MessageCreateParamsBase>)),
     };
 
+    // One comma-separated header: Google Cloud reads only the first anthropic-beta header.
+    const requestOptions: RequestOptions | undefined =
+        betas.length > 0 ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined;
+
     return { payload, requestOptions };
+}
+
+function containsToolChanges(messages: MessageParam[]): boolean {
+    return messages.some((message) => Array.isArray(message.content) && message.content.some(isClaudeToolChangeBlock));
 }
 
 // ============================================================================
@@ -1117,6 +1158,14 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
 
+/** Append this turn's prompt and record its tool set (append-only tool changes, where supported). */
+function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudePrompt, provider: string): ClaudePrompt {
+    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    return canUseClaudeToolChanges(options.model, provider)
+        ? applyClaudeToolChanges(conversation, options.tools as Tool[] | undefined)
+        : conversation;
+}
+
 /**
  * Execute a non-streaming Claude completion.
  * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
@@ -1132,7 +1181,7 @@ export async function executeClaudeCompletion(
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const conversation = prepareClaudeConversation(options, prompt, provider);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', logger);
 
@@ -1182,7 +1231,7 @@ export async function streamClaudeCompletion(
     requestModel?: string,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const conversation = prepareClaudeConversation(options, prompt, provider);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', logger);
     const streamingPayload: MessageStreamParams = { ...payload, model: requestModel ?? payload.model, stream: true };

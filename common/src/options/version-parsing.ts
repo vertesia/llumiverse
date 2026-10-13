@@ -285,6 +285,33 @@ export function hasSamplingParameterRestriction(modelString: string): boolean {
 export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
+ * Check if a model accepts mid-conversation tool changes: `tool_addition` / `tool_removal` blocks in a
+ * `role: "system"` message (beta `mid-conversation-tool-changes-2026-07-01`).
+ *
+ * Supported on Claude Opus 4.8+, Fable 5+, Mythos 5+, and Sonnet and Haiku 5.5+. Not on Claude Sonnet 5,
+ * Mythos Preview or older models. Later generations of each family are included.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model accepts mid-conversation tool changes
+ */
+export function supportsMidConversationToolChanges(modelString: string): boolean {
+    if (/claude-mythos-preview(?:-|\b)/i.test(modelString)) return false;
+    const version = parseClaudeVersion(modelString);
+    if (!version) return false;
+    const atLeast = (major: number, minor: number) =>
+        version.major > major || (version.major === major && version.minor >= minor);
+    switch (version.variant) {
+        case 'opus':
+            return atLeast(4, 8);
+        case 'fable':
+        case 'mythos':
+            return atLeast(5, 0);
+        default:
+            return atLeast(5, 5);
+    }
+}
+
+/**
  * Check if a model supports the effort parameter.
  *
  * Effort is supported on:

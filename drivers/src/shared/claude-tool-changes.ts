@@ -1,0 +1,198 @@
+/**
+ * Append-only tool changes for Claude conversations.
+ *
+ * Claude binds each thinking block, and the prompt cache, to the conversation before it, including the
+ * `tools` array. Editing `tools` between turns therefore invalidates earlier thinking and restarts the cache.
+ * Instead, the first request's tools stay in `tools` as sent; tools that appear later are appended with
+ * `defer_loading: true`, and every change is announced by a `tool_addition` / `tool_removal` block in an
+ * appended `role: "system"` message (beta `mid-conversation-tool-changes-2026-07-01`).
+ *
+ * TODO(inline-tools-2026-09-15): once that beta is available beyond the Claude API, define new and changed tools
+ * by value in `tool_addition` (`{ type: 'tool_definition', definition }`) instead of appending them to `tools`.
+ * That also removes the in-place replacement of a tool whose definition changes under the same name.
+ */
+
+import type {
+    AnthropicBeta,
+    BetaRequestToolAdditionBlock,
+    BetaRequestToolRemovalBlock,
+} from '@anthropic-ai/sdk/resources/beta.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+import type { Tool } from '@anthropic-ai/sdk/resources/messages.js';
+import { Providers, supportsMidConversationToolChanges } from '@llumiverse/core';
+
+export const MID_CONVERSATION_TOOL_CHANGES_BETA: AnthropicBeta = 'mid-conversation-tool-changes-2026-07-01';
+
+/** Providers whose Claude endpoint accepts mid-conversation tool changes (not Microsoft Foundry). */
+const TOOL_CHANGE_PROVIDERS = new Set<string>([
+    Providers.anthropic,
+    Providers.vertexai,
+    Providers.bedrock,
+    Providers.bedrock_mantle,
+]);
+
+const META_KEY = '_llumiverse_meta';
+
+/** A custom tool definition; tool-change state only tracks the caller's own tools. */
+export type ClaudeTool = Tool;
+type ClaudeToolChangeBlock = BetaRequestToolAdditionBlock | BetaRequestToolRemovalBlock;
+
+interface DeclaredClaudeTool {
+    /** The definition as sent in `tools`, without request-only fields (`cache_control`, `defer_loading`). */
+    definition: ClaudeTool;
+    /** True for tools first offered after the first request; sent with `defer_loading: true`. */
+    deferred: boolean;
+}
+
+/** Tool state stored with the conversation so later requests replay `tools` unchanged. */
+export interface ClaudeToolState {
+    /** Every tool declared in this conversation, in first-declared order. */
+    declared: DeclaredClaudeTool[];
+    /** Names the model can currently call. */
+    visible: string[];
+}
+
+interface ConversationWithMeta {
+    [META_KEY]?: { claude_tools?: ClaudeToolState };
+}
+
+export function canUseClaudeToolChanges(model: string, provider: string): boolean {
+    return TOOL_CHANGE_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
+}
+
+export function getClaudeToolState(conversation: unknown): ClaudeToolState | undefined {
+    if (!conversation || typeof conversation !== 'object') return undefined;
+    return (conversation as ConversationWithMeta)[META_KEY]?.claude_tools;
+}
+
+function toolName(tool: ClaudeTool): string {
+    return tool.name;
+}
+
+function withoutRequestFields(tool: ClaudeTool): ClaudeTool {
+    const {
+        cache_control: _cacheControl,
+        defer_loading: _deferLoading,
+        ...definition
+    } = tool as ClaudeTool & {
+        cache_control?: unknown;
+        defer_loading?: unknown;
+    };
+    return definition as ClaudeTool;
+}
+
+/** JSON with sorted object keys, so equal definitions compare equal regardless of key order. */
+function canonicalJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .filter(([, v]) => v !== undefined)
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+        return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+}
+
+function setClaudeToolState<T extends object>(conversation: T, state: ClaudeToolState): T {
+    const meta = (conversation as ConversationWithMeta)[META_KEY];
+    return { ...conversation, [META_KEY]: { ...meta, claude_tools: state } };
+}
+
+/**
+ * Record this request's tool set on the conversation. The first request declares the tools as sent. Later
+ * requests append new tools as deferred, announce additions and removals in one `role: "system"` message at
+ * the end of the conversation, and keep every declared definition in place.
+ *
+ * Returns the conversation unchanged when the request has no tools (they are not offered this turn, see
+ * {@link renderClaudeTools}) or when the conversation does not end with a user turn (a system message may only
+ * follow one; the change is then announced on the next request).
+ */
+export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
+    conversation: T,
+    requestedTools: ClaudeTool[] | undefined,
+): T {
+    if (!requestedTools || requestedTools.length === 0) return conversation;
+    const requested = requestedTools.map(withoutRequestFields);
+    const state = getClaudeToolState(conversation);
+
+    if (!state) {
+        return setClaudeToolState(conversation, {
+            declared: requested.map((definition) => ({ definition, deferred: false })),
+            visible: requested.map(toolName),
+        });
+    }
+
+    const lastMessage = conversation.messages[conversation.messages.length - 1];
+    if (lastMessage?.role !== 'user') return conversation;
+
+    const declared = [...state.declared];
+    const visible = new Set(state.visible);
+    const additions: string[] = [];
+    for (const definition of requested) {
+        const name = toolName(definition);
+        const index = declared.findIndex((tool) => toolName(tool.definition) === name);
+        if (index < 0) {
+            declared.push({ definition, deferred: true });
+        } else if (canonicalJson(declared[index].definition) !== canonicalJson(definition)) {
+            // Same name, new definition (e.g. a refreshed MCP schema). There is no append-only form without the
+            // inline-tools beta, so replace it in place: this invalidates earlier thinking and the prompt cache
+            // once, and the model sees the current schema.
+            declared[index] = { ...declared[index], definition };
+        }
+        if (!visible.has(name)) additions.push(name);
+    }
+    const requestedNames = new Set(requested.map(toolName));
+    const removals = state.visible.filter((name) => !requestedNames.has(name));
+
+    const nextState: ClaudeToolState = { declared, visible: requested.map(toolName) };
+    if (additions.length === 0 && removals.length === 0) {
+        return setClaudeToolState(conversation, nextState);
+    }
+
+    const changes: ClaudeToolChangeBlock[] = [
+        ...additions.map(
+            (name): BetaRequestToolAdditionBlock => ({
+                type: 'tool_addition',
+                tool: { type: 'tool_reference', name },
+            }),
+        ),
+        ...removals.map(
+            (name): BetaRequestToolRemovalBlock => ({
+                type: 'tool_removal',
+                tool: { type: 'tool_reference', name },
+            }),
+        ),
+    ];
+    // The SDK only types tool-change blocks on beta message params; the wire format is the same.
+    const changeMessage = { role: 'system', content: changes } as unknown as MessageParam;
+    return setClaudeToolState({ ...conversation, messages: [...conversation.messages, changeMessage] }, nextState);
+}
+
+/** The `tools` array for a conversation: every declared tool, later ones deferred. */
+export function renderClaudeTools(state: ClaudeToolState): ClaudeTool[] {
+    return state.declared.map(({ definition, deferred }) =>
+        deferred ? ({ ...definition, defer_loading: true } as ClaudeTool) : { ...definition },
+    );
+}
+
+export function isClaudeToolChangeBlock(block: unknown): boolean {
+    const type = (block as { type?: unknown } | null)?.type;
+    return type === 'tool_addition' || type === 'tool_removal';
+}
+
+/**
+ * Remove tool-change blocks for a request that sends `tools` the old way (an unsupported model or provider,
+ * e.g. a conversation continued elsewhere). System messages left empty are dropped.
+ */
+export function stripClaudeToolChanges(messages: MessageParam[]): MessageParam[] {
+    const result: MessageParam[] = [];
+    for (const message of messages) {
+        if (!Array.isArray(message.content) || !message.content.some(isClaudeToolChangeBlock)) {
+            result.push(message);
+            continue;
+        }
+        const content = message.content.filter((block) => !isClaudeToolChangeBlock(block));
+        if (content.length > 0) result.push({ ...message, content });
+    }
+    return result;
+}

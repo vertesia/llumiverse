@@ -10,6 +10,7 @@ import {
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
     supportsEffort,
+    supportsMidConversationToolChanges,
 } from './version-parsing.js';
 
 describe('Claude model version parsing', () => {
@@ -150,5 +151,39 @@ describe('Gemini model version parsing', () => {
         expect(isGeminiModelVersionGte('gemini-3.10-flash', '3.5')).toBe(true);
         expect(isGeminiModelVersionGte('gemini-3.1-pro', '3.5')).toBe(false);
         expect(isGeminiModelVersionGte('gemini-4-pro', '3.5')).toBe(true);
+    });
+});
+
+describe('supportsMidConversationToolChanges', () => {
+    it.each([
+        'claude-opus-4-8',
+        'claude-opus-5',
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'claude-haiku-5-5',
+        'claude-fable-5',
+        'claude-fable-5-1',
+        'claude-mythos-5-1',
+        'us.anthropic.claude-sonnet-5-5',
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
+        'publishers/anthropic/models/claude-sonnet-5-5@20260901',
+        'claude-sonnet-6',
+        'claude-haiku-6',
+        'claude-opus-6',
+    ])('accepts %s', (model) => {
+        expect(supportsMidConversationToolChanges(model)).toBe(true);
+    });
+
+    it.each([
+        'claude-sonnet-5',
+        'claude-haiku-5',
+        'claude-opus-4-7',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5',
+        'claude-3-7-sonnet-20250219',
+        'claude-mythos-preview',
+        'gpt-5',
+    ])('rejects %s', (model) => {
+        expect(supportsMidConversationToolChanges(model)).toBe(false);
     });
 });
