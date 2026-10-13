@@ -639,7 +639,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let system: Content | undefined = { role: 'user', parts: [] }; // Single content block for system messages
 
         const safety: Content[] = [];
-        const inlineBudget: InlineMediaBudget = { bytes: 0 };
+        // Media an earlier turn inlined is still in the history sent with this request.
+        const inlineBudget: InlineMediaBudget = { bytes: conversationInlineBytes(options.conversation) };
 
         for (const msg of segments) {
             // Role specific handling
@@ -1333,9 +1334,28 @@ export const GEMINI_INLINE_MEDIA_MAX_BYTES = 100_000_000;
  * Largest total of inline media read for one request. The per-file cap alone does not bound the heap:
  * every inlined file is held as base64 (4/3 of its size) until the request is sent, and serializing the
  * request copies it again. A handful of files under the per-file cap can pass V8's maximum string length
- * or exhaust the host process, so past this total the remaining files must be gs:// URIs.
+ * or exhaust the host process, so past this total the remaining files must be gs:// URIs. The total counts
+ * the inline media still in the conversation history, which is sent with the request too.
  */
 export const GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES = 150_000_000;
+
+/** Decoded size of the base64 inline media earlier turns left in a conversation's history. */
+export function conversationInlineBytes(value: unknown, seen: Set<object> = new Set()): number {
+    // Binary buffers hold no base64 parts, and walking one would visit every byte.
+    if (!value || typeof value !== 'object' || ArrayBuffer.isView(value) || seen.has(value)) {
+        return 0;
+    }
+    seen.add(value);
+    const data = (value as { inlineData?: { data?: unknown } }).inlineData?.data;
+    if (typeof data === 'string') {
+        return Math.floor((data.length * 3) / 4);
+    }
+    let bytes = 0;
+    for (const child of Array.isArray(value) ? value : Object.values(value)) {
+        bytes += conversationInlineBytes(child, seen);
+    }
+    return bytes;
+}
 
 /** Inline bytes read so far for one request. */
 interface InlineMediaBudget {

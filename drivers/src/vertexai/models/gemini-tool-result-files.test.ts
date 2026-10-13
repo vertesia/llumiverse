@@ -11,7 +11,12 @@ import type { Content } from '@google/genai';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { VertexAIDriver } from '../index.js';
-import { GEMINI_INLINE_MEDIA_MAX_BYTES, GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES, GeminiModelDefinition } from './gemini.js';
+import {
+    conversationInlineBytes,
+    GEMINI_INLINE_MEDIA_MAX_BYTES,
+    GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES,
+    GeminiModelDefinition,
+} from './gemini.js';
 
 const OPTIONS = { model: 'gemini-3-pro' } as unknown as ExecutionOptions;
 
@@ -114,6 +119,49 @@ describe('Gemini tool result attachments', () => {
         await expect(createPrompt([{ role: PromptRole.user, content: 'Compare', files }])).rejects.toThrow(
             `Inline media for this request exceeds the ${GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES} byte limit at b.mp4`,
         );
+    });
+
+    it('counts the inline media a resumed conversation already carries against the request total', async () => {
+        // Four 30 MB parts sharing one string: 120 MB of history without allocating it four times.
+        const base64 = 'A'.repeat(40_000_000);
+        const conversation = [1, 2, 3, 4].map(() => ({
+            role: 'user',
+            parts: [{ inlineData: { data: base64, mimeType: 'video/mp4' } }],
+        }));
+        expect(conversationInlineBytes(conversation)).toBe(120_000_000);
+
+        const chunk = new Uint8Array(1_000_000);
+        let reads = 0;
+        const file = {
+            name: 'next.mp4',
+            mime_type: 'video/mp4',
+            getStream: vi.fn().mockResolvedValue(
+                new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                        if (reads++ < 40) {
+                            controller.enqueue(chunk);
+                        } else {
+                            controller.close();
+                        }
+                    },
+                }),
+            ),
+            getURL: vi.fn(),
+            getURI: vi.fn().mockResolvedValue('https://bucket.s3.amazonaws.com/next.mp4'),
+        } as unknown as DataSource;
+        const definition = new GeminiModelDefinition('gemini-3-pro');
+
+        await expect(
+            definition.createPrompt(
+                null as unknown as VertexAIDriver,
+                [{ role: PromptRole.user, content: 'And this one?', files: [file] }],
+                { ...OPTIONS, conversation } as ExecutionOptions,
+            ),
+        ).rejects.toThrow(`exceeds the ${GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES} byte limit at next.mp4`);
+    });
+
+    it('does not walk binary buffers in the history', () => {
+        expect(conversationInlineBytes([{ bytes: new Uint8Array(10) }, null, 'text'])).toBe(0);
     });
 
     it('passes a Cloud Storage attachment by URI instead of inlining it', async () => {
