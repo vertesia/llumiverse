@@ -132,9 +132,10 @@ export function resolveClaudeThinking(
     // Output config for effort parameter (Opus 4.5+, Sonnet 4.6+, all 4.7+)
     const outputConfig: OutputConfig | undefined = options?.effort ? { effort: options.effort } : undefined;
 
-    // Drop thinking blocks whose conversation prefix changed (e.g. the agent's tool set grew) instead of
-    // failing the request. between_tools rejects block_binding, and models that enforce the binding
-    // accept no thinking budget, so adaptive is the only mode that needs it.
+    // Compatibility exception: models that bind thinking blocks to the conversation reject a replayed block
+    // with a 400 once the system prompt, tool set or earlier messages change, which agents do when a skill
+    // unlocks tools. Ask the API to drop those blocks instead of failing the request. Applies only to adaptive
+    // thinking: between_tools rejects block_binding, and these models accept no thinking budget.
     const betas: AnthropicBeta[] = [];
     if (thinking?.type === 'adaptive' && enforcesThinkingBinding(version)) {
         thinking = { ...thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } };
