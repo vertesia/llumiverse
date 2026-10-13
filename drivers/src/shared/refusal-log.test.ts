@@ -141,6 +141,7 @@ describe('Bedrock Converse refusal logging', () => {
             usage: { inputTokens: 1, outputTokens: 0, totalTokens: 1 },
         }));
         const converseStream = vi.fn(async (_request: ConverseRequest) => ({
+            $metadata: { requestId: 'req-stream' },
             stream: (async function* () {
                 const events: ConverseStreamOutput[] = [
                     { messageStart: { role: 'assistant' } },
@@ -190,7 +191,11 @@ describe('Bedrock Converse refusal logging', () => {
         await drain(stream);
 
         expect(logger.info).toHaveBeenCalledWith(
-            expect.objectContaining({ streaming: true, provider_finish_reason: 'content_filtered' }),
+            expect.objectContaining({
+                streaming: true,
+                provider_finish_reason: 'content_filtered',
+                response_id: 'req-stream',
+            }),
             MODEL_REFUSAL_LOG_MESSAGE,
         );
     });
@@ -329,7 +334,7 @@ describe('OpenAI Chat Completions refusal logging', () => {
                 provider: 'azure_foundry',
                 streaming: false,
                 response_id: 'chatcmpl-1',
-                details: { refusal: 'I cannot help.', finish_reason: 'stop' },
+                details: { refusal: 'I cannot help.' },
             }),
             MODEL_REFUSAL_LOG_MESSAGE,
         );
@@ -360,7 +365,7 @@ describe('OpenAI Chat Completions refusal logging', () => {
             expect.objectContaining({
                 streaming: true,
                 provider_finish_reason: 'content_filter',
-                details: { refusal: null, finish_reason: 'content_filter' },
+                details: { refusal: null },
             }),
             MODEL_REFUSAL_LOG_MESSAGE,
         );
@@ -396,7 +401,7 @@ describe('OpenRouter refusal logging', () => {
             expect.objectContaining({
                 provider: 'openrouter',
                 response_id: 'gen-1',
-                details: { refusal: 'I cannot help.', finish_reason: 'stop' },
+                details: { refusal: 'I cannot help.' },
             }),
             MODEL_REFUSAL_LOG_MESSAGE,
         );

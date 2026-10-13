@@ -1240,7 +1240,6 @@ export function mapResponseStream(
                     refusalText += event.delta;
                 } else if (event.type === 'response.refusal.done') {
                     logRefusal({
-                        provider_finish_reason: 'refusal',
                         response_id: responseId,
                         details: {
                             type: 'refusal',

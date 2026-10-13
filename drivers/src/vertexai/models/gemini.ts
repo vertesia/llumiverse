@@ -1110,8 +1110,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             model: options.model,
             streaming: false,
         };
-        if (!candidate) logGeminiPromptBlocked(refusalLogContext, response.promptFeedback, response.responseId);
-        if (candidate) {
+        if (!candidate) {
+            logGeminiPromptBlocked(refusalLogContext, response.promptFeedback, response.responseId);
+        } else {
             finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
             const content = candidate.content;
             logGeminiCandidateRefusal(refusalLogContext, candidate, response.responseId);

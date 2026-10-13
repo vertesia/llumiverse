@@ -837,6 +837,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         _prompt?: BedrockPrompt,
         options?: ExecutionOptions,
         streamingToolBlocks?: Map<number, { id: string; name: string }>,
+        requestId?: string,
     ): CompletionChunkObject {
         let output: string = '';
         let reasoning: string = '';
@@ -933,6 +934,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     streaming: true,
                     finish_reason: converseFinishReason(stop_reason),
                     provider_finish_reason: stop_reason,
+                    response_id: requestId,
                     details: {
                         additionalModelResponseFields: result.messageStop.additionalModelResponseFields,
                     } satisfies Pick<MessageStopEvent, 'additionalModelResponseFields'>,
@@ -1370,7 +1372,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const nativeBlocks = new Map<number, ContentBlock>();
                 const transformedStream = transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
                     collectBedrockNativeStreamBlock(nativeBlocks, streamSegment);
-                    return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
+                    return this.getExtractedStream(
+                        streamSegment,
+                        conversePrompt,
+                        options,
+                        streamingToolBlocks,
+                        res.$metadata?.requestId,
+                    );
                 });
                 const scoped = withBedrockRuntimeScope(transformedStream, executorScope);
                 return Object.assign(scoped, {
