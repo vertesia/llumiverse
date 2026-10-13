@@ -1,35 +1,12 @@
-import type { AbstractDriver, ExecutionOptions } from '@llumiverse/core';
-import 'dotenv/config';
-import fs from 'node:fs';
+import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, test } from 'vitest';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '../src/bedrock/nova-image-payload.js';
-import { BedrockDriver } from '../src/index.js';
-import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from './samples.js';
+import { testPrompt_textToImage } from './samples.js';
 
-interface TestDriver {
-    driver: AbstractDriver;
-    models: string[];
-    name: string;
-}
-
-const drivers: TestDriver[] = [];
 const imageOutputModality = 'image' as NonNullable<ExecutionOptions['output_modality']>;
 
-if (process.env.BEDROCK_REGION) {
-    drivers.push({
-        name: 'bedrock',
-        driver: new BedrockDriver({
-            region: process.env.BEDROCK_REGION as string,
-        }),
-        models: ['amazon.nova-canvas-v1:0'],
-    });
-} else {
-    console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
-}
-
-//TODO: Add vertexai imagen tests
-
-describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
+// Live Nova Canvas generation tests were removed: amazon.nova-canvas-v1:0 has reached end of life on Bedrock.
+describe('Nova Canvas payload', () => {
     test('generate a prompt Nova canvas', async () => {
         const options: ExecutionOptions = {
             model: 'amazon.nova-canvas-v1:0',
@@ -47,81 +24,5 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
         expect(res).toBeDefined();
         expect(res).toHaveProperty('textToImageParams');
         expect(res).toHaveProperty('taskType');
-        console.log(res);
-    });
-
-    test.each(models)(`${name}: text to image generation`, { timeout: 300 * 1000 }, async (model) => {
-        console.log(`Testing model ${model}`);
-
-        const options: ExecutionOptions = {
-            model: model,
-            output_modality: imageOutputModality,
-            model_options: {
-                _option_id: 'bedrock-nova-canvas',
-                taskType: 'TEXT_IMAGE',
-            },
-        };
-
-        const res = await driver.requestImageGeneration(testPrompt_textToImage, options);
-        expect(res).toBeDefined();
-        expect(res.result).toHaveLength(1);
-        expect(res.result[0]).toHaveProperty('value');
-        await saveImagesToOutput(
-            res.result.filter((r) => r.type === 'image').map((r) => r.value),
-            `text-to-image-${model}`,
-        );
-    });
-
-    test.each(models)(`${name}: text to image guidance`, { timeout: 300 * 1000 }, async (model) => {
-        console.log(`Testing model ${model}`);
-
-        const options: ExecutionOptions = {
-            model: model,
-            output_modality: imageOutputModality,
-            model_options: {
-                _option_id: 'bedrock-nova-canvas',
-                taskType: 'TEXT_IMAGE',
-            },
-        };
-
-        const res = await driver.requestImageGeneration(testPrompt_textToImageGuidance, options);
-        expect(res).toBeDefined();
-        expect(res.result).toHaveLength(1);
-        expect(res.result[0]).toHaveProperty('value');
-        await saveImagesToOutput(
-            res.result.filter((r) => r.type === 'image').map((r) => r.value),
-            `text-to-image-guidance-${model}`,
-        );
-    });
-
-    test.each(models)(`${name}: text to image variation`, { timeout: 300 * 1000 }, async (model) => {
-        const options: ExecutionOptions = {
-            model: model,
-            output_modality: imageOutputModality,
-            model_options: {
-                _option_id: 'bedrock-nova-canvas',
-                taskType: 'IMAGE_VARIATION',
-            },
-        };
-
-        const res = await driver.requestImageGeneration(testPrompt_imageVariations, options);
-        expect(res).toBeDefined();
-        expect(res.result).toHaveLength(1);
-        expect(res.result[0]).toHaveProperty('value');
-        await saveImagesToOutput(
-            res.result.filter((r) => r.type === 'image').map((r) => r.value),
-            `text-to-image-variation-${model}`,
-        );
     });
 });
-
-async function saveImagesToOutput(images: string[] = [], name: string) {
-    await fs.promises.mkdir('output', { recursive: true });
-    for (const [i, image] of images.entries()) {
-        const filename = `output/${name}-${i}.png`;
-        console.log(`Saving image to ${filename}`);
-        const response = await fetch(image);
-        if (!response.ok) throw new Error(`Failed to read generated image: HTTP ${response.status}`);
-        await fs.promises.writeFile(filename, Buffer.from(await response.arrayBuffer()));
-    }
-}
