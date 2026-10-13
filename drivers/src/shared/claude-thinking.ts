@@ -152,8 +152,8 @@ export function resolveClaudeThinking(
 }
 
 /**
- * Report thinking blocks the API dropped or let through because the conversation before them changed
- * (`thinking.block_binding`). Each entry means earlier reasoning was not reused for this request.
+ * Report replayed thinking blocks the API dropped or let through because they no longer match the request
+ * (`thinking.block_binding`): a changed conversation prefix, another model, or another account.
  */
 export function logClaudeInputTransformations(
     logger: Logger | undefined,
@@ -162,12 +162,16 @@ export function logClaudeInputTransformations(
 ): void {
     if (!logger || !transformations?.length) return;
 
+    const counts: Record<string, number> = {};
+    for (const { type, reason } of transformations) {
+        const key = `${type}:${reason}`;
+        counts[key] = (counts[key] ?? 0) + 1;
+    }
     logger.warn(
         {
             ...context,
             transformation_count: transformations.length,
-            transformation_types: [...new Set(transformations.map((t) => t.type))],
-            transformation_reasons: [...new Set(transformations.map((t) => t.reason))],
+            transformations: counts,
             first_path: transformations[0].path,
         },
         '[Claude] API transformed replayed thinking blocks',

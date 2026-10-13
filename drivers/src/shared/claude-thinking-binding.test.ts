@@ -38,8 +38,7 @@ const droppedLog = expect.objectContaining({
     provider: 'anthropic',
     model: 'claude-sonnet-5-5',
     transformation_count: 1,
-    transformation_types: ['thinking_dropped'],
-    transformation_reasons: ['prefix_binding_mismatch'],
+    transformations: { 'thinking_dropped:prefix_binding_mismatch': 1 },
     first_path: 'messages.1.content.0',
 });
 
