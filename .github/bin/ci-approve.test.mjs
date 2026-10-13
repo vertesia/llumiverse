@@ -311,7 +311,7 @@ test('manual discovery excludes forks and unsupported bases', async () => {
             { ...pr, number: 14, head: { ...pr.head, repo: { full_name: 'fork/studio' } } },
         ],
     });
-    assert.deepEqual(await targets(api, {}, 'workflow_dispatch'), [12]);
+    assert.deepEqual(await targets(api, {}, 'repository_dispatch'), [12]);
     assert.deepEqual(api.opened, [undefined]);
 });
 
@@ -348,8 +348,11 @@ test('workflow events resolve current PRs even when the event has no PR list or 
     );
 });
 
-test('manual dispatch rejects malformed PR numbers', async () => {
-    await assert.rejects(targets(fixture(), { inputs: { pr_number: '-1' } }, 'workflow_dispatch'), /Invalid PR/);
+test('manual reconciliation rejects malformed PR numbers', async () => {
+    await assert.rejects(
+        targets(fixture(), { client_payload: { pr_number: '-1' } }, 'repository_dispatch'),
+        /Invalid PR/,
+    );
 });
 
 test('API transport scopes approval and membership calls to dedicated App tokens', async () => {
@@ -837,16 +840,16 @@ test('settle caps a sleep at the remaining deadline', async () => {
     assert.deepEqual(sleeps, [10, 5]);
 });
 
-test('manual dispatch resolves a selected PR to its actual branch', async () => {
-    assert.deepEqual(await targetBranches(fixture(), { inputs: { pr_number: '12' } }, 'workflow_dispatch'), [
+test('manual reconciliation resolves a selected PR to its actual branch', async () => {
+    assert.deepEqual(await targetBranches(fixture(), { client_payload: { pr_number: '12' } }, 'repository_dispatch'), [
         'feature',
     ]);
 });
 
-test('bulk manual dispatch deduplicates branch jobs and scopes discovery to the locked branch', async () => {
+test('bulk manual reconciliation deduplicates branch jobs and scopes discovery to the locked branch', async () => {
     const api = fixture({ pulls: [pr, { ...pr, number: 13 }] });
-    assert.deepEqual(await targetBranches(api, {}, 'workflow_dispatch'), ['feature']);
-    await targets(api, {}, 'workflow_dispatch', 'feature');
+    assert.deepEqual(await targetBranches(api, {}, 'repository_dispatch'), ['feature']);
+    await targets(api, {}, 'repository_dispatch', 'feature');
     assert.equal(api.opened.at(-1), 'feature');
 });
 
@@ -983,7 +986,13 @@ test('a successful gate hands the exact published revision to the specialized au
     assert.deepEqual(result.handoff, {
         workflow: 'renovate-automerge.yaml',
         eventType: 'ci-approved-renovate',
-        inputs: { pr_number: '12', head_branch: renovate.head.ref, head_sha: sha, base_sha: 'base' },
+        inputs: {
+            pr_number: '12',
+            head_branch: renovate.head.ref,
+            head_sha: sha,
+            base_ref: 'main',
+            base_sha: 'base',
+        },
     });
 });
 
@@ -1053,7 +1062,7 @@ test('every hand-off target runs from the default branch and verifies the revisi
     };
     for (const [prefix, file] of Object.entries(handoffs)) {
         const workflow = readFileSync(new URL(`../workflows/${file}`, import.meta.url), 'utf8');
-        for (const input of ['pr_number', 'head_branch', 'head_sha', 'base_sha']) {
+        for (const input of ['pr_number', 'head_branch', 'head_sha', 'base_ref', 'base_sha']) {
             assert.match(workflow, new RegExp(`github\\.event\\.client_payload\\.${input}`), `${file} ${input}`);
         }
         assert.match(workflow, new RegExp(`repository_dispatch:\\n    types: \\[${eventTypes[file]}\\]`), file);
@@ -1078,4 +1087,10 @@ test('every hand-off target runs from the default branch and verifies the revisi
             file,
         );
     }
+});
+
+test('manual approval reconciliation runs only from the default branch', () => {
+    const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
+    assert.match(workflow, /repository_dispatch:\n {4}types: \[ci-approve-reconcile\]/);
+    assert.doesNotMatch(workflow, /^\s+workflow_dispatch:/m);
 });

@@ -58,7 +58,7 @@ merging until the PR branch is brought up to date and checks pass again.
 Approval writes explicitly name the tested commit. PR metadata and CI are read
 again before publication and after a new review is submitted. Events are serialized
 per head branch, and delayed events always evaluate the latest PR state. All triggers,
-including manual dispatch for one or all PRs, first resolve their target branches
+including default-branch-only manual reconciliation for one or all PRs, first resolve their target branches
 and create a job per branch using the same concurrency group. Each job limits writes
 to its locked branch. Unrelated branches can reconcile concurrently.
 
@@ -75,13 +75,13 @@ gate has published a successful `PR approval gate` status. Instead of letting th
 race the gate on the same CI completion, the gate starts them: after publishing
 success for a PR whose head branch matches a prefix in
 `ci-approve-handoffs.json`, it sends a `repository_dispatch` event with the PR
-number, head branch, head commit and base commit it evaluated. A push, a pending
+number, head branch, head commit, base branch and base commit it evaluated. A push, a pending
 or error result, or a PR change during evaluation hands off nothing. A failed
-dispatch fails the job without changing the status or any approval; manually
-dispatch this workflow to retry.
+dispatch fails the job without changing the status or any approval. To retry safely,
+send the `ci-approve-reconcile` repository event, optionally with a `pr_number` client payload.
 
 The dispatched workflow first runs `automerge-dispatch.mjs`, which stops unless
-the PR is still open with that head branch, head commit and base commit, and the
+the PR is still open with that head branch, head commit, base branch and base commit, and the
 latest `PR approval gate` status on the head is the Actions-published success.
 Its own eligibility checks follow unchanged, and only a dispatched run uses the
 merge-capable token to approve and merge. CI-completion runs keep their lockfile
@@ -139,7 +139,7 @@ make GitHub's push/rerun and review APIs atomic.
 If the initial PR read fails, the workflow fails with the original API error and
 cannot safely publish a status for an unknown head. Cleanup after later failures
 is best effort; an API outage can also prevent status writes or review dismissal.
-Use manual dispatch after recovery. The workflow cannot guarantee withdrawal
+Send the `ci-approve-reconcile` repository event after recovery. The workflow cannot guarantee withdrawal
 while GitHub's APIs are unavailable.
 
 ## Validation

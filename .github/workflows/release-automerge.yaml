@@ -78,6 +78,7 @@ jobs:
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           HEAD_BRANCH: ${{ github.event.client_payload.head_branch }}
           HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          BASE_REF: ${{ github.event.client_payload.base_ref }}
           BASE_SHA: ${{ github.event.client_payload.base_sha }}
         run: node .github/bin/automerge-dispatch.mjs
       - name: Check automerge eligibility

@@ -8,12 +8,10 @@ on:
   # zizmor: ignore[dangerous-triggers] Withdraws this gate's approval on PR changes; checkout is pinned to the trusted workflow commit.
   pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "PR number to reconcile (leave empty for all open PRs)"
-        type: string
-        required: false
+  # Default-branch-only manual reconciliation. Send client_payload.pr_number to select one PR;
+  # omit it to reconcile all open PRs.
+  repository_dispatch:
+    types: [ci-approve-reconcile]
 
 permissions: {}
 
@@ -22,7 +20,7 @@ jobs:
     name: Resolve approval branches
     # Discovery only reads metadata; publishing jobs use the actual branch lock below.
     concurrency:
-      group: ci-approve-discovery-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.event.inputs.pr_number || 'manual' }}
+      group: ci-approve-discovery-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.event.client_payload.pr_number || 'manual' }}
       cancel-in-progress: false
       queue: max
     if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
@@ -30,7 +28,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read # Read the trusted discovery script at the workflow commit.
-      pull-requests: read # Resolve manual dispatch targets to their PR head branches.
+      pull-requests: read # Resolve manual reconciliation targets to their PR head branches.
     outputs:
       branches: ${{ steps.branches.outputs.branches }}
     steps:

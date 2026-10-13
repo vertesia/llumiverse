@@ -79,6 +79,7 @@ export function handoffFor(pr, handoffs = {}) {
             pr_number: String(pr.number),
             head_branch: pr.head.ref,
             head_sha: pr.head.sha,
+            base_ref: pr.base.ref,
             base_sha: pr.base.sha,
         },
     };
@@ -384,8 +385,8 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
 
 export async function targets(api, event, eventName, branch) {
     if (event.pull_request) return [event.pull_request.number];
-    if (eventName === 'workflow_dispatch' && event.inputs?.pr_number) {
-        const number = Number(event.inputs.pr_number);
+    if (eventName === 'repository_dispatch' && event.client_payload?.pr_number) {
+        const number = Number(event.client_payload.pr_number);
         if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid PR number');
         return [number];
     }

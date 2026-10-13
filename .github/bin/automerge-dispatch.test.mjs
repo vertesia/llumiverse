@@ -9,11 +9,11 @@ import { CONTEXT } from './ci-approve.mjs';
 const head = 'a'.repeat(40);
 const base = 'b'.repeat(40);
 const repo = 'vertesia/llumiverse';
-const expected = { repo, headBranch: 'renovate/main-node-dependencies', headSha: head, baseSha: base };
+const expected = { repo, headBranch: 'renovate/main-node-dependencies', headSha: head, baseRef: 'main', baseSha: base };
 const pr = {
     state: 'open',
     head: { ref: expected.headBranch, sha: head, repo: { full_name: repo } },
-    base: { sha: base },
+    base: { ref: expected.baseRef, sha: base },
 };
 const gate = (state, login = 'github-actions[bot]') => ({ context: CONTEXT, state, creator: { login } });
 const other = { context: 'Vercel', state: 'success', creator: { login: 'vercel[bot]' } };
@@ -28,7 +28,8 @@ test('a closed PR, a foreign head, or a moved head, branch or base stops the mer
         [{ ...pr, head: { ...pr.head, repo: { full_name: 'fork/llumiverse' } } }, /not in this repository/],
         [{ ...pr, head: { ...pr.head, ref: 'renovate/other' } }, /head branch/],
         [{ ...pr, head: { ...pr.head, sha: 'c'.repeat(40) } }, /head moved/],
-        [{ ...pr, base: { sha: 'c'.repeat(40) } }, /base moved/],
+        [{ ...pr, base: { ...pr.base, ref: 'release/1.5' } }, /base branch/],
+        [{ ...pr, base: { ...pr.base, sha: 'c'.repeat(40) } }, /base moved/],
     ]) {
         assert.match(dispatchedRevisionReason(changed, [gate('success')], expected), reason);
     }
@@ -54,6 +55,7 @@ test('main reports whether the dispatched revision is current', () => {
         REPO: repo,
         HEAD_BRANCH: expected.headBranch,
         HEAD_SHA: head,
+        BASE_REF: expected.baseRef,
         BASE_SHA: base,
         GITHUB_OUTPUT: output,
     };
@@ -74,7 +76,14 @@ test('main reports whether the dispatched revision is current', () => {
 });
 
 test('malformed dispatch inputs are rejected before any API call', () => {
-    const env = { PR_NUMBER: '12', REPO: repo, HEAD_BRANCH: 'renovate/x', HEAD_SHA: head, BASE_SHA: base };
+    const env = {
+        PR_NUMBER: '12',
+        REPO: repo,
+        HEAD_BRANCH: 'renovate/x',
+        HEAD_SHA: head,
+        BASE_REF: 'main',
+        BASE_SHA: base,
+    };
     const api = () => assert.fail('must not call the API');
     for (const changed of [
         { PR_NUMBER: '0' },
@@ -82,6 +91,7 @@ test('malformed dispatch inputs are rejected before any API call', () => {
         { REPO: 'vertesia/llumiverse/../x' },
         { HEAD_BRANCH: '' },
         { HEAD_SHA: '../../../user' },
+        { BASE_REF: '' },
         { BASE_SHA: 'main' },
     ]) {
         assert.throws(() => main({ ...env, ...changed }, api), /Invalid PR number|Missing or malformed/);
