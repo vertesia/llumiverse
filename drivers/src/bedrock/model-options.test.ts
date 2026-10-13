@@ -25,6 +25,24 @@ describe('Bedrock provider-specific model options', () => {
         });
     });
 
+    it('asks Converse to drop mismatched thinking blocks for adaptive Claude Sonnet 5.5', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const model = 'us.anthropic.claude-sonnet-5-5';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-claude', effort: 'medium' } },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            reasoning_config: {
+                type: 'adaptive',
+                display: 'omitted',
+                block_binding: { prefix_mismatch_behavior: 'drop_block' },
+            },
+            anthropic_beta: ['thinking-binding-controls-2026-08-01'],
+            output_config: { effort: 'medium' },
+        });
+    });
+
     it.each([
         ['amazon.nova-pro-v1:0', { _option_id: 'bedrock-nova', top_k: 12 }, { inferenceConfig: { topK: 12 } }],
         ['mistral.mixtral-8x7b-instruct-v0:1', { _option_id: 'bedrock-mistral', top_k: 12 }, { top_k: 12 }],

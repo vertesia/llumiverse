@@ -1,3 +1,4 @@
+import type { BetaInputTransformation } from '@anthropic-ai/sdk/resources/beta.js';
 import type { Logger } from '@llumiverse/core';
 
 export function claudeFinishReason(reason: string | undefined): string | undefined {
@@ -31,4 +32,27 @@ export function logClaudeTruncation(
     } else if (reason === 'model_context_window_exceeded') {
         logger.warn(details, '[Claude] Completion exceeded the model context window');
     }
+}
+
+/**
+ * Report thinking blocks the API dropped or let through because the conversation before them changed
+ * (`thinking.block_binding`). Each entry means earlier reasoning was not reused for this request.
+ */
+export function logClaudeInputTransformations(
+    logger: Logger | undefined,
+    transformations: BetaInputTransformation[] | null | undefined,
+    context: { provider: string; model: string },
+): void {
+    if (!logger || !transformations?.length) return;
+
+    logger.warn(
+        {
+            ...context,
+            transformation_count: transformations.length,
+            transformation_types: [...new Set(transformations.map((t) => t.type))],
+            transformation_reasons: [...new Set(transformations.map((t) => t.reason))],
+            first_path: transformations[0].path,
+        },
+        '[Claude] API transformed replayed thinking blocks',
+    );
 }
