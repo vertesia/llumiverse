@@ -1,5 +1,6 @@
 import type { ApiError } from '@google/genai';
 import {
+    type Candidate,
     type Content,
     FinishReason,
     FunctionCallingConfigMode,
@@ -7,6 +8,7 @@ import {
     type FunctionResponsePart,
     type GenerateContentConfig,
     type GenerateContentParameters,
+    type GenerateContentResponsePromptFeedback,
     type GenerateContentResponseUsageMetadata,
     HarmBlockThreshold,
     HarmCategory,
@@ -54,6 +56,7 @@ import { asyncMap } from '@llumiverse/core/async';
 import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { logModelOptionException } from '../../shared/model-option-exceptions.js';
+import { logModelRefusal } from '../../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -666,6 +669,54 @@ function isFileAudioModel(model: string): boolean {
     return /(?:tts|transcribe)/.test(model) && !/(?:live|native-audio)/.test(model);
 }
 
+/** Finish reasons where Gemini refused or filtered the response on policy grounds. */
+const geminiRefusalFinishReasons = new Set<FinishReason>([
+    FinishReason.SAFETY,
+    FinishReason.RECITATION,
+    FinishReason.BLOCKLIST,
+    FinishReason.PROHIBITED_CONTENT,
+    FinishReason.SPII,
+    FinishReason.IMAGE_SAFETY,
+    FinishReason.IMAGE_PROHIBITED_CONTENT,
+    FinishReason.IMAGE_RECITATION,
+]);
+
+type GeminiRefusalLogContext = { logger: Logger; provider: string; model: string; streaming: boolean };
+
+function logGeminiCandidateRefusal(
+    context: GeminiRefusalLogContext,
+    candidate: Candidate,
+    responseId: string | undefined,
+): void {
+    if (!candidate.finishReason || !geminiRefusalFinishReasons.has(candidate.finishReason)) return;
+    // Keep the provider's safety metadata, but not generated output or grounding data.
+    const { content: _content, groundingMetadata: _grounding, logprobsResult: _logprobs, ...details } = candidate;
+    const { logger, ...logContext } = context;
+    logModelRefusal(logger, {
+        ...logContext,
+        finish_reason: normalizeGeminiFinishReason(candidate.finishReason),
+        provider_finish_reason: candidate.finishReason,
+        response_id: responseId,
+        details,
+    });
+}
+
+function logGeminiPromptBlocked(
+    context: GeminiRefusalLogContext,
+    promptFeedback: GenerateContentResponsePromptFeedback | undefined,
+    responseId: string | undefined,
+): void {
+    if (!promptFeedback?.blockReason) return;
+    const { logger, ...logContext } = context;
+    logModelRefusal(logger, {
+        ...logContext,
+        finish_reason: promptFeedback.blockReason,
+        provider_finish_reason: promptFeedback.blockReason,
+        response_id: responseId,
+        details: promptFeedback,
+    });
+}
+
 function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): string | undefined {
     switch (finishReason) {
         case FinishReason.MAX_TOKENS:
@@ -1046,9 +1097,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let finalContent: Content | undefined;
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
         const candidate = response.candidates?.[0];
+        const refusalLogContext = {
+            logger: driver.logger,
+            provider: driver.provider,
+            model: options.model,
+            streaming: false,
+        };
+        if (!candidate) logGeminiPromptBlocked(refusalLogContext, response.promptFeedback, response.responseId);
         if (candidate) {
             finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
             const content = candidate.content;
+            logGeminiCandidateRefusal(refusalLogContext, candidate, response.responseId);
 
             // Provider finish reasons are terminal responses, not transport failures. Classify them
             // explicitly while allowing recoverable tool-call issues to continue through the workflow.
@@ -1146,6 +1205,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const nativeParts: Part[] = [];
         let streamedToolCallCount = 0;
+        const refusalLogContext = {
+            logger: driver.logger,
+            provider: driver.provider,
+            model: options.model,
+            streaming: true,
+        };
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
@@ -1153,6 +1218,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     let tool_use: StreamingToolUse[] | undefined;
                     let finish_reason: string | undefined;
                     finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
+                    logGeminiCandidateRefusal(refusalLogContext, candidate, item.responseId);
                     const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
                     if (candidate.content?.role === 'model') {
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
@@ -1183,6 +1249,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 }
             }
             //No normal output, returning block reason if it exists.
+            logGeminiPromptBlocked(refusalLogContext, item.promptFeedback, item.responseId);
             return {
                 result: item.promptFeedback?.blockReasonMessage
                     ? [{ type: 'text' as const, value: item.promptFeedback.blockReasonMessage }]
