@@ -1,7 +1,12 @@
-import type { AnthropicBeta, BetaThinkingConfigParam } from '@anthropic-ai/sdk/resources/beta.js';
+import type {
+    AnthropicBeta,
+    BetaInputTransformation,
+    BetaThinkingConfigParam,
+} from '@anthropic-ai/sdk/resources/beta.js';
 import type { OutputConfig } from '@anthropic-ai/sdk/resources/messages.js';
 import {
     type AnthropicClaudeOptions,
+    type ClaudeVersion,
     hasSamplingParameterRestriction,
     isClaudeVersionGTE,
     type Logger,
@@ -30,9 +35,10 @@ export const THINKING_BINDING_BETA: AnthropicBeta = 'thinking-binding-controls-2
  * Whether the model binds each thinking block to the conversation before it (system, tools, earlier
  * messages) and rejects a replayed block once that prefix changes: Claude Fable 5.1 and Claude 5.5+.
  */
-function enforcesThinkingBinding(model: string): boolean {
-    const version = parseClaudeVersion(model);
-    return isClaudeVersionGTE(model, 5, 5) || (version?.variant === 'fable' && isClaudeVersionGTE(model, 5, 1));
+function enforcesThinkingBinding(version: ClaudeVersion | null): boolean {
+    if (!version) return false;
+    const { major, minor, variant } = version;
+    return major > 5 || (major === 5 && (minor >= 5 || (variant === 'fable' && minor >= 1)));
 }
 
 /**
@@ -127,9 +133,10 @@ export function resolveClaudeThinking(
     const outputConfig: OutputConfig | undefined = options?.effort ? { effort: options.effort } : undefined;
 
     // Drop thinking blocks whose conversation prefix changed (e.g. the agent's tool set grew) instead of
-    // failing the request. Only adaptive thinking accepts block_binding; between_tools rejects it.
+    // failing the request. between_tools rejects block_binding, and models that enforce the binding
+    // accept no thinking budget, so adaptive is the only mode that needs it.
     const betas: AnthropicBeta[] = [];
-    if (thinking?.type === 'adaptive' && enforcesThinkingBinding(model)) {
+    if (thinking?.type === 'adaptive' && enforcesThinkingBinding(version)) {
         thinking = { ...thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } };
         betas.push(THINKING_BINDING_BETA);
     }
@@ -141,4 +148,27 @@ export function resolveClaudeThinking(
         hasSamplingRestriction: samplingRestriction,
         supportsThinking,
     };
+}
+
+/**
+ * Report thinking blocks the API dropped or let through because the conversation before them changed
+ * (`thinking.block_binding`). Each entry means earlier reasoning was not reused for this request.
+ */
+export function logClaudeInputTransformations(
+    logger: Logger | undefined,
+    transformations: BetaInputTransformation[] | null | undefined,
+    context: { provider: string; model: string },
+): void {
+    if (!logger || !transformations?.length) return;
+
+    logger.warn(
+        {
+            ...context,
+            transformation_count: transformations.length,
+            transformation_types: [...new Set(transformations.map((t) => t.type))],
+            transformation_reasons: [...new Set(transformations.map((t) => t.reason))],
+            first_path: transformations[0].path,
+        },
+        '[Claude] API transformed replayed thinking blocks',
+    );
 }

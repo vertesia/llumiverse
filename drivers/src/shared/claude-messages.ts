@@ -66,8 +66,8 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { claudeFinishReason, logClaudeInputTransformations, logClaudeTruncation } from './claude-stop-reason.js';
-import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
+import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
+import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
 
