@@ -65,6 +65,14 @@ describe('Claude thinking block binding', () => {
         );
     });
 
+    it('ignores input transformation types it does not recognise', async () => {
+        const logger = testLogger();
+        const message = messageWith([{ type: 'future_transformation', path: 'messages.0' }]);
+        const client = { messages: { stream: () => sdkStream([], message) } } as never;
+        await executeClaudeCompletion(client, prompt, { model: 'claude-sonnet-5-5' }, logger);
+        expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it('does not log when no block was transformed', async () => {
         const logger = testLogger();
         const client = { messages: { stream: () => sdkStream([], messageWith([])) } } as never;

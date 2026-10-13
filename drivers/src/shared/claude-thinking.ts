@@ -160,19 +160,23 @@ export function logClaudeInputTransformations(
     transformations: BetaInputTransformation[] | null | undefined,
     context: { provider: string; model: string },
 ): void {
-    if (!logger || !transformations?.length) return;
+    // Later API versions may add entry types; only these two describe replayed thinking blocks.
+    const thinking = transformations?.filter(
+        (t) => t.type === 'thinking_dropped' || t.type === 'thinking_mismatch_allowed',
+    );
+    if (!logger || !thinking?.length) return;
 
     const counts: Record<string, number> = {};
-    for (const { type, reason } of transformations) {
+    for (const { type, reason } of thinking) {
         const key = `${type}:${reason}`;
         counts[key] = (counts[key] ?? 0) + 1;
     }
     logger.warn(
         {
             ...context,
-            transformation_count: transformations.length,
+            transformation_count: thinking.length,
             transformations: counts,
-            first_path: transformations[0].path,
+            first_path: thinking[0].path,
         },
         '[Claude] Replayed thinking blocks no longer match the request',
     );
