@@ -59,7 +59,10 @@ describe('Claude thinking block binding', () => {
             }),
             { headers: { 'anthropic-beta': 'thinking-binding-controls-2026-08-01' } },
         );
-        expect(logger.warn).toHaveBeenCalledWith(droppedLog, '[Claude] API transformed replayed thinking blocks');
+        expect(logger.warn).toHaveBeenCalledWith(
+            droppedLog,
+            '[Claude] Replayed thinking blocks no longer match the request',
+        );
     });
 
     it('does not log when no block was transformed', async () => {
@@ -79,6 +82,9 @@ describe('Claude thinking block binding', () => {
             // drain
         }
         expect(logger.warn).toHaveBeenCalledTimes(1);
-        expect(logger.warn).toHaveBeenCalledWith(droppedLog, '[Claude] API transformed replayed thinking blocks');
+        expect(logger.warn).toHaveBeenCalledWith(
+            droppedLog,
+            '[Claude] Replayed thinking blocks no longer match the request',
+        );
     });
 });

@@ -1,3 +1,4 @@
+import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
@@ -1426,7 +1427,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     };
                 }
                 // Betas go in the body on Bedrock, not in a header.
-                const anthropicBeta: string[] = [...claudeThinking.betas];
+                const anthropicBeta: AnthropicBeta[] = [...claudeThinking.betas];
                 // For Claude 3.7 with extended thinking + high output, add the 128k output beta
                 if (
                     claudeThinking.thinking?.type === 'enabled' &&

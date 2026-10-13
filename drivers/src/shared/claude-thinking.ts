@@ -174,6 +174,6 @@ export function logClaudeInputTransformations(
             transformations: counts,
             first_path: transformations[0].path,
         },
-        '[Claude] API transformed replayed thinking blocks',
+        '[Claude] Replayed thinking blocks no longer match the request',
     );
 }

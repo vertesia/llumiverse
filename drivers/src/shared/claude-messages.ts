@@ -22,7 +22,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from '@anthropic-ai/sdk/error';
-import type { BetaMessage } from '@anthropic-ai/sdk/resources/beta.js';
+import type { AnthropicBeta, BetaMessage } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -737,7 +737,7 @@ export function getClaudePayload(
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    const betas: string[] = [];
+    const betas: AnthropicBeta[] = [];
     if (
         modelName.includes('claude-3-7-sonnet') &&
         ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)

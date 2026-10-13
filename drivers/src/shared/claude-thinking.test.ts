@@ -170,6 +170,8 @@ describe('resolveClaudeThinking', () => {
             'claude-opus-5-5',
             'claude-haiku-5-5',
             'claude-fable-5-1',
+            'claude-sonnet-5-6',
+            'claude-opus-6',
             'anthropic.claude-sonnet-5-5',
             'us.anthropic.claude-opus-5-5',
         ])('drops mismatched blocks with adaptive thinking on %s', (model) => {
@@ -184,14 +186,18 @@ describe('resolveClaudeThinking', () => {
             expect(resolved.betas).toEqual([]);
         });
 
-        it.each(['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7'])(
-            'leaves adaptive thinking unbound on %s, which does not enforce binding',
-            (model) => {
-                const resolved = resolveClaudeThinking(model, { effort: 'medium' });
-                expect(resolved.thinking).not.toHaveProperty('block_binding');
-                expect(resolved.betas).toEqual([]);
-            },
-        );
+        it.each([
+            'claude-sonnet-5',
+            'claude-opus-5',
+            'claude-fable-5',
+            'claude-sonnet-4-6',
+            'claude-opus-4-6',
+            'claude-opus-4-7',
+        ])('leaves adaptive thinking unbound on %s, which does not enforce binding', (model) => {
+            const resolved = resolveClaudeThinking(model, { effort: 'medium' });
+            expect(resolved.thinking).not.toHaveProperty('block_binding');
+            expect(resolved.betas).toEqual([]);
+        });
 
         it('leaves budgeted and disabled thinking unbound', () => {
             expect(resolveClaudeThinking('claude-3-7-sonnet', { thinking_budget_tokens: 2048 }).betas).toEqual([]);
