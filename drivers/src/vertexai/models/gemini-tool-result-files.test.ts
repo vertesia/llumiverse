@@ -11,7 +11,7 @@ import type { Content } from '@google/genai';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { VertexAIDriver } from '../index.js';
-import { GEMINI_INLINE_MEDIA_MAX_BYTES, GeminiModelDefinition } from './gemini.js';
+import { GEMINI_INLINE_MEDIA_MAX_BYTES, GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES, GeminiModelDefinition } from './gemini.js';
 
 const OPTIONS = { model: 'gemini-3-pro' } as unknown as ExecutionOptions;
 
@@ -83,6 +83,37 @@ describe('Gemini tool result attachments', () => {
         );
         expect(cancel).toHaveBeenCalled();
         expect(reads).toBeLessThanOrEqual(GEMINI_INLINE_MEDIA_MAX_BYTES / chunk.byteLength + 2);
+    });
+
+    it('refuses inline media past the per-request total, even when each file is under its own limit', async () => {
+        const chunk = new Uint8Array(1_000_000);
+        const video = (name: string, chunks: number) => {
+            let reads = 0;
+            return {
+                name,
+                mime_type: 'video/mp4',
+                getStream: vi.fn().mockResolvedValue(
+                    new ReadableStream<Uint8Array>({
+                        pull(controller) {
+                            if (reads++ < chunks) {
+                                controller.enqueue(chunk);
+                            } else {
+                                controller.close();
+                            }
+                        },
+                    }),
+                ),
+                getURL: vi.fn(),
+                getURI: vi.fn().mockResolvedValue(`https://bucket.s3.amazonaws.com/${name}`),
+            } as unknown as DataSource;
+        };
+        const perFile = GEMINI_INLINE_MEDIA_MAX_BYTES / chunk.byteLength;
+        const files = [video('a.mp4', perFile), video('b.mp4', perFile)];
+        expect(2 * GEMINI_INLINE_MEDIA_MAX_BYTES).toBeGreaterThan(GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES);
+
+        await expect(createPrompt([{ role: PromptRole.user, content: 'Compare', files }])).rejects.toThrow(
+            `Inline media for this request exceeds the ${GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES} byte limit at b.mp4`,
+        );
     });
 
     it('passes a Cloud Storage attachment by URI instead of inlining it', async () => {
