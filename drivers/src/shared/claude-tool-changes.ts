@@ -33,13 +33,11 @@ const TOOL_CHANGE_PROVIDERS = new Set<string>([
 
 const META_KEY = '_llumiverse_meta';
 
-/** A custom tool definition; tool-change state only tracks the caller's own tools. */
-export type ClaudeTool = Tool;
 type ClaudeToolChangeBlock = BetaRequestToolAdditionBlock | BetaRequestToolRemovalBlock;
 
 interface DeclaredClaudeTool {
     /** The definition as sent in `tools`, without request-only fields (`cache_control`, `defer_loading`). */
-    definition: ClaudeTool;
+    definition: Tool;
     /** True for tools first offered after the first request; sent with `defer_loading: true`. */
     deferred: boolean;
 }
@@ -65,20 +63,9 @@ export function getClaudeToolState(conversation: unknown): ClaudeToolState | und
     return (conversation as ConversationWithMeta)[META_KEY]?.claude_tools;
 }
 
-function toolName(tool: ClaudeTool): string {
-    return tool.name;
-}
-
-function withoutRequestFields(tool: ClaudeTool): ClaudeTool {
-    const {
-        cache_control: _cacheControl,
-        defer_loading: _deferLoading,
-        ...definition
-    } = tool as ClaudeTool & {
-        cache_control?: unknown;
-        defer_loading?: unknown;
-    };
-    return definition as ClaudeTool;
+function withoutRequestFields(tool: Tool): Tool {
+    const { cache_control: _cacheControl, defer_loading: _deferLoading, ...definition } = tool;
+    return definition;
 }
 
 /** JSON with sorted object keys, so equal definitions compare equal regardless of key order. */
@@ -103,13 +90,12 @@ function setClaudeToolState<T extends object>(conversation: T, state: ClaudeTool
  * requests append new tools as deferred, announce additions and removals in one `role: "system"` message at
  * the end of the conversation, and keep every declared definition in place.
  *
- * Returns the conversation unchanged when the request has no tools (they are not offered this turn, see
- * {@link renderClaudeTools}) or when the conversation does not end with a user turn (a system message may only
- * follow one; the change is then announced on the next request).
+ * Returns the conversation unchanged when the request has no tools; the declared tools are then sent with
+ * tool_choice none (see getClaudePayload).
  */
 export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     conversation: T,
-    requestedTools: ClaudeTool[] | undefined,
+    requestedTools: Tool[] | undefined,
 ): T {
     if (!requestedTools || requestedTools.length === 0) return conversation;
     const requested = requestedTools.map(withoutRequestFields);
@@ -118,20 +104,18 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     if (!state) {
         return setClaudeToolState(conversation, {
             declared: requested.map((definition) => ({ definition, deferred: false })),
-            visible: requested.map(toolName),
+            visible: requested.map((tool) => tool.name),
         });
     }
 
-    const lastMessage = conversation.messages[conversation.messages.length - 1];
-    if (lastMessage?.role !== 'user') return conversation;
-
     const declared = [...state.declared];
+    const declaredIndex = new Map(declared.map((tool, index) => [tool.definition.name, index]));
     const visible = new Set(state.visible);
     const additions: string[] = [];
     for (const definition of requested) {
-        const name = toolName(definition);
-        const index = declared.findIndex((tool) => toolName(tool.definition) === name);
-        if (index < 0) {
+        const index = declaredIndex.get(definition.name);
+        if (index === undefined) {
+            declaredIndex.set(definition.name, declared.length);
             declared.push({ definition, deferred: true });
         } else if (canonicalJson(declared[index].definition) !== canonicalJson(definition)) {
             // Same name, new definition (e.g. a refreshed MCP schema). There is no append-only form without the
@@ -139,12 +123,12 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
             // once, and the model sees the current schema.
             declared[index] = { ...declared[index], definition };
         }
-        if (!visible.has(name)) additions.push(name);
+        if (!visible.has(definition.name)) additions.push(definition.name);
     }
-    const requestedNames = new Set(requested.map(toolName));
+    const requestedNames = new Set(requested.map((tool) => tool.name));
     const removals = state.visible.filter((name) => !requestedNames.has(name));
 
-    const nextState: ClaudeToolState = { declared, visible: requested.map(toolName) };
+    const nextState: ClaudeToolState = { declared, visible: [...requestedNames] };
     if (additions.length === 0 && removals.length === 0) {
         return setClaudeToolState(conversation, nextState);
     }
@@ -165,13 +149,21 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     ];
     // The SDK only types tool-change blocks on beta message params; the wire format is the same.
     const changeMessage = { role: 'system', content: changes } as unknown as MessageParam;
-    return setClaudeToolState({ ...conversation, messages: [...conversation.messages, changeMessage] }, nextState);
+    // A system message must follow a user turn. A resumed run can end with an assistant turn; add the same
+    // continuation turn getClaudePayload would, so the change is announced on this request.
+    const lastRole = conversation.messages[conversation.messages.length - 1]?.role;
+    const continuation: MessageParam[] =
+        lastRole === 'user' ? [] : [{ role: 'user', content: [{ type: 'text', text: 'Continue.' }] }];
+    return setClaudeToolState(
+        { ...conversation, messages: [...conversation.messages, ...continuation, changeMessage] },
+        nextState,
+    );
 }
 
 /** The `tools` array for a conversation: every declared tool, later ones deferred. */
-export function renderClaudeTools(state: ClaudeToolState): ClaudeTool[] {
+export function renderClaudeTools(state: ClaudeToolState): Tool[] {
     return state.declared.map(({ definition, deferred }) =>
-        deferred ? ({ ...definition, defer_loading: true } as ClaudeTool) : { ...definition },
+        deferred ? { ...definition, defer_loading: true } : { ...definition },
     );
 }
 

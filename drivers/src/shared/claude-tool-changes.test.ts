@@ -183,11 +183,70 @@ describe('append-only Claude tool changes', () => {
         }
     });
 
-    it('waits for a user turn before announcing a change', () => {
+    it('adds a continuation turn before announcing a change after an assistant turn', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const afterAssistant = { ...declared, messages: [...declared.messages, { role: 'assistant', content: 'ok' }] };
         const next = applyClaudeToolChanges(afterAssistant as ClaudePrompt, [tool('a') as Tool, tool('b') as Tool]);
-        expect(next).toBe(afterAssistant);
+        expect(next.messages.slice(-2)).toEqual([
+            { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
+            { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+        ]);
+        expect(getClaudeToolState(next)?.visible).toEqual(['a', 'b']);
+    });
+
+    it('puts the continuation turn before a trailing tool change when orphan repair drops the user turn', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt = applyClaudeToolChanges(
+            {
+                ...declared,
+                messages: [
+                    ...declared.messages,
+                    { role: 'assistant', content: 'ok' },
+                    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'gone', content: 'x' }] },
+                ],
+            } as ClaudePrompt,
+            [tool('a') as Tool, tool('b') as Tool],
+        );
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a'), tool('b')] }, prompt);
+        expect(payload.messages.slice(-3).map((m) => m.role)).toEqual(['assistant', 'user', 'system']);
+    });
+
+    it('keeps agent cache breakpoints off tool-change messages', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt = applyClaudeToolChanges(
+            { ...declared, messages: [...declared.messages, { role: 'user', content: 'more' }] },
+            [tool('a') as Tool, tool('b') as Tool],
+        );
+        const { payload } = getClaudePayload(
+            { model: MODEL, tools: [tool('a'), tool('b')], prompt_cache_key: 'agent-run' },
+            prompt,
+        );
+        const system = payload.messages.find((m) => m.role === 'system');
+        expect(JSON.stringify(system)).not.toContain('cache_control');
+    });
+
+    it('logs when declared tools override a caller tool choice', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const { payload } = getClaudePayload(
+            {
+                model: MODEL,
+                tools: [], // tool_choice is an internal execution hint, not a public option.
+                model_options: {
+                    _option_id: 'anthropic-claude',
+                    tool_choice: 'auto',
+                } as ExecutionOptions['model_options'],
+            },
+            declared,
+            'anthropic',
+            'execute',
+            logger,
+        );
+        expect(payload.tool_choice).toEqual({ type: 'none' });
+        expect(logger.warn).toHaveBeenCalledWith(
+            expect.objectContaining({ option_names: ['tool_choice'], reason: 'claude_declared_tools' }),
+            expect.any(String),
+        );
     });
 
     it('caches the last tool loaded up front and never marks the caller tools', () => {

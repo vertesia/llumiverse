@@ -132,7 +132,8 @@ function addAgentMessageCacheBreakpoints(
     let breakpointCount = 0;
 
     for (const message of messages) {
-        if (!Array.isArray(message.content)) continue;
+        // Breakpoints go on conversation turns, not on tool-change system messages.
+        if (message.role === 'system' || !Array.isArray(message.content)) continue;
 
         for (const block of message.content) {
             if (block.type === 'thinking' || block.type === 'redacted_thinking') continue;
@@ -841,6 +842,9 @@ export function getClaudePayload(
     // no tools (a final answer turn, a summary), so earlier thinking and the prompt cache stay valid. The model
     // cannot call them: tool_choice is set to none below.
     const hasTools = hasRequestedTools || toolState !== undefined;
+    if (toolState && !hasRequestedTools && model_options?.tool_choice !== 'none') {
+        logModelOptionException(logger, modelName, model_options, ['tool_choice'], 'claude_declared_tools');
+    }
     if (toolState && (toolState.declared.some((tool) => tool.deferred) || containsToolChanges(sanitizedMessages))) {
         betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
     }
@@ -856,12 +860,16 @@ export function getClaudePayload(
     // guaranteed 400 into a graceful continue — the same behavior pre-4.6
     // models applied implicitly by treating the trailing turn as prefill.
     // Older models are left untouched: prefill there can be intentional.
+    // Trailing tool-change system messages are skipped: the continuation turn goes before them, since a system
+    // message must follow a user turn.
     if (isClaudeVersionGTE(modelName, 4, 6)) {
-        const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
-        if (lastMessage?.role === 'assistant') {
+        let insertAt = sanitizedMessages.length;
+        while (insertAt > 0 && sanitizedMessages[insertAt - 1].role === 'system') insertAt--;
+        if (sanitizedMessages[insertAt - 1]?.role === 'assistant') {
             sanitizedMessages = [
-                ...sanitizedMessages,
+                ...sanitizedMessages.slice(0, insertAt),
                 { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
+                ...sanitizedMessages.slice(insertAt),
             ];
         }
     }

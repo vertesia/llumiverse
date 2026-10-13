@@ -296,18 +296,16 @@ export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  */
 export function supportsMidConversationToolChanges(modelString: string): boolean {
     if (/claude-mythos-preview(?:-|\b)/i.test(modelString)) return false;
-    const version = parseClaudeVersion(modelString);
-    if (!version) return false;
-    const atLeast = (major: number, minor: number) =>
-        version.major > major || (version.major === major && version.minor >= minor);
-    switch (version.variant) {
+    switch (parseClaudeVersion(modelString)?.variant) {
         case 'opus':
-            return atLeast(4, 8);
+            return isClaudeVersionGTE(modelString, 4, 8);
         case 'fable':
         case 'mythos':
-            return atLeast(5, 0);
+            return isClaudeVersionGTE(modelString, 5, 0);
+        case undefined:
+            return false;
         default:
-            return atLeast(5, 5);
+            return isClaudeVersionGTE(modelString, 5, 5);
     }
 }
 

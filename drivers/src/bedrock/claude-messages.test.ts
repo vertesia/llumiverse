@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { BadRequestError } from '@anthropic-ai/sdk/error';
+import { APIError, BadRequestError } from '@anthropic-ai/sdk/error';
 import { type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { isConverseConversation } from './converse.js';
@@ -155,6 +155,23 @@ describe('Bedrock Claude on the Messages API', () => {
         });
         expect(formatted.message).toContain('bad');
         expect(formatted.retryable).toBe(false);
+    });
+
+    it('marks Bedrock exceptions raised mid-stream with the Bedrock retry rules', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const context = { provider: 'bedrock', model: MODEL, operation: 'stream' as const };
+        // The SDK throws a plain APIError (no status) for an SSE error event.
+        const streamError = (type: string) =>
+            new APIError(undefined, { type: 'error', error: { type, message: 'm' } }, undefined, new Headers());
+        expect(driver.formatLlumiverseError(streamError('throttlingException'), context).retryable).toBe(true);
+        expect(driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable).toBe(true);
+        expect(driver.formatLlumiverseError(streamError('validationException'), context).retryable).toBe(false);
+    });
+
+    it('sends a Claude prompt with no messages to the Messages API', async () => {
+        const { driver, stream } = driverWithClaudeClient();
+        await driver.requestTextCompletion({ messages: [] }, { model: MODEL });
+        expect(stream).toHaveBeenCalledOnce();
     });
 
     it('formats Claude prompts for debugging', async () => {

@@ -1,5 +1,5 @@
 import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
-import { AnthropicError } from '@anthropic-ai/sdk/error';
+import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
@@ -386,11 +386,15 @@ function usesClaudeMessagesApi(options: Pick<ExecutionOptions, 'model' | 'conver
 }
 
 /**
- * Whether a formatted prompt is a Claude Messages prompt. {@link usesClaudeMessagesApi} picks the format in
- * `formatPrompt`; the request methods follow the prompt they receive. A Converse prompt always has `modelId`,
- * a TwelveLabs prompt `mediaSource`, and Nova content blocks carry no `type`.
+ * Whether a formatted Claude prompt targets the Messages API. {@link usesClaudeMessagesApi} picks the format in
+ * `formatPrompt`; the request methods follow the prompt they receive. A Converse prompt always has `modelId`.
  */
-function isClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
+function isClaudeMessagesPrompt(prompt: BedrockPrompt, model: string): prompt is ClaudePrompt {
+    return isBedrockClaudeModel(model) && !('modelId' in prompt) && !('mediaSource' in prompt);
+}
+
+/** For debug output only, where the model is unknown: Nova content blocks carry no `type`. */
+function looksLikeClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
     if ('modelId' in prompt || 'mediaSource' in prompt) return false;
     return prompt.messages.some(
         (message) =>
@@ -712,7 +716,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if ('modelId' in prompt) {
             return formatConversePromptForDebug(prompt);
         }
-        if (isClaudeMessagesPrompt(prompt)) {
+        if (looksLikeClaudeMessagesPrompt(prompt)) {
             return formatClaudeDebugPrompt(prompt);
         }
         return formatNovaPromptForDebug(prompt);
@@ -734,7 +738,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Claude on the Messages API fails with Anthropic SDK errors.
         if (error instanceof AnthropicError) {
-            return formatAnthropicLlumiverseError(error, context);
+            return this.formatClaudeMessagesError(error, context);
         }
         // Check if it's an AWS SDK error with $metadata
         const awsError = error as AwsSdkError;
@@ -790,6 +794,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             httpStatusCode, // Only set code if we have numeric status code
             errorName, // Preserve AWS error name
         );
+    }
+
+    /**
+     * Format an Anthropic SDK error from the Messages API route. Bedrock exceptions raised mid-stream arrive as
+     * errors typed by the camel-cased exception name (e.g. `throttlingException`) with no HTTP status; apply the
+     * Bedrock retry rules to those.
+     */
+    private formatClaudeMessagesError(error: AnthropicError, context: LlumiverseErrorContext): LlumiverseError {
+        const formatted = formatAnthropicLlumiverseError(error, context);
+        if (formatted.retryable !== undefined || !(error instanceof APIError)) return formatted;
+        const type = (error.error as { error?: { type?: unknown } } | undefined)?.error?.type;
+        if (typeof type !== 'string' || type.length === 0) return formatted;
+        const exceptionName = type.charAt(0).toUpperCase() + type.slice(1);
+        const retryable =
+            exceptionName === 'ModelStreamErrorException'
+                ? true
+                : this.isBedrockErrorRetryable(exceptionName, undefined, undefined);
+        if (retryable === undefined) return formatted;
+        return new LlumiverseError(formatted.message, retryable, context, error, formatted.code, formatted.name);
     }
 
     /**
@@ -1163,7 +1186,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ConverseRequest | ClaudePrompt | undefined {
-        if (isClaudeMessagesPrompt(prompt)) {
+        if (isClaudeMessagesPrompt(prompt, options.model)) {
             return buildClaudeStreamingConversation(prompt, result, toolUse, options);
         }
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
@@ -1261,7 +1284,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
         }
-        if (isClaudeMessagesPrompt(prompt)) {
+        if (isClaudeMessagesPrompt(prompt, options.model)) {
             return executeClaudeCompletion(
                 this.getAnthropicService(),
                 prompt,
@@ -1454,7 +1477,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options, signal);
         }
-        if (isClaudeMessagesPrompt(prompt)) {
+        if (isClaudeMessagesPrompt(prompt, options.model)) {
             return streamClaudeCompletion(
                 this.getAnthropicService(),
                 prompt,
