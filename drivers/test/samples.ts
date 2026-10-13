@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { JSONSchema } from '@llumiverse/core';
-import { type DataSource, PromptRole, type PromptSegment, readStreamAsBase64 } from '@llumiverse/core';
+import { type DataSource, PromptRole, type PromptSegment } from '@llumiverse/core';
 import type { NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { createReadableStreamFromReadable } from 'node-web-stream-adapters';
 
@@ -106,66 +106,3 @@ export const testPrompt_textToImage: NovaMessagesPrompt = {
         },
     ],
 };
-
-export const testPrompt_textToImageGuidance: NovaMessagesPrompt = {
-    messages: [
-        {
-            role: PromptRole.user,
-            content: [
-                {
-                    text: 'A blue sky with a purple unicorn flying',
-                },
-                {
-                    image: {
-                        format: 'jpeg',
-                        source: {
-                            bytes: await getImageAsBase64(
-                                new ImageUrlSource('https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg'),
-                            ),
-                        },
-                    },
-                },
-            ],
-        },
-    ],
-};
-
-export const testPrompt_imageVariations: NovaMessagesPrompt = {
-    messages: [
-        {
-            role: PromptRole.user,
-            content: [
-                {
-                    text: 'A purple cat in from of a cathedral',
-                },
-                {
-                    image: {
-                        format: 'jpeg',
-                        source: {
-                            bytes: await getImageAsBase64(
-                                new ImageUrlSource('https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg'),
-                            ),
-                        },
-                    },
-                },
-                {
-                    image: {
-                        format: 'jpeg',
-                        source: {
-                            bytes: await getImageAsBase64(
-                                new ImageUrlSource(
-                                    'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg',
-                                ),
-                            ),
-                        },
-                    },
-                },
-            ],
-        },
-    ],
-};
-
-async function getImageAsBase64(source: DataSource) {
-    const stream = await source.getStream();
-    return readStreamAsBase64(stream);
-}
