@@ -689,8 +689,14 @@ function logGeminiCandidateRefusal(
     responseId: string | undefined,
 ): void {
     if (!candidate.finishReason || !geminiRefusalFinishReasons.has(candidate.finishReason)) return;
-    // Keep the provider's safety metadata, but not generated output or grounding data.
-    const { content: _content, groundingMetadata: _grounding, logprobsResult: _logprobs, ...details } = candidate;
+    // Keep the provider's safety metadata, but not generated output or request-derived grounding data.
+    const {
+        content: _content,
+        groundingMetadata: _grounding,
+        logprobsResult: _logprobs,
+        urlContextMetadata: _urlContext,
+        ...details
+    } = candidate;
     const { logger, ...logContext } = context;
     logModelRefusal(logger, {
         ...logContext,
@@ -710,7 +716,8 @@ function logGeminiPromptBlocked(
     const { logger, ...logContext } = context;
     logModelRefusal(logger, {
         ...logContext,
-        finish_reason: promptFeedback.blockReason,
+        // The stream returns blockReason as its finish reason; execute returns none.
+        finish_reason: logContext.streaming ? promptFeedback.blockReason : undefined,
         provider_finish_reason: promptFeedback.blockReason,
         response_id: responseId,
         details: promptFeedback,

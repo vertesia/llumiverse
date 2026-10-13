@@ -1169,8 +1169,12 @@ export function mapResponseStream(
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';
+            let responseId: string | undefined;
             const emittedImages = new Set<string>();
             for await (const event of stream) {
+                if (event.type === 'response.created') {
+                    responseId = event.response.id;
+                }
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
                     const callId = event.item.call_id ?? event.item.id;
@@ -1237,6 +1241,7 @@ export function mapResponseStream(
                 } else if (event.type === 'response.refusal.done') {
                     logRefusal({
                         provider_finish_reason: 'refusal',
+                        response_id: responseId,
                         details: {
                             type: 'refusal',
                             refusal: event.refusal || refusalText,

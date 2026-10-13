@@ -161,6 +161,7 @@ describe('Bedrock Converse refusal logging', () => {
             {
                 stopReason: 'guardrail_intervened',
                 additionalModelResponseFields: { stop_details: { category: 'bio' } },
+                $metadata: { requestId: 'req-1' },
             } as never,
             undefined,
             { model: MODEL },
@@ -173,6 +174,7 @@ describe('Bedrock Converse refusal logging', () => {
                 streaming: false,
                 finish_reason: 'guardrail_intervened',
                 provider_finish_reason: 'guardrail_intervened',
+                response_id: 'req-1',
                 details: { additionalModelResponseFields: { stop_details: { category: 'bio' } } },
             },
             MODEL_REFUSAL_LOG_MESSAGE,
@@ -222,6 +224,7 @@ describe('OpenAI Responses refusal logging', () => {
     it('logs a streamed refusal before the existing error', async () => {
         const logger = testLogger();
         async function* events() {
+            yield { type: 'response.created', response: { id: 'resp-stream' } } as OpenAI.Responses.ResponseStreamEvent;
             yield { type: 'response.refusal.delta', delta: 'No.' } as OpenAI.Responses.ResponseStreamEvent;
             yield { type: 'response.refusal.done', refusal: 'No.' } as OpenAI.Responses.ResponseStreamEvent;
         }
@@ -233,7 +236,11 @@ describe('OpenAI Responses refusal logging', () => {
 
         await expect(drain(stream)).rejects.toThrow('Model refused');
         expect(logger.info).toHaveBeenCalledWith(
-            expect.objectContaining({ streaming: true, details: { type: 'refusal', refusal: 'No.' } }),
+            expect.objectContaining({
+                streaming: true,
+                response_id: 'resp-stream',
+                details: { type: 'refusal', refusal: 'No.' },
+            }),
             MODEL_REFUSAL_LOG_MESSAGE,
         );
     });
@@ -336,6 +343,8 @@ describe('OpenAI Chat Completions refusal logging', () => {
         });
         const model = new TestProtocol(undefined, [
             chunk({ index: 0, delta: { content: 'partial' }, finish_reason: null }),
+            chunk({ index: 0, delta: {}, finish_reason: 'content_filter' }),
+            // Some providers repeat finish_reason on a trailing usage chunk.
             chunk({ index: 0, delta: {}, finish_reason: 'content_filter' }),
         ]);
 
@@ -453,12 +462,20 @@ describe('Gemini refusal logging', () => {
         await modelDef.requestTextCompletion(driver, structuredClone(prompt), options);
         await drain(await modelDef.requestTextCompletionStream(driver, structuredClone(prompt), options));
 
-        for (const streaming of [false, true]) {
-            expect(logger.info).toHaveBeenCalledWith(
-                expect.objectContaining({ streaming, response_id: 'gemini-2', details: promptFeedback }),
-                MODEL_REFUSAL_LOG_MESSAGE,
-            );
-        }
+        expect(logger.info).toHaveBeenCalledWith(
+            expect.objectContaining({
+                streaming: false,
+                finish_reason: undefined,
+                provider_finish_reason: 'PROHIBITED_CONTENT',
+                response_id: 'gemini-2',
+                details: promptFeedback,
+            }),
+            MODEL_REFUSAL_LOG_MESSAGE,
+        );
+        expect(logger.info).toHaveBeenCalledWith(
+            expect.objectContaining({ streaming: true, finish_reason: 'PROHIBITED_CONTENT', details: promptFeedback }),
+            MODEL_REFUSAL_LOG_MESSAGE,
+        );
     });
 
     it('does not log a normal stop', async () => {

@@ -13,7 +13,8 @@ export interface RefusalLogContext {
     response_id?: string;
     /**
      * The provider's own refusal or safety object, copied verbatim so new provider fields are kept.
-     * Pass only refusal metadata, never prompt or output content.
+     * This includes the provider's refusal text or explanation, which is the point of the log. Do not
+     * pass the prompt, generated answer content, or other request-derived data.
      */
     details?: unknown;
 }

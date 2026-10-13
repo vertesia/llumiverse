@@ -10,6 +10,7 @@ import {
 import {
     BedrockRuntime,
     type ContentBlock,
+    type ConverseCommandOutput,
     type ConverseRequest,
     type ConverseResponse,
     type ConverseStreamOutput,
@@ -761,7 +762,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     getExtractedExecution(
-        result: ConverseResponse,
+        result: ConverseResponse & Partial<Pick<ConverseCommandOutput, '$metadata'>>,
         _prompt?: BedrockPrompt,
         options?: ExecutionOptions,
     ): CompletionChunkObject {
@@ -778,6 +779,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 streaming: false,
                 finish_reason: converseFinishReason(result.stopReason),
                 provider_finish_reason: result.stopReason,
+                response_id: result.$metadata?.requestId,
                 details: {
                     additionalModelResponseFields: result.additionalModelResponseFields,
                 } satisfies Pick<ConverseResponse, 'additionalModelResponseFields'>,
