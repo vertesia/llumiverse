@@ -1914,11 +1914,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AIModel[]> {
         const service = this.getService();
+        // The foundation model listing is required, so its failure is kept and rethrown below: it carries the
+        // provider's status and reason (rejected credentials, missing permission), which callers map to a status.
+        let foundationModelsError: unknown;
         const [foundationModelsList, customModelsList, inferenceProfilesList] = await Promise.all([
-            service.listFoundationModels({}).catch(() => {
-                this.logger.warn(
-                    "[Bedrock] Can't list foundation models. Check if the user has the right permissions.",
-                );
+            service.listFoundationModels({}).catch((error: unknown) => {
+                foundationModelsError = error;
                 return undefined;
             }),
             service.listCustomModels({}).catch(() => {
@@ -1933,6 +1934,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }),
         ]);
 
+        if (foundationModelsError !== undefined) {
+            throw this.formatLlumiverseError(foundationModelsError, {
+                provider: this.provider,
+                model: '',
+                operation: 'execute',
+            });
+        }
         if (!foundationModelsList?.modelSummaries) {
             throw new Error('Foundation models not found');
         }

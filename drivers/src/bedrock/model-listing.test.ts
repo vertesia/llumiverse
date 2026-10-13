@@ -207,4 +207,24 @@ describe('Bedrock Converse model discovery', () => {
             }),
         ]);
     });
+
+    it('rethrows a foundation listing failure with the provider status instead of a generic error', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = createMockService();
+        mockModelListingMethods(service, { $metadata: {}, modelSummaries: [] });
+        const rejection = Object.assign(new Error('The web identity token provided could not be validated.'), {
+            name: 'InvalidIdentityTokenException',
+            $metadata: { httpStatusCode: 400 },
+            $fault: 'client',
+        });
+        Reflect.set(service, 'listFoundationModels', vi.fn().mockRejectedValue(rejection));
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        await expect(driver.listModels()).rejects.toMatchObject({
+            code: 400,
+            name: 'InvalidIdentityTokenException',
+            retryable: false,
+            message: expect.stringContaining('InvalidIdentityTokenException'),
+        });
+    });
 });
