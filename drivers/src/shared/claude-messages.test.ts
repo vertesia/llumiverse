@@ -1,11 +1,18 @@
+import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
     anthropicUsageToTokenUsage,
     buildClaudeStreamingConversation,
+    ClaudeStreamError,
     claudeServiceTier,
+    formatAnthropicLlumiverseError,
     formatClaudePrompt,
     getClaudePayload,
+    isClaudeErrorRetryable,
+    mergeConsecutiveUserMessages,
+    streamClaudeCompletion,
     updateClaudeConversation,
 } from './claude-messages.js';
 
@@ -474,7 +481,9 @@ describe('formatClaudePrompt', () => {
         const prompt = { system: [{ type: 'text' as const, text: 'system' }], messages: [] };
         const fast = getClaudePayload({ model: 'claude-opus-5-5', model_options: { speed: 'fast' } as never }, prompt);
         expect(fast.payload).toMatchObject({ speed: 'fast' });
-        expect(fast.requestOptions?.headers).toEqual({ 'anthropic-beta': 'fast-mode-2026-02-01' });
+        expect(fast.requestOptions?.headers).toEqual({
+            'anthropic-beta': 'fast-mode-2026-02-01,thinking-binding-controls-2026-08-01',
+        });
 
         const both = getClaudePayload(
             { model: 'claude-3-7-sonnet-20250219', model_options: { speed: 'fast', max_tokens: 100_000 } as never },
@@ -489,7 +498,7 @@ describe('formatClaudePrompt', () => {
             prompt,
         );
         expect(standard.payload).not.toHaveProperty('speed');
-        expect(standard.requestOptions).toBeUndefined();
+        expect(standard.requestOptions?.headers).toEqual({ 'anthropic-beta': 'thinking-binding-controls-2026-08-01' });
     });
 
     it('reports fast mode as the fast tier, otherwise the service tier the response reports', () => {
@@ -543,6 +552,7 @@ describe('formatClaudePrompt', () => {
             [],
             [{ id: 'tool-1', tool_name: 'app_workspace_edit', tool_input: { path: 'src/App.tsx' } }],
             options,
+            'anthropic',
         );
         const second = buildClaudeStreamingConversation(
             {
@@ -556,6 +566,7 @@ describe('formatClaudePrompt', () => {
             [],
             [{ id: 'tool-2', tool_name: 'app_workspace_typecheck', tool_input: {} }],
             { ...options, conversation: first },
+            'anthropic',
         );
 
         expect(JSON.stringify(first.messages)).toContain(largeHistoricalResult);
@@ -586,6 +597,7 @@ describe('formatClaudePrompt', () => {
                 model: 'claude-sonnet-4-6',
                 stripTextMaxTokens: 8_000,
             },
+            'anthropic',
         );
 
         expect(JSON.stringify(conversation.messages)).not.toContain(largeHistoricalResult);
@@ -597,7 +609,7 @@ describe('Sonnet between-tools payload', () => {
     it.each(['anthropic-claude', 'vertexai-claude', 'bedrock-mantle-claude'] as const)(
         'serializes only the mode for %s',
         (_option_id) => {
-            const { payload } = getClaudePayload(
+            const { payload, requestOptions } = getClaudePayload(
                 {
                     model: 'claude-sonnet-5-5',
                     model_options: {
@@ -612,6 +624,7 @@ describe('Sonnet between-tools payload', () => {
                 { messages: [{ role: 'user', content: 'Hello' }] },
             );
             expect(payload.thinking).toEqual({ type: 'between_tools' });
+            expect(requestOptions).toBeUndefined();
             expect(payload.output_config).toEqual({ effort: 'medium' });
             expect(payload.temperature).toBeUndefined();
             expect(payload.tool_choice).toBeUndefined();
@@ -623,7 +636,7 @@ describe('Haiku 5.5 payload', () => {
     it.each(['anthropic-claude', 'vertexai-claude', 'bedrock-mantle-claude'] as const)(
         'requests thinking summaries without effort and removes legacy parameters for %s',
         (_option_id) => {
-            const { payload } = getClaudePayload(
+            const { payload, requestOptions } = getClaudePayload(
                 {
                     model: 'claude-haiku-5-5',
                     model_options: {
@@ -637,11 +650,277 @@ describe('Haiku 5.5 payload', () => {
                 },
                 { messages: [{ role: 'user', content: 'Hello' }] },
             );
-            expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+            expect(payload.thinking).toEqual({
+                type: 'adaptive',
+                display: 'summarized',
+                block_binding: { prefix_mismatch_behavior: 'drop_block' },
+            });
+            expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'thinking-binding-controls-2026-08-01' });
             expect(payload.output_config).toBeUndefined();
             expect(payload.temperature).toBeUndefined();
             expect(payload.top_p).toBeUndefined();
             expect(payload.top_k).toBeUndefined();
         },
     );
+});
+
+describe('anthropic-beta header', () => {
+    it('keeps the 128k output beta alone for Claude 3.7, which does not bind thinking blocks', () => {
+        const { requestOptions } = getClaudePayload(
+            { model: 'claude-3-7-sonnet', model_options: { _option_id: 'anthropic-claude', max_tokens: 100_000 } },
+            { messages: [{ role: 'user', content: 'Hello' }] },
+        );
+        expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'output-128k-2025-02-19' });
+    });
+});
+
+describe('forced Claude tool choice', () => {
+    const forcedOptions = (model: string): ExecutionOptions => ({
+        model,
+        tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+        model_options: {
+            _option_id: 'anthropic-claude',
+            tool_choice: 'required',
+            required_tool_name: 'write_artifact',
+            parallel_tool_calls: false,
+        } as never,
+    });
+    const prompt = { messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'Act now.' }] }] };
+    const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+
+    it.each([
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'global.anthropic.claude-sonnet-5-5',
+        // Plausible future generations keep the latest behaviour.
+        'claude-sonnet-5-6',
+        'claude-opus-6',
+    ])('falls back to automatic tool choice and logs it for %s', (model) => {
+        const log = logger();
+        const { payload } = getClaudePayload(forcedOptions(model), prompt, 'anthropic', 'execute', log);
+        expect(payload.tool_choice).toEqual({ type: 'auto', disable_parallel_tool_use: true });
+        expect(log.warn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model,
+                option_names: ['tool_choice', 'required_tool_name'],
+                reason: 'claude_forced_tool_choice',
+            }),
+            expect.any(String),
+        );
+    });
+
+    it.each(['claude-haiku-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8'])(
+        'keeps the forced tool choice for %s',
+        (model) => {
+            const log = logger();
+            const { payload } = getClaudePayload(forcedOptions(model), prompt, 'anthropic', 'execute', log);
+            expect(payload.tool_choice).toEqual({
+                type: 'tool',
+                name: 'write_artifact',
+                disable_parallel_tool_use: true,
+            });
+            expect(log.warn).not.toHaveBeenCalledWith(
+                expect.objectContaining({ reason: 'claude_forced_tool_choice' }),
+                expect.any(String),
+            );
+        },
+    );
+
+    it('falls back from an any tool choice without a named tool', () => {
+        const options: ExecutionOptions = {
+            ...forcedOptions('claude-opus-5-5'),
+            model_options: { _option_id: 'anthropic-claude', tool_choice: 'any' } as never,
+        };
+        const { payload } = getClaudePayload(options, prompt);
+        expect(payload.tool_choice).toEqual({ type: 'auto', disable_parallel_tool_use: false });
+    });
+});
+
+describe('Claude attachments', () => {
+    const textSource = (name: string, mime_type: string, text: string): DataSource => ({
+        name,
+        mime_type,
+        getStream: vi.fn().mockResolvedValue(
+            new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode(text));
+                    controller.close();
+                },
+            }),
+        ),
+        getURL: vi.fn(),
+        getURI: vi.fn(),
+    });
+    const attach = (file: DataSource): PromptSegment[] => [{ role: PromptRole.user, content: 'Read', files: [file] }];
+
+    it.each([
+        'application/json',
+        'application/xml',
+        'application/x-yaml',
+        'application/ld+json',
+        'application/json; charset=utf-8',
+    ])('sends %s as a plain-text document', async (mimeType) => {
+        const prompt = await formatClaudePrompt(attach(textSource('data', mimeType, '{"a":1}')), {
+            model: 'claude-sonnet-5-5',
+        });
+        expect(prompt.messages[0].content).toEqual([
+            { type: 'text', text: 'Read' },
+            {
+                title: 'data',
+                type: 'document',
+                source: { type: 'text', data: '{"a":1}', media_type: 'text/plain' },
+            },
+        ]);
+    });
+
+    it('sends image/jpg as image/jpeg', async () => {
+        const prompt = await formatClaudePrompt(attach(textSource('photo.jpg', 'image/jpg', 'abc')), {
+            model: 'claude-sonnet-5-5',
+        });
+        expect(prompt.messages[0].content).toEqual([
+            { type: 'text', text: 'Read' },
+            { type: 'image', source: { type: 'base64', data: 'YWJj', media_type: 'image/jpeg' } },
+        ]);
+    });
+
+    it('skips an unsupported attachment with a warning', async () => {
+        const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        const file = textSource('report.docx', mimeType, 'binary');
+        const warn = vi.fn();
+        const prompt = await formatClaudePrompt(attach(file), { model: 'claude-sonnet-5-5' }, { warn });
+        expect(prompt.messages[0].content).toEqual([{ type: 'text', text: 'Read' }]);
+        expect(file.getStream).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+            { file_name: 'report.docx', mime_type: mimeType },
+            '[Claude] Skipping unsupported attachment',
+        );
+    });
+});
+
+describe('mergeConsecutiveUserMessages', () => {
+    it('moves tool results ahead of text within a single user message', () => {
+        const messages = [
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lookup', input: {} }] },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Continue.' },
+                    { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+                ],
+            },
+        ] as MessageParam[];
+        expect(mergeConsecutiveUserMessages(messages)[1].content).toEqual([
+            { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+            { type: 'text', text: 'Continue.' },
+        ]);
+    });
+});
+
+describe('isClaudeErrorRetryable', () => {
+    it.each(['overloaded_error', 'api_error'])('retries a mid-stream %s without an HTTP status', (type) => {
+        // The SDK raises a plain APIError (no status) for an SSE error event.
+        const error = new APIError(
+            undefined,
+            { type: 'error', error: { type, message: 'm' } },
+            undefined,
+            new Headers(),
+        );
+        expect(isClaudeErrorRetryable(error, undefined, type)).toBe(true);
+        const formatted = formatAnthropicLlumiverseError(error, {
+            provider: 'anthropic',
+            model: 'claude-sonnet-5-5',
+            operation: 'stream',
+        });
+        expect(formatted.retryable).toBe(true);
+    });
+
+    it('does not retry a mid-stream invalid request', () => {
+        expect(isClaudeErrorRetryable(new Error('bad'), undefined, 'invalid_request_error')).toBe(false);
+    });
+});
+
+describe('streamClaudeCompletion errors', () => {
+    it('surfaces an error the SDK iterator dropped, before the stream ends', async () => {
+        const failure = new APIError(
+            undefined,
+            { type: 'error', error: { type: 'overloaded_error' } },
+            'mid',
+            undefined,
+        );
+        const stream = () => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'message_start', message: { id: 'm', usage: { input_tokens: 1, output_tokens: 0 } } };
+            },
+            abort: () => undefined,
+            finalMessage: () => Promise.reject(failure),
+        });
+        const completion = await streamClaudeCompletion(
+            { messages: { stream } } as never,
+            { messages: [] },
+            {
+                model: 'claude-sonnet-4-6',
+            },
+        );
+        const chunks: unknown[] = [];
+        await expect(
+            (async () => {
+                for await (const chunk of completion) chunks.push(chunk);
+            })(),
+        ).rejects.toBe(failure);
+        expect(chunks).toHaveLength(1);
+    });
+
+    const failingStream = (eventsBeforeFailure: number, failure: Error) => () => ({
+        async *[Symbol.asyncIterator]() {
+            for (let i = 0; i < eventsBeforeFailure; i++) {
+                yield { type: 'message_start', message: { id: 'm', usage: { input_tokens: 1, output_tokens: 0 } } };
+            }
+            throw failure;
+        },
+        abort: () => undefined,
+        finalMessage: () => Promise.reject(failure),
+    });
+
+    async function streamError(eventsBeforeFailure: number, failure: Error): Promise<unknown> {
+        const stream = failingStream(eventsBeforeFailure, failure);
+        const completion = await streamClaudeCompletion(
+            { messages: { stream } } as never,
+            { messages: [] },
+            {
+                model: 'claude-sonnet-4-6',
+            },
+        );
+        return (async () => {
+            for await (const _chunk of completion) {
+                // drain
+            }
+        })().catch((error: unknown) => error);
+    }
+
+    const context = { provider: 'anthropic', model: 'claude-sonnet-4-6', operation: 'stream' as const };
+
+    it('retries a client-side failure after the stream started', async () => {
+        const error = await streamError(1, new AnthropicError('terminated'));
+        expect(error).toBeInstanceOf(ClaudeStreamError);
+        const formatted = formatAnthropicLlumiverseError(error, context);
+        expect(formatted.retryable).toBe(true);
+        expect(formatted.message).toContain('terminated');
+    });
+
+    it('keeps a client-side error before the first event a configuration error', async () => {
+        const error = await streamError(0, new AnthropicError('Could not resolve authentication method'));
+        expect(error).not.toBeInstanceOf(ClaudeStreamError);
+        expect(formatAnthropicLlumiverseError(error, context).retryable).toBe(false);
+    });
+
+    it('leaves API errors after the stream started to their own classification', async () => {
+        const overloaded = new APIError(
+            undefined,
+            { type: 'error', error: { type: 'overloaded_error' } },
+            'o',
+            undefined,
+        );
+        const error = await streamError(1, overloaded);
+        expect(error).toBe(overloaded);
+    });
 });

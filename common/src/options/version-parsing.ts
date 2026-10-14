@@ -285,6 +285,54 @@ export function hasSamplingParameterRestriction(modelString: string): boolean {
 export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
+ * Check if a model accepts mid-conversation tool changes: `tool_addition` / `tool_removal` blocks in a
+ * `role: "system"` message (beta `mid-conversation-tool-changes-2026-07-01`).
+ *
+ * Supported on Claude Opus 4.8+, Fable 5+, Mythos 5+, and Sonnet and Haiku 5.5+. Not on Claude Sonnet 5,
+ * Mythos Preview or older models. Later generations of each family are included.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model accepts mid-conversation tool changes
+ */
+export function supportsMidConversationToolChanges(modelString: string): boolean {
+    if (/claude-mythos-preview\b/i.test(modelString)) return false;
+    switch (parseClaudeVersion(modelString)?.variant) {
+        case 'opus':
+            return isClaudeVersionGTE(modelString, 4, 8);
+        case 'fable':
+        case 'mythos':
+            return isClaudeVersionGTE(modelString, 5, 0);
+        case undefined:
+            return false;
+        default:
+            return isClaudeVersionGTE(modelString, 5, 5);
+    }
+}
+
+/**
+ * Check if a model accepts a forced `tool_choice` (`any` or a named tool).
+ *
+ * Claude Opus and Sonnet 5.5+ and Fable 5.1+ reject it ("tool_choice: type "tool" and "any" are not supported for
+ * this model"). Mythos 5.1+ is treated like Fable 5.1, since automatic tool choice is always accepted. Haiku 5.5,
+ * Claude 5 (including Fable 5) and older models accept it.
+ *
+ * @param modelString - The model identifier string
+ * @returns false if the model rejects a forced tool choice
+ */
+export function supportsClaudeForcedToolChoice(modelString: string): boolean {
+    switch (parseClaudeVersion(modelString)?.variant) {
+        case 'opus':
+        case 'sonnet':
+            return !isClaudeVersionGTE(modelString, 5, 5);
+        case 'fable':
+        case 'mythos':
+            return !isClaudeVersionGTE(modelString, 5, 1);
+        default:
+            return true;
+    }
+}
+
+/**
  * Check if a model supports the effort parameter.
  *
  * Effort is supported on:

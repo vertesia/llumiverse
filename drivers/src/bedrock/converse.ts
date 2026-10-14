@@ -577,3 +577,30 @@ export async function formatConversePrompt(
         system: system,
     };
 }
+
+/**
+ * Whether a stored conversation is in Anthropic Messages format (Claude on the Messages API). Switching such a
+ * conversation to a Converse model is not supported.
+ */
+export function isMessagesApiConversation(conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    return Array.isArray(messages) && messages.length > 0 && !isConverseConversation(conversation);
+}
+
+/**
+ * Whether a stored conversation was built for the Converse API: its content blocks are single-key objects
+ * (`{ text }`, `{ toolUse }`, `{ reasoningContent }`, ...) rather than Anthropic Messages blocks with a `type`.
+ * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse.
+ */
+export function isConverseConversation(conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    if (!Array.isArray(messages)) return false;
+    const isConverseBlock = (block: unknown) => !!block && typeof block === 'object' && !('type' in block);
+    // Every Converse message has array content, so the first non-empty one decides.
+    for (const message of messages) {
+        const content = (message as { content?: unknown } | null)?.content;
+        if (Array.isArray(content) && content.length > 0) return content.some(isConverseBlock);
+    }
+    const system = (conversation as { system?: unknown }).system;
+    return Array.isArray(system) && system.some(isConverseBlock);
+}

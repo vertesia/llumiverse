@@ -1,3 +1,6 @@
+import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
+import type { AnthropicError } from '@anthropic-ai/sdk/error';
+import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
@@ -73,6 +76,16 @@ import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/form
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'lru-cache';
 import type { BedrockDriverOptions } from '../driver-options.js';
+import {
+    buildClaudeStreamingConversation,
+    type ClaudePrompt,
+    executeClaudeCompletion,
+    formatAnthropicLlumiverseError,
+    formatClaudeDebugPrompt,
+    formatClaudePrompt,
+    isAnthropicSdkError,
+    streamClaudeCompletion,
+} from '../shared/claude-messages.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
@@ -85,6 +98,8 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    isConverseConversation,
+    isMessagesApiConversation,
     relocateConverseToolImages,
     sanitizeConverseMessages,
     shouldIncludeSchemaInConversePrompt,
@@ -98,6 +113,7 @@ import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './
 export type { BedrockDriverOptions } from '../driver-options.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
+const baseModelCache = new LRUCache<string, string>({ max: 4096 });
 
 type AwsSdkError = {
     name?: string;
@@ -359,7 +375,104 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
-export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
+/**
+ * User-facing Bedrock error text, shared by the Converse and Messages routes:
+ * `[provider] Name: [status] message (Request ID: id)`. A generic name (`Error`, `UnknownError`) is left out.
+ */
+function formatBedrockErrorMessage(
+    provider: string,
+    errorName: string | undefined,
+    httpStatusCode: number | undefined,
+    message: string,
+    requestId: string | undefined,
+): string {
+    let text = httpStatusCode ? `[${httpStatusCode}] ${message}` : message;
+    if (errorName && errorName !== 'Error' && errorName !== 'UnknownError') text = `${errorName}: ${text}`;
+    if (requestId) text += ` (Request ID: ${requestId})`;
+    return `[${provider}] ${text}`;
+}
+
+/**
+ * The Bedrock exception behind an Anthropic SDK error: the `x-amzn-errortype` response header for HTTP errors
+ * (`Name:namespace`), or the camel-cased error type of an exception raised mid-stream (`throttlingException`).
+ */
+function bedrockExceptionName(error: AnthropicError): string | undefined {
+    const headers = (error as { headers?: Headers | null }).headers;
+    const fromHeader = headers?.get('x-amzn-errortype')?.split(':')[0];
+    if (fromHeader) return fromHeader;
+    const type = ((error as { error?: unknown }).error as { error?: { type?: unknown } } | undefined)?.error?.type;
+    if (typeof type !== 'string' || !type.endsWith('Exception')) return undefined;
+    return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+/**
+ * Reports the service tier Bedrock applied, which InvokeModel returns in a response header rather than in the
+ * message usage. Wraps the client the shared Claude helpers call, setting `usage.service_tier` from the header.
+ */
+function withBedrockServiceTier(client: AnthropicBedrock) {
+    type StreamArgs = Parameters<AnthropicBedrock['messages']['stream']>;
+    type BedrockMessage = Awaited<ReturnType<ReturnType<AnthropicBedrock['messages']['stream']>['finalMessage']>>;
+    const applyTier = <T extends { usage: object }>(message: T, tier: string | undefined): T =>
+        tier ? { ...message, usage: { ...message.usage, service_tier: tier } } : message;
+    return {
+        messages: {
+            stream(payload: StreamArgs[0], options?: StreamArgs[1]) {
+                const stream = client.messages.stream(payload, options);
+                const tier = stream.withResponse().then(
+                    ({ response }) => response.headers.get('x-amzn-bedrock-service-tier') ?? undefined,
+                    () => undefined,
+                );
+                return {
+                    abort: () => stream.abort(),
+                    finalMessage: async (): Promise<BedrockMessage> =>
+                        applyTier(await stream.finalMessage(), await tier),
+                    async *[Symbol.asyncIterator]() {
+                        for await (const event of stream) {
+                            yield event.type === 'message_start'
+                                ? { ...event, message: applyTier(event.message, await tier) }
+                                : event;
+                        }
+                    },
+                };
+            },
+        },
+    };
+}
+
+/** A Claude prompt for the Messages API, tagged by `formatPrompt` so later steps follow its routing decision. */
+export type BedrockClaudePrompt = ClaudePrompt & { _is_claude_messages: true };
+
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest | BedrockClaudePrompt;
+
+function isBedrockClaudeModel(model: string): boolean {
+    return model.toLowerCase().includes('claude');
+}
+
+/**
+ * The model a Bedrock identifier names without a lookup: a foundation-model ID or ARN, or a system inference
+ * profile (`us.anthropic.claude-…`), whose names AWS defines. Undefined for application inference profiles, custom
+ * models and provisioned throughput, whose ARNs carry caller-chosen names.
+ */
+function namedBedrockModel(model: string): string | undefined {
+    if (!model.startsWith('arn:')) return model;
+    for (const resource of [':foundation-model/', ':inference-profile/']) {
+        const index = model.indexOf(resource);
+        if (index >= 0) return model.slice(index + resource.length) || undefined;
+    }
+    return undefined;
+}
+
+/**
+ * Claude runs on the Anthropic Messages API over InvokeModel. Conversations started on the Converse API (before
+ * this change) continue there, because their stored turns are Converse-shaped.
+ */
+function usesClaudeMessagesApi(options: Pick<ExecutionOptions, 'model' | 'conversation'>): boolean {
+    return isBedrockClaudeModel(options.model) && !isConverseConversation(options.conversation);
+}
+
+function isClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is BedrockClaudePrompt {
+    return '_is_claude_messages' in prompt && prompt._is_claude_messages === true;
+}
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
 type BedrockToolEntry = NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>[number];
@@ -535,6 +648,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     provider = BedrockDriver.PROVIDER;
 
     private _executor?: BedrockRuntime;
+    private _anthropicService?: AnthropicBedrock;
     private _service?: Bedrock;
     private _service_region?: string;
     constructor(options: BedrockDriverOptions) {
@@ -566,8 +680,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return new BedrockRuntime({
             region: this.options.region,
             credentials: this.options.credentials,
+            ...this.authSchemeOptions(),
             requestHandler: this.getBedrockRequestHandlerConfig(httpTimeout),
         });
+    }
+
+    /**
+     * Configured credentials sign every request, as on the Claude Messages route; otherwise the AWS SDK would
+     * prefer an AWS_BEARER_TOKEN_BEDROCK environment token.
+     */
+    private authSchemeOptions(): { authSchemePreference?: string[] } {
+        return this.options.credentials ? { authSchemePreference: ['sigv4'] } : {};
     }
 
     getExecutor(httpTimeout?: HttpTimeoutOptions) {
@@ -595,11 +718,139 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
     }
 
+    /** Anthropic SDK client for Claude on the Messages API (InvokeModel). */
+    private getAnthropicService(): AnthropicBedrock {
+        if (!this._anthropicService) {
+            const credentials = this.options.credentials;
+            const base = {
+                awsRegion: this.options.region,
+                fetch: this.getDriverFetch(),
+                timeout: this.getDriverRequestTimeoutMs(),
+                // Configured credentials must win over an AWS_BEARER_TOKEN_BEDROCK environment token, which the
+                // SDK would otherwise prefer. The SDK only types the field as a string.
+                ...(credentials && { apiKey: null as unknown as undefined }),
+            };
+            // Separate calls: the constructor's overloads take static keys or a provider resolver, not a union.
+            if (credentials && typeof credentials !== 'function') {
+                this._anthropicService = new AnthropicBedrock({
+                    ...base,
+                    awsAccessKey: credentials.accessKeyId,
+                    awsSecretKey: credentials.secretAccessKey,
+                    awsSessionToken: credentials.sessionToken,
+                });
+            } else {
+                // Reuse the AWS SDK client's credential provider (the configured one or the default chain), which
+                // caches resolved credentials. Captured once, so a released driver never builds a new AWS SDK
+                // client while signing.
+                const credentialProvider = this.getExecutor().config.credentials;
+                this._anthropicService = new AnthropicBedrock({
+                    ...base,
+                    providerChainResolver: async () => credentialProvider,
+                });
+            }
+        }
+        return this._anthropicService;
+    }
+
+    /**
+     * The stored conversation for a Converse request. A Claude conversation stored by the Messages API cannot
+     * continue on a Converse model (switching models mid-conversation is not supported); fail clearly instead of
+     * sending a malformed request.
+     */
+    private converseConversation(options: ExecutionOptions, operation: 'execute' | 'stream'): ConverseRequest {
+        if (isMessagesApiConversation(options.conversation)) {
+            const message = `The stored conversation is not in Converse format, so it cannot continue on ${options.model}. Start a new conversation.`;
+            const cause = new Error(message);
+            cause.name = 'ConversationFormatError';
+            throw new LlumiverseError(
+                message,
+                false,
+                { provider: this.provider, model: options.model, operation },
+                cause,
+                400,
+                cause.name,
+            );
+        }
+        return deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+    }
+
+    /**
+     * The foundation model behind a model identifier. Application inference profiles, custom models and provisioned
+     * throughput are addressed by ARNs with caller-chosen names, so their model is read from Bedrock (and cached)
+     * rather than inferred from the name. Falls back to the identifier when the lookup fails.
+     */
+    private async resolveBaseModel(model: string, signal?: AbortSignal): Promise<string> {
+        const named = namedBedrockModel(model);
+        if (named) return named;
+        const region = this.extractRegion(model, this.options.region);
+        const cacheKey = `${region}:${model}`;
+        const cached = baseModelCache.get(cacheKey);
+        if (cached) return cached;
+        const service = this.getService(region);
+        const requestOptions = signal ? { abortSignal: signal } : undefined;
+        try {
+            const underlying = model.includes(':application-inference-profile/')
+                ? (await service.getInferenceProfile({ inferenceProfileIdentifier: model }, requestOptions)).models?.[0]
+                      ?.modelArn
+                : model.includes(':custom-model/')
+                  ? (await service.getCustomModel({ modelIdentifier: model }, requestOptions)).baseModelArn
+                  : model.includes(':provisioned-model/')
+                    ? (await service.getProvisionedModelThroughput({ provisionedModelId: model }, requestOptions))
+                          .modelArn
+                    : undefined;
+            const resolved =
+                underlying && underlying !== model ? await this.resolveBaseModel(underlying, signal) : model;
+            baseModelCache.set(cacheKey, resolved);
+            return resolved;
+        } catch (error) {
+            signal?.throwIfAborted();
+            this.logger.warn(
+                { err: error, model, region },
+                'Could not resolve the Bedrock base model; using its identifier',
+            );
+            return model;
+        }
+    }
+
+    /**
+     * Execution options for the Claude Messages route: the resolved base model for Claude's model checks (the request
+     * still names the caller's identifier), with the Bedrock output-limit clamp applied.
+     */
+    private async claudeMessagesOptions(options: ExecutionOptions, signal?: AbortSignal): Promise<ExecutionOptions> {
+        const resolved = { ...options, model: await this.resolveBaseModel(options.model, signal) };
+        const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
+        const maxTokens = this.clampedClaudeMaxTokens(resolved);
+        return { ...resolved, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
+    }
+
+    /**
+     * Compatibility exception: retain the existing Claude output-limit clamp (see maxTokenFallbackClaude),
+     * logging when it changes the caller's value.
+     */
+    private clampedClaudeMaxTokens(options: StatelessExecutionOptions): number {
+        const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
+        const maxTokens = maxTokenFallbackClaude(options);
+        if (modelOptions?.max_tokens !== undefined && modelOptions.max_tokens !== maxTokens) {
+            logModelOptionException(this.logger, options.model, modelOptions, ['max_tokens'], 'claude_output_limit');
+        }
+        return maxTokens;
+    }
+
+    /** Transport options for the Claude Messages route; the service tier is an InvokeModel header. */
+    private claudeTransportOptions(options: ExecutionOptions, signal?: AbortSignal) {
+        const serviceTier = getBedrockServiceTier(options.model_options);
+        return {
+            ...this.getDriverRequestOptions(options, signal),
+            ...(serviceTier && { headers: { 'X-Amzn-Bedrock-Service-Tier': serviceTier } }),
+        };
+    }
+
     getService(region: string = this.options.region) {
         if (!this._service || this._service_region !== region) {
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
+                ...this.authSchemeOptions(),
                 requestHandler: this.getBedrockRequestHandlerConfig(),
             });
             this._service_region = region;
@@ -614,6 +865,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (opts.model.includes('twelvelabs.pegasus')) {
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
+        const baseModel = await this.resolveBaseModel(opts.model);
+        if (usesClaudeMessagesApi({ ...opts, model: baseModel })) {
+            const claudePrompt = await formatClaudePrompt(segments, { ...opts, model: baseModel }, this.logger);
+            return { ...claudePrompt, _is_claude_messages: true };
+        }
         return await formatConversePrompt(segments, opts);
     }
 
@@ -623,6 +879,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         if ('modelId' in prompt) {
             return formatConversePromptForDebug(prompt);
+        }
+        if (isClaudeMessagesPrompt(prompt)) {
+            return { ...formatClaudeDebugPrompt(prompt), _is_claude_messages: true };
         }
         return formatNovaPromptForDebug(prompt);
     }
@@ -641,6 +900,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * @returns A standardized LlumiverseError
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        // Claude on the Messages API fails with Anthropic SDK errors.
+        if (isAnthropicSdkError(error)) {
+            return this.formatClaudeMessagesError(error, context);
+        }
         // Check if it's an AWS SDK error with $metadata
         const awsError = error as AwsSdkError;
         const hasMetadata = awsError?.$metadata !== undefined;
@@ -666,35 +929,64 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             message = String(error);
         }
 
-        // Build user-facing message with error name and status code
-        let userMessage = message;
-
-        // Include status code in message if available (for end-user visibility)
-        if (httpStatusCode) {
-            userMessage = `[${httpStatusCode}] ${userMessage}`;
-        }
-
-        // Prefix with error name if it's meaningful (not just "Error")
-        if (errorName && errorName !== 'Error' && errorName !== 'UnknownError') {
-            userMessage = `${errorName}: ${userMessage}`;
-        }
-
-        // Add request ID if available (useful for AWS support)
-        if (requestId) {
-            userMessage += ` (Request ID: ${requestId})`;
-        }
-
         // Determine retryability based on AWS error types
         const retryable = this.isBedrockErrorRetryable(errorName, httpStatusCode, fault);
 
         return new LlumiverseError(
-            `[${this.provider}] ${userMessage}`,
+            formatBedrockErrorMessage(this.provider, errorName, httpStatusCode, message, requestId),
             retryable,
             context,
             error,
             httpStatusCode, // Only set code if we have numeric status code
             errorName, // Preserve AWS error name
         );
+    }
+
+    /**
+     * Format an Anthropic SDK error from the Messages API route, applying the Bedrock retry rules when Bedrock
+     * names the exception (e.g. ServiceQuotaExceededException arrives as an HTTP 400).
+     */
+    private formatClaudeMessagesError(error: AnthropicError, context: LlumiverseErrorContext): LlumiverseError {
+        const formatted = formatAnthropicLlumiverseError(error, context);
+        const apiError = error as { status?: number; error?: unknown; headers?: Headers | null };
+        const exceptionName = bedrockExceptionName(error);
+        const requestId = apiError.headers?.get('x-amzn-requestid') ?? undefined;
+        if (!exceptionName) {
+            let message = formatted.message;
+            // A connection error wraps the real failure, e.g. a credential provider that could not assume its role.
+            const cause = error.cause instanceof Error ? error.cause : undefined;
+            if (cause && !message.includes(cause.message)) message = `${message}: ${cause.message}`;
+            if (requestId && !message.includes(requestId)) message = `${message} (Request ID: ${requestId})`;
+            // An AWS SDK failure (e.g. STS AccessDenied) is classified as on the Converse route, not as a connection
+            // error, so a misconfigured role fails fast.
+            const aws = (cause as AwsSdkError | undefined)?.$metadata
+                ? this.formatLlumiverseError(cause, context)
+                : undefined;
+            return new LlumiverseError(
+                message,
+                aws ? aws.retryable : formatted.retryable,
+                context,
+                error,
+                aws?.code ?? formatted.code,
+                aws?.name ?? formatted.name,
+            );
+        }
+        // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
+        // non-retryable as on the Converse route.
+        const retryable =
+            this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ??
+            (apiError.status === undefined ? false : formatted.retryable);
+        // HTTP errors carry { message }; exceptions raised mid-stream carry { error: { type, message } }.
+        const body = apiError.error as { message?: unknown; error?: { message?: unknown } } | undefined;
+        const bodyMessage = body?.message ?? body?.error?.message;
+        const message = formatBedrockErrorMessage(
+            this.provider,
+            exceptionName,
+            apiError.status,
+            typeof bodyMessage === 'string' ? bodyMessage : error.message,
+            requestId,
+        );
+        return new LlumiverseError(message, retryable, context, error, formatted.code, exceptionName);
     }
 
     /**
@@ -1067,7 +1359,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
-    ): ConverseRequest | undefined {
+    ): ConverseRequest | ClaudePrompt | undefined {
+        if (isClaudeMessagesPrompt(prompt)) {
+            return buildClaudeStreamingConversation(prompt, result, toolUse, options, this.provider);
+        }
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
         if (options.model.includes('canvas') || options.model.includes('twelvelabs.pegasus')) {
             return undefined;
@@ -1163,12 +1458,23 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
         }
+        if (isClaudeMessagesPrompt(prompt)) {
+            return executeClaudeCompletion(
+                withBedrockServiceTier(this.getAnthropicService()),
+                prompt,
+                await this.claudeMessagesOptions(options, signal),
+                this.logger,
+                this.provider,
+                this.claudeTransportOptions(options, signal),
+                options.model,
+            );
+        }
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
 
         // Deserialize any base64-encoded binary data back to Uint8Array before API call
-        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const incomingConversation = this.converseConversation(options, 'execute');
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
@@ -1346,13 +1652,24 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options, signal);
         }
+        if (isClaudeMessagesPrompt(prompt)) {
+            return streamClaudeCompletion(
+                withBedrockServiceTier(this.getAnthropicService()),
+                prompt,
+                await this.claudeMessagesOptions(options, signal),
+                this.logger,
+                this.provider,
+                this.claudeTransportOptions(options, signal),
+                options.model,
+            );
+        }
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
 
         // Include conversation history (same as non-streaming)
         // Deserialize any base64-encoded binary data back to Uint8Array before API call
-        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const incomingConversation = this.converseConversation(options, 'stream');
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
@@ -1480,15 +1797,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         reasoning_config: claudeThinking.thinking,
                     };
                 }
-                // For Claude 3.7 with extended thinking + high output, add beta header
+                // Betas go in the body on Bedrock, not in a header.
+                const anthropicBeta: AnthropicBeta[] = [...claudeThinking.betas];
+                // For Claude 3.7 with extended thinking + high output, add the 128k output beta
                 if (
                     claudeThinking.thinking?.type === 'enabled' &&
                     options.model.includes('claude-3-7-sonnet') &&
                     ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)
                 ) {
+                    anthropicBeta.push('output-128k-2025-02-19');
+                }
+                if (anthropicBeta.length > 0) {
                     additionalField = {
                         ...additionalField,
-                        anthropic_beta: ['output-128k-2025-02-19'],
+                        anthropic_beta: anthropicBeta,
                     };
                 }
             }
@@ -1501,18 +1823,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             // Needs max_tokens to be set — and caller-provided values clamped to
             // the model's output limit (both handled by maxTokenFallbackClaude).
-            // Compatibility exception: retain the existing Claude output-limit clamp.
-            const maxTokens = maxTokenFallbackClaude(options);
-            if (model_options.max_tokens !== undefined && model_options.max_tokens !== maxTokens) {
-                logModelOptionException(
-                    this.logger,
-                    options.model,
-                    model_options,
-                    ['max_tokens'],
-                    'claude_output_limit',
-                );
-            }
-            model_options.max_tokens = maxTokens;
+            model_options.max_tokens = this.clampedClaudeMaxTokens(options);
             // Only models without sampling restrictions support top_k
             if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
@@ -2171,6 +2482,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         this._service?.destroy();
         this._executor = undefined;
         this._service = undefined;
+        // Its credential resolver and fetch belong to the resources released above.
+        this._anthropicService = undefined;
     }
 }
 

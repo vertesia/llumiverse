@@ -24,7 +24,7 @@ describe('Bedrock service tiers', () => {
         expect(completion.service_tier).toBe('priority');
     });
 
-    it('uses the Converse service tier object for text models', () => {
+    it('uses the Converse service tier object for text models, including Claude on the legacy Converse route', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt: ConverseRequest = {
             modelId: 'anthropic.claude-sonnet-4-6-v1:0',

@@ -12,7 +12,7 @@ const result_schema = {
     required: ['object', 'color'],
 };
 
-describe('Bedrock Converse structured output', () => {
+describe('Bedrock Converse structured output (including Claude on the legacy Converse route)', () => {
     it('keeps native schemas out of non-Claude prompts', async () => {
         const prompt = await formatConversePrompt([{ role: PromptRole.user, content: 'hello' }], {
             model: 'google.gemma-3-12b-it',

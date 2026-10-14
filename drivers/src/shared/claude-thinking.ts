@@ -1,6 +1,12 @@
-import type { OutputConfig, ThinkingConfigParam } from '@anthropic-ai/sdk/resources/messages.js';
+import type {
+    AnthropicBeta,
+    BetaInputTransformation,
+    BetaThinkingConfigParam,
+} from '@anthropic-ai/sdk/resources/beta.js';
+import type { OutputConfig } from '@anthropic-ai/sdk/resources/messages.js';
 import {
     type AnthropicClaudeOptions,
+    type ClaudeVersion,
     hasSamplingParameterRestriction,
     isClaudeVersionGTE,
     type Logger,
@@ -22,12 +28,27 @@ export interface ClaudeThinkingInput {
     include_thoughts?: boolean;
 }
 
+/** Beta that enables `thinking.block_binding` and the response's `input_transformations`. */
+export const THINKING_BINDING_BETA: AnthropicBeta = 'thinking-binding-controls-2026-08-01';
+
+/**
+ * Whether the model binds each thinking block to the conversation before it (system, tools, earlier
+ * messages) and rejects a replayed block once that prefix changes: Claude Fable 5.1 and Claude 5.5+.
+ */
+function enforcesThinkingBinding(version: ClaudeVersion | null): boolean {
+    if (!version) return false;
+    const { major, minor, variant } = version;
+    return major > 5 || (major === 5 && (minor >= 5 || (variant === 'fable' && minor >= 1)));
+}
+
 /**
  * Result of resolving Claude thinking and effort configuration.
  */
 export interface ClaudeThinkingResult {
     /** Thinking/reasoning config to include in the API payload. */
-    thinking: ThinkingConfigParam | undefined;
+    thinking: BetaThinkingConfigParam | undefined;
+    /** Beta values the thinking config requires; empty when it needs none. */
+    betas: AnthropicBeta[];
     /** Output config (effort) to include in the API payload, if applicable. */
     outputConfig: OutputConfig | undefined;
     /** Whether sampling parameters (temperature, top_p, top_k) should be stripped. */
@@ -57,15 +78,18 @@ export function resolveClaudeThinking(
     const supportsThinking = isClaudeVersionGTE(model, 3, 7);
     const budgetTokens = options?.thinking_budget_tokens;
     const version = parseClaudeVersion(model);
+    // Compatibility exception: Claude 5+ Opus, Sonnet, Fable and Mythos (and Haiku 5.5+) send adaptive thinking
+    // even when omitted, so display follows include_thoughts and thinking.block_binding can be attached. Later
+    // generations inherit this, per the forward-compatibility rule.
     const defaultAdaptiveThinking =
-        (version?.major === 5 && ['opus', 'sonnet', 'fable', 'mythos'].includes(version.variant)) ||
+        (version != null && version.major >= 5 && ['opus', 'sonnet', 'fable', 'mythos'].includes(version.variant)) ||
         (version?.variant === 'haiku' && isClaudeVersionGTE(model, 5, 5));
     // Adaptive thinking is active when the caller supplies an effort level on a
     // model that supports it. Extended thinking is active when a budget is set.
     const adaptiveEnabled = supportsAdaptive && options?.effort != null;
     const extendedEnabled = budgetTokens != null && !samplingRestriction;
 
-    let thinking: ThinkingConfigParam | undefined;
+    let thinking: BetaThinkingConfigParam | undefined;
 
     if (options?.thinking_mode === 'between_tools') {
         // This mode accepts only type: no display or budget, even if stale settings are present.
@@ -111,10 +135,53 @@ export function resolveClaudeThinking(
     // Output config for effort parameter (Opus 4.5+, Sonnet 4.6+, all 4.7+)
     const outputConfig: OutputConfig | undefined = options?.effort ? { effort: options.effort } : undefined;
 
+    // Compatibility exception: models that bind thinking blocks to the conversation reject a replayed block
+    // with a 400 once the system prompt, tool set or earlier messages change, which agents do when a skill
+    // unlocks tools. Ask the API to drop those blocks instead of failing the request. Applies only to adaptive
+    // thinking: between_tools rejects block_binding, and these models accept no thinking budget.
+    const betas: AnthropicBeta[] = [];
+    if (thinking?.type === 'adaptive' && enforcesThinkingBinding(version)) {
+        thinking = { ...thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+        betas.push(THINKING_BINDING_BETA);
+    }
+
     return {
         thinking,
+        betas,
         outputConfig,
         hasSamplingRestriction: samplingRestriction,
         supportsThinking,
     };
+}
+
+/**
+ * Report replayed thinking blocks the API dropped or let through because they no longer match the request
+ * (`thinking.block_binding`): a changed conversation prefix, another model, or another account.
+ */
+export function logClaudeInputTransformations(
+    logger: Logger | undefined,
+    transformations: BetaInputTransformation[] | null | undefined,
+    context: { provider: string; model: string },
+): void {
+    if (!logger || !transformations?.length) return;
+    // Later API versions may add entry types; only these two describe replayed thinking blocks.
+    const thinking = transformations.filter(
+        (t) => t.type === 'thinking_dropped' || t.type === 'thinking_mismatch_allowed',
+    );
+    if (!thinking.length) return;
+
+    const counts: Record<string, number> = {};
+    for (const { type, reason } of thinking) {
+        const key = `${type}:${reason}`;
+        counts[key] = (counts[key] ?? 0) + 1;
+    }
+    logger.warn(
+        {
+            ...context,
+            transformation_count: thinking.length,
+            transformations: counts,
+            first_path: thinking[0].path,
+        },
+        '[Claude] Replayed thinking blocks no longer match the request',
+    );
 }

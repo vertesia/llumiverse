@@ -2,7 +2,7 @@ import type { ModelOptions } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
-describe('Bedrock provider-specific model options', () => {
+describe('legacy Converse: Bedrock provider-specific model options', () => {
     it('serializes Claude between-tools mode through Converse reasoning_config', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const model = 'anthropic.claude-sonnet-5-5';
@@ -23,6 +23,36 @@ describe('Bedrock provider-specific model options', () => {
             reasoning_config: { type: 'between_tools' },
             output_config: { effort: 'high' },
         });
+    });
+
+    it('asks Converse to drop mismatched thinking blocks for adaptive Claude Sonnet 5.5', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const model = 'us.anthropic.claude-sonnet-5-5';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-claude', effort: 'medium' } },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            reasoning_config: {
+                type: 'adaptive',
+                display: 'omitted',
+                block_binding: { prefix_mismatch_behavior: 'drop_block' },
+            },
+            anthropic_beta: ['thinking-binding-controls-2026-08-01'],
+            output_config: { effort: 'medium' },
+        });
+    });
+
+    it('sends no thinking binding to Claude Opus 4.6, which rejects block_binding on Bedrock', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const model = 'us.anthropic.claude-opus-4-6-v1';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-claude', effort: 'medium' } },
+        );
+        expect(request.additionalModelRequestFields).toMatchObject({ reasoning_config: { type: 'adaptive' } });
+        expect(request.additionalModelRequestFields).not.toHaveProperty('anthropic_beta');
+        expect(request.additionalModelRequestFields).not.toHaveProperty('reasoning_config.block_binding');
     });
 
     it.each([
