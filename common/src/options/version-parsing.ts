@@ -310,6 +310,25 @@ export function supportsMidConversationToolChanges(modelString: string): boolean
 }
 
 /**
+ * Check if a model accepts a forced `tool_choice` (`any` or a named tool).
+ *
+ * Claude Opus and Sonnet 5.5+ reject it ("tool_choice: type "tool" and "any" are not supported for this model").
+ * Haiku 5.5, Claude 5 and older models accept it.
+ *
+ * @param modelString - The model identifier string
+ * @returns false if the model rejects a forced tool choice
+ */
+export function supportsClaudeForcedToolChoice(modelString: string): boolean {
+    switch (parseClaudeVersion(modelString)?.variant) {
+        case 'opus':
+        case 'sonnet':
+            return !isClaudeVersionGTE(modelString, 5, 5);
+        default:
+            return true;
+    }
+}
+
+/**
  * Check if a model supports the effort parameter.
  *
  * Effort is supported on:

@@ -98,6 +98,7 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    isClaudeMessagesConversation,
     isConverseConversation,
     relocateConverseToolImages,
     sanitizeConverseMessages,
@@ -676,8 +677,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return new BedrockRuntime({
             region: this.options.region,
             credentials: this.options.credentials,
+            ...this.authSchemeOptions(),
             requestHandler: this.getBedrockRequestHandlerConfig(httpTimeout),
         });
+    }
+
+    /**
+     * Configured credentials sign every request, as on the Claude Messages route; otherwise the AWS SDK would
+     * prefer an AWS_BEARER_TOKEN_BEDROCK environment token.
+     */
+    private authSchemeOptions(): { authSchemePreference?: string[] } {
+        return this.options.credentials ? { authSchemePreference: ['sigv4'] } : {};
     }
 
     getExecutor(httpTimeout?: HttpTimeoutOptions) {
@@ -739,6 +749,27 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this._anthropicService;
     }
 
+    /**
+     * The stored conversation for a Converse request. A conversation stored by Claude on the Messages API cannot
+     * continue on a Converse model (e.g. a non-Claude model); fail clearly instead of sending a malformed request.
+     */
+    private converseConversation(options: ExecutionOptions, operation: 'execute' | 'stream'): ConverseRequest {
+        if (isClaudeMessagesConversation(options.conversation)) {
+            const message = `The stored conversation is not in Converse format, so it cannot continue on ${options.model}. Start a new conversation.`;
+            const cause = new Error(message);
+            cause.name = 'ConversationFormatError';
+            throw new LlumiverseError(
+                message,
+                false,
+                { provider: this.provider, model: options.model, operation },
+                cause,
+                400,
+                cause.name,
+            );
+        }
+        return deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+    }
+
     /** Execution options for the Claude Messages route, with the Bedrock output-limit clamp applied. */
     private claudeMessagesOptions(options: ExecutionOptions): ExecutionOptions {
         const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
@@ -773,6 +804,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
+                ...this.authSchemeOptions(),
                 requestHandler: this.getBedrockRequestHandlerConfig(),
             });
             this._service_region = region;
@@ -876,9 +908,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const corruptChunk = error.message.startsWith('Could not parse a Bedrock chunk');
             const requestId = apiError.headers?.get('x-amzn-requestid');
             const missingId = !!requestId && !formatted.message.includes(requestId);
-            if (!corruptChunk && !missingId) return formatted;
+            // A connection error wraps the real failure, e.g. a credential provider that could not assume its role.
+            const cause = error.cause instanceof Error ? error.cause.message : undefined;
+            const missingCause = !!cause && !formatted.message.includes(cause);
+            if (!corruptChunk && !missingId && !missingCause) return formatted;
+            let message = missingCause ? `${formatted.message}: ${cause}` : formatted.message;
+            if (missingId) message = `${message} (Request ID: ${requestId})`;
             return new LlumiverseError(
-                missingId ? `${formatted.message} (Request ID: ${requestId})` : formatted.message,
+                message,
                 corruptChunk || formatted.retryable,
                 context,
                 error,
@@ -1276,7 +1313,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         options: ExecutionOptions,
     ): ConverseRequest | ClaudePrompt | undefined {
         if (isClaudeMessagesPrompt(prompt, options.model)) {
-            return buildClaudeStreamingConversation(prompt, result, toolUse, options);
+            return buildClaudeStreamingConversation(prompt, result, toolUse, options, this.provider);
         }
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
         if (options.model.includes('canvas') || options.model.includes('twelvelabs.pegasus')) {
@@ -1388,7 +1425,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const conversePrompt = prompt as ConverseRequest;
 
         // Deserialize any base64-encoded binary data back to Uint8Array before API call
-        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const incomingConversation = this.converseConversation(options, 'execute');
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
@@ -1582,7 +1619,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Include conversation history (same as non-streaming)
         // Deserialize any base64-encoded binary data back to Uint8Array before API call
-        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const incomingConversation = this.converseConversation(options, 'stream');
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);

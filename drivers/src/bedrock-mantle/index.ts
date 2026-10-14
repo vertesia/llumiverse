@@ -268,7 +268,13 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                 );
             case 'messages':
-                return buildClaudeStreamingConversation(requireClaudePrompt(prompt), result, toolUse, options);
+                return buildClaudeStreamingConversation(
+                    requireClaudePrompt(prompt),
+                    result,
+                    toolUse,
+                    options,
+                    this.provider,
+                );
             default:
                 return undefined;
         }

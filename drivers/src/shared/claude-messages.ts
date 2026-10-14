@@ -47,6 +47,7 @@ import {
     type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
+    supportsClaudeForcedToolChoice,
     type ToolUse,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
@@ -339,6 +340,22 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 // File / multimodal block helpers
 // ============================================================================
 
+const TEXT_APPLICATION_TYPES = new Set([
+    'application/json',
+    'application/xml',
+    'application/yaml',
+    'application/x-yaml',
+]);
+
+/** Text formats sent as plain-text documents: text/*, JSON, XML and YAML (including +json / +xml types). */
+function isTextMimeType(mimeType: string | undefined): boolean {
+    if (!mimeType) return false;
+    const type = mimeType.split(';')[0].trim().toLowerCase();
+    return (
+        type.startsWith('text/') || TEXT_APPLICATION_TYPES.has(type) || type.endsWith('+json') || type.endsWith('+xml')
+    );
+}
+
 async function collectFileBlocks(
     segment: PromptSegment,
     logger?: WarnLogger,
@@ -348,10 +365,12 @@ async function collectFileBlocks(
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith('image/')) {
             const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-            if (!allowedTypes.includes(file.mime_type)) {
+            // image/jpg is a common non-standard alias.
+            const normalizedType = file.mime_type === 'image/jpg' ? 'image/jpeg' : file.mime_type;
+            if (!allowedTypes.includes(normalizedType)) {
                 throw new Error(`Unsupported image type: ${file.mime_type}`);
             }
-            const mimeType = String(file.mime_type) as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+            const mimeType = normalizedType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
             contentBlocks.push({
                 type: 'image',
                 source: {
@@ -380,7 +399,7 @@ async function collectFileBlocks(
                     media_type: 'application/pdf',
                 },
             } satisfies DocumentBlockParam);
-        } else if (file.mime_type?.startsWith('text/')) {
+        } else if (isTextMimeType(file.mime_type)) {
             contentBlocks.push({
                 title: file.name,
                 type: 'document',
@@ -390,6 +409,14 @@ async function collectFileBlocks(
                     media_type: 'text/plain',
                 },
             } satisfies DocumentBlockParam);
+        } else {
+            logger?.warn(
+                {
+                    file_name: file.name,
+                    mime_type: file.mime_type,
+                },
+                '[Claude] Skipping unsupported attachment',
+            );
         }
     }
 
@@ -507,7 +534,9 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
     if (messages.length === 0) return [];
 
     const needsMerging = messages.some(
-        (msg, i) => i < messages.length - 1 && msg.role === 'user' && messages[i + 1].role === 'user',
+        (msg, i) =>
+            msg.role === 'user' &&
+            ((i < messages.length - 1 && messages[i + 1].role === 'user') || hasToolResultAfterOtherContent(msg)),
     );
     if (!needsMerging) return messages;
 
@@ -543,6 +572,12 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
     return result;
 }
 
+function hasToolResultAfterOtherContent(message: MessageParam): boolean {
+    if (!Array.isArray(message.content)) return false;
+    const firstOther = message.content.findIndex((block) => block.type !== 'tool_result');
+    return firstOther >= 0 && message.content.slice(firstOther).some((block) => block.type === 'tool_result');
+}
+
 export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
     const result: MessageParam[] = [];
     for (const message of messages) {
@@ -561,8 +596,10 @@ export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
     return result;
 }
 
-export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
-    if (messages.length < 2) return messages;
+export function fixOrphanedToolUse(input: MessageParam[]): MessageParam[] {
+    if (input.length < 2) return input;
+    // Synthetic results are written into a copy, never into the caller's (stored) conversation.
+    const messages = [...input];
     const result: MessageParam[] = [];
     for (let i = 0; i < messages.length; i++) {
         const current = messages[i];
@@ -756,12 +793,11 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
 // Cache control stripping
 // ============================================================================
 
+/** Always a copy: cache breakpoints are written onto the returned blocks, never onto the caller's conversation. */
 function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T): T {
-    if (typeof block === 'object' && block !== null && 'cache_control' in block) {
-        const { cache_control: _cc, ...rest } = block as T & { cache_control: unknown };
-        return rest as T;
-    }
-    return block;
+    if (typeof block !== 'object' || block === null) return block;
+    const { cache_control: _cc, ...rest } = block as T & { cache_control?: unknown };
+    return rest as T;
 }
 
 function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageParam[] {
@@ -860,7 +896,8 @@ export function getClaudePayload(
     if (isClaudeVersionGTE(modelName, 4, 6)) {
         const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
         if (lastMessage?.role === 'assistant') {
-            sanitizedMessages = [...sanitizedMessages, claudeContinueTurn()];
+            // Repair again: a trailing tool_use now has a user turn to carry its interrupted result.
+            sanitizedMessages = fixOrphanedToolUse([...sanitizedMessages, claudeContinueTurn()]);
         }
     }
     sanitizedMessages = mergeConsecutiveUserMessages(placeSystemMessagesAfterUserTurns(sanitizedMessages));
@@ -957,11 +994,29 @@ export function getClaudePayload(
             { provider, model: modelName, operation },
         );
     }
-    const disableManualThinkingForForcedTool = forcedToolChoice !== undefined && thinking?.type === 'enabled';
+    // Compatibility exception: models that reject a forced tool choice get automatic tool choice instead; the
+    // caller's required-tool check stays authoritative.
+    const supportedForcedToolChoice =
+        forcedToolChoice && supportsClaudeForcedToolChoice(modelName) ? forcedToolChoice : undefined;
+    if (forcedToolChoice && !supportedForcedToolChoice) {
+        logModelOptionException(
+            logger,
+            modelName,
+            model_options,
+            ['tool_choice', 'required_tool_name'],
+            'claude_forced_tool_choice',
+        );
+    }
+    const disableManualThinkingForForcedTool = supportedForcedToolChoice !== undefined && thinking?.type === 'enabled';
     const toolChoice = !hasTools
         ? undefined
         : forcedToolChoice
-          ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
+          ? supportedForcedToolChoice
+              ? {
+                    ...supportedForcedToolChoice,
+                    disable_parallel_tool_use: model_options?.parallel_tool_calls === false,
+                }
+              : ({ type: 'auto', disable_parallel_tool_use: model_options?.parallel_tool_calls === false } as const)
           : model_options?.tool_choice === 'none' || !hasRequestedTools
             ? ({ type: 'none' } as const)
             : model_options?.tool_choice === 'auto'
@@ -1079,6 +1134,7 @@ export function buildClaudeStreamingConversation(
     result: unknown[],
     toolUse: unknown[] | undefined,
     options: ExecutionOptions,
+    provider = 'anthropic',
 ): ClaudePrompt {
     const completionResults = result as CompletionResult[];
     const text = completionResults
@@ -1086,7 +1142,7 @@ export function buildClaudeStreamingConversation(
         .map((r) => r.value as string)
         .join('');
 
-    let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    let conversation = prepareClaudeConversation(options, prompt, provider);
 
     if (text) {
         const assistantMsg: MessageParam = { role: 'assistant', content: text };
@@ -1231,7 +1287,13 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 
 /** Append this turn's prompt and record its tool set (append-only tool changes, where supported). */
 function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudePrompt, provider: string): ClaudePrompt {
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    // Store the continuation turn getClaudePayload would add for a resumed run that ends with an assistant turn,
+    // so the next request replays what this one sent and the reply's thinking stays valid.
+    const lastTurn = conversation.messages.findLast((message) => message.role !== 'system');
+    if (isClaudeVersionGTE(options.model, 4, 6) && lastTurn?.role === 'assistant') {
+        conversation = { ...conversation, messages: [...conversation.messages, claudeContinueTurn()] };
+    }
     return canUseClaudeToolChanges(options.model, provider)
         ? applyClaudeToolChanges(conversation, options.tools as Tool[] | undefined)
         : clearClaudeToolState(conversation);
@@ -1555,6 +1617,8 @@ export function isClaudeErrorRetryable(
     if (classes.has('ConflictError')) return true; // SDK retries 409 (lock timeouts)
     if (classes.has('UnprocessableEntityError')) return false;
     if (errorType === 'invalid_request_error') return false;
+    // A mid-stream error event has a type but no HTTP status.
+    if (httpStatusCode === undefined && (errorType === 'overloaded_error' || errorType === 'api_error')) return true;
     if (httpStatusCode !== undefined) {
         if (httpStatusCode === 429 || httpStatusCode === 408 || httpStatusCode === 529) return true;
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true;

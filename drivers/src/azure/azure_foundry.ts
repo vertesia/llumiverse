@@ -493,7 +493,13 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
         if (protocol === 'messages') {
-            return buildClaudeStreamingConversation(requireClaudePrompt(prompt), result, toolUse, options);
+            return buildClaudeStreamingConversation(
+                requireClaudePrompt(prompt),
+                result,
+                toolUse,
+                options,
+                this.provider,
+            );
         }
         if (protocol === 'responses' && this.openAIProtocolDriver) {
             return this.openAIProtocolDriver.buildStreamingConversation(

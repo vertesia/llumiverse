@@ -583,6 +583,15 @@ export async function formatConversePrompt(
  * (`{ text }`, `{ toolUse }`, `{ reasoningContent }`, ...) rather than Anthropic Messages blocks with a `type`.
  * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse.
  */
+/**
+ * Whether a stored conversation uses the Anthropic Messages format (Claude on the Messages API), which the
+ * Converse API cannot continue.
+ */
+export function isClaudeMessagesConversation(conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    return Array.isArray(messages) && messages.length > 0 && !isConverseConversation(conversation);
+}
+
 export function isConverseConversation(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
     if (!Array.isArray(messages)) return false;
