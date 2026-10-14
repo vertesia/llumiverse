@@ -327,7 +327,7 @@ describe('Bedrock Mantle metadata', () => {
     });
 
     it.each([
-        ['amazon.nova-2-lite-v1:0', 1_000_000, 65_536],
+        ['amazon.nova-2-lite-v1:0', 1_000_000, 65_535],
         ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 64_000],
         ['google.gemma-3-12b-it', 128_000, 8_192],
         ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
