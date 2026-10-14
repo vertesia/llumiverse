@@ -22,6 +22,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from '@anthropic-ai/sdk/error';
+import type { AnthropicBeta, BetaMessage, BetaRawMessageDeltaEvent } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -66,7 +67,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
-import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
+import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
 
@@ -736,12 +737,12 @@ export function getClaudePayload(
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    let requestOptions: RequestOptions | undefined;
+    const betas: AnthropicBeta[] = [];
     if (
         modelName.includes('claude-3-7-sonnet') &&
         ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)
     ) {
-        requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
+        betas.push('output-128k-2025-02-19');
     }
 
     // Merge first so parallel tool results split across user messages are recombined
@@ -847,11 +848,13 @@ export function getClaudePayload(
         }
     }
 
-    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(
-        modelName,
-        model_options as Parameters<typeof resolveClaudeThinking>[1],
-        logger,
-    );
+    const {
+        thinking,
+        betas: thinkingBetas,
+        outputConfig,
+        hasSamplingRestriction,
+    } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1], logger);
+    betas.push(...thinkingBetas);
 
     // Compatibility exception: preserve existing Claude sampling omissions and temperature-over-top_p precedence.
     logModelOptionException(
@@ -879,10 +882,15 @@ export function getClaudePayload(
               : model_options?.top_p,
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking,
+        // The beta config adds block_binding (sent with its beta header); the wire field is the same.
+        thinking: thinking as MessageCreateParamsBase['thinking'],
         stream: true,
         ...(outputConfig && { output_config: outputConfig }),
     };
+
+    // One comma-separated header: Google Cloud reads only the first anthropic-beta header.
+    const requestOptions: RequestOptions | undefined =
+        betas.length > 0 ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined;
 
     return { payload, requestOptions };
 }
@@ -1046,6 +1054,27 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
 
+type InputTransformations = BetaMessage['input_transformations'];
+
+/**
+ * Track the final `input_transformations` (only typed on beta events; present when the binding beta was sent).
+ * `message_start` carries it, and the final `message_delta` replaces it after a server-side model fallback,
+ * which the stable SDK accumulator drops, so both paths read it from the raw events.
+ */
+function trackInputTransformations(current: InputTransformations, event: RawMessageStreamEvent): InputTransformations {
+    switch (event.type) {
+        case 'message_start':
+            return (event.message as Partial<Pick<BetaMessage, 'input_transformations'>>).input_transformations;
+        case 'message_delta':
+            return (
+                (event as Partial<Pick<BetaRawMessageDeltaEvent, 'input_transformations'>>).input_transformations ??
+                current
+            );
+        default:
+            return current;
+    }
+}
+
 /**
  * Execute a non-streaming Claude completion.
  * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
@@ -1070,8 +1099,13 @@ export async function executeClaudeCompletion(
         { ...payload, model: requestModel ?? payload.model } as MessageStreamParams,
         transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
     );
+    let transformations: InputTransformations;
+    for await (const event of responseStream) {
+        transformations = trackInputTransformations(transformations, event);
+    }
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
+    logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
@@ -1116,8 +1150,10 @@ export async function streamClaudeCompletion(
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
+    let transformations: InputTransformations;
 
     const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+        transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
                 return {
@@ -1126,6 +1162,7 @@ export async function streamClaudeCompletion(
                 } satisfies CompletionChunkObject;
             case 'message_delta':
                 logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });
+                logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },
