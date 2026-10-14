@@ -6,6 +6,8 @@ import {
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
+    isModelFamilyVersionGTE,
+    type JSONSchema,
     type Logger,
     ModelType,
     modelModalitiesToArray,
@@ -34,6 +36,7 @@ import {
     preserveOpenAIChatCompletionsOriginalResponse,
 } from '../openai/openai_chat_completions.js';
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
+import { formatOpenAISchema } from '../openai/schema.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
 export type { GroqDriverOptions } from '../driver-options.js';
@@ -196,12 +199,36 @@ function toGroqRequest(
         stop: payload.stop ?? undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toGroqTool),
+        response_format: toGroqResponseFormat(payload, options),
         reasoning_format: reasoningFormat,
         reasoning_effort: payload.reasoning_effort as ChatCompletionCreateParamsNonStreaming['reasoning_effort'],
         service_tier: payload.service_tier as ChatCompletionCreateParamsNonStreaming['service_tier'],
         stream,
     } satisfies ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming;
     return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
+}
+
+/**
+ * Groq Structured Outputs: `json_schema` on gpt-oss and Qwen 3.8+, strict (constrained decoding) except on
+ * gpt-oss-safeguard. Groq rejects `response_format` together with tools, so a request with tools keeps the
+ * prompt instruction alone, which this driver always sends.
+ */
+function toGroqResponseFormat(
+    payload: OpenAIChatCompletionsPayload,
+    options: ExecutionOptions,
+): ChatCompletionCreateParamsNonStreaming['response_format'] {
+    if (!options.result_schema || (payload.tools?.length ?? 0) > 0) return undefined;
+    const model = payload.model.toLowerCase().split('/').pop() ?? '';
+    if (!model.startsWith('gpt-oss-') && !isModelFamilyVersionGTE(model, 'qwen', 3, 8)) return undefined;
+    const formatted = formatOpenAISchema(options.result_schema as JSONSchema);
+    return {
+        type: 'json_schema',
+        json_schema: {
+            name: 'output',
+            strict: formatted.strict && !model.includes('safeguard'),
+            schema: formatted.schema as Record<string, unknown>,
+        },
+    };
 }
 
 function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
