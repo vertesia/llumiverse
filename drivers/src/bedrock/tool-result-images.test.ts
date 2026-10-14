@@ -61,7 +61,7 @@ describe('Bedrock tool-result images', () => {
     );
 
     it.each(['us.anthropic.claude-sonnet-4-6', 'amazon.nova-pro-v1:0'])(
-        'keeps supported nested images for %s',
+        'keeps supported nested images for %s on Converse (the legacy route for Claude)',
         (model) => {
             const driver = new BedrockDriver({ region: 'us-east-1' });
             const original = messages();

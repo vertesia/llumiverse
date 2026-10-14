@@ -125,7 +125,7 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
     });
 });
 
-describe('BedrockDriver private tool-choice mapping', () => {
+describe('legacy Converse: BedrockDriver private tool-choice mapping', () => {
     const prompt = {
         modelId: 'anthropic.claude-sonnet-4-6',
         messages: [{ role: 'user', content: [{ text: 'Act now.' }] }],
@@ -361,7 +361,7 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
     });
 });
 
-describe('BedrockDriver buildStreamingConversation', () => {
+describe('legacy Converse: BedrockDriver buildStreamingConversation', () => {
     it('writes streamed text and tool use blocks back into the assistant message', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt = {

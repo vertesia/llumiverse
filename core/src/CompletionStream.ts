@@ -631,9 +631,19 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         });
 
         // Build conversation context for multi-turn support
-        const conversation = stream?.finalizeConversation
-            ? await stream.finalizeConversation()
-            : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
+        let conversation: unknown;
+        try {
+            conversation = stream?.finalizeConversation
+                ? await stream.finalizeConversation()
+                : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
+        } catch (error: unknown) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            throw this.driver.formatLlumiverseError(error, {
+                provider: this.driver.provider,
+                model: this.options.model,
+                operation: 'stream',
+            });
+        }
         if (conversation !== undefined) {
             this.completion.conversation = stripAudioPayloads(conversation);
         }

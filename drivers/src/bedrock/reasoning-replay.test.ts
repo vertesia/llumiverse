@@ -8,7 +8,7 @@ function prompt(): ConverseRequest {
     return { modelId: MODEL, messages: [{ role: 'user', content: [{ text: 'question' }] }] };
 }
 
-describe('Bedrock native reasoning replay', () => {
+describe('legacy Converse: Bedrock native reasoning replay', () => {
     it('preserves reasoning signatures and redacted bytes across a JSON roundtrip', async () => {
         const redacted = new Uint8Array([1, 2, 255]);
         const response: ConverseResponse = {
