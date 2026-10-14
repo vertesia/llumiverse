@@ -102,6 +102,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
             expect(toolUse[0].id).toBeDefined();
             expect(toolUse[0].tool_input).toBeDefined();
             expect(toolUse[0].tool_name).toBe('get_weather');
+            expect(toolCall.conversation).toBeDefined();
 
             // Step 2: the model uses the tool result
             const toolAnswer = await driver.execute(
@@ -110,6 +111,8 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
             );
             const answer = toolAnswer.result.map(completionResultToString).join('');
             expect(answer, `[${model}] Tool result not found in response`).toContain('15');
+            // Without the conversation the checkpoint would start fresh and never meet the tool blocks.
+            expect(toolAnswer.conversation).toBeDefined();
 
             // Step 3: checkpoint summary with tools=[] over a conversation holding tool blocks
             const checkpoint = await driver.execute(
