@@ -312,8 +312,9 @@ export function supportsMidConversationToolChanges(modelString: string): boolean
 /**
  * Check if a model accepts a forced `tool_choice` (`any` or a named tool).
  *
- * Claude Opus and Sonnet 5.5+ reject it ("tool_choice: type "tool" and "any" are not supported for this model").
- * Haiku 5.5, Claude 5 and older models accept it.
+ * Claude Opus and Sonnet 5.5+ and Fable 5.1+ reject it ("tool_choice: type "tool" and "any" are not supported for
+ * this model"). Mythos 5.1+ is treated like Fable 5.1, since automatic tool choice is always accepted. Haiku 5.5,
+ * Claude 5 (including Fable 5) and older models accept it.
  *
  * @param modelString - The model identifier string
  * @returns false if the model rejects a forced tool choice
@@ -323,6 +324,9 @@ export function supportsClaudeForcedToolChoice(modelString: string): boolean {
         case 'opus':
         case 'sonnet':
             return !isClaudeVersionGTE(modelString, 5, 5);
+        case 'fable':
+        case 'mythos':
+            return !isClaudeVersionGTE(modelString, 5, 1);
         default:
             return true;
     }

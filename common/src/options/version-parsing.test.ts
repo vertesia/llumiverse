@@ -215,6 +215,10 @@ describe('supportsClaudeForcedToolChoice', () => {
         'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
         'publishers/anthropic/models/claude-sonnet-5-5@20260901',
         'claude-opus-5-5@20260901',
+        'claude-fable-5-1',
+        'global.anthropic.claude-fable-5-1',
+        'claude-fable-6',
+        'claude-mythos-5-1',
     ])('rejects a forced tool choice on %s', (model) => {
         expect(supportsClaudeForcedToolChoice(model)).toBe(false);
     });
@@ -228,7 +232,7 @@ describe('supportsClaudeForcedToolChoice', () => {
         'claude-opus-4-8',
         'claude-sonnet-4-6',
         'claude-fable-5',
-        'claude-fable-6',
+        'global.anthropic.claude-fable-5',
         'claude-mythos-5',
         'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
         'anthropic.claude-opus-4-8-v1:0',
