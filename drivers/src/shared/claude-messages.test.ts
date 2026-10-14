@@ -11,6 +11,7 @@ import {
     getClaudePayload,
     isClaudeErrorRetryable,
     mergeConsecutiveUserMessages,
+    streamClaudeCompletion,
     updateClaudeConversation,
 } from './claude-messages.js';
 
@@ -834,5 +835,37 @@ describe('isClaudeErrorRetryable', () => {
 
     it('does not retry a mid-stream invalid request', () => {
         expect(isClaudeErrorRetryable(new Error('bad'), undefined, 'invalid_request_error')).toBe(false);
+    });
+});
+
+describe('streamClaudeCompletion errors', () => {
+    it('surfaces an error the SDK iterator dropped, before the stream ends', async () => {
+        const failure = new APIError(
+            undefined,
+            { type: 'error', error: { type: 'overloaded_error' } },
+            'mid',
+            undefined,
+        );
+        const stream = () => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'message_start', message: { id: 'm', usage: { input_tokens: 1, output_tokens: 0 } } };
+            },
+            abort: () => undefined,
+            finalMessage: () => Promise.reject(failure),
+        });
+        const completion = await streamClaudeCompletion(
+            { messages: { stream } } as never,
+            { messages: [] },
+            {
+                model: 'claude-sonnet-4-6',
+            },
+        );
+        const chunks: unknown[] = [];
+        await expect(
+            (async () => {
+                for await (const chunk of completion) chunks.push(chunk);
+            })(),
+        ).rejects.toBe(failure);
+        expect(chunks).toHaveLength(1);
     });
 });

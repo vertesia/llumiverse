@@ -72,6 +72,16 @@ describe('isConverseConversation', () => {
         ).toBe(true);
     });
 
+    it('treats a conversation with any Converse block as Converse', () => {
+        const mixed = {
+            messages: [
+                { role: 'user', content: [{ type: 'text', text: 'question' }] },
+                { role: 'assistant', content: [{ text: 'answer from a Converse model' }] },
+            ],
+        };
+        expect(isConverseConversation(mixed)).toBe(true);
+    });
+
     it.each([
         undefined,
         null,
@@ -439,6 +449,23 @@ describe('Bedrock Claude on the Messages API', () => {
         expect(formatted.message).toContain('AccessDenied: not authorized to perform sts:AssumeRole');
     });
 
+    it('classifies an AWS credential failure behind a connection error with the AWS rules', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const cause = Object.assign(new Error('not authorized to perform sts:AssumeRoleWithWebIdentity'), {
+            name: 'AccessDenied',
+            $fault: 'client',
+            $metadata: { httpStatusCode: 403 },
+        });
+        const formatted = driver.formatLlumiverseError(new APIConnectionError({ cause }), {
+            provider: 'bedrock',
+            model: MODEL,
+            operation: 'execute',
+        });
+        expect(formatted.retryable).toBe(false);
+        expect(formatted.code).toBe(403);
+        expect(formatted.message).toContain('sts:AssumeRoleWithWebIdentity');
+    });
+
     it('builds the streamed conversation in the format of the prompt', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const options = { model: MODEL } as ExecutionOptions;
@@ -548,6 +575,21 @@ describe('legacy Converse conversations with Claude on Bedrock', () => {
         expect(converse).toHaveBeenCalledOnce();
         expect(converse.mock.calls[0][0].messages?.at(-1)?.content).toContainEqual({ text: 'hello' });
         expect(isConverseConversation(completion.conversation)).toBe(true);
+    });
+
+    it('keeps a Claude conversation that a non-Claude model continued on Converse', async () => {
+        const { driver, converse, messagesStream } = converseDriver();
+        // Claude on the Messages API, then a Converse model.
+        const first = { messages: [{ role: 'user', content: [{ type: 'text', text: 'question' }] }] };
+        const nova = { model: 'amazon.nova-pro-v1:0', conversation: first } as ExecutionOptions;
+        const afterNova = await driver.requestTextCompletion(await driver.createPrompt(segments, nova), nova);
+        expect(converse).toHaveBeenCalledOnce();
+
+        // Back to Claude: the mixed conversation stays on Converse, which accepts its typed text blocks.
+        const claude = { model: MODEL, conversation: afterNova.conversation } as ExecutionOptions;
+        await driver.requestTextCompletion(await driver.createPrompt(segments, claude), claude);
+        expect(messagesStream).not.toHaveBeenCalled();
+        expect(converse).toHaveBeenCalledTimes(2);
     });
 
     it('continues a legacy conversation on Converse when streaming', async () => {

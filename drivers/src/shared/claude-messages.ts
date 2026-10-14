@@ -254,6 +254,16 @@ function mergeRequestOptions(
     return { ...requestOptions, ...transportOptions, ...(headers && { headers }) };
 }
 
+/**
+ * A message stream's events, then its outcome. The SDK's iterator drops an error that arrives while no read is
+ * pending (the consumer is busy with the previous chunk) and only `finalMessage()` rejects with it, so await it
+ * here for the error to surface during iteration, where the driver formats it.
+ */
+async function* eventsThenOutcome(stream: ClaudeMessageStream): AsyncGenerator<RawMessageStreamEvent> {
+    yield* stream;
+    await stream.finalMessage();
+}
+
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
     payload: MessageStreamParams,
@@ -1398,7 +1408,7 @@ export async function streamClaudeCompletion(
     let responseId: string | undefined;
     let transformations: InputTransformations;
 
-    const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+    const stream = asyncMap(eventsThenOutcome(response_stream), async (streamEvent: RawMessageStreamEvent) => {
         transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':

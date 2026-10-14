@@ -599,17 +599,20 @@ export function isIncompatibleWithConverse(conversation: unknown): boolean {
 /**
  * Whether a stored conversation was built for the Converse API: its content blocks are single-key objects
  * (`{ text }`, `{ toolUse }`, `{ reasoningContent }`, ...) rather than Anthropic Messages blocks with a `type`.
- * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse.
+ * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse, and so does a
+ * text-only Claude conversation that a Converse model continued: any Converse block makes the whole conversation
+ * Converse, since the Messages API rejects blocks without a `type` and Converse accepts typed text blocks.
  */
 export function isConverseConversation(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
     if (!Array.isArray(messages)) return false;
     const isConverseBlock = (block: unknown) => !!block && typeof block === 'object' && !('type' in block);
-    // Every Converse message has array content, so the first non-empty one decides.
-    for (const message of messages) {
-        const content = (message as { content?: unknown } | null)?.content;
-        if (Array.isArray(content) && content.length > 0) return content.some(isConverseBlock);
-    }
     const system = (conversation as { system?: unknown }).system;
-    return Array.isArray(system) && system.some(isConverseBlock);
+    return (
+        (Array.isArray(system) && system.some(isConverseBlock)) ||
+        messages.some((message) => {
+            const content = (message as { content?: unknown } | null)?.content;
+            return Array.isArray(content) && content.some(isConverseBlock);
+        })
+    );
 }

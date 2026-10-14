@@ -925,10 +925,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (!exceptionName) {
             let message = formatted.message;
             // A connection error wraps the real failure, e.g. a credential provider that could not assume its role.
-            const cause = error.cause instanceof Error ? error.cause.message : undefined;
-            if (cause && !message.includes(cause)) message = `${message}: ${cause}`;
+            const cause = error.cause instanceof Error ? error.cause : undefined;
+            if (cause && !message.includes(cause.message)) message = `${message}: ${cause.message}`;
             if (requestId && !message.includes(requestId)) message = `${message} (Request ID: ${requestId})`;
-            return new LlumiverseError(message, formatted.retryable, context, error, formatted.code, formatted.name);
+            // An AWS SDK failure (e.g. STS AccessDenied) is classified as on the Converse route, not as a connection
+            // error, so a misconfigured role fails fast.
+            const aws = (cause as AwsSdkError | undefined)?.$metadata
+                ? this.formatLlumiverseError(cause, context)
+                : undefined;
+            return new LlumiverseError(
+                message,
+                aws ? aws.retryable : formatted.retryable,
+                context,
+                error,
+                aws?.code ?? formatted.code,
+                aws?.name ?? formatted.name,
+            );
         }
         // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
         // non-retryable as on the Converse route.
