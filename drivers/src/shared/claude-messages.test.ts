@@ -474,7 +474,9 @@ describe('formatClaudePrompt', () => {
         const prompt = { system: [{ type: 'text' as const, text: 'system' }], messages: [] };
         const fast = getClaudePayload({ model: 'claude-opus-5-5', model_options: { speed: 'fast' } as never }, prompt);
         expect(fast.payload).toMatchObject({ speed: 'fast' });
-        expect(fast.requestOptions?.headers).toEqual({ 'anthropic-beta': 'fast-mode-2026-02-01' });
+        expect(fast.requestOptions?.headers).toEqual({
+            'anthropic-beta': 'fast-mode-2026-02-01,thinking-binding-controls-2026-08-01',
+        });
 
         const both = getClaudePayload(
             { model: 'claude-3-7-sonnet-20250219', model_options: { speed: 'fast', max_tokens: 100_000 } as never },
@@ -489,7 +491,7 @@ describe('formatClaudePrompt', () => {
             prompt,
         );
         expect(standard.payload).not.toHaveProperty('speed');
-        expect(standard.requestOptions).toBeUndefined();
+        expect(standard.requestOptions?.headers).toEqual({ 'anthropic-beta': 'thinking-binding-controls-2026-08-01' });
     });
 
     it('reports fast mode as the fast tier, otherwise the service tier the response reports', () => {
@@ -597,7 +599,7 @@ describe('Sonnet between-tools payload', () => {
     it.each(['anthropic-claude', 'vertexai-claude', 'bedrock-mantle-claude'] as const)(
         'serializes only the mode for %s',
         (_option_id) => {
-            const { payload } = getClaudePayload(
+            const { payload, requestOptions } = getClaudePayload(
                 {
                     model: 'claude-sonnet-5-5',
                     model_options: {
@@ -612,6 +614,7 @@ describe('Sonnet between-tools payload', () => {
                 { messages: [{ role: 'user', content: 'Hello' }] },
             );
             expect(payload.thinking).toEqual({ type: 'between_tools' });
+            expect(requestOptions).toBeUndefined();
             expect(payload.output_config).toEqual({ effort: 'medium' });
             expect(payload.temperature).toBeUndefined();
             expect(payload.tool_choice).toBeUndefined();
@@ -623,7 +626,7 @@ describe('Haiku 5.5 payload', () => {
     it.each(['anthropic-claude', 'vertexai-claude', 'bedrock-mantle-claude'] as const)(
         'requests thinking summaries without effort and removes legacy parameters for %s',
         (_option_id) => {
-            const { payload } = getClaudePayload(
+            const { payload, requestOptions } = getClaudePayload(
                 {
                     model: 'claude-haiku-5-5',
                     model_options: {
@@ -637,11 +640,26 @@ describe('Haiku 5.5 payload', () => {
                 },
                 { messages: [{ role: 'user', content: 'Hello' }] },
             );
-            expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+            expect(payload.thinking).toEqual({
+                type: 'adaptive',
+                display: 'summarized',
+                block_binding: { prefix_mismatch_behavior: 'drop_block' },
+            });
+            expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'thinking-binding-controls-2026-08-01' });
             expect(payload.output_config).toBeUndefined();
             expect(payload.temperature).toBeUndefined();
             expect(payload.top_p).toBeUndefined();
             expect(payload.top_k).toBeUndefined();
         },
     );
+});
+
+describe('anthropic-beta header', () => {
+    it('keeps the 128k output beta alone for Claude 3.7, which does not bind thinking blocks', () => {
+        const { requestOptions } = getClaudePayload(
+            { model: 'claude-3-7-sonnet', model_options: { _option_id: 'anthropic-claude', max_tokens: 100_000 } },
+            { messages: [{ role: 'user', content: 'Hello' }] },
+        );
+        expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'output-128k-2025-02-19' });
+    });
 });

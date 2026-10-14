@@ -1,5 +1,6 @@
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import { describe, expect, it, vi } from 'vitest';
+import { claudeSdkStream } from '../../test/__helpers__/test-utils.js';
 import {
     type ClaudePrompt,
     executeClaudeCompletion,
@@ -7,17 +8,6 @@ import {
     streamClaudeCompletion,
 } from './claude-messages.js';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
-
-function sdkStream(events: RawMessageStreamEvent[], finalMessage: Message) {
-    return {
-        async *[Symbol.asyncIterator]() {
-            for (const event of events) yield event;
-        },
-        async finalMessage() {
-            return finalMessage;
-        },
-    };
-}
 
 const finalToolMessage = {
     id: 'msg-1',
@@ -36,14 +26,14 @@ const finalToolMessage = {
 } as unknown as Message;
 
 function clientFor(message: Message, events: RawMessageStreamEvent[] = []) {
-    return { messages: { stream: () => sdkStream(events, message) } } as never;
+    return { messages: { stream: () => claudeSdkStream(events, message) } } as never;
 }
 
 const prompt: ClaudePrompt = { messages: [{ role: 'user', content: 'question' }] };
 
 describe('Claude native reasoning replay', () => {
     it('sends the same Anthropic request with or without the optional family ID', async () => {
-        const stream = vi.fn(() => sdkStream([], finalToolMessage));
+        const stream = vi.fn(() => claudeSdkStream([], finalToolMessage));
         const client = { messages: { stream } } as never;
         const model_options = { max_tokens: 1024, temperature: 0.2, cache_enabled: false };
         for (const tagged of [false, true]) {
@@ -150,7 +140,7 @@ describe('Claude native reasoning replay', () => {
             content: [{ type: 'text', text: 'done', citations: null }],
             stop_reason: 'end_turn',
         } as unknown as Message;
-        const nextStream = vi.fn(() => sdkStream([], nextMessage));
+        const nextStream = vi.fn(() => claudeSdkStream([], nextMessage));
         await executeClaudeCompletion(
             { messages: { stream: nextStream } } as never,
             {

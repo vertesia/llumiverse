@@ -1,3 +1,4 @@
+import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
@@ -1480,15 +1481,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         reasoning_config: claudeThinking.thinking,
                     };
                 }
-                // For Claude 3.7 with extended thinking + high output, add beta header
+                // Betas go in the body on Bedrock, not in a header.
+                const anthropicBeta: AnthropicBeta[] = [...claudeThinking.betas];
+                // For Claude 3.7 with extended thinking + high output, add the 128k output beta
                 if (
                     claudeThinking.thinking?.type === 'enabled' &&
                     options.model.includes('claude-3-7-sonnet') &&
                     ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)
                 ) {
+                    anthropicBeta.push('output-128k-2025-02-19');
+                }
+                if (anthropicBeta.length > 0) {
                     additionalField = {
                         ...additionalField,
-                        anthropic_beta: ['output-128k-2025-02-19'],
+                        anthropic_beta: anthropicBeta,
                     };
                 }
             }

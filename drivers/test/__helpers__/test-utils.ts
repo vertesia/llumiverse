@@ -1,3 +1,5 @@
+import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
+
 /**
  * Shared helpers for tests in @llumiverse/drivers. These avoid repeated `as unknown` casts
  * and centralize the patterns we need when asserting on untyped/dynamic values in tests.
@@ -48,3 +50,17 @@ export function exposePrivate<T>(obj: object): T {
  * string/array methods on a leaf (e.g. `.substring`), add a targeted `as string` cast.
  */
 export type Tree = { readonly [key: string]: Tree };
+
+/**
+ * Fake Claude SDK message stream: yields the raw events, then resolves `finalMessage()` with the given message.
+ */
+export function claudeSdkStream(events: RawMessageStreamEvent[], finalMessage: Message) {
+    return {
+        async *[Symbol.asyncIterator]() {
+            for (const event of events) yield event;
+        },
+        async finalMessage() {
+            return finalMessage;
+        },
+    };
+}
