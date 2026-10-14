@@ -125,7 +125,8 @@ if (process.env.BEDROCK_REGION) {
             region: process.env.BEDROCK_REGION as string,
         }),
         //Use foundation models and inference profiles to test the driver
-        models: ['global.anthropic.claude-haiku-5-5', 'global.amazon.nova-2-lite-v1:0'],
+        // One global and one regional (us.) inference profile.
+        models: ['global.anthropic.claude-haiku-5-5', 'us.amazon.nova-2-lite-v1:0'],
     });
 } else {
     console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
@@ -136,7 +137,8 @@ if (process.env.BEDROCK_MANTLE_REGION) {
         name: 'bedrock-mantle',
         driver: new BedrockMantleDriver({ region: process.env.BEDROCK_MANTLE_REGION }),
         // Mantle does not list Claude Haiku 5.5 yet; Haiku 4.5 is its smallest Claude model.
-        models: ['openai.gpt-6-luna', 'anthropic.claude-haiku-4-5'],
+        // One model per Mantle protocol: Responses (gpt-6-luna), Chat Completions (gpt-oss-20b) and Messages (Claude).
+        models: ['openai.gpt-6-luna', 'openai.gpt-oss-20b', 'anthropic.claude-haiku-4-5'],
     });
 } else {
     console.warn('Bedrock Mantle tests are skipped: BEDROCK_MANTLE_REGION environment variable is not set');
@@ -230,6 +232,12 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         expect(r.length).toBeGreaterThan(0);
     });
 
+    // Offline: checks image prompt formatting even where the live image test below cannot tell the model is multimodal.
+    test.each(models)(`${name}: multimodal prompt generation for %s`, async (model) => {
+        const p = await driver.createPrompt(testPrompt_describeImage, { model });
+        expect(p).toBeDefined();
+    });
+
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model, driver.provider));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
@@ -278,10 +286,10 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             }
 
             const shortPrompt: PromptSegment[] = [{ role: PromptRole.user, content: 'Say "ok".' }];
-            const r = await driver.execute(
-                shortPrompt,
-                getLowEffortTestOptions(model, driver.provider, { max_tokens: limit }),
-            );
+            const options = getLowEffortTestOptions(model, driver.provider, { max_tokens: limit });
+            // Guard against the advertised-options filter dropping the option this test is about.
+            expect((options.model_options as { max_tokens?: number } | undefined)?.max_tokens).toBe(limit);
+            const r = await driver.execute(shortPrompt, options);
             // If the provider rejects our limit value, r.error will be set
             expect(r.error).toBeFalsy();
             expect(r.finish_reason).toBeTruthy();
@@ -302,6 +310,8 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             const isMultiModal = fetchedModels?.find((r) => r.id === model)?.is_multimodal;
 
             console.log(`${model} is multimodal: ${isMultiModal}`);
+            // Only some drivers' listModels report is_multimodal (not Vertex, Bedrock, Mantle, Azure, Watsonx or
+            // OpenRouter), so this passes without a call there. Their image paths are covered by the conversation test.
             if (!isMultiModal) return;
 
             const r = await driver.execute(testPrompt_describeImage, {
