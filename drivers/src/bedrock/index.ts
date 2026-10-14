@@ -455,7 +455,11 @@ function isBedrockClaudeModel(model: string): boolean {
  */
 function namedBedrockModel(model: string): string | undefined {
     if (!model.startsWith('arn:')) return model;
-    return model.match(/:(?:foundation-model|inference-profile)\/(.+)$/)?.[1];
+    for (const resource of [':foundation-model/', ':inference-profile/']) {
+        const index = model.indexOf(resource);
+        if (index >= 0) return model.slice(index + resource.length) || undefined;
+    }
+    return undefined;
 }
 
 /**
