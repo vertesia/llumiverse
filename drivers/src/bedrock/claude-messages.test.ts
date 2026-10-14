@@ -602,3 +602,60 @@ describe('legacy Converse conversations with Claude on Bedrock', () => {
         },
     );
 });
+
+describe('Bedrock model identifiers with caller-chosen names', () => {
+    const profileArn = (name: string) => `arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/${name}`;
+
+    function driverWithProfiles(models: Record<string, string>) {
+        const { driver, stream } = driverWithClaudeClient();
+        const getInferenceProfile = vi.fn(
+            async ({ inferenceProfileIdentifier }: { inferenceProfileIdentifier: string }) => {
+                const modelArn = models[inferenceProfileIdentifier];
+                if (!modelArn) throw new Error('ResourceNotFoundException');
+                return { models: [{ modelArn }] };
+            },
+        );
+        Object.defineProperty(driver, 'getService', { value: () => ({ getInferenceProfile }) });
+        return { driver, stream, getInferenceProfile };
+    }
+
+    it('routes an opaque profile backed by Claude to the Messages API and requests it by its ARN', async () => {
+        const arn = profileArn('team-assistant');
+        const { driver, stream, getInferenceProfile } = driverWithProfiles({
+            [arn]: 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5-5',
+        });
+        const prompt = await driver.createPrompt(segments, { model: arn });
+        expect(prompt).toHaveProperty('_is_claude_messages', true);
+
+        await driver.requestTextCompletion(prompt, { model: arn });
+        expect(stream.mock.calls[0][0]).toMatchObject({ model: arn });
+        // Resolved once, then cached.
+        expect(getInferenceProfile).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a non-Claude profile on Converse even when its name contains "claude"', async () => {
+        const arn = profileArn('claude-replacement');
+        const { driver } = driverWithProfiles({
+            [arn]: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+        });
+        expect(await driver.createPrompt(segments, { model: arn })).toHaveProperty('modelId');
+    });
+
+    it('falls back to the identifier when the profile cannot be read', async () => {
+        const warn = vi.fn();
+        const { driver } = driverWithClaudeClient({ warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as never);
+        Object.defineProperty(driver, 'getService', {
+            value: () => ({
+                getInferenceProfile: async () => {
+                    throw new Error('AccessDeniedException');
+                },
+            }),
+        });
+        const prompt = await driver.createPrompt(segments, { model: profileArn('unreadable') });
+        expect(prompt).toHaveProperty('modelId');
+        expect(warn).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.stringContaining('Could not resolve the Bedrock base model'),
+        );
+    });
+});

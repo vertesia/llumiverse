@@ -113,6 +113,7 @@ import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './
 export type { BedrockDriverOptions } from '../driver-options.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
+const baseModelCache = new LRUCache<string, string>({ max: 4096 });
 
 type AwsSdkError = {
     name?: string;
@@ -448,6 +449,16 @@ function isBedrockClaudeModel(model: string): boolean {
 }
 
 /**
+ * The model a Bedrock identifier names without a lookup: a foundation-model ID or ARN, or a system inference
+ * profile (`us.anthropic.claude-…`), whose names AWS defines. Undefined for application inference profiles, custom
+ * models and provisioned throughput, whose ARNs carry caller-chosen names.
+ */
+function namedBedrockModel(model: string): string | undefined {
+    if (!model.startsWith('arn:')) return model;
+    return model.match(/:(?:foundation-model|inference-profile)\/(.+)$/)?.[1];
+}
+
+/**
  * Claude runs on the Anthropic Messages API over InvokeModel. Conversations started on the Converse API (before
  * this change) continue there, because their stored turns are Converse-shaped.
  */
@@ -759,11 +770,53 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
     }
 
-    /** Execution options for the Claude Messages route, with the Bedrock output-limit clamp applied. */
-    private claudeMessagesOptions(options: ExecutionOptions): ExecutionOptions {
+    /**
+     * The foundation model behind a model identifier. Application inference profiles, custom models and provisioned
+     * throughput are addressed by ARNs with caller-chosen names, so their model is read from Bedrock (and cached)
+     * rather than inferred from the name. Falls back to the identifier when the lookup fails.
+     */
+    private async resolveBaseModel(model: string, signal?: AbortSignal): Promise<string> {
+        const named = namedBedrockModel(model);
+        if (named) return named;
+        const region = this.extractRegion(model, this.options.region);
+        const cacheKey = `${region}:${model}`;
+        const cached = baseModelCache.get(cacheKey);
+        if (cached) return cached;
+        const service = this.getService(region);
+        const requestOptions = signal ? { abortSignal: signal } : undefined;
+        try {
+            const underlying = model.includes(':application-inference-profile/')
+                ? (await service.getInferenceProfile({ inferenceProfileIdentifier: model }, requestOptions)).models?.[0]
+                      ?.modelArn
+                : model.includes(':custom-model/')
+                  ? (await service.getCustomModel({ modelIdentifier: model }, requestOptions)).baseModelArn
+                  : model.includes(':provisioned-model/')
+                    ? (await service.getProvisionedModelThroughput({ provisionedModelId: model }, requestOptions))
+                          .modelArn
+                    : undefined;
+            const resolved =
+                underlying && underlying !== model ? await this.resolveBaseModel(underlying, signal) : model;
+            baseModelCache.set(cacheKey, resolved);
+            return resolved;
+        } catch (error) {
+            signal?.throwIfAborted();
+            this.logger.warn(
+                { err: error, model, region },
+                'Could not resolve the Bedrock base model; using its identifier',
+            );
+            return model;
+        }
+    }
+
+    /**
+     * Execution options for the Claude Messages route: the resolved base model for Claude's model checks (the request
+     * still names the caller's identifier), with the Bedrock output-limit clamp applied.
+     */
+    private async claudeMessagesOptions(options: ExecutionOptions, signal?: AbortSignal): Promise<ExecutionOptions> {
+        const resolved = { ...options, model: await this.resolveBaseModel(options.model, signal) };
         const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
-        const maxTokens = this.clampedClaudeMaxTokens(options);
-        return { ...options, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
+        const maxTokens = this.clampedClaudeMaxTokens(resolved);
+        return { ...resolved, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
     }
 
     /**
@@ -808,8 +861,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (opts.model.includes('twelvelabs.pegasus')) {
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
-        if (usesClaudeMessagesApi(opts)) {
-            return { ...(await formatClaudePrompt(segments, opts, this.logger)), _is_claude_messages: true };
+        const baseModel = await this.resolveBaseModel(opts.model);
+        if (usesClaudeMessagesApi({ ...opts, model: baseModel })) {
+            const claudePrompt = await formatClaudePrompt(segments, { ...opts, model: baseModel }, this.logger);
+            return { ...claudePrompt, _is_claude_messages: true };
         }
         return await formatConversePrompt(segments, opts);
     }
@@ -1403,10 +1458,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return executeClaudeCompletion(
                 withBedrockServiceTier(this.getAnthropicService()),
                 prompt,
-                this.claudeMessagesOptions(options),
+                await this.claudeMessagesOptions(options, signal),
                 this.logger,
                 this.provider,
                 this.claudeTransportOptions(options, signal),
+                options.model,
             );
         }
 
@@ -1596,10 +1652,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return streamClaudeCompletion(
                 withBedrockServiceTier(this.getAnthropicService()),
                 prompt,
-                this.claudeMessagesOptions(options),
+                await this.claudeMessagesOptions(options, signal),
                 this.logger,
                 this.provider,
                 this.claudeTransportOptions(options, signal),
+                options.model,
             );
         }
 
