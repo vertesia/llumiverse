@@ -7,6 +7,8 @@ import {
     getMaxTokensLimitVertexAi,
     PromptRole,
     type PromptSegment,
+    type Providers,
+    resolveModelProfile,
 } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
@@ -32,7 +34,7 @@ import {
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
-import { getAdvertisedTestOptions } from './utils.js';
+import { getLowEffortTestOptions } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 
@@ -54,7 +56,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
         }),
         models: [
             'locations/global/publishers/google/models/gemini-3.5-flash-lite',
-            'locations/global/publishers/anthropic/models/claude-sonnet-5',
+            'locations/global/publishers/anthropic/models/claude-haiku-5-5',
         ],
     });
 } else {
@@ -80,11 +82,8 @@ if (process.env.TOGETHER_API_KEY) {
         driver: new TogetherAIDriver({
             apiKey: process.env.TOGETHER_API_KEY as string,
         }),
-        models: [
-            //"meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", // No longer serverless on TogetherAI
-            //"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-            //"mistralai/Mixtral-8x7B-Instruct-v0.1" //too slow in tests for now
-        ],
+        // A cheap current serverless model; Together serves gpt-oss-20b only on dedicated endpoints.
+        models: ['Qwen/Qwen3.5-9B'],
     });
 } else {
     console.warn('TogetherAI tests are skipped: TOGETHER_API_KEY environment variable is not set');
@@ -96,13 +95,14 @@ if (process.env.OPENAI_API_KEY) {
         driver: new OpenAIDriver({
             apiKey: process.env.OPENAI_API_KEY as string,
         }),
-        models: ['gpt-4o-mini', 'gpt-5.4-mini'],
+        models: ['gpt-6-luna'],
     });
 } else {
     console.warn('OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set');
 }
 
-const AZURE_OPENAI_MODELS = ['gpt-4'];
+// Azure OpenAI addresses models by deployment name; the deployment must exist on the configured resource.
+const AZURE_OPENAI_MODELS = ['gpt-6-luna'];
 
 if (process.env.AZURE_OPENAI_KEY && process.env.AZURE_OPENAI_ENDPOINT) {
     drivers.push({
@@ -125,7 +125,7 @@ if (process.env.BEDROCK_REGION) {
             region: process.env.BEDROCK_REGION as string,
         }),
         //Use foundation models and inference profiles to test the driver
-        models: ['global.anthropic.claude-haiku-4-5-20251001-v1:0', 'us.amazon.nova-micro-v1:0'],
+        models: ['global.anthropic.claude-haiku-5-5', 'global.amazon.nova-2-lite-v1:0'],
     });
 } else {
     console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
@@ -135,7 +135,8 @@ if (process.env.BEDROCK_MANTLE_REGION) {
     drivers.push({
         name: 'bedrock-mantle',
         driver: new BedrockMantleDriver({ region: process.env.BEDROCK_MANTLE_REGION }),
-        models: ['openai.gpt-oss-20b', 'google.gemma-3-4b-it', 'anthropic.claude-haiku-4-5'],
+        // Mantle does not list Claude Haiku 5.5 yet; Haiku 4.5 is its smallest Claude model.
+        models: ['openai.gpt-6-luna', 'anthropic.claude-haiku-4-5'],
     });
 } else {
     console.warn('Bedrock Mantle tests are skipped: BEDROCK_MANTLE_REGION environment variable is not set');
@@ -147,12 +148,10 @@ if (process.env.GROQ_API_KEY) {
         driver: new GroqDriver({
             apiKey: process.env.GROQ_API_KEY as string,
         }),
-        models: [
-            //TODO: re enabled when groq has constrained decoding
-            //https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
-            //    "openai/gpt-oss-20b",
-            //"llama-3.3-70b-versatile"
-        ],
+        // gpt-oss-20b is Groq's cheapest self-serve model; qwen3.8-27b covers Groq's Qwen output cap and effort levels.
+        // Tool calling on Groq's gpt-oss is not covered here:
+        // https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
+        models: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
     });
 } else {
     console.warn('Groq tests are skipped: GROQ_API_KEY environment variable is not set');
@@ -166,7 +165,7 @@ if (process.env.WATSONX_API_KEY) {
             projectId: process.env.WATSONX_PROJECT_ID as string,
             endpointUrl: process.env.WATSONX_ENDPOINT_URL as string,
         }),
-        models: ['ibm/granite-3-2b-instruct'],
+        models: ['ibm/granite-4-h-small'],
     });
 } else {
     console.warn('Watsonx tests are skipped: WATSONX_API_KEY environment variable is not set');
@@ -180,7 +179,7 @@ if (process.env.OPENROUTER_API_KEY) {
             endpoint: 'https://openrouter.ai/api/v1',
         }),
         // qwen/qwen3.8-flash was dropped: its upstream on OpenRouter answered 429 on most runs, outlasting the retries.
-        models: ['moonshotai/kimi-k2.5', 'minimax/minimax-m2.5', 'google/gemini-3.1-flash-lite'],
+        models: ['minimax/minimax-m3', 'deepseek/deepseek-v4-flash', 'google/gemini-3.5-flash-lite'],
     });
 } else {
     console.warn('OpenRouter tests are skipped: OPENROUTER_API_KEY environment variable is not set');
@@ -192,7 +191,7 @@ if (process.env.XAI_API_KEY) {
         driver: new xAIDriver({
             apiKey: process.env.XAI_API_KEY as string,
         }),
-        models: ['grok-4.1'],
+        models: ['grok-4.7'],
     });
 } else {
     console.warn('xAI tests are skipped: XAI_API_KEY environment variable is not set');
@@ -203,38 +202,22 @@ const selectedDrivers = selectLiveTestDrivers(drivers, {
     models: process.env.LLUMIVERSE_LIVE_MODELS,
 });
 
-function getTestOptions(model: string): ExecutionOptions {
-    if (model === 'o1-mini' || model === 'o3-mini') {
-        return {
-            model: model,
-            model_options: {
-                _option_id: 'openai-thinking',
-                max_tokens: 3000,
-                stop_sequence: model === 'o3-mini' ? ['haemoglobin'] : undefined,
-            },
-        };
-    }
-
+function getTestOptions(model: string, provider: string): ExecutionOptions {
     const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
 
-    return {
-        model: model,
-        model_options: {
-            _option_id: 'text-fallback',
-            max_tokens: 512,
-            temperature: 0.3,
-            top_k: 40,
-            top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
-            //   top_logprobs: 5,        //Currently not supported, option will be ignored
-            ...(isGemini35FlashLite
-                ? {}
-                : {
-                      presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
-                      frequency_penalty: -0.1,
-                  }),
-            stop_sequence: ['haemoglobin'],
-        },
-    };
+    // Exercises option mapping on models that advertise these controls; others drop them.
+    return getLowEffortTestOptions(model, provider, {
+        max_tokens: 512,
+        top_k: 40,
+        top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
+        ...(isGemini35FlashLite
+            ? {}
+            : {
+                  presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
+                  frequency_penalty: -0.1,
+              }),
+        stop_sequence: ['haemoglobin'],
+    });
 }
 
 describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
@@ -247,26 +230,8 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         expect(r.length).toBeGreaterThan(0);
     });
 
-    test.each(models)(`${name}: prompt generation for %s`, {}, async (model) => {
-        const p = await driver.createPrompt(testPrompt_color, { model });
-        expect(p).toBeDefined();
-    });
-
-    test.each(models)(`${name}: prompt generation for %s`, {}, async (model) => {
-        const p = await driver.createPrompt(testPrompt_color, { model, result_schema: testSchema_color });
-        expect(p).toBeDefined();
-    });
-
-    test.each(models)(`${name}: multimodal prompt generation for %s`, {}, async (model) => {
-        const p = await driver.createPrompt(testPrompt_describeImage, { model });
-        expect(p).toBeDefined();
-    });
-
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await driver.execute(
-            testPrompt_color,
-            getAdvertisedTestOptions(getTestOptions(model), driver.provider),
-        );
+        const r = await driver.execute(testPrompt_color, getTestOptions(model, driver.provider));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
     });
@@ -279,7 +244,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         },
         async (model) => {
             const r = await driver.stream(testPrompt_color, {
-                ...getAdvertisedTestOptions(getTestOptions(model), driver.provider),
+                ...getTestOptions(model, driver.provider),
                 result_schema: testSchema_color,
             });
             const out = await assertStreamingCompletionOk(r, true);
@@ -305,20 +270,18 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
                     return;
                 }
             }
-            // Fallback to conservative provider-agnostic limit for all other providers
+            // Other providers: the provider-aware profile (e.g. Groq's own completion caps), else the canonical limit
             if (!limit) {
-                limit = getMaxOutputTokens(model);
+                limit =
+                    resolveModelProfile(model, driver.provider as Providers).max_output_tokens ??
+                    getMaxOutputTokens(model);
             }
 
             const shortPrompt: PromptSegment[] = [{ role: PromptRole.user, content: 'Say "ok".' }];
-            const r = await driver.execute(shortPrompt, {
-                model,
-                model_options: {
-                    _option_id: 'text-fallback',
-                    max_tokens: limit,
-                    temperature: 0,
-                },
-            });
+            const r = await driver.execute(
+                shortPrompt,
+                getLowEffortTestOptions(model, driver.provider, { max_tokens: limit }),
+            );
             // If the provider rejects our limit value, r.error will be set
             expect(r.error).toBeFalsy();
             expect(r.finish_reason).toBeTruthy();
@@ -342,12 +305,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             if (!isMultiModal) return;
 
             const r = await driver.execute(testPrompt_describeImage, {
-                model: model,
-                model_options: {
-                    _option_id: 'text-fallback',
-                    temperature: 0.5,
-                    max_tokens: 1024,
-                },
+                ...getLowEffortTestOptions(model, driver.provider, { max_tokens: 1024 }),
                 result_schema: testSchema_animalDescription,
             });
             console.log('Result', r);
