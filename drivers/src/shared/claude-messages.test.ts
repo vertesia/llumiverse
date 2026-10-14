@@ -1,10 +1,11 @@
-import { APIError } from '@anthropic-ai/sdk/error';
+import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
     anthropicUsageToTokenUsage,
     buildClaudeStreamingConversation,
+    ClaudeStreamError,
     claudeServiceTier,
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
@@ -867,5 +868,59 @@ describe('streamClaudeCompletion errors', () => {
             })(),
         ).rejects.toBe(failure);
         expect(chunks).toHaveLength(1);
+    });
+
+    const failingStream = (eventsBeforeFailure: number, failure: Error) => () => ({
+        async *[Symbol.asyncIterator]() {
+            for (let i = 0; i < eventsBeforeFailure; i++) {
+                yield { type: 'message_start', message: { id: 'm', usage: { input_tokens: 1, output_tokens: 0 } } };
+            }
+            throw failure;
+        },
+        abort: () => undefined,
+        finalMessage: () => Promise.reject(failure),
+    });
+
+    async function streamError(eventsBeforeFailure: number, failure: Error): Promise<unknown> {
+        const stream = failingStream(eventsBeforeFailure, failure);
+        const completion = await streamClaudeCompletion(
+            { messages: { stream } } as never,
+            { messages: [] },
+            {
+                model: 'claude-sonnet-4-6',
+            },
+        );
+        return (async () => {
+            for await (const _chunk of completion) {
+                // drain
+            }
+        })().catch((error: unknown) => error);
+    }
+
+    const context = { provider: 'anthropic', model: 'claude-sonnet-4-6', operation: 'stream' as const };
+
+    it('retries a client-side failure after the stream started', async () => {
+        const error = await streamError(1, new AnthropicError('terminated'));
+        expect(error).toBeInstanceOf(ClaudeStreamError);
+        const formatted = formatAnthropicLlumiverseError(error, context);
+        expect(formatted.retryable).toBe(true);
+        expect(formatted.message).toContain('terminated');
+    });
+
+    it('keeps a client-side error before the first event a configuration error', async () => {
+        const error = await streamError(0, new AnthropicError('Could not resolve authentication method'));
+        expect(error).not.toBeInstanceOf(ClaudeStreamError);
+        expect(formatAnthropicLlumiverseError(error, context).retryable).toBe(false);
+    });
+
+    it('leaves API errors after the stream started to their own classification', async () => {
+        const overloaded = new APIError(
+            undefined,
+            { type: 'error', error: { type: 'overloaded_error' } },
+            'o',
+            undefined,
+        );
+        const error = await streamError(1, overloaded);
+        expect(error).toBe(overloaded);
     });
 });

@@ -255,13 +255,37 @@ function mergeRequestOptions(
 }
 
 /**
+ * A client-side failure while reading a response stream that had started (e.g. a dropped connection or an event
+ * the SDK could not decode). The request reached the provider, so it can be retried.
+ */
+export class ClaudeStreamError extends AnthropicError {
+    constructor(cause: AnthropicError) {
+        super(cause.message, { cause });
+        this.name = 'ClaudeStreamError';
+    }
+}
+
+/**
  * A message stream's events, then its outcome. The SDK's iterator drops an error that arrives while no read is
  * pending (the consumer is busy with the previous chunk) and only `finalMessage()` rejects with it, so await it
  * here for the error to surface during iteration, where the driver formats it.
+ *
+ * A client-side SDK error after the first event is a stream fault (API errors carry their own status and type);
+ * before it, the same error type means a configuration problem such as a missing credential.
  */
 async function* eventsThenOutcome(stream: ClaudeMessageStream): AsyncGenerator<RawMessageStreamEvent> {
-    yield* stream;
-    await stream.finalMessage();
+    let started = false;
+    try {
+        for await (const event of stream) {
+            started = true;
+            yield event;
+        }
+        await stream.finalMessage();
+    } catch (error) {
+        throw started && isAnthropicSdkError(error) && !isAnthropicApiError(error)
+            ? new ClaudeStreamError(error)
+            : error;
+    }
 }
 
 function streamClaudeMessages(
@@ -1347,7 +1371,7 @@ export async function executeClaudeCompletion(
         mergeRequestOptions(requestOptions, transportOptions),
     );
     let transformations: InputTransformations;
-    for await (const event of responseStream) {
+    for await (const event of eventsThenOutcome(responseStream)) {
         transformations = trackInputTransformations(transformations, event);
     }
     const result = await responseStream.finalMessage();
@@ -1542,6 +1566,16 @@ export function isAnthropicApiError(error: unknown): error is APIError {
 }
 
 export function formatAnthropicLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+    if (error instanceof ClaudeStreamError) {
+        return new LlumiverseError(
+            `[${context.provider}] ${error.message}`,
+            true,
+            context,
+            error,
+            undefined,
+            error.name,
+        );
+    }
     if (isAnthropicSdkError(error) && !isAnthropicApiError(error)) {
         // Client-side SDK error (e.g. "Streaming is required for operations that may take longer than 10 minutes").
         // These are structural/configuration errors — retrying will never succeed.

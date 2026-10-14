@@ -336,8 +336,8 @@ describe('Bedrock Claude on the Messages API', () => {
         Reflect.set(driver, '_anthropicService', {
             messages: {
                 stream: () => ({
-                    // biome-ignore lint/correctness/useYield: the stream fails before its first event
                     async *[Symbol.asyncIterator]() {
+                        yield { type: 'message_start', message: message() };
                         throw new AnthropicError('Could not parse a Bedrock chunk into JSON: {');
                     },
                     finalMessage: async () => message(),

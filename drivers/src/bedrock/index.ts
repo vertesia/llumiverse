@@ -83,7 +83,6 @@ import {
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
-    isAnthropicApiError,
     isAnthropicSdkError,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
@@ -409,22 +408,6 @@ function bedrockExceptionName(error: AnthropicError): string | undefined {
  * Reports the service tier Bedrock applied, which InvokeModel returns in a response header rather than in the
  * message usage. Wraps the client the shared Claude helpers call, setting `usage.service_tier` from the header.
  */
-/**
- * A client-side fault while reading a Messages API response stream, such as an event chunk the SDK cannot decode.
- * The request reached Bedrock and the stream broke, so it can be retried.
- */
-class BedrockStreamError extends Error {
-    constructor(readonly sdkError: AnthropicError) {
-        super(sdkError.message, { cause: sdkError });
-        this.name = 'BedrockStreamError';
-    }
-}
-
-/** SDK errors that are not API errors (HTTP, connection, abort) can only come from reading the stream itself. */
-function classifyStreamError(error: unknown): unknown {
-    return isAnthropicSdkError(error) && !isAnthropicApiError(error) ? new BedrockStreamError(error) : error;
-}
-
 function withBedrockServiceTier(client: AnthropicBedrock) {
     type StreamArgs = Parameters<AnthropicBedrock['messages']['stream']>;
     type BedrockMessage = Awaited<ReturnType<ReturnType<AnthropicBedrock['messages']['stream']>['finalMessage']>>;
@@ -440,22 +423,13 @@ function withBedrockServiceTier(client: AnthropicBedrock) {
                 );
                 return {
                     abort: () => stream.abort(),
-                    finalMessage: async (): Promise<BedrockMessage> => {
-                        try {
-                            return applyTier(await stream.finalMessage(), await tier);
-                        } catch (error) {
-                            throw classifyStreamError(error);
-                        }
-                    },
+                    finalMessage: async (): Promise<BedrockMessage> =>
+                        applyTier(await stream.finalMessage(), await tier),
                     async *[Symbol.asyncIterator]() {
-                        try {
-                            for await (const event of stream) {
-                                yield event.type === 'message_start'
-                                    ? { ...event, message: applyTier(event.message, await tier) }
-                                    : event;
-                            }
-                        } catch (error) {
-                            throw classifyStreamError(error);
+                        for await (const event of stream) {
+                            yield event.type === 'message_start'
+                                ? { ...event, message: applyTier(event.message, await tier) }
+                                : event;
                         }
                     },
                 };
@@ -867,10 +841,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * @returns A standardized LlumiverseError
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-        if (error instanceof BedrockStreamError) {
-            const formatted = this.formatClaudeMessagesError(error.sdkError, context);
-            return new LlumiverseError(formatted.message, true, context, error, formatted.code, error.name);
-        }
         // Claude on the Messages API fails with Anthropic SDK errors.
         if (isAnthropicSdkError(error)) {
             return this.formatClaudeMessagesError(error, context);
