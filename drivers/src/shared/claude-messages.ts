@@ -526,7 +526,15 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
                 }
                 i++;
             }
-            result.push({ role: 'user', content: mergedContent });
+            // tool_result blocks must lead a user turn; keep them ahead of text merged in from another message.
+            const toolResults = mergedContent.filter((block) => block.type === 'tool_result');
+            result.push({
+                role: 'user',
+                content:
+                    toolResults.length > 0
+                        ? [...toolResults, ...mergedContent.filter((block) => block.type !== 'tool_result')]
+                        : mergedContent,
+            });
         } else {
             result.push(current);
             i++;
@@ -1016,11 +1024,7 @@ function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessagePar
     const flush = () => {
         if (pending.length === 0) return;
         if (result[result.length - 1]?.role !== 'user') result.push(claudeContinueTurn());
-        result.push(
-            pending.length === 1
-                ? pending[0]
-                : { role: 'system', content: pending.flatMap((m) => (Array.isArray(m.content) ? m.content : [])) },
-        );
+        result.push(pending.length === 1 ? pending[0] : mergeToolChangeMessages(pending));
         pending = [];
     };
     for (const message of messages) {
@@ -1035,6 +1039,22 @@ function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessagePar
     }
     flush();
     return result;
+}
+
+/** One system message for several pending ones; for each tool only its last change applies. */
+function mergeToolChangeMessages(messages: MessageParam[]): MessageParam {
+    const blocks = messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []));
+    const toolName = (block: unknown) => (block as { tool?: { name?: string } }).tool?.name;
+    const lastChange = new Map<string, unknown>();
+    for (const block of blocks) {
+        const name = toolName(block);
+        if (name && isClaudeToolChangeBlock(block)) lastChange.set(name, block);
+    }
+    const content = blocks.filter((block) => {
+        const name = toolName(block);
+        return !name || !isClaudeToolChangeBlock(block) || lastChange.get(name) === block;
+    });
+    return { role: 'system', content } as MessageParam;
 }
 
 function containsToolChanges(messages: MessageParam[]): boolean {

@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { AnthropicError, APIError, BadRequestError } from '@anthropic-ai/sdk/error';
+import { AnthropicError, APIError, BadRequestError, InternalServerError } from '@anthropic-ai/sdk/error';
 import { type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
@@ -255,6 +255,23 @@ describe('Bedrock Claude on the Messages API', () => {
         // A client fault in the Bedrock API model, non-retryable as on the Converse route.
         expect(driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable).toBe(false);
         expect(driver.formatLlumiverseError(streamError('validationException'), context).retryable).toBe(false);
+    });
+
+    it('keeps the Bedrock request ID when no exception is named', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const error = new InternalServerError(
+            503,
+            { message: 'unavailable' },
+            'unavailable',
+            new Headers({ 'x-amzn-requestid': 'aws-req-2' }),
+        );
+        const formatted = driver.formatLlumiverseError(error, {
+            provider: 'bedrock',
+            model: MODEL,
+            operation: 'execute',
+        });
+        expect(formatted.message).toContain('(Request ID: aws-req-2)');
+        expect(formatted.retryable).toBe(true);
     });
 
     it('retries a corrupt stream chunk', () => {

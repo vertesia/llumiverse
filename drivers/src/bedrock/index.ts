@@ -709,6 +709,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private getAnthropicService(): AnthropicBedrock {
         if (!this._anthropicService) {
             const credentials = this.options.credentials;
+            // Captured once, so a released driver never builds a new AWS SDK client while signing.
+            const credentialProvider = this.getExecutor().config.credentials;
             const base = {
                 awsRegion: this.options.region,
                 fetch: this.getDriverFetch(),
@@ -729,7 +731,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                           ...base,
                           // Reuse the AWS SDK client's credential provider (the configured one or the default
                           // chain), which caches resolved credentials across requests.
-                          providerChainResolver: async () => this.getExecutor().config.credentials,
+                          providerChainResolver: async () => credentialProvider,
                           // A configured provider must win over an AWS_BEARER_TOKEN_BEDROCK environment token.
                           ...(credentials && { apiKey: null as unknown as undefined }),
                       });
@@ -872,9 +874,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             // The SDK's event-stream decoder raises a client-side error for a corrupt chunk: a transport fault
             // worth retrying, unlike the configuration errors that error type usually means.
             const corruptChunk = error.message.startsWith('Could not parse a Bedrock chunk');
-            return corruptChunk
-                ? new LlumiverseError(formatted.message, true, context, error, formatted.code, formatted.name)
-                : formatted;
+            const requestId = apiError.headers?.get('x-amzn-requestid');
+            if (!corruptChunk && (!requestId || formatted.message.includes(requestId))) return formatted;
+            const message =
+                requestId && !formatted.message.includes(requestId)
+                    ? `${formatted.message} (Request ID: ${requestId})`
+                    : formatted.message;
+            const retryable = corruptChunk ? true : formatted.retryable;
+            return new LlumiverseError(message, retryable, context, error, formatted.code, formatted.name);
         }
         // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
         // non-retryable as on the Converse route.

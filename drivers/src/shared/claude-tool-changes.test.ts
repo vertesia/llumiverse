@@ -364,6 +364,41 @@ describe('append-only Claude tool changes', () => {
         expect(declared._llumiverse_meta?.turnNumber).toBe(0);
     });
 
+    it('keeps tool results first when a continuation turn and tool results merge', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt = {
+            ...declared,
+            messages: [
+                ...declared.messages,
+                { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'a', input: {} }] },
+                { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
+                { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+            ],
+        } as unknown as ClaudePrompt;
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a'), tool('b')] }, prompt);
+        const user = payload.messages.at(-2);
+        expect(Array.isArray(user?.content) && user.content.map((b) => b.type)).toEqual(['tool_result', 'text']);
+    });
+
+    it('keeps only the last change per tool when pending changes merge', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt = {
+            ...declared,
+            messages: [
+                ...declared.messages,
+                { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+                { role: 'user', content: 'again' },
+                { role: 'system', content: [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'b' } }] },
+            ],
+        } as unknown as ClaudePrompt;
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a')] }, prompt);
+        expect(payload.messages.at(-1)).toEqual({
+            role: 'system',
+            content: [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'b' } }],
+        });
+    });
+
     it('announces a tool listed twice once', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const next = applyClaudeToolChanges(
