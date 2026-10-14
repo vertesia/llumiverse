@@ -78,6 +78,9 @@ export function resolveClaudeThinking(
     const supportsThinking = isClaudeVersionGTE(model, 3, 7);
     const budgetTokens = options?.thinking_budget_tokens;
     const version = parseClaudeVersion(model);
+    // Compatibility exception: Claude 5+ Opus, Sonnet, Fable and Mythos (and Haiku 5.5+) send adaptive thinking
+    // even when omitted, so display follows include_thoughts and thinking.block_binding can be attached. Later
+    // generations inherit this, per the forward-compatibility rule.
     const defaultAdaptiveThinking =
         (version != null && version.major >= 5 && ['opus', 'sonnet', 'fable', 'mythos'].includes(version.variant)) ||
         (version?.variant === 'haiku' && isClaudeVersionGTE(model, 5, 5));
