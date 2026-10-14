@@ -100,7 +100,7 @@ import {
     converseSystemToMessages,
     formatConversePrompt,
     isConverseConversation,
-    isIncompatibleWithConverse,
+    isMessagesApiConversation,
     relocateConverseToolImages,
     sanitizeConverseMessages,
     shouldIncludeSchemaInConversePrompt,
@@ -764,12 +764,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     /**
-     * The stored conversation for a Converse request. A Claude conversation stored by the Messages API with tool
-     * use, thinking or media cannot continue on a Converse model (e.g. a non-Claude model); fail clearly instead of
+     * The stored conversation for a Converse request. A Claude conversation stored by the Messages API cannot
+     * continue on a Converse model (switching models mid-conversation is not supported); fail clearly instead of
      * sending a malformed request.
      */
     private converseConversation(options: ExecutionOptions, operation: 'execute' | 'stream'): ConverseRequest {
-        if (isIncompatibleWithConverse(options.conversation)) {
+        if (isMessagesApiConversation(options.conversation)) {
             const message = `The stored conversation is not in Converse format, so it cannot continue on ${options.model}. Start a new conversation.`;
             const cause = new Error(message);
             cause.name = 'ConversationFormatError';

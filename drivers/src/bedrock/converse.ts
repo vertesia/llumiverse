@@ -579,40 +579,28 @@ export async function formatConversePrompt(
 }
 
 /**
- * Whether a stored conversation holds Anthropic Messages content the Converse API cannot carry: string content,
- * `role: "system"` messages, or typed blocks other than text (tool use, thinking, images, documents). Text-only
- * Messages blocks (`{ type: 'text', text }`) serialize as Converse text blocks, so those conversations continue.
+ * Whether a stored conversation is in Anthropic Messages format (Claude on the Messages API). Switching such a
+ * conversation to a Converse model is not supported.
  */
-export function isIncompatibleWithConverse(conversation: unknown): boolean {
+export function isMessagesApiConversation(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
-    if (!Array.isArray(messages)) return false;
-    return messages.some((message) => {
-        const { role, content } = (message ?? {}) as { role?: unknown; content?: unknown };
-        if (role === 'system' || typeof content === 'string') return true;
-        return (
-            Array.isArray(content) &&
-            content.some((block) => !!block && typeof block === 'object' && 'type' in block && block.type !== 'text')
-        );
-    });
+    return Array.isArray(messages) && messages.length > 0 && !isConverseConversation(conversation);
 }
 
 /**
  * Whether a stored conversation was built for the Converse API: its content blocks are single-key objects
  * (`{ text }`, `{ toolUse }`, `{ reasoningContent }`, ...) rather than Anthropic Messages blocks with a `type`.
- * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse, and so does a
- * text-only Claude conversation that a Converse model continued: any Converse block makes the whole conversation
- * Converse, since the Messages API rejects blocks without a `type` and Converse accepts typed text blocks.
+ * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse.
  */
 export function isConverseConversation(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
     if (!Array.isArray(messages)) return false;
     const isConverseBlock = (block: unknown) => !!block && typeof block === 'object' && !('type' in block);
+    // Every Converse message has array content, so the first non-empty one decides.
+    for (const message of messages) {
+        const content = (message as { content?: unknown } | null)?.content;
+        if (Array.isArray(content) && content.length > 0) return content.some(isConverseBlock);
+    }
     const system = (conversation as { system?: unknown }).system;
-    return (
-        (Array.isArray(system) && system.some(isConverseBlock)) ||
-        messages.some((message) => {
-            const content = (message as { content?: unknown } | null)?.content;
-            return Array.isArray(content) && content.some(isConverseBlock);
-        })
-    );
+    return Array.isArray(system) && system.some(isConverseBlock);
 }
