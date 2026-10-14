@@ -579,12 +579,21 @@ export async function formatConversePrompt(
 }
 
 /**
- * Whether a stored conversation uses the Anthropic Messages format (Claude on the Messages API), which the
- * Converse API cannot continue.
+ * Whether a stored conversation holds Anthropic Messages content the Converse API cannot carry: string content,
+ * `role: "system"` messages, or typed blocks other than text (tool use, thinking, images, documents). Text-only
+ * Messages blocks (`{ type: 'text', text }`) serialize as Converse text blocks, so those conversations continue.
  */
-export function isClaudeMessagesConversation(conversation: unknown): boolean {
+export function isIncompatibleWithConverse(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
-    return Array.isArray(messages) && messages.length > 0 && !isConverseConversation(conversation);
+    if (!Array.isArray(messages)) return false;
+    return messages.some((message) => {
+        const { role, content } = (message ?? {}) as { role?: unknown; content?: unknown };
+        if (role === 'system' || typeof content === 'string') return true;
+        return (
+            Array.isArray(content) &&
+            content.some((block) => !!block && typeof block === 'object' && 'type' in block && block.type !== 'text')
+        );
+    });
 }
 
 /**

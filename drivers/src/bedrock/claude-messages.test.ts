@@ -17,7 +17,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { type ClaudePrompt, formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
 import { MID_CONVERSATION_TOOL_CHANGES_BETA } from '../shared/claude-tool-changes.js';
-import { isClaudeMessagesConversation, isConverseConversation } from './converse.js';
+import { isConverseConversation, isIncompatibleWithConverse } from './converse.js';
 import { BedrockDriver, type BedrockPrompt } from './index.js';
 
 const MODEL = 'us.anthropic.claude-sonnet-5-5';
@@ -91,7 +91,7 @@ describe('isConverseConversation', () => {
             ],
         };
         expect(isConverseConversation(stripped)).toBe(true);
-        expect(isClaudeMessagesConversation(stripped)).toBe(false);
+        expect(isIncompatibleWithConverse(stripped)).toBe(false);
     });
 
     it('recognises a Messages API conversation that starts with string content', () => {
@@ -102,12 +102,34 @@ describe('isConverseConversation', () => {
             ],
         };
         expect(isConverseConversation(conversation)).toBe(false);
-        expect(isClaudeMessagesConversation(conversation)).toBe(true);
-        expect(isClaudeMessagesConversation({ messages: [{ role: 'user', content: 'hi' }] })).toBe(true);
+        expect(isIncompatibleWithConverse(conversation)).toBe(true);
+        expect(isIncompatibleWithConverse({ messages: [{ role: 'user', content: 'hi' }] })).toBe(true);
+    });
+
+    it('lets a text-only Messages API conversation continue on Converse', () => {
+        const conversation = {
+            messages: [
+                { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+                { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+            ],
+        };
+        expect(isIncompatibleWithConverse(conversation)).toBe(false);
+    });
+
+    it.each([
+        ['tool use', { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'a', input: {} }] }],
+        ['thinking', { role: 'assistant', content: [{ type: 'thinking', thinking: '…', signature: 's' }] }],
+        [
+            'a tool change',
+            { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'a' } }] },
+        ],
+    ])('rejects a Messages API conversation with %s', (_label, message) => {
+        const conversation = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }, message] };
+        expect(isIncompatibleWithConverse(conversation)).toBe(true);
     });
 
     it.each([undefined, null, {}, { messages: [] }])('treats %j as neither format with history', (conversation) => {
-        expect(isClaudeMessagesConversation(conversation)).toBe(false);
+        expect(isIncompatibleWithConverse(conversation)).toBe(false);
     });
 });
 
@@ -525,7 +547,12 @@ describe('legacy Converse conversations with Claude on Bedrock', () => {
             const model = 'amazon.nova-pro-v1:0';
             const options = {
                 model,
-                conversation: { messages: [{ role: 'user', content: [{ type: 'text', text: 'earlier' }] }] },
+                conversation: {
+                    messages: [
+                        { role: 'user', content: [{ type: 'text', text: 'earlier' }] },
+                        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lookup', input: {} }] },
+                    ],
+                },
             } as ExecutionOptions;
             const prompt = await driver.createPrompt(segments, { model });
             const request =
