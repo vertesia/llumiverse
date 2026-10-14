@@ -1,4 +1,4 @@
-import { Base64DataSource, type Driver } from '@llumiverse/core';
+import { Base64DataSource, type Driver, WATSONX_DEFAULT_EMBEDDING_MODEL } from '@llumiverse/core';
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
@@ -163,13 +163,9 @@ if (watsonx) {
         test(
             'embeddings for text',
             async () => {
-                // The driver default (ibm/slate-125m-english-rtrvr) has been withdrawn from watsonx.ai.
-                const r = await watsonxDriver.generateEmbeddings({
-                    inputs: [{ type: 'text', text: TEXT }],
-                    model: 'ibm/granite-embedding-278m-multilingual',
-                });
+                const r = await firstValues(watsonxDriver)({ type: 'text', text: TEXT });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
-                expect(r.model).toBe('ibm/granite-embedding-278m-multilingual');
+                expect(r.model).toBe(WATSONX_DEFAULT_EMBEDDING_MODEL);
             },
             TIMEOUT,
         );
