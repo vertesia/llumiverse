@@ -586,9 +586,12 @@ export async function formatConversePrompt(
 export function isConverseConversation(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
     if (!Array.isArray(messages)) return false;
-    // Every Converse message has array content, so the first message with array content decides.
-    const content = messages
-        .map((message) => (message as { content?: unknown } | null)?.content)
-        .find((value) => Array.isArray(value)) as unknown[] | undefined;
-    return !!content?.some((block) => !!block && typeof block === 'object' && !('type' in (block as object)));
+    // Every Converse message has array content, so the first non-empty one decides.
+    for (const message of messages) {
+        const content = (message as { content?: unknown } | null)?.content;
+        if (Array.isArray(content) && content.length > 0) {
+            return content.some((block) => !!block && typeof block === 'object' && !('type' in (block as object)));
+        }
+    }
+    return false;
 }

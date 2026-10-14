@@ -47,6 +47,12 @@ describe('isConverseConversation', () => {
         expect(isConverseConversation(legacyConversation)).toBe(true);
     });
 
+    it('skips empty content when deciding the format', () => {
+        expect(
+            isConverseConversation({ messages: [{ role: 'assistant', content: [] }, ...legacyConversation.messages] }),
+        ).toBe(true);
+    });
+
     it.each([
         undefined,
         null,
@@ -187,7 +193,10 @@ describe('Bedrock Claude on the Messages API', () => {
             400,
             { message: 'quota' },
             'quota',
-            new Headers({ 'x-amzn-errortype': 'ServiceQuotaExceededException:http://internal.amazon.com/coral/' }),
+            new Headers({
+                'x-amzn-errortype': 'ServiceQuotaExceededException:http://internal.amazon.com/coral/',
+                'x-amzn-requestid': 'aws-req-1',
+            }),
         );
         const formatted = driver.formatLlumiverseError(error, {
             provider: 'bedrock',
@@ -195,6 +204,8 @@ describe('Bedrock Claude on the Messages API', () => {
             operation: 'execute',
         });
         expect(formatted.retryable).toBe(true);
+        expect(formatted.name).toBe('ServiceQuotaExceededException');
+        expect(formatted.message).toContain('aws-req-1');
     });
 
     it('does not treat another SDK error named APIError as an Anthropic error', () => {

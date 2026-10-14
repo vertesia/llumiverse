@@ -110,7 +110,10 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     const state = getClaudeToolState(conversation);
 
     if (!state) {
-        return setClaudeToolState(conversation, {
+        // Tool-change blocks without stored state (e.g. a rebuilt conversation that lost its metadata) may name
+        // tools this declaration does not include.
+        const messages = stripClaudeToolChanges(conversation.messages);
+        return setClaudeToolState(messages === conversation.messages ? conversation : { ...conversation, messages }, {
             declared: requested.map((definition) => ({ definition, deferred: false })),
             visible: requested.map((tool) => tool.name),
         });

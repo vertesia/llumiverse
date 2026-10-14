@@ -232,6 +232,23 @@ describe('append-only Claude tool changes', () => {
         expect(roles.slice(1)).toEqual(['assistant', 'user', 'system', 'assistant', 'user']);
     });
 
+    it('drops tool-change blocks left without stored state before declaring tools', () => {
+        const rebuilt = {
+            messages: [
+                { role: 'user', content: 'hi' },
+                {
+                    role: 'system',
+                    content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'gone' } }],
+                },
+                { role: 'assistant', content: 'ok' },
+                { role: 'user', content: 'more' },
+            ],
+        } as unknown as ClaudePrompt;
+        const next = applyClaudeToolChanges(rebuilt, [tool('a') as Tool]);
+        expect(next.messages.some((m) => m.role === 'system')).toBe(false);
+        expect(getClaudeToolState(next)?.visible).toEqual(['a']);
+    });
+
     it('announces a tool listed twice once', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const next = applyClaudeToolChanges(

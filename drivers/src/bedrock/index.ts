@@ -723,12 +723,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     /** Execution options for the Claude Messages route, with the Bedrock output-limit clamp applied. */
     private claudeMessagesOptions(options: ExecutionOptions): ExecutionOptions {
         const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
-        // Compatibility exception: retain the existing Claude output-limit clamp (see maxTokenFallbackClaude).
+        const maxTokens = this.claudeMaxTokens(options);
+        return { ...options, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
+    }
+
+    /**
+     * Compatibility exception: retain the existing Claude output-limit clamp (see maxTokenFallbackClaude),
+     * logging when it changes the caller's value.
+     */
+    private claudeMaxTokens(options: StatelessExecutionOptions): number {
+        const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
         const maxTokens = maxTokenFallbackClaude(options);
         if (modelOptions?.max_tokens !== undefined && modelOptions.max_tokens !== maxTokens) {
             logModelOptionException(this.logger, options.model, modelOptions, ['max_tokens'], 'claude_output_limit');
         }
-        return { ...options, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
+        return maxTokens;
     }
 
     /** Transport options for the Claude Messages route; the service tier is an InvokeModel header. */
@@ -863,9 +872,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const retryable =
             exceptionName === 'ModelStreamErrorException'
                 ? true
-                : this.isBedrockErrorRetryable(exceptionName, undefined, undefined);
-        if (retryable === undefined || retryable === formatted.retryable) return formatted;
-        return new LlumiverseError(formatted.message, retryable, context, error, formatted.code, formatted.name);
+                : (this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable);
+        // Keep Bedrock's exception name and request ID, as the Converse route reports them.
+        const requestId = (error as { headers?: Headers | null }).headers?.get('x-amzn-requestid');
+        const message =
+            requestId && !formatted.message.includes(requestId)
+                ? `${formatted.message} (Request ID: ${requestId})`
+                : formatted.message;
+        return new LlumiverseError(message, retryable, context, error, formatted.code, exceptionName);
     }
 
     /**
@@ -1695,18 +1709,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             // Needs max_tokens to be set — and caller-provided values clamped to
             // the model's output limit (both handled by maxTokenFallbackClaude).
-            // Compatibility exception: retain the existing Claude output-limit clamp.
-            const maxTokens = maxTokenFallbackClaude(options);
-            if (model_options.max_tokens !== undefined && model_options.max_tokens !== maxTokens) {
-                logModelOptionException(
-                    this.logger,
-                    options.model,
-                    model_options,
-                    ['max_tokens'],
-                    'claude_output_limit',
-                );
-            }
-            model_options.max_tokens = maxTokens;
+            model_options.max_tokens = this.claudeMaxTokens(options);
             // Only models without sampling restrictions support top_k
             if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
