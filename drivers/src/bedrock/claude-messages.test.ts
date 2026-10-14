@@ -47,6 +47,10 @@ describe('isConverseConversation', () => {
         expect(isConverseConversation(legacyConversation)).toBe(true);
     });
 
+    it('recognises a Converse conversation from its system blocks alone', () => {
+        expect(isConverseConversation({ messages: [], system: [{ text: 'You are helpful.' }] })).toBe(true);
+    });
+
     it('skips empty content when deciding the format', () => {
         expect(
             isConverseConversation({ messages: [{ role: 'assistant', content: [] }, ...legacyConversation.messages] }),
@@ -243,7 +247,10 @@ describe('Bedrock Claude on the Messages API', () => {
         const streamError = (type: string) =>
             new APIError(undefined, { type: 'error', error: { type, message: 'm' } }, undefined, new Headers());
         expect(driver.formatLlumiverseError(streamError('throttlingException'), context).retryable).toBe(true);
-        expect(driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable).toBe(true);
+        // Not in the Bedrock retry rules, as on the Converse route.
+        expect(
+            driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable,
+        ).toBeUndefined();
         expect(driver.formatLlumiverseError(streamError('validationException'), context).retryable).toBe(false);
     });
 

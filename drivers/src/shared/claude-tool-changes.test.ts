@@ -249,6 +249,49 @@ describe('append-only Claude tool changes', () => {
         expect(getClaudeToolState(next)?.visible).toEqual(['a']);
     });
 
+    it.each([
+        [
+            'a change left first after orphan repair',
+            [
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'gone', content: 'x' }] },
+                { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+                { role: 'assistant', content: 'ok' },
+                { role: 'user', content: 'next' },
+            ],
+            ['user', 'system', 'assistant', 'user'],
+        ],
+        [
+            'a change followed by a user turn after an empty reply',
+            [
+                { role: 'user', content: 'hi' },
+                { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+                { role: 'user', content: 'again' },
+            ],
+            ['user', 'user', 'system'],
+        ],
+        [
+            'back-to-back changes',
+            [
+                { role: 'user', content: 'hi' },
+                { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+                { role: 'system', content: [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'b' } }] },
+            ],
+            ['user', 'system'],
+        ],
+    ])('keeps tool changes between a user and an assistant turn: %s', (_case, messages, roles) => {
+        const prompt = { messages, _llumiverse_meta: { turnNumber: 0, claude_tools: { declared: [], visible: [] } } };
+        const declared = applyClaudeToolChanges(start(), [tool('b') as Tool]);
+        const state = getClaudeToolState(declared);
+        const { payload } = getClaudePayload(
+            { model: MODEL, tools: [tool('b')] },
+            {
+                ...(prompt as unknown as ClaudePrompt),
+                _llumiverse_meta: { turnNumber: 0, claude_tools: state },
+            },
+        );
+        expect(payload.messages.map((m) => m.role)).toEqual(roles);
+    });
+
     it('announces a tool listed twice once', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const next = applyClaudeToolChanges(

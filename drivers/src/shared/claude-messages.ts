@@ -859,7 +859,7 @@ export function getClaudePayload(
             ];
         }
     }
-    sanitizedMessages = ensureUserTurnBeforeSystemMessages(sanitizedMessages);
+    sanitizedMessages = placeSystemMessagesAfterUserTurns(sanitizedMessages);
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
@@ -1004,18 +1004,35 @@ export function getClaudePayload(
 }
 
 /**
- * A system message must follow a user turn. Orphan repair can drop the user turn a stored tool-change message
- * followed (a turn holding only orphaned tool results); add a continuation turn before such a system message.
+ * Keep each tool-change system message between a user turn and the next assistant turn, as the API requires.
+ * Orphan repair can drop the user turn a stored change followed, and an empty reply can leave a change before the
+ * next user turn. Well-formed histories pass through unchanged.
  */
-function ensureUserTurnBeforeSystemMessages(messages: MessageParam[]): MessageParam[] {
+function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessageParam[] {
+    if (!messages.some((message) => message.role === 'system')) return messages;
     const result: MessageParam[] = [];
+    let pending: MessageParam[] = [];
+    const flush = () => {
+        if (pending.length === 0) return;
+        if (result[result.length - 1]?.role !== 'user') result.push(claudeContinueTurn());
+        result.push(
+            pending.length === 1
+                ? pending[0]
+                : { role: 'system', content: pending.flatMap((m) => (Array.isArray(m.content) ? m.content : [])) },
+        );
+        pending = [];
+    };
     for (const message of messages) {
-        const previous = result[result.length - 1];
-        if (message.role === 'system' && previous && previous.role === 'assistant') {
-            result.push(claudeContinueTurn());
+        if (message.role === 'system') {
+            pending.push(message);
+        } else if (message.role === 'user') {
+            result.push(message);
+        } else {
+            flush();
+            result.push(message);
         }
-        result.push(message);
     }
+    flush();
     return result;
 }
 

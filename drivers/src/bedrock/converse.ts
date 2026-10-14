@@ -586,12 +586,12 @@ export async function formatConversePrompt(
 export function isConverseConversation(conversation: unknown): boolean {
     const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
     if (!Array.isArray(messages)) return false;
+    const isConverseBlock = (block: unknown) => !!block && typeof block === 'object' && !('type' in block);
     // Every Converse message has array content, so the first non-empty one decides.
     for (const message of messages) {
         const content = (message as { content?: unknown } | null)?.content;
-        if (Array.isArray(content) && content.length > 0) {
-            return content.some((block) => !!block && typeof block === 'object' && !('type' in (block as object)));
-        }
+        if (Array.isArray(content) && content.length > 0) return content.some(isConverseBlock);
     }
-    return false;
+    const system = (conversation as { system?: unknown }).system;
+    return Array.isArray(system) && system.some(isConverseBlock);
 }

@@ -869,10 +869,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const formatted = formatAnthropicLlumiverseError(error, context);
         const exceptionName = bedrockExceptionName(error);
         if (!exceptionName) return formatted;
-        const retryable =
-            exceptionName === 'ModelStreamErrorException'
-                ? true
-                : (this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable);
+        const retryable = this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable;
         // Keep Bedrock's exception name and request ID, as the Converse route reports them.
         const requestId = (error as { headers?: Headers | null }).headers?.get('x-amzn-requestid');
         const message =
