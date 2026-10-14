@@ -1,6 +1,5 @@
 import {
     type AbstractDriver,
-    type AIModel,
     type ExecutionOptions,
     type ExecutionResponse,
     getMaxOutputTokens,
@@ -223,18 +222,14 @@ function getTestOptions(model: string, provider: string): ExecutionOptions {
 // Drivers and their models run in parallel. The tests for one model stay in order (`concurrent: false`) so a
 // throttled model is never sent several requests at once.
 describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
-    let fetchedModels: AIModel[];
-
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1, concurrent: false }, async () => {
         const r = await driver.listModels();
-        fetchedModels = r;
         console.log(r);
         expect(r.length).toBeGreaterThan(0);
     });
 
     describe.each(models)('%s', (model) => {
-        // Offline: checks image prompt formatting even where the live image test below cannot tell the model is
-        // multimodal.
+        // Offline: checks image prompt formatting, including for models the live image test below skips.
         test(`${name}: multimodal prompt generation for ${model}`, { concurrent: false }, async () => {
             const p = await driver.createPrompt(testPrompt_describeImage, { model });
             expect(p).toBeDefined();
@@ -306,17 +301,13 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
             timeout: TIMEOUT,
             retry: retryUnlessRateLimited(2),
             concurrent: false,
-        }, async () => {
-            if (!fetchedModels) {
-                fetchedModels = await driver.listModels();
+        }, async (context) => {
+            // Image input comes from the model capability catalog, not listModels: several drivers' listings
+            // do not say whether a model takes images.
+            if (resolveModelProfile(model, driver.provider as Providers).capabilities.input.image !== true) {
+                context.skip();
+                return;
             }
-
-            const isMultiModal = fetchedModels?.find((r) => r.id === model)?.is_multimodal;
-
-            console.log(`${model} is multimodal: ${isMultiModal}`);
-            // Only some drivers' listModels report is_multimodal (not Vertex, Bedrock, Mantle, Azure, Watsonx or
-            // OpenRouter), so this passes without a call there. Their image paths are covered by the conversation test.
-            if (!isMultiModal) return;
 
             const r = await withRateLimitBackoff(() =>
                 driver.execute(testPrompt_describeImage, {
