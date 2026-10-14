@@ -3,7 +3,7 @@ name: (ci) Approve tested pull requests
 on:
   # zizmor: ignore[dangerous-triggers] Runs only trusted default-branch scripts; never executes PR code or artifacts.
   workflow_run:
-    workflows: ["(test) Build and test", "(lint) Lint codebase"]
+    workflows: ["(ci) PR validation", "(test) Build and test", "(lint) Lint codebase"]
     types: [completed]
   # zizmor: ignore[dangerous-triggers] Withdraws this gate's approval on PR changes; checkout is pinned to the trusted workflow commit.
   pull_request_target:

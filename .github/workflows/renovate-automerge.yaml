@@ -16,6 +16,7 @@ on:
   # zizmor: ignore[dangerous-triggers] This intentionally chains after successful Renovate branch workflows, then re-checks the exact head SHA before merging.
   workflow_run:
     workflows:
+      - "(ci) PR validation"
       - "(test) Build and test"
       - "(lint) Lint codebase"
     types:

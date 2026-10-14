@@ -18,10 +18,16 @@ gate. Human reviews and reviews from the existing deployment, Renovate, release,
 backport and submodule gates are never dismissed by this workflow.
 
 On a new push, the gate removes its approvals for older commits without inspecting
-CI. When a CI workflow finishes, it approves the current head only if all required
-lint, build and test checks pass; otherwise it withdraws its approval. Draft and
-eligibility changes also trigger reassessment. Manual dispatch recovers missed
-events or API failures. There is no scheduled reconciliation or rerun-start handler.
+CI. Pull requests run lint and build/test under the single `(ci) PR validation`
+coordinator. When it finishes, the gate approves the current head only if all required
+lint, build and test jobs pass; otherwise it withdraws its approval. Draft and
+eligibility changes also trigger reassessment. The default-branch-only
+`ci-approve-reconcile` repository event recovers missed events or API failures.
+There is no scheduled reconciliation or rerun-start handler.
+
+The policy retains the standalone lint and build/test workflow names as fallbacks
+while maintained release branches adopt the coordinator. Each half is evaluated by
+its required jobs, so an unrelated failure in the other half cannot mask its result.
 
 Because a CI completion is the only event that re-checks a finished head, its PR
 lookup queries open PRs by head branch (`head=<owner>:<branch>`) rather than paging

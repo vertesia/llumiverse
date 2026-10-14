@@ -17,6 +17,7 @@ on:
   # backport-branch CI, then re-checks the exact head SHA before merging.
   workflow_run:
     workflows:
+      - "(ci) PR validation"
       - "(test) Build and test"
       - "(lint) Lint codebase"
     types:

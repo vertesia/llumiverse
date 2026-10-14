@@ -662,6 +662,9 @@ test('only server errors and dropped connections count as transient', () => {
 
 test('workflow executes only trusted scripts and observes pushes and CI completion', () => {
     const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
+    const coordinator = readFileSync(new URL('../workflows/pr-validation.yaml', import.meta.url), 'utf8');
+    const build = readFileSync(new URL('../workflows/build-and-test.yml', import.meta.url), 'utf8');
+    const lint = readFileSync(new URL('../workflows/lint.yml', import.meta.url), 'utf8');
     assert.match(workflow, /ref: \$\{\{ github.workflow_sha \}\}/);
     assert.match(workflow, /types: \[completed\]/);
     assert.match(workflow, /permission-members: read/);
@@ -679,6 +682,14 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.match(workflow, /CI_APPROVAL_BRANCH:/);
     assert.match(workflow, /ci-approve\.mjs --discover/);
     assert.doesNotMatch(workflow, /github\.ref_name/);
+    assert.match(workflow, /"\(ci\) PR validation"/);
+    assert.match(coordinator, /uses: \.\/\.github\/workflows\/build-and-test\.yml/);
+    assert.match(coordinator, /uses: \.\/\.github\/workflows\/lint\.yml/);
+    assert.match(coordinator, /if: github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+    for (const reusable of [build, lint]) {
+        assert.match(reusable, /^ {2}workflow_call:$/m);
+        assert.doesNotMatch(reusable, /^ {2}pull_request:$/m);
+    }
 });
 
 test('additive ruleset requires CI without changing human review or thread rules', () => {
