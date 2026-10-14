@@ -35,7 +35,8 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION,
         }),
         models: [
-            'locations/global/publishers/google/models/gemini-3.5-flash-lite',
+            // US multi-region endpoint; the other live tests use the global one.
+            'locations/us/publishers/google/models/gemini-3.5-flash-lite',
             'locations/global/publishers/anthropic/models/claude-haiku-5-5',
         ],
     });
