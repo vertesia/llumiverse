@@ -1,10 +1,24 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { AnthropicError, APIError, BadRequestError, InternalServerError } from '@anthropic-ai/sdk/error';
-import { type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
+import {
+    AnthropicError,
+    APIConnectionError,
+    APIError,
+    BadRequestError,
+    InternalServerError,
+} from '@anthropic-ai/sdk/error';
+import type { ConverseRequest, ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime';
+import {
+    type ExecutionOptions,
+    LlumiverseError,
+    PromptRole,
+    type PromptSegment,
+    type ToolDefinition,
+} from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
-import { formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
-import { isConverseConversation } from './converse.js';
-import { BedrockDriver } from './index.js';
+import { type ClaudePrompt, formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
+import { MID_CONVERSATION_TOOL_CHANGES_BETA } from '../shared/claude-tool-changes.js';
+import { isClaudeMessagesConversation, isConverseConversation } from './converse.js';
+import { BedrockDriver, type BedrockPrompt } from './index.js';
 
 const MODEL = 'us.anthropic.claude-sonnet-5-5';
 const segments: PromptSegment[] = [{ role: PromptRole.user, content: 'hello' }];
@@ -67,6 +81,33 @@ describe('isConverseConversation', () => {
         { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
     ])('treats %j as a Messages API conversation', (conversation) => {
         expect(isConverseConversation(conversation)).toBe(false);
+    });
+
+    it('recognises a stored Converse conversation whose images were replaced by text placeholders', () => {
+        const stripped = {
+            messages: [
+                { role: 'user', content: [{ text: 'Describe this.' }, { text: '[Image removed from conversation]' }] },
+                { role: 'assistant', content: [{ text: 'A chart.' }] },
+            ],
+        };
+        expect(isConverseConversation(stripped)).toBe(true);
+        expect(isClaudeMessagesConversation(stripped)).toBe(false);
+    });
+
+    it('recognises a Messages API conversation that starts with string content', () => {
+        const conversation = {
+            messages: [
+                { role: 'user', content: 'hi' },
+                { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+            ],
+        };
+        expect(isConverseConversation(conversation)).toBe(false);
+        expect(isClaudeMessagesConversation(conversation)).toBe(true);
+        expect(isClaudeMessagesConversation({ messages: [{ role: 'user', content: 'hi' }] })).toBe(true);
+    });
+
+    it.each([undefined, null, {}, { messages: [] }])('treats %j as neither format with history', (conversation) => {
+        expect(isClaudeMessagesConversation(conversation)).toBe(false);
     });
 });
 
@@ -319,5 +360,187 @@ describe('Bedrock Claude on the Messages API', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt = await driver.createPrompt(segments, { model: MODEL });
         expect(driver.formatDebugPrompt(prompt)).toEqual(prompt);
+
+        const image = 'A'.repeat(5_000);
+        const pdf = 'B'.repeat(5_000);
+        const binary: ClaudePrompt = {
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: 'Compare these.' },
+                        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } },
+                        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf } },
+                    ],
+                },
+            ],
+        };
+        const snapshot = structuredClone(binary);
+        const debug = JSON.stringify(driver.formatDebugPrompt(binary));
+        expect(debug).toContain('Compare these.');
+        expect(debug).not.toContain(image);
+        expect(debug).not.toContain(pdf);
+        expect(debug).toContain('AAAA');
+        expect(debug).toContain('BBBB');
+        expect(binary).toEqual(snapshot);
     });
+
+    it('includes the cause of a connection error', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const cause = new Error('AccessDenied: not authorized to perform sts:AssumeRole');
+        const formatted = driver.formatLlumiverseError(new APIConnectionError({ cause }), {
+            provider: 'bedrock',
+            model: MODEL,
+            operation: 'execute',
+        });
+        expect(formatted.message).toContain('Connection error.');
+        expect(formatted.message).toContain('AccessDenied: not authorized to perform sts:AssumeRole');
+    });
+
+    it('builds the streamed conversation in the format of the prompt', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const options = { model: MODEL } as ExecutionOptions;
+        const messagesPrompt: ClaudePrompt = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] };
+        const messagesConversation = driver.buildStreamingConversation(
+            messagesPrompt,
+            [{ type: 'text', value: 'ok' }],
+            [{ id: 't1', tool_name: 'lookup', tool_input: { q: 'x' } }],
+            options,
+        ) as ClaudePrompt;
+        // The shared builder stores streamed text and tool calls as separate assistant messages.
+        expect(messagesConversation.messages).toEqual([
+            messagesPrompt.messages[0],
+            { role: 'assistant', content: 'ok' },
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lookup', input: { q: 'x' } }] },
+        ]);
+
+        const conversePrompt = { modelId: MODEL, messages: [{ role: 'user', content: [{ text: 'hi' }] }] };
+        const converseConversation = driver.buildStreamingConversation(
+            conversePrompt as BedrockPrompt,
+            [{ type: 'text', value: 'ok' }],
+            undefined,
+            options,
+        ) as ConverseRequest;
+        expect(converseConversation.messages).toEqual([
+            conversePrompt.messages[0],
+            { role: 'assistant', content: [{ text: 'ok' }] },
+        ]);
+    });
+
+    it('sends the tool-change beta and the service tier header together', async () => {
+        const { driver, stream } = driverWithClaudeClient();
+        const tool = (name: string): ToolDefinition => ({ name, input_schema: { type: 'object', properties: {} } });
+        const modelOptions = { _option_id: 'bedrock-claude' as const, service_tier: 'priority' };
+        const first = await driver.requestTextCompletion(await driver.createPrompt(segments, { model: MODEL }), {
+            model: MODEL,
+            model_options: modelOptions,
+            tools: [tool('lookup')],
+        });
+        const options: ExecutionOptions = {
+            model: MODEL,
+            model_options: modelOptions,
+            tools: [tool('lookup'), tool('list_items')],
+            conversation: JSON.parse(JSON.stringify(first.conversation)),
+        };
+        const next = [{ role: PromptRole.user, content: 'more' }];
+        await driver.requestTextCompletion(await driver.createPrompt(next, options), options);
+
+        const [payload, requestOptions] = stream.mock.calls[1] as [
+            { messages: { role: string }[] },
+            { headers: Record<string, string> },
+        ];
+        expect(payload.messages.at(-1)).toMatchObject({ role: 'system' });
+        expect(requestOptions.headers['anthropic-beta'].split(',')).toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(requestOptions.headers['X-Amzn-Bedrock-Service-Tier']).toBe('priority');
+    });
+
+    it.each([
+        ['static credentials', { accessKeyId: 'test-key', secretAccessKey: 'test-secret' }],
+        ['a credential provider', async () => ({ accessKeyId: 'k', secretAccessKey: 's' })],
+    ])('prefers SigV4 on the AWS SDK clients with %s', async (_case, credentials) => {
+        const driver = new BedrockDriver({ region: 'us-east-1', credentials });
+        const preference = (config: unknown) =>
+            (config as { authSchemePreference?: () => Promise<string[]> }).authSchemePreference?.();
+        await expect(preference(driver.getExecutor().config)).resolves.toEqual(['sigv4']);
+        await expect(preference(driver.getService().config)).resolves.toEqual(['sigv4']);
+    });
+});
+
+describe('legacy Converse conversations with Claude on Bedrock', () => {
+    const usage: ConverseStreamOutput = {
+        metadata: { usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, metrics: { latencyMs: 1 } },
+    };
+
+    function converseDriver() {
+        const converse = vi.fn(async (_request: ConverseRequest) => ({
+            output: { message: { role: 'assistant', content: [{ text: 'ok' }] } },
+            stopReason: 'end_turn',
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            metrics: { latencyMs: 1 },
+        }));
+        const converseStream = vi.fn(async (_request: ConverseRequest) => ({
+            stream: (async function* () {
+                yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'ok' } } };
+                yield { messageStop: { stopReason: 'end_turn' } };
+                yield usage;
+            })(),
+        }));
+        const messagesStream = vi.fn();
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converse, converseStream, destroy: vi.fn() }),
+        });
+        Reflect.set(driver, '_anthropicService', { messages: { stream: messagesStream } });
+        return { driver, converse, converseStream, messagesStream };
+    }
+
+    it('continues a legacy conversation on Converse when executing', async () => {
+        const { driver, converse, messagesStream } = converseDriver();
+        const options = { model: MODEL, conversation: structuredClone(legacyConversation) } as ExecutionOptions;
+        const completion = await driver.requestTextCompletion(await driver.createPrompt(segments, options), options);
+
+        expect(messagesStream).not.toHaveBeenCalled();
+        expect(converse).toHaveBeenCalledOnce();
+        expect(converse.mock.calls[0][0].messages?.at(-1)?.content).toContainEqual({ text: 'hello' });
+        expect(isConverseConversation(completion.conversation)).toBe(true);
+    });
+
+    it('continues a legacy conversation on Converse when streaming', async () => {
+        const { driver, converseStream, messagesStream } = converseDriver();
+        const options = { model: MODEL, conversation: structuredClone(legacyConversation) } as ExecutionOptions;
+        const stream = await driver.requestTextCompletionStream(await driver.createPrompt(segments, options), options);
+        for await (const _chunk of stream) {
+            // drain
+        }
+
+        expect(messagesStream).not.toHaveBeenCalled();
+        expect(converseStream).toHaveBeenCalledOnce();
+        expect(isConverseConversation(await stream.finalizeConversation?.())).toBe(true);
+    });
+
+    it.each(['execute', 'stream'] as const)(
+        'rejects a Messages API conversation on a non-Claude model (%s)',
+        async (operation) => {
+            const { driver, converse, converseStream } = converseDriver();
+            const model = 'amazon.nova-pro-v1:0';
+            const options = {
+                model,
+                conversation: { messages: [{ role: 'user', content: [{ type: 'text', text: 'earlier' }] }] },
+            } as ExecutionOptions;
+            const prompt = await driver.createPrompt(segments, { model });
+            const request =
+                operation === 'execute'
+                    ? driver.requestTextCompletion(prompt, options)
+                    : driver.requestTextCompletionStream(prompt, options);
+
+            await expect(request).rejects.toBeInstanceOf(LlumiverseError);
+            await expect(request).rejects.toMatchObject({
+                name: 'ConversationFormatError',
+                retryable: false,
+                context: { provider: 'bedrock', model, operation },
+            });
+            expect(converse).not.toHaveBeenCalled();
+            expect(converseStream).not.toHaveBeenCalled();
+        },
+    );
 });

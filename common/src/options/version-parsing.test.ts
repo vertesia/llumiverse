@@ -9,6 +9,7 @@ import {
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
+    supportsClaudeForcedToolChoice,
     supportsEffort,
     supportsMidConversationToolChanges,
 } from './version-parsing.js';
@@ -170,6 +171,13 @@ describe('supportsMidConversationToolChanges', () => {
         'claude-sonnet-6',
         'claude-haiku-6',
         'claude-opus-6',
+        'anthropic.claude-opus-4-8-v1:0',
+        'claude-opus-4-8@20260901',
+        'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
+        'claude-opus-4-10',
+        'claude-sonnet-5-6',
+        'claude-mythos-5',
+        'claude-fable-6',
     ])('accepts %s', (model) => {
         expect(supportsMidConversationToolChanges(model)).toBe(true);
     });
@@ -183,7 +191,50 @@ describe('supportsMidConversationToolChanges', () => {
         'claude-3-7-sonnet-20250219',
         'claude-mythos-preview',
         'gpt-5',
+        'claude-sonnet-5@20260901',
+        'claude-sonnet-5-20260901',
+        'claude-sonnet-5-v1:0',
+        'claude-opus-4',
+        'claude-opus-4-1',
+        'us.anthropic.claude-mythos-preview-v1:0',
+        'claude-mythos-preview-1',
     ])('rejects %s', (model) => {
         expect(supportsMidConversationToolChanges(model)).toBe(false);
+    });
+});
+
+describe('supportsClaudeForcedToolChoice', () => {
+    it.each([
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'claude-sonnet-5-6',
+        'claude-opus-6',
+        'claude-sonnet-6',
+        'us.anthropic.claude-opus-5-5-v1:0',
+        'global.anthropic.claude-sonnet-5-5',
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
+        'publishers/anthropic/models/claude-sonnet-5-5@20260901',
+        'claude-opus-5-5@20260901',
+    ])('rejects a forced tool choice on %s', (model) => {
+        expect(supportsClaudeForcedToolChoice(model)).toBe(false);
+    });
+
+    it.each([
+        'claude-haiku-5-5',
+        'claude-haiku-6',
+        'claude-opus-5',
+        'claude-sonnet-5',
+        'claude-sonnet-5-20260901',
+        'claude-opus-4-8',
+        'claude-sonnet-4-6',
+        'claude-fable-5',
+        'claude-fable-6',
+        'claude-mythos-5',
+        'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
+        'anthropic.claude-opus-4-8-v1:0',
+        'claude-3-7-sonnet-20250219',
+        'gpt-5',
+    ])('accepts a forced tool choice on %s', (model) => {
+        expect(supportsClaudeForcedToolChoice(model)).toBe(true);
     });
 });

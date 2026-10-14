@@ -132,8 +132,8 @@ Llumiverse supports multi-turn conversations via the `conversation` property in 
 ### Image Handling in Conversations
 
 Images in conversations can cause issues:
-- **Bedrock**: Stores images as `Uint8Array` which corrupts during `JSON.stringify()` (becomes `{ "0": 137, "1": 80, ... }`)
-- **OpenAI/Gemini**: Stores images as base64 strings which can bloat storage
+- **Bedrock (Converse)**: Stores images as `Uint8Array` which corrupts during `JSON.stringify()` (becomes `{ "0": 137, "1": 80, ... }`). This covers non-Claude models and Claude conversations started on Converse; Claude on Bedrock now uses the Anthropic Messages API and stores base64 like the other Claude providers.
+- **OpenAI/Gemini/Claude**: Stores images as base64 strings which can bloat storage
 
 To address this, drivers automatically strip/serialize images based on `stripImagesAfterTurns`:
 
@@ -158,10 +158,18 @@ driver.execute(prompt, {
 ```
 
 When `stripImagesAfterTurns > 0`:
-- Bedrock: `Uint8Array` is converted to `{ _base64: '...' }` for safe JSON serialization, then deserialized back before API calls
-- OpenAI/Gemini: Base64 strings are preserved as-is (already JSON-safe)
+- Bedrock (Converse): `Uint8Array` is converted to `{ _base64: '...' }` for safe JSON serialization, then deserialized back before API calls
+- OpenAI/Gemini/Claude: Base64 strings are preserved as-is (already JSON-safe)
 
 Turn counting is automatic via `_llumiverse_meta.turnNumber` in the conversation object.
+
+### Claude Tool Changes
+
+Claude conversations keep `tools` append-only: tools offered after the first request are sent with
+`defer_loading: true`, and additions and removals are announced by `tool_addition` / `tool_removal` blocks in
+`role: "system"` messages (beta `mid-conversation-tool-changes-2026-07-01`). The declared tools are stored in
+`_llumiverse_meta.claude_tools`, so keep `_llumiverse_meta` with the conversation when storing or editing it.
+Unsupported models and providers (Microsoft Foundry) receive `tools` as before, without the tool-change blocks.
 
 ### Utility Functions
 

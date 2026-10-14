@@ -280,7 +280,7 @@ export function getConversationMeta(conversation: unknown): ConversationMeta {
 const ARRAY_WRAPPER_KEY = '_arrayConversation';
 
 /**
- * Set metadata on a conversation object.
+ * Set metadata on a conversation object, keeping fields a driver stored there (e.g. Claude's declared tools).
  * Arrays are wrapped in an object to preserve their type through JSON serialization.
  */
 export function setConversationMeta(conversation: unknown, meta: ConversationMeta): unknown {
@@ -289,7 +289,8 @@ export function setConversationMeta(conversation: unknown, meta: ConversationMet
         return { [ARRAY_WRAPPER_KEY]: conversation, [META_KEY]: meta };
     }
     if (typeof conversation === 'object' && conversation !== null) {
-        return { ...(conversation as object), [META_KEY]: meta };
+        const existing = (conversation as Record<string, unknown>)[META_KEY];
+        return { ...(conversation as object), [META_KEY]: { ...(existing as object | undefined), ...meta } };
     }
     return conversation;
 }

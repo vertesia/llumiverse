@@ -1,11 +1,16 @@
+import { APIError } from '@anthropic-ai/sdk/error';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
     anthropicUsageToTokenUsage,
     buildClaudeStreamingConversation,
     claudeServiceTier,
+    formatAnthropicLlumiverseError,
     formatClaudePrompt,
     getClaudePayload,
+    isClaudeErrorRetryable,
+    mergeConsecutiveUserMessages,
     updateClaudeConversation,
 } from './claude-messages.js';
 
@@ -661,5 +666,170 @@ describe('anthropic-beta header', () => {
             { messages: [{ role: 'user', content: 'Hello' }] },
         );
         expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'output-128k-2025-02-19' });
+    });
+});
+
+describe('forced Claude tool choice', () => {
+    const forcedOptions = (model: string): ExecutionOptions => ({
+        model,
+        tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+        model_options: {
+            _option_id: 'anthropic-claude',
+            tool_choice: 'required',
+            required_tool_name: 'write_artifact',
+            parallel_tool_calls: false,
+        } as never,
+    });
+    const prompt = { messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'Act now.' }] }] };
+    const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+
+    it.each([
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'global.anthropic.claude-sonnet-5-5',
+        // Plausible future generations keep the latest behaviour.
+        'claude-sonnet-5-6',
+        'claude-opus-6',
+    ])('falls back to automatic tool choice and logs it for %s', (model) => {
+        const log = logger();
+        const { payload } = getClaudePayload(forcedOptions(model), prompt, 'anthropic', 'execute', log);
+        expect(payload.tool_choice).toEqual({ type: 'auto', disable_parallel_tool_use: true });
+        expect(log.warn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model,
+                option_names: ['tool_choice', 'required_tool_name'],
+                reason: 'claude_forced_tool_choice',
+            }),
+            expect.any(String),
+        );
+    });
+
+    it.each(['claude-haiku-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8'])(
+        'keeps the forced tool choice for %s',
+        (model) => {
+            const log = logger();
+            const { payload } = getClaudePayload(forcedOptions(model), prompt, 'anthropic', 'execute', log);
+            expect(payload.tool_choice).toEqual({
+                type: 'tool',
+                name: 'write_artifact',
+                disable_parallel_tool_use: true,
+            });
+            expect(log.warn).not.toHaveBeenCalledWith(
+                expect.objectContaining({ reason: 'claude_forced_tool_choice' }),
+                expect.any(String),
+            );
+        },
+    );
+
+    it('falls back from an any tool choice without a named tool', () => {
+        const options: ExecutionOptions = {
+            ...forcedOptions('claude-opus-5-5'),
+            model_options: { _option_id: 'anthropic-claude', tool_choice: 'any' } as never,
+        };
+        const { payload } = getClaudePayload(options, prompt);
+        expect(payload.tool_choice).toEqual({ type: 'auto', disable_parallel_tool_use: false });
+    });
+});
+
+describe('Claude attachments', () => {
+    const textSource = (name: string, mime_type: string, text: string): DataSource => ({
+        name,
+        mime_type,
+        getStream: vi.fn().mockResolvedValue(
+            new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode(text));
+                    controller.close();
+                },
+            }),
+        ),
+        getURL: vi.fn(),
+        getURI: vi.fn(),
+    });
+    const attach = (file: DataSource): PromptSegment[] => [{ role: PromptRole.user, content: 'Read', files: [file] }];
+
+    it.each([
+        'application/json',
+        'application/xml',
+        'application/x-yaml',
+        'application/ld+json',
+        'application/json; charset=utf-8',
+    ])('sends %s as a plain-text document', async (mimeType) => {
+        const prompt = await formatClaudePrompt(attach(textSource('data', mimeType, '{"a":1}')), {
+            model: 'claude-sonnet-5-5',
+        });
+        expect(prompt.messages[0].content).toEqual([
+            { type: 'text', text: 'Read' },
+            {
+                title: 'data',
+                type: 'document',
+                source: { type: 'text', data: '{"a":1}', media_type: 'text/plain' },
+            },
+        ]);
+    });
+
+    it('sends image/jpg as image/jpeg', async () => {
+        const prompt = await formatClaudePrompt(attach(textSource('photo.jpg', 'image/jpg', 'abc')), {
+            model: 'claude-sonnet-5-5',
+        });
+        expect(prompt.messages[0].content).toEqual([
+            { type: 'text', text: 'Read' },
+            { type: 'image', source: { type: 'base64', data: 'YWJj', media_type: 'image/jpeg' } },
+        ]);
+    });
+
+    it('skips an unsupported attachment with a warning', async () => {
+        const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        const file = textSource('report.docx', mimeType, 'binary');
+        const warn = vi.fn();
+        const prompt = await formatClaudePrompt(attach(file), { model: 'claude-sonnet-5-5' }, { warn });
+        expect(prompt.messages[0].content).toEqual([{ type: 'text', text: 'Read' }]);
+        expect(file.getStream).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+            { file_name: 'report.docx', mime_type: mimeType },
+            '[Claude] Skipping unsupported attachment',
+        );
+    });
+});
+
+describe('mergeConsecutiveUserMessages', () => {
+    it('moves tool results ahead of text within a single user message', () => {
+        const messages = [
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lookup', input: {} }] },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Continue.' },
+                    { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+                ],
+            },
+        ] as MessageParam[];
+        expect(mergeConsecutiveUserMessages(messages)[1].content).toEqual([
+            { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+            { type: 'text', text: 'Continue.' },
+        ]);
+    });
+});
+
+describe('isClaudeErrorRetryable', () => {
+    it.each(['overloaded_error', 'api_error'])('retries a mid-stream %s without an HTTP status', (type) => {
+        // The SDK raises a plain APIError (no status) for an SSE error event.
+        const error = new APIError(
+            undefined,
+            { type: 'error', error: { type, message: 'm' } },
+            undefined,
+            new Headers(),
+        );
+        expect(isClaudeErrorRetryable(error, undefined, type)).toBe(true);
+        const formatted = formatAnthropicLlumiverseError(error, {
+            provider: 'anthropic',
+            model: 'claude-sonnet-5-5',
+            operation: 'stream',
+        });
+        expect(formatted.retryable).toBe(true);
+    });
+
+    it('does not retry a mid-stream invalid request', () => {
+        expect(isClaudeErrorRetryable(new Error('bad'), undefined, 'invalid_request_error')).toBe(false);
     });
 });

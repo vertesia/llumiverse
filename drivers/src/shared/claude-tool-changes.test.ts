@@ -1,15 +1,18 @@
 import type { Message, MessageParam, RawMessageStreamEvent, Tool } from '@anthropic-ai/sdk/resources/messages.js';
-import type { ExecutionOptions, ToolDefinition } from '@llumiverse/core';
+import { type ExecutionOptions, Providers, type ToolDefinition } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
+    buildClaudeStreamingConversation,
     type ClaudePrompt,
     executeClaudeCompletion,
     fixOrphanedToolResults,
     fixOrphanedToolUse,
     getClaudePayload,
+    streamClaudeCompletion,
 } from './claude-messages.js';
 import {
     applyClaudeToolChanges,
+    canUseClaudeToolChanges,
     getClaudeToolState,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
     stripClaudeToolChanges,
@@ -61,9 +64,10 @@ async function turn(
     response: Message,
     provider = 'anthropic',
     model = MODEL,
+    extra: Partial<ExecutionOptions> = {},
 ) {
     const stream = vi.fn((_payload: unknown, _options: unknown) => sdkStream(response));
-    const options: ExecutionOptions = { model, tools, conversation };
+    const options: ExecutionOptions = { ...extra, model, tools, conversation };
     const completion = await executeClaudeCompletion(
         { messages: { stream } } as never,
         prompt,
@@ -79,6 +83,28 @@ async function turn(
 }
 
 const start = (): ClaudePrompt => ({ messages: [{ role: 'user', content: 'hi' }] });
+const userText = (text: string): ClaudePrompt => ({ messages: [{ role: 'user', content: [{ type: 'text', text }] }] });
+
+function assistantReply(content: unknown[], stop_reason = 'end_turn'): Message {
+    return {
+        id: 'msg-reply',
+        type: 'message',
+        role: 'assistant',
+        model: MODEL,
+        content,
+        stop_reason,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+    } as unknown as Message;
+}
+
+const addition = (name: string) => ({ type: 'tool_addition', tool: { type: 'tool_reference', name } });
+const removal = (name: string) => ({ type: 'tool_removal', tool: { type: 'tool_reference', name } });
+
+/** A copy without request-only `cache_control` markers, to compare what a request replays. */
+function withoutCacheControl<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value, (key, v) => (key === 'cache_control' ? undefined : v)));
+}
 const firstPrompt: ClaudePrompt = { messages: [{ role: 'user', content: 'Audit the project.' }] };
 
 describe('append-only Claude tool changes', () => {
@@ -112,11 +138,15 @@ describe('append-only Claude tool changes', () => {
             t2.conversation,
             assistantToolUse('c3', 'list_items'),
         );
-        expect(t3.payload.tools).toEqual(t2.payload.tools);
+        expect(JSON.stringify(t3.payload.tools)).toBe(JSON.stringify(t2.payload.tools));
         const systemMessages = t3.payload.messages.filter((m) => m.role === 'system');
         expect(systemMessages).toHaveLength(1);
-        expect(t3.payload.messages.slice(0, t2.payload.messages.length)).toMatchObject(
-            t2.payload.messages.map((m) => ({ role: m.role })),
+        // Each request replays the previous one as a prefix.
+        expect(withoutCacheControl(t2.payload.messages.slice(0, t1.payload.messages.length))).toEqual(
+            withoutCacheControl(t1.payload.messages),
+        );
+        expect(withoutCacheControl(t3.payload.messages.slice(0, t2.payload.messages.length))).toEqual(
+            withoutCacheControl(t2.payload.messages),
         );
     });
 
@@ -283,16 +313,11 @@ describe('append-only Claude tool changes', () => {
             ['user'],
         ],
     ])('keeps tool changes between a user and an assistant turn: %s', (_case, messages, roles) => {
-        const prompt = { messages, _llumiverse_meta: { turnNumber: 0, claude_tools: { declared: [], visible: [] } } };
-        const declared = applyClaudeToolChanges(start(), [tool('b') as Tool]);
-        const state = getClaudeToolState(declared);
-        const { payload } = getClaudePayload(
-            { model: MODEL, tools: [tool('b')] },
-            {
-                ...(prompt as unknown as ClaudePrompt),
-                _llumiverse_meta: { turnNumber: 0, claude_tools: state },
-            },
-        );
+        const state = getClaudeToolState(applyClaudeToolChanges(start(), [tool('b') as Tool]));
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('b')] }, {
+            messages,
+            _llumiverse_meta: { turnNumber: 0, claude_tools: state },
+        } as unknown as ClaudePrompt);
         expect(payload.messages.map((m) => m.role)).toEqual(roles);
     });
 
@@ -489,5 +514,370 @@ describe('orphan repair around system messages', () => {
             expect.objectContaining({ type: 'tool_result', tool_use_id: 't1' }),
             { type: 'text', text: 'next' },
         ]);
+    });
+});
+
+describe('canUseClaudeToolChanges', () => {
+    it.each([
+        [Providers.anthropic, MODEL, true],
+        [Providers.vertexai, 'claude-sonnet-5-5@20260901', true],
+        [Providers.bedrock, 'global.anthropic.claude-sonnet-5-5', true],
+        [Providers.bedrock_mantle, 'anthropic.claude-opus-5-5', true],
+        [Providers.azure_foundry, MODEL, false],
+        [Providers.anthropic, 'claude-sonnet-5', false],
+        [Providers.bedrock, 'us.anthropic.claude-sonnet-4-6', false],
+    ])('%s with %s: %s', (provider, model, expected) => {
+        expect(canUseClaudeToolChanges(model, provider)).toBe(expected);
+    });
+});
+
+/** Streaming events for one assistant turn that calls a tool. */
+function toolUseEvents(id: string, name: string): RawMessageStreamEvent[] {
+    return [
+        {
+            type: 'message_start',
+            message: { ...assistantReply([], 'tool_use'), id: `msg-${id}`, content: [] },
+        },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name, input: {} } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"q":"x"}' } },
+        { type: 'content_block_stop', index: 0 },
+        {
+            type: 'message_delta',
+            delta: { stop_reason: 'tool_use', stop_sequence: null },
+            usage: { output_tokens: 1 },
+        },
+        { type: 'message_stop' },
+    ] as unknown as RawMessageStreamEvent[];
+}
+
+async function streamTurn(
+    prompt: ClaudePrompt,
+    tools: ToolDefinition[],
+    conversation: unknown,
+    id: string,
+    name: string,
+) {
+    const final = assistantToolUse(id, name);
+    const stream = vi.fn((_payload: unknown, _options: unknown) => ({
+        async *[Symbol.asyncIterator]() {
+            yield* toolUseEvents(id, name);
+        },
+        finalMessage: async () => final,
+        abort() {},
+    }));
+    const completion = await streamClaudeCompletion({ messages: { stream } } as never, prompt, {
+        model: MODEL,
+        tools,
+        conversation,
+    });
+    const toolNames: string[] = [];
+    for await (const chunk of completion) {
+        if (typeof chunk === 'object') toolNames.push(...(chunk.tool_use ?? []).map((t) => t.tool_name));
+    }
+    const stored = JSON.parse(JSON.stringify(await completion.finalizeConversation?.()));
+    const [payload] = stream.mock.calls[0] as [{ tools?: Tool[]; messages: MessageParam[] }, unknown];
+    return { payload, conversation: stored, toolNames };
+}
+
+describe('Claude tool changes on the streaming path', () => {
+    it('records the tool change in the conversation finalizeConversation returns', async () => {
+        const t1 = await streamTurn(firstPrompt, [tool('a')], undefined, 'c1', 'a');
+        expect(t1.toolNames).toContain('a');
+        expect(getClaudeToolState(t1.conversation)).toEqual({
+            declared: [{ definition: tool('a'), deferred: false }],
+            visible: ['a'],
+        });
+
+        const t2 = await streamTurn(toolResult('c1'), [tool('a'), tool('b')], t1.conversation, 'c2', 'b');
+        expect(t2.payload.tools).toEqual([tool('a'), { ...tool('b'), defer_loading: true }]);
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [addition('b')] });
+        expect(t2.conversation.messages.map((m: MessageParam) => m.role)).toEqual([
+            'user',
+            'assistant',
+            'user',
+            'system',
+            'assistant',
+        ]);
+        expect(getClaudeToolState(t2.conversation)).toEqual({
+            declared: [
+                { definition: tool('a'), deferred: false },
+                { definition: tool('b'), deferred: true },
+            ],
+            visible: ['a', 'b'],
+        });
+    });
+
+    it('records tool changes when the streamed conversation is rebuilt from chunks', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'));
+        const options: ExecutionOptions = {
+            model: MODEL,
+            tools: [tool('a'), tool('b')],
+            conversation: t1.conversation,
+        };
+        const streamed = buildClaudeStreamingConversation(
+            toolResult('c1'),
+            [],
+            [{ id: 'c2', tool_name: 'b', tool_input: { q: 'x' } }],
+            options,
+            'anthropic',
+        );
+        const executed = await turn(toolResult('c1'), options.tools, t1.conversation, assistantToolUse('c2', 'b'));
+
+        expect(streamed.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'system', 'assistant']);
+        expect(streamed.messages[3]).toEqual({ role: 'system', content: [addition('b')] });
+        expect(executed.conversation.messages[3]).toEqual(streamed.messages[3]);
+        expect(getClaudeToolState(streamed)).toEqual(getClaudeToolState(executed.conversation));
+    });
+});
+
+describe('Claude tool changes across turns', () => {
+    it('keeps tools and the message prefix byte-identical as the conversation moves between providers', async () => {
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a'), tool('b')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            'anthropic',
+            'claude-sonnet-5-5',
+        );
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b'), tool('c')],
+            t1.conversation,
+            assistantToolUse('c2', 'c'),
+            'vertexai',
+            'claude-sonnet-5-5@20260901',
+        );
+        const t3 = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('b'), tool('c')],
+            t2.conversation,
+            assistantToolUse('c3', 'b'),
+            'bedrock',
+            'global.anthropic.claude-sonnet-5-5',
+        );
+
+        expect(JSON.stringify(t2.payload.tools?.slice(0, 2))).toBe(JSON.stringify(t1.payload.tools));
+        expect(JSON.stringify(t3.payload.tools)).toBe(JSON.stringify(t2.payload.tools));
+        expect(JSON.stringify(t2.payload.messages.slice(0, t1.payload.messages.length))).toBe(
+            JSON.stringify(t1.payload.messages),
+        );
+        expect(JSON.stringify(t3.payload.messages.slice(0, t2.payload.messages.length))).toBe(
+            JSON.stringify(t2.payload.messages),
+        );
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toEqual([
+            { role: 'system', content: [addition('c')] },
+        ]);
+    });
+
+    it('announces an addition and a removal in one system message', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'));
+        const t2 = await turn(toolResult('c1'), [tool('b')], t1.conversation, assistantToolUse('c2', 'b'));
+        const systemMessages = t2.payload.messages.filter((m) => m.role === 'system');
+        expect(systemMessages).toEqual([{ role: 'system', content: [addition('b'), removal('a')] }]);
+        expect(t2.payload.tools).toEqual([tool('a'), { ...tool('b'), defer_loading: true }]);
+        expect(getClaudeToolState(t2.conversation)?.visible).toEqual(['b']);
+    });
+
+    it('sends declared tools on a turn without tools, then announces only real differences', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'));
+        const empty = await turn(
+            toolResult('c1'),
+            undefined,
+            t1.conversation,
+            assistantReply([{ type: 'text', text: 'Summary.' }]),
+        );
+        expect(empty.payload.tools).toEqual([tool('a')]);
+        expect(empty.payload.tool_choice).toEqual({ type: 'none' });
+        expect(empty.payload.messages.some((m) => m.role === 'system')).toBe(false);
+
+        const same = await turn(userText('again'), [tool('a')], empty.conversation, assistantToolUse('c2', 'a'));
+        expect(same.payload.messages.some((m) => m.role === 'system')).toBe(false);
+        expect(same.payload.tool_choice).toBeUndefined();
+
+        const more = await turn(
+            userText('more'),
+            [tool('a'), tool('b')],
+            empty.conversation,
+            assistantToolUse('c2', 'b'),
+        );
+        expect(more.payload.messages.filter((m) => m.role === 'system')).toEqual([
+            { role: 'system', content: [addition('b')] },
+        ]);
+    });
+
+    it('replays a thinking block from before a tool change unchanged', async () => {
+        const thinking = { type: 'thinking', thinking: 'Look up the item first.', signature: 'sig-before' };
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantReply([thinking, { type: 'tool_use', id: 'c1', name: 'a', input: { q: 'x' } }], 'tool_use'),
+        );
+        const t2 = await turn(toolResult('c1'), [tool('a'), tool('b')], t1.conversation, assistantToolUse('c2', 'b'));
+        const t3 = await turn(toolResult('c2'), [tool('a'), tool('b')], t2.conversation, assistantToolUse('c3', 'b'));
+
+        for (const { payload } of [t2, t3]) {
+            expect(payload.messages[1]).toEqual(t1.conversation.messages[1]);
+            expect(payload.messages[1].content).toContainEqual(thinking);
+        }
+        expect(t2.payload.messages.findIndex((m) => m.role === 'system')).toBeGreaterThan(1);
+    });
+
+    it('stores the continuation turn for a resumed run that ends with a tool call and replays it', async () => {
+        const toolCall = assistantReply([{ type: 'tool_use', id: 'c1', name: 'a', input: { q: 'x' } }], 'tool_use');
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, toolCall);
+        const resumed = await turn(
+            { messages: [] },
+            [tool('a')],
+            t1.conversation,
+            assistantReply([{ type: 'text', text: 'Resumed.' }]),
+        );
+
+        const last = resumed.payload.messages.at(-1);
+        expect(resumed.payload.messages.at(-2)?.role).toBe('assistant');
+        expect(last?.role).toBe('user');
+        expect(last?.content).toEqual([
+            expect.objectContaining({ type: 'tool_result', tool_use_id: 'c1' }),
+            { type: 'text', text: 'Continue.' },
+        ]);
+        expect(resumed.conversation.messages.map((m: MessageParam) => m.role)).toEqual([
+            'user',
+            'assistant',
+            'user',
+            'assistant',
+        ]);
+        expect(resumed.conversation.messages[2]).toEqual({
+            role: 'user',
+            content: [{ type: 'text', text: 'Continue.' }],
+        });
+
+        const next = await turn(userText('next'), [tool('a')], resumed.conversation, assistantToolUse('c2', 'a'));
+        expect(JSON.stringify(next.payload.messages.slice(0, resumed.payload.messages.length))).toBe(
+            JSON.stringify(resumed.payload.messages),
+        );
+    });
+
+    it('keeps the tool state and tool-change blocks through stored-conversation cleanup', async () => {
+        const cleanup: Partial<ExecutionOptions> = {
+            stripImagesAfterTurns: 0,
+            stripTextMaxTokens: 2,
+            stripHeartbeatsAfterTurns: 0,
+        };
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            'anthropic',
+            MODEL,
+            cleanup,
+        );
+        const prompt = {
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'tool_result', tool_use_id: 'c1', content: 'ok' },
+                        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+                        { type: 'text', text: '<heartbeat>status update</heartbeat>' },
+                    ],
+                },
+            ],
+        } as ClaudePrompt;
+        const t2 = await turn(
+            prompt,
+            [tool('a'), tool('list_items')],
+            t1.conversation,
+            assistantReply([{ type: 'text', text: 'Listed.' }]),
+            'anthropic',
+            MODEL,
+            cleanup,
+        );
+
+        const stored = JSON.stringify(t2.conversation);
+        // The cleanup ran on this turn...
+        expect(stored).not.toContain('iVBORw0KGgo=');
+        expect(stored).not.toContain('status update');
+        // ...without touching the tool state or the tool change.
+        expect(t2.conversation.messages).toContainEqual({ role: 'system', content: [addition('list_items')] });
+        expect(getClaudeToolState(t2.conversation)).toEqual({
+            declared: [
+                { definition: tool('a'), deferred: false },
+                { definition: tool('list_items'), deferred: true },
+            ],
+            visible: ['a', 'list_items'],
+        });
+
+        const t3 = await turn(
+            userText('again'),
+            [tool('a'), tool('list_items')],
+            t2.conversation,
+            assistantToolUse('c3', 'a'),
+            'anthropic',
+            MODEL,
+            cleanup,
+        );
+        expect(t3.payload.tools).toEqual([tool('a'), { ...tool('list_items'), defer_loading: true }]);
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toEqual([
+            { role: 'system', content: [addition('list_items')] },
+        ]);
+    });
+});
+
+describe('Claude cache breakpoints around tool changes', () => {
+    /** A conversation of five turns whose last request adds tool b, ending with a tool-change system message. */
+    function promptWithToolChange(): ClaudePrompt {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const text = (t: string) => [{ type: 'text' as const, text: t }];
+        return applyClaudeToolChanges(
+            {
+                ...declared,
+                system: [{ type: 'text', text: 'You are helpful.' }],
+                messages: [
+                    ...declared.messages,
+                    { role: 'assistant', content: text('ok') },
+                    { role: 'user', content: text('more') },
+                    { role: 'assistant', content: text('sure') },
+                    { role: 'user', content: [...text('stable source'), ...text('task')] },
+                ],
+            },
+            [tool('a') as Tool, tool('b') as Tool],
+        );
+    }
+
+    function expectNoBreakpointOnToolChanges(payload: { messages: MessageParam[]; tools?: unknown[] }) {
+        const system = payload.messages.filter((m) => m.role === 'system');
+        expect(system).toHaveLength(1);
+        expect(JSON.stringify(system)).not.toContain('cache_control');
+        const deferred = (payload.tools ?? []).filter((t) => (t as { defer_loading?: boolean }).defer_loading);
+        expect(deferred).toHaveLength(1);
+        expect(deferred[0]).not.toHaveProperty('cache_control');
+    }
+
+    it.each([
+        ['the pivot turn', {}],
+        ['the prompt_cache_key', { prompt_cache_key: 'document-prefix' }],
+    ])('marks %s, never a tool-change message or a deferred tool, and leaves the input unchanged', (_case, extra) => {
+        const prompt = promptWithToolChange();
+        const tools = [tool('a'), tool('b')];
+        const options: ExecutionOptions = {
+            ...extra,
+            model: MODEL,
+            tools,
+            model_options: { _option_id: 'anthropic-claude', cache_enabled: true },
+        };
+        const before = structuredClone({ prompt, tools });
+
+        const { payload } = getClaudePayload(options, prompt);
+
+        expectNoBreakpointOnToolChanges(payload);
+        expect(payload.tools?.[0]).toMatchObject({ name: 'a', cache_control: { type: 'ephemeral' } });
+        const turns = payload.messages.filter((m) => m.role !== 'system');
+        // The routed key marks the stable block before the task; otherwise the pivot turn is marked.
+        const markedTurn = turns['prompt_cache_key' in extra ? turns.length - 1 : turns.length - 2];
+        const marked = (markedTurn.content as { text: string }[])[0];
+        expect(marked).toMatchObject({ cache_control: { type: 'ephemeral' } });
+        expect({ prompt, tools }).toEqual(before);
     });
 });

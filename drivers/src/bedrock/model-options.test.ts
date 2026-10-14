@@ -2,7 +2,7 @@ import type { ModelOptions } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
-describe('Bedrock provider-specific model options', () => {
+describe('legacy Converse: Bedrock provider-specific model options', () => {
     it('serializes Claude between-tools mode through Converse reasoning_config', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const model = 'anthropic.claude-sonnet-5-5';
