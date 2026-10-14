@@ -183,25 +183,25 @@ The following functions are exported from `@llumiverse/core` for advanced use ca
 
 ## Testing
 
-Tests require API keys for the various LLM providers stored as environment variables:
-- OPENAI_API_KEY
-- BEDROCK_REGION
-- GOOGLE_PROJECT_ID and GOOGLE_REGION
-- AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_DEPLOYMENT
-- MISTRAL_API_KEY
-- TOGETHER_API_KEY
-- GROQ_API_KEY
-- WATSONX_API_KEY
-- XAI_API_KEY
-- OPENROUTER_API_KEY
+Live tests (`*.live.test.ts`) call provider APIs; each provider's tests run only when its credentials are set in
+your local environment and are skipped otherwise.
 
-Tests can be found in:
-- `drivers/test/model-smoke.live.test.ts` - Curated live smoke coverage for a small set of models across providers
-- `drivers/test/tools.test.ts` - Tests for LLM tool functionality
-- `drivers/test/embeddings.test.ts` - Tests for embedding functionality
-- `drivers/test/image-gen.test.ts` - Tests for image generation
-- `drivers/test/conversation.test.ts` - Tests for multi-turn conversations with images
-- `core/test/conversation-strip.test.ts` - Unit tests for conversation stripping utilities
+Live tests in `drivers/test/`:
+- `model-smoke.live.test.ts` - Curated smoke coverage: listing, execute, streaming with a schema, max_tokens at the
+  documented limit, and image input, for one or two small current models per provider
+- `conversation.live.test.ts` - Multi-turn conversations mixing execute and stream, images, and Claude prompt caching
+- `tools.live.test.ts` - Tool call, tool result, then a `tools=[]` checkpoint turn
+- `embeddings.live.test.ts` - Embeddings with each provider's default model
+- `vertexai-embedding-models.live.test.ts` - One Vertex embedding model per request path
+- `api-key-list-models.live.test.ts` - Gemini API key model listing
+
+Live tests use small, current models so a retirement does not break CI, and build options with
+`getLowEffortTestOptions()` from `drivers/test/utils.ts`: low effort where supported, no `temperature`, and only the
+controls the model advertises.
+
+Functional tests run without credentials: colocated `*.test.ts` files under `common/src`, `core/src` and
+`drivers/src`, plus `core/test/` and `drivers/test/` (for example `core/test/conversation-strip.test.ts` for the
+conversation stripping utilities and `drivers/test/image-gen.test.ts` for the Nova Canvas payload).
 
 ## Adding a New Driver
 
