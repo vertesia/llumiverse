@@ -96,7 +96,7 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
 
 function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' | 'max_output_tokens'> {
     if (model.includes('ai21.jamba')) return { context_window: 256_000, max_output_tokens: 4_096 };
-    if (model.includes('amazon.nova-2')) return { context_window: 1_000_000, max_output_tokens: 65_536 };
+    if (model.includes('amazon.nova-2')) return { context_window: 1_000_000, max_output_tokens: 65_535 };
     if (model.includes('amazon.nova-premier')) return { context_window: 1_000_000, max_output_tokens: 25_600 };
     if (model.includes('amazon.nova-micro')) return { context_window: 128_000, max_output_tokens: 5_120 };
     if (includesAny(model, ['amazon.nova-lite', 'amazon.nova-pro'])) {
