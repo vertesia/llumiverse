@@ -453,22 +453,15 @@ function usesClaudeMessagesApi(options: Pick<ExecutionOptions, 'model' | 'conver
 }
 
 /**
- * Whether a formatted Claude prompt targets the Messages API. {@link usesClaudeMessagesApi} picks the format in
- * `formatPrompt`; the request methods follow the prompt they receive, told apart by their content blocks.
+ * Whether a formatted prompt is in Anthropic Messages format. Converse and Nova content blocks carry no `type`.
+ * {@link usesClaudeMessagesApi} picks the format in `formatPrompt`; later steps follow the prompt they receive.
  */
-function isClaudeMessagesPrompt(prompt: BedrockPrompt, model: string): prompt is ClaudePrompt {
-    return isBedrockClaudeModel(model) && !('mediaSource' in prompt) && !isConverseConversation(prompt);
+function isMessagesShapedPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
+    return !('modelId' in prompt) && !('mediaSource' in prompt) && !isConverseConversation(prompt);
 }
 
-/** For debug output only, where the model is unknown: Nova content blocks carry no `type`. */
-function looksLikeClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
-    if ('modelId' in prompt || 'mediaSource' in prompt) return false;
-    if (prompt.system?.some((block) => 'type' in block)) return true;
-    return prompt.messages.some(
-        (message) =>
-            typeof message.content === 'string' ||
-            (Array.isArray(message.content) && message.content.some((block) => 'type' in block)),
-    );
+function isClaudeMessagesPrompt(prompt: BedrockPrompt, model: string): prompt is ClaudePrompt {
+    return isBedrockClaudeModel(model) && isMessagesShapedPrompt(prompt);
 }
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
@@ -719,32 +712,32 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private getAnthropicService(): AnthropicBedrock {
         if (!this._anthropicService) {
             const credentials = this.options.credentials;
-            // Captured once, so a released driver never builds a new AWS SDK client while signing.
-            const credentialProvider = this.getExecutor().config.credentials;
             const base = {
                 awsRegion: this.options.region,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
+                // Configured credentials must win over an AWS_BEARER_TOKEN_BEDROCK environment token, which the
+                // SDK would otherwise prefer. The SDK only types the field as a string.
+                ...(credentials && { apiKey: null as unknown as undefined }),
             };
-            this._anthropicService =
-                credentials && typeof credentials !== 'function'
-                    ? new AnthropicBedrock({
-                          ...base,
-                          awsAccessKey: credentials.accessKeyId,
-                          awsSecretKey: credentials.secretAccessKey,
-                          awsSessionToken: credentials.sessionToken,
-                          // Without this the SDK would prefer an AWS_BEARER_TOKEN_BEDROCK environment token over
-                          // the driver's own credentials. The SDK only types the field as a string.
-                          apiKey: null as unknown as undefined,
-                      })
-                    : new AnthropicBedrock({
-                          ...base,
-                          // Reuse the AWS SDK client's credential provider (the configured one or the default
-                          // chain), which caches resolved credentials across requests.
-                          providerChainResolver: async () => credentialProvider,
-                          // A configured provider must win over an AWS_BEARER_TOKEN_BEDROCK environment token.
-                          ...(credentials && { apiKey: null as unknown as undefined }),
-                      });
+            // Separate calls: the constructor's overloads take static keys or a provider resolver, not a union.
+            if (credentials && typeof credentials !== 'function') {
+                this._anthropicService = new AnthropicBedrock({
+                    ...base,
+                    awsAccessKey: credentials.accessKeyId,
+                    awsSecretKey: credentials.secretAccessKey,
+                    awsSessionToken: credentials.sessionToken,
+                });
+            } else {
+                // Reuse the AWS SDK client's credential provider (the configured one or the default chain), which
+                // caches resolved credentials. Captured once, so a released driver never builds a new AWS SDK
+                // client while signing.
+                const credentialProvider = this.getExecutor().config.credentials;
+                this._anthropicService = new AnthropicBedrock({
+                    ...base,
+                    providerChainResolver: async () => credentialProvider,
+                });
+            }
         }
         return this._anthropicService;
     }
@@ -833,7 +826,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if ('modelId' in prompt) {
             return formatConversePromptForDebug(prompt);
         }
-        if (looksLikeClaudeMessagesPrompt(prompt)) {
+        if (isMessagesShapedPrompt(prompt)) {
             return formatClaudeDebugPrompt(prompt);
         }
         return formatNovaPromptForDebug(prompt);
@@ -903,26 +896,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const formatted = formatAnthropicLlumiverseError(error, context);
         const apiError = error as { status?: number; error?: unknown; headers?: Headers | null };
         const exceptionName = bedrockExceptionName(error);
+        const requestId = apiError.headers?.get('x-amzn-requestid') ?? undefined;
         if (!exceptionName) {
-            // The SDK's event-stream decoder raises a client-side error for a corrupt chunk: a transport fault
-            // worth retrying, unlike the configuration errors that error type usually means.
-            const corruptChunk = error.message.startsWith('Could not parse a Bedrock chunk');
-            const requestId = apiError.headers?.get('x-amzn-requestid');
-            const missingId = !!requestId && !formatted.message.includes(requestId);
+            let message = formatted.message;
             // A connection error wraps the real failure, e.g. a credential provider that could not assume its role.
             const cause = error.cause instanceof Error ? error.cause.message : undefined;
-            const missingCause = !!cause && !formatted.message.includes(cause);
-            if (!corruptChunk && !missingId && !missingCause) return formatted;
-            let message = missingCause ? `${formatted.message}: ${cause}` : formatted.message;
-            if (missingId) message = `${message} (Request ID: ${requestId})`;
-            return new LlumiverseError(
-                message,
-                corruptChunk || formatted.retryable,
-                context,
-                error,
-                formatted.code,
-                formatted.name,
-            );
+            if (cause && !message.includes(cause)) message = `${message}: ${cause}`;
+            if (requestId && !message.includes(requestId)) message = `${message} (Request ID: ${requestId})`;
+            // The SDK's event-stream decoder raises a client-side error for a corrupt chunk: a transport fault
+            // worth retrying, unlike the configuration errors that error type usually means.
+            const retryable = error.message.startsWith('Could not parse a Bedrock chunk') || formatted.retryable;
+            return new LlumiverseError(message, retryable, context, error, formatted.code, formatted.name);
         }
         // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
         // non-retryable as on the Converse route.
@@ -937,7 +921,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             exceptionName,
             apiError.status,
             typeof bodyMessage === 'string' ? bodyMessage : error.message,
-            apiError.headers?.get('x-amzn-requestid') ?? undefined,
+            requestId,
         );
         return new LlumiverseError(message, retryable, context, error, formatted.code, exceptionName);
     }

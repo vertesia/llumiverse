@@ -56,7 +56,7 @@ import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './cla
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import {
     applyClaudeToolChanges,
-    type ClaudeToolState,
+    type ClaudeConversationMeta,
     canUseClaudeToolChanges,
     claudeContinueTurn,
     clearClaudeToolState,
@@ -147,7 +147,7 @@ export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
     /** Conversation metadata; `claude_tools` keeps the declared tools for append-only tool changes. */
-    _llumiverse_meta?: { turnNumber: number; claude_tools?: ClaudeToolState };
+    _llumiverse_meta?: ClaudeConversationMeta;
 }
 
 function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBlockParam {
@@ -574,8 +574,12 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
 
 function hasToolResultAfterOtherContent(message: MessageParam): boolean {
     if (!Array.isArray(message.content)) return false;
-    const firstOther = message.content.findIndex((block) => block.type !== 'tool_result');
-    return firstOther >= 0 && message.content.slice(firstOther).some((block) => block.type === 'tool_result');
+    let seenOther = false;
+    for (const block of message.content) {
+        if (block.type !== 'tool_result') seenOther = true;
+        else if (seenOther) return true;
+    }
+    return false;
 }
 
 export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
@@ -1011,12 +1015,10 @@ export function getClaudePayload(
     const toolChoice = !hasTools
         ? undefined
         : forcedToolChoice
-          ? supportedForcedToolChoice
-              ? {
-                    ...supportedForcedToolChoice,
-                    disable_parallel_tool_use: model_options?.parallel_tool_calls === false,
-                }
-              : ({ type: 'auto', disable_parallel_tool_use: model_options?.parallel_tool_calls === false } as const)
+          ? {
+                ...(supportedForcedToolChoice ?? ({ type: 'auto' } as const)),
+                disable_parallel_tool_use: model_options?.parallel_tool_calls === false,
+            }
           : model_options?.tool_choice === 'none' || !hasRequestedTools
             ? ({ type: 'none' } as const)
             : model_options?.tool_choice === 'auto'
@@ -1105,19 +1107,13 @@ function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessagePar
  */
 function mergeToolChangeMessages(messages: MessageParam[]): MessageParam {
     const blocks = messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []));
-    const toolName = (block: unknown) =>
-        isClaudeToolChangeBlock(block) ? (block as { tool?: { name?: string } }).tool?.name : undefined;
-    const changes = new Map<string, unknown[]>();
+    const changes = new Map<string, { count: number; last: unknown }>();
     for (const block of blocks) {
-        const name = toolName(block);
-        if (name) changes.set(name, [...(changes.get(name) ?? []), block]);
+        const name = isClaudeToolChangeBlock(block) ? (block as { tool?: { name?: string } }).tool?.name : undefined;
+        if (name) changes.set(name, { count: (changes.get(name)?.count ?? 0) + 1, last: block });
     }
-    const content = blocks.filter((block) => {
-        const name = toolName(block);
-        if (!name) return true;
-        const forTool = changes.get(name) ?? [];
-        return forTool.length % 2 === 1 && forTool[forTool.length - 1] === block;
-    });
+    const kept = new Set([...changes.values()].filter((change) => change.count % 2 === 1).map((change) => change.last));
+    const content = blocks.filter((block) => !isClaudeToolChangeBlock(block) || kept.has(block));
     return { role: 'system', content } as MessageParam;
 }
 
@@ -1134,7 +1130,7 @@ export function buildClaudeStreamingConversation(
     result: unknown[],
     toolUse: unknown[] | undefined,
     options: ExecutionOptions,
-    provider = 'anthropic',
+    provider: string,
 ): ClaudePrompt {
     const completionResults = result as CompletionResult[];
     const text = completionResults

@@ -26,6 +26,8 @@ const META_KEY = '_llumiverse_meta';
 export interface ConversationMeta {
     /** Current turn number (incremented each time a message is added) */
     turnNumber: number;
+    /** Driver-specific state stored with the conversation (e.g. Claude's declared tools). */
+    [key: string]: unknown;
 }
 
 /**

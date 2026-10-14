@@ -217,15 +217,16 @@ describe('append-only Claude tool changes', () => {
         }
     });
 
-    it('adds a continuation turn before announcing a change after an assistant turn', () => {
+    it('adds a continuation turn before a change announced after an assistant turn', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const afterAssistant = { ...declared, messages: [...declared.messages, { role: 'assistant', content: 'ok' }] };
         const next = applyClaudeToolChanges(afterAssistant as ClaudePrompt, [tool('a') as Tool, tool('b') as Tool]);
-        expect(next.messages.slice(-2)).toEqual([
+        expect(getClaudeToolState(next)?.visible).toEqual(['a', 'b']);
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a'), tool('b')] }, next);
+        expect(payload.messages.slice(-2)).toEqual([
             { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
             { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
         ]);
-        expect(getClaudeToolState(next)?.visible).toEqual(['a', 'b']);
     });
 
     it('puts the continuation turn before a trailing tool change when orphan repair drops the user turn', () => {

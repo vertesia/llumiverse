@@ -550,6 +550,7 @@ describe('formatClaudePrompt', () => {
             [],
             [{ id: 'tool-1', tool_name: 'app_workspace_edit', tool_input: { path: 'src/App.tsx' } }],
             options,
+            'anthropic',
         );
         const second = buildClaudeStreamingConversation(
             {
@@ -563,6 +564,7 @@ describe('formatClaudePrompt', () => {
             [],
             [{ id: 'tool-2', tool_name: 'app_workspace_typecheck', tool_input: {} }],
             { ...options, conversation: first },
+            'anthropic',
         );
 
         expect(JSON.stringify(first.messages)).toContain(largeHistoricalResult);
@@ -593,6 +595,7 @@ describe('formatClaudePrompt', () => {
                 model: 'claude-sonnet-4-6',
                 stripTextMaxTokens: 8_000,
             },
+            'anthropic',
         );
 
         expect(JSON.stringify(conversation.messages)).not.toContain(largeHistoricalResult);
