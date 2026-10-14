@@ -811,7 +811,8 @@ export function getClaudePayload(
     // into the single user turn after their assistant tool_use message; then fix both
     // orphan directions (tool_use without result, and result without tool_use) so the
     // request can never trip Anthropic/Vertex's tool_use/tool_result pairing validation.
-    const mergedMessages = mergeConsecutiveUserMessages(promptMessages);
+    // Tool-change messages are placed first, so user turns they separated are merged before orphan repair.
+    const mergedMessages = mergeConsecutiveUserMessages(placeSystemMessagesAfterUserTurns(promptMessages));
     const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 

@@ -374,6 +374,23 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
 }
 
 /**
+ * User-facing Bedrock error text, shared by the Converse and Messages routes:
+ * `[provider] Name: [status] message (Request ID: id)`. A generic name (`Error`, `UnknownError`) is left out.
+ */
+function formatBedrockErrorMessage(
+    provider: string,
+    errorName: string | undefined,
+    httpStatusCode: number | undefined,
+    message: string,
+    requestId: string | undefined,
+): string {
+    let text = httpStatusCode ? `[${httpStatusCode}] ${message}` : message;
+    if (errorName && errorName !== 'Error' && errorName !== 'UnknownError') text = `${errorName}: ${text}`;
+    if (requestId) text += ` (Request ID: ${requestId})`;
+    return `[${provider}] ${text}`;
+}
+
+/**
  * The Bedrock exception behind an Anthropic SDK error: the `x-amzn-errortype` response header for HTTP errors
  * (`Name:namespace`), or the camel-cased error type of an exception raised mid-stream (`throttlingException`).
  */
@@ -830,29 +847,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             message = String(error);
         }
 
-        // Build user-facing message with error name and status code
-        let userMessage = message;
-
-        // Include status code in message if available (for end-user visibility)
-        if (httpStatusCode) {
-            userMessage = `[${httpStatusCode}] ${userMessage}`;
-        }
-
-        // Prefix with error name if it's meaningful (not just "Error")
-        if (errorName && errorName !== 'Error' && errorName !== 'UnknownError') {
-            userMessage = `${errorName}: ${userMessage}`;
-        }
-
-        // Add request ID if available (useful for AWS support)
-        if (requestId) {
-            userMessage += ` (Request ID: ${requestId})`;
-        }
-
         // Determine retryability based on AWS error types
         const retryable = this.isBedrockErrorRetryable(errorName, httpStatusCode, fault);
 
         return new LlumiverseError(
-            `[${this.provider}] ${userMessage}`,
+            formatBedrockErrorMessage(this.provider, errorName, httpStatusCode, message, requestId),
             retryable,
             context,
             error,
@@ -874,12 +873,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             exceptionName === 'ModelStreamErrorException'
                 ? false
                 : (this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable);
-        // Report it as the Converse route does: "[bedrock] Name: [status] message (Request ID: id)".
         const apiError = error as { status?: number; error?: unknown; headers?: Headers | null };
-        const bodyMessage = (apiError.error as { message?: unknown } | undefined)?.message;
-        const text = typeof bodyMessage === 'string' ? bodyMessage : error.message;
-        const requestId = apiError.headers?.get('x-amzn-requestid');
-        const message = `[${context.provider}] ${exceptionName}: ${apiError.status ? `[${apiError.status}] ` : ''}${text}${requestId ? ` (Request ID: ${requestId})` : ''}`;
+        // HTTP errors carry { message }; exceptions raised mid-stream carry { error: { type, message } }.
+        const body = apiError.error as { message?: unknown; error?: { message?: unknown } } | undefined;
+        const bodyMessage = body?.message ?? body?.error?.message;
+        const message = formatBedrockErrorMessage(
+            this.provider,
+            exceptionName,
+            apiError.status,
+            typeof bodyMessage === 'string' ? bodyMessage : error.message,
+            apiError.headers?.get('x-amzn-requestid') ?? undefined,
+        );
         return new LlumiverseError(message, retryable, context, error, formatted.code, exceptionName);
     }
 

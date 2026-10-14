@@ -249,7 +249,10 @@ describe('append-only Claude tool changes', () => {
             ],
         } as unknown as ClaudePrompt;
         const next = applyClaudeToolChanges(rebuilt, [tool('a') as Tool]);
-        expect(next.messages.some((m) => m.role === 'system')).toBe(false);
+        // Only the new announcement remains; the orphaned block naming 'gone' is removed.
+        expect(next.messages.filter((m) => m.role === 'system')).toEqual([
+            { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'a' } }] },
+        ]);
         expect(getClaudeToolState(next)?.visible).toEqual(['a']);
     });
 
@@ -296,7 +299,7 @@ describe('append-only Claude tool changes', () => {
         expect(payload.messages.map((m) => m.role)).toEqual(roles);
     });
 
-    it('declares tools again from scratch after a turn without tool-change support', async () => {
+    it('declares tools again, deferred, after a turn without tool-change support', async () => {
         const t1 = await turn(firstPrompt, [tool('a'), tool('b')], undefined, assistantToolUse('c1', 'a'));
         const other = await turn(
             toolResult('c1'),
@@ -308,14 +311,48 @@ describe('append-only Claude tool changes', () => {
         );
         expect(getClaudeToolState(other.conversation)).toBeUndefined();
 
+        // Earlier turns keep the tools they ran with; the re-declared tools are deferred and announced.
         const back = await turn(
             toolResult('c2'),
             [tool('a'), tool('c')],
             other.conversation,
             assistantToolUse('c3', 'a'),
         );
-        expect(back.payload.tools).toEqual([tool('a'), tool('c')]);
-        expect(back.payload.messages.some((m) => m.role === 'system')).toBe(false);
+        expect(back.payload.tools).toEqual([
+            { ...tool('a'), defer_loading: true },
+            { ...tool('c'), defer_loading: true },
+        ]);
+        expect(back.payload.messages.at(-1)).toEqual({
+            role: 'system',
+            content: [
+                { type: 'tool_addition', tool: { type: 'tool_reference', name: 'a' } },
+                { type: 'tool_addition', tool: { type: 'tool_reference', name: 'c' } },
+            ],
+        });
+    });
+
+    it('keeps a real tool result when a tool change sat between split result turns', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt = {
+            ...declared,
+            messages: [
+                ...declared.messages,
+                {
+                    role: 'assistant',
+                    content: [
+                        { type: 'tool_use', id: 'x', name: 'a', input: {} },
+                        { type: 'tool_use', id: 'y', name: 'a', input: {} },
+                    ],
+                },
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'x done' }] },
+                { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'y', content: 'y done' }] },
+            ],
+        } as unknown as ClaudePrompt;
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a'), tool('b')] }, prompt);
+        const results = JSON.stringify(payload.messages);
+        expect(results).toContain('y done');
+        expect(results).not.toContain('Tool interrupted');
     });
 
     it('declares a tool listed twice once on the first request', () => {

@@ -247,7 +247,9 @@ describe('Bedrock Claude on the Messages API', () => {
         // The SDK throws a plain APIError (no status) for an SSE error event.
         const streamError = (type: string) =>
             new APIError(undefined, { type: 'error', error: { type, message: 'm' } }, undefined, new Headers());
-        expect(driver.formatLlumiverseError(streamError('throttlingException'), context).retryable).toBe(true);
+        const throttled = driver.formatLlumiverseError(streamError('throttlingException'), context);
+        expect(throttled.retryable).toBe(true);
+        expect(throttled.message).toBe('[bedrock] ThrottlingException: m');
         // A client fault in the Bedrock API model, non-retryable as on the Converse route.
         expect(driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable).toBe(false);
         expect(driver.formatLlumiverseError(streamError('validationException'), context).retryable).toBe(false);
