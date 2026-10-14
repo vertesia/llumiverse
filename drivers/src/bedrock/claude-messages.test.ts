@@ -209,7 +209,7 @@ describe('Bedrock Claude on the Messages API', () => {
         });
         expect(formatted.retryable).toBe(true);
         expect(formatted.name).toBe('ServiceQuotaExceededException');
-        expect(formatted.message).toContain('aws-req-1');
+        expect(formatted.message).toBe('[bedrock] ServiceQuotaExceededException: [400] quota (Request ID: aws-req-1)');
     });
 
     it('does not treat another SDK error named APIError as an Anthropic error', () => {
@@ -247,10 +247,8 @@ describe('Bedrock Claude on the Messages API', () => {
         const streamError = (type: string) =>
             new APIError(undefined, { type: 'error', error: { type, message: 'm' } }, undefined, new Headers());
         expect(driver.formatLlumiverseError(streamError('throttlingException'), context).retryable).toBe(true);
-        // Not in the Bedrock retry rules, as on the Converse route.
-        expect(
-            driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable,
-        ).toBeUndefined();
+        // A client fault in the Bedrock API model, non-retryable as on the Converse route.
+        expect(driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable).toBe(false);
         expect(driver.formatLlumiverseError(streamError('validationException'), context).retryable).toBe(false);
     });
 

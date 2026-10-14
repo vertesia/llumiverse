@@ -854,7 +854,7 @@ export function getClaudePayload(
             sanitizedMessages = [...sanitizedMessages, claudeContinueTurn()];
         }
     }
-    sanitizedMessages = placeSystemMessagesAfterUserTurns(sanitizedMessages);
+    sanitizedMessages = mergeConsecutiveUserMessages(placeSystemMessagesAfterUserTurns(sanitizedMessages));
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);

@@ -174,8 +174,8 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     const changeMessage = { role: 'system', content: changes } as unknown as MessageParam;
     // A system message must follow a user turn. A resumed run can end with an assistant turn; add the same
     // continuation turn getClaudePayload would, so the change is announced on this request.
-    const lastRole = conversation.messages[conversation.messages.length - 1]?.role;
-    const continuation: MessageParam[] = lastRole === 'user' ? [] : [claudeContinueTurn()];
+    const lastTurn = conversation.messages.findLast((message) => message.role !== 'system');
+    const continuation: MessageParam[] = lastTurn?.role === 'user' ? [] : [claudeContinueTurn()];
     return setClaudeToolState(
         { ...conversation, messages: [...conversation.messages, ...continuation, changeMessage] },
         nextState,

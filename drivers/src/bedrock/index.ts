@@ -436,10 +436,10 @@ function usesClaudeMessagesApi(options: Pick<ExecutionOptions, 'model' | 'conver
 
 /**
  * Whether a formatted Claude prompt targets the Messages API. {@link usesClaudeMessagesApi} picks the format in
- * `formatPrompt`; the request methods follow the prompt they receive. A Converse prompt always has `modelId`.
+ * `formatPrompt`; the request methods follow the prompt they receive, told apart by their content blocks.
  */
 function isClaudeMessagesPrompt(prompt: BedrockPrompt, model: string): prompt is ClaudePrompt {
-    return isBedrockClaudeModel(model) && !('modelId' in prompt) && !('mediaSource' in prompt);
+    return isBedrockClaudeModel(model) && !('mediaSource' in prompt) && !isConverseConversation(prompt);
 }
 
 /** For debug output only, where the model is unknown: Nova content blocks carry no `type`. */
@@ -869,13 +869,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const formatted = formatAnthropicLlumiverseError(error, context);
         const exceptionName = bedrockExceptionName(error);
         if (!exceptionName) return formatted;
-        const retryable = this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable;
-        // Keep Bedrock's exception name and request ID, as the Converse route reports them.
-        const requestId = (error as { headers?: Headers | null }).headers?.get('x-amzn-requestid');
-        const message =
-            requestId && !formatted.message.includes(requestId)
-                ? `${formatted.message} (Request ID: ${requestId})`
-                : formatted.message;
+        const retryable =
+            // A client fault in the Bedrock API model; Converse reports it as non-retryable too.
+            exceptionName === 'ModelStreamErrorException'
+                ? false
+                : (this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable);
+        // Report it as the Converse route does: "[bedrock] Name: [status] message (Request ID: id)".
+        const apiError = error as { status?: number; error?: unknown; headers?: Headers | null };
+        const bodyMessage = (apiError.error as { message?: unknown } | undefined)?.message;
+        const text = typeof bodyMessage === 'string' ? bodyMessage : error.message;
+        const requestId = apiError.headers?.get('x-amzn-requestid');
+        const message = `[${context.provider}] ${exceptionName}: ${apiError.status ? `[${apiError.status}] ` : ''}${text}${requestId ? ` (Request ID: ${requestId})` : ''}`;
         return new LlumiverseError(message, retryable, context, error, formatted.code, exceptionName);
     }
 

@@ -267,7 +267,7 @@ describe('append-only Claude tool changes', () => {
                 { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
                 { role: 'user', content: 'again' },
             ],
-            ['user', 'user', 'system'],
+            ['user', 'system'],
         ],
         [
             'back-to-back changes',
