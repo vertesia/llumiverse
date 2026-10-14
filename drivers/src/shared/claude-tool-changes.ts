@@ -59,7 +59,7 @@ export interface ClaudeToolState {
 }
 
 interface ConversationWithMeta {
-    [META_KEY]?: { claude_tools?: ClaudeToolState };
+    [META_KEY]?: { turnNumber?: number; claude_tools?: ClaudeToolState };
 }
 
 export function canUseClaudeToolChanges(model: string, provider: string): boolean {
@@ -90,7 +90,18 @@ function canonicalJson(value: unknown): string {
 
 function setClaudeToolState<T extends object>(conversation: T, state: ClaudeToolState): T {
     const meta = (conversation as ConversationWithMeta)[META_KEY];
-    return { ...conversation, [META_KEY]: { ...meta, claude_tools: state } };
+    return { ...conversation, [META_KEY]: { turnNumber: 0, ...meta, claude_tools: state } };
+}
+
+/**
+ * Forget the declared tools after a turn that sent tools the old way (a model or provider without tool
+ * changes). Its tools are not tracked, so a later supported turn declares the tools again from scratch.
+ */
+export function clearClaudeToolState<T extends object>(conversation: T): T {
+    const meta = (conversation as ConversationWithMeta)[META_KEY];
+    if (!meta?.claude_tools) return conversation;
+    const { claude_tools: _tools, ...rest } = meta;
+    return { ...conversation, [META_KEY]: rest };
 }
 
 /**
@@ -106,7 +117,8 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     requestedTools: Tool[] | undefined,
 ): T {
     if (!requestedTools || requestedTools.length === 0) return conversation;
-    const requested = requestedTools.map(withoutRequestFields);
+    // One definition per name; a later duplicate wins, as it does when replacing a declared tool.
+    const requested = [...new Map(requestedTools.map((tool) => [tool.name, withoutRequestFields(tool)])).values()];
     const state = getClaudeToolState(conversation);
 
     if (!state) {

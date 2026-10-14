@@ -292,6 +292,37 @@ describe('append-only Claude tool changes', () => {
         expect(payload.messages.map((m) => m.role)).toEqual(roles);
     });
 
+    it('declares tools again from scratch after a turn without tool-change support', async () => {
+        const t1 = await turn(firstPrompt, [tool('a'), tool('b')], undefined, assistantToolUse('c1', 'a'));
+        const other = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('c')],
+            t1.conversation,
+            assistantToolUse('c2', 'c'),
+            'anthropic',
+            'claude-sonnet-5',
+        );
+        expect(getClaudeToolState(other.conversation)).toBeUndefined();
+
+        const back = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('c')],
+            other.conversation,
+            assistantToolUse('c3', 'a'),
+        );
+        expect(back.payload.tools).toEqual([tool('a'), tool('c')]);
+        expect(back.payload.messages.some((m) => m.role === 'system')).toBe(false);
+    });
+
+    it('declares a tool listed twice once on the first request', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool, tool('a', 'v2') as Tool]);
+        expect(getClaudeToolState(declared)).toEqual({
+            declared: [{ definition: tool('a', 'v2'), deferred: false }],
+            visible: ['a'],
+        });
+        expect(declared._llumiverse_meta?.turnNumber).toBe(0);
+    });
+
     it('announces a tool listed twice once', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const next = applyClaudeToolChanges(

@@ -58,6 +58,7 @@ import {
     type ClaudeToolState,
     canUseClaudeToolChanges,
     claudeContinueTurn,
+    clearClaudeToolState,
     getClaudeToolState,
     isClaudeToolChangeBlock,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
@@ -847,16 +848,10 @@ export function getClaudePayload(
     // guaranteed 400 into a graceful continue — the same behavior pre-4.6
     // models applied implicitly by treating the trailing turn as prefill.
     // Older models are left untouched: prefill there can be intentional.
-    // Trailing tool-change system messages are skipped: the continuation turn goes before them.
     if (isClaudeVersionGTE(modelName, 4, 6)) {
-        let insertAt = sanitizedMessages.length;
-        while (insertAt > 0 && sanitizedMessages[insertAt - 1].role === 'system') insertAt--;
-        if (sanitizedMessages[insertAt - 1]?.role === 'assistant') {
-            sanitizedMessages = [
-                ...sanitizedMessages.slice(0, insertAt),
-                claudeContinueTurn(),
-                ...sanitizedMessages.slice(insertAt),
-            ];
+        const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
+        if (lastMessage?.role === 'assistant') {
+            sanitizedMessages = [...sanitizedMessages, claudeContinueTurn()];
         }
     }
     sanitizedMessages = placeSystemMessagesAfterUserTurns(sanitizedMessages);
@@ -1204,7 +1199,7 @@ function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudeProm
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
     return canUseClaudeToolChanges(options.model, provider)
         ? applyClaudeToolChanges(conversation, options.tools as Tool[] | undefined)
-        : conversation;
+        : clearClaudeToolState(conversation);
 }
 
 /**
