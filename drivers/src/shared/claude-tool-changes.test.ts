@@ -85,7 +85,7 @@ describe('append-only Claude tool changes', () => {
     it('declares the first tools as sent and replays them unchanged when a tool is added', async () => {
         const t1 = await turn(firstPrompt, [tool('learn_skill')], undefined, assistantToolUse('c1', 'learn_skill'));
         expect(t1.payload.tools).toEqual([tool('learn_skill')]);
-        expect(t1.requestOptions).toBeUndefined();
+        expect(t1.requestOptions?.headers?.['anthropic-beta']).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
         expect(getClaudeToolState(t1.conversation)?.visible).toEqual(['learn_skill']);
 
         const t2 = await turn(
@@ -101,7 +101,9 @@ describe('append-only Claude tool changes', () => {
             content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'list_items' } }],
         });
         expect(t2.payload.messages.at(-2)?.role).toBe('user');
-        expect(t2.requestOptions?.headers?.['anthropic-beta']).toBe(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(t2.requestOptions?.headers?.['anthropic-beta']?.split(',')).toContain(
+            MID_CONVERSATION_TOOL_CHANGES_BETA,
+        );
 
         // The change is stored and replayed verbatim; the next request adds nothing new.
         const t3 = await turn(
@@ -179,7 +181,9 @@ describe('append-only Claude tool changes', () => {
             );
             expect(legacy.payload.tools).toEqual([tool('b')]);
             expect(legacy.payload.messages.some((m) => m.role === 'system')).toBe(false);
-            expect(legacy.requestOptions).toBeUndefined();
+            expect(legacy.requestOptions?.headers?.['anthropic-beta'] ?? '').not.toContain(
+                MID_CONVERSATION_TOOL_CHANGES_BETA,
+            );
         }
     });
 

@@ -35,6 +35,7 @@ const tierResponse = () => new Response(null, { headers: { 'x-amzn-bedrock-servi
 function driverWithClaudeClient(logger?: ConstructorParameters<typeof BedrockDriver>[0]['logger']) {
     const driver = new BedrockDriver({ region: 'us-east-1', logger });
     const stream = vi.fn((_payload: unknown, _options?: unknown) => ({
+        async *[Symbol.asyncIterator]() {},
         finalMessage: async () => message(),
         withResponse: async () => ({ response: tierResponse() }),
     }));
@@ -103,7 +104,7 @@ describe('Bedrock Claude on the Messages API', () => {
         const [payload, requestOptions] = stream.mock.calls[0] as [{ max_tokens: number }, { headers?: unknown }];
         expect(payload).toMatchObject({ model: MODEL, stream: true });
         expect(payload.max_tokens).toBeLessThan(10_000_000);
-        expect(requestOptions.headers).toEqual({ 'X-Amzn-Bedrock-Service-Tier': 'priority' });
+        expect(requestOptions.headers).toMatchObject({ 'X-Amzn-Bedrock-Service-Tier': 'priority' });
         expect(logger.warn).toHaveBeenCalledWith(
             expect.objectContaining({ option_names: ['max_tokens'], reason: 'claude_output_limit' }),
             expect.any(String),

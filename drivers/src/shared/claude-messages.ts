@@ -7,7 +7,7 @@
  */
 
 import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
-import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
+import type { AnthropicBeta, BetaMessage, BetaRawMessageDeltaEvent } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -52,7 +52,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
-import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
+import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import {
     applyClaudeToolChanges,
     type ClaudeToolState,
@@ -923,11 +923,13 @@ export function getClaudePayload(
         }
     }
 
-    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(
-        modelName,
-        model_options as Parameters<typeof resolveClaudeThinking>[1],
-        logger,
-    );
+    const {
+        thinking,
+        betas: thinkingBetas,
+        outputConfig,
+        hasSamplingRestriction,
+    } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1], logger);
+    betas.push(...thinkingBetas);
     const forcedToolChoice = model_options?.required_tool_name
         ? ({ type: 'tool', name: model_options.required_tool_name } as const)
         : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
@@ -984,7 +986,10 @@ export function getClaudePayload(
               : model_options?.top_p,
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: disableManualThinkingForForcedTool ? { type: 'disabled' } : thinking,
+        // The beta config adds block_binding (sent with its beta header); the wire field is the same.
+        thinking: disableManualThinkingForForcedTool
+            ? { type: 'disabled' }
+            : (thinking as MessageCreateParamsBase['thinking']),
         stream: true,
         ...(!disableManualThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
         // `speed` is a beta request field the base type doesn't declare yet.
@@ -1202,6 +1207,27 @@ function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudeProm
         : clearClaudeToolState(conversation);
 }
 
+type InputTransformations = BetaMessage['input_transformations'];
+
+/**
+ * Track the final `input_transformations` (only typed on beta events; present when the binding beta was sent).
+ * `message_start` carries it, and the final `message_delta` replaces it after a server-side model fallback,
+ * which the stable SDK accumulator drops, so both paths read it from the raw events.
+ */
+function trackInputTransformations(current: InputTransformations, event: RawMessageStreamEvent): InputTransformations {
+    switch (event.type) {
+        case 'message_start':
+            return (event.message as Partial<Pick<BetaMessage, 'input_transformations'>>).input_transformations;
+        case 'message_delta':
+            return (
+                (event as Partial<Pick<BetaRawMessageDeltaEvent, 'input_transformations'>>).input_transformations ??
+                current
+            );
+        default:
+            return current;
+    }
+}
+
 /**
  * Execute a non-streaming Claude completion.
  * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
@@ -1226,6 +1252,10 @@ export async function executeClaudeCompletion(
         { ...payload, model: requestModel ?? payload.model } as MessageStreamParams,
         mergeRequestOptions(requestOptions, transportOptions),
     );
+    let transformations: InputTransformations;
+    for await (const event of responseStream) {
+        transformations = trackInputTransformations(transformations, event);
+    }
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
     logClaudeRefusal(logger, result.stop_reason, {
@@ -1235,6 +1265,7 @@ export async function executeClaudeCompletion(
         response_id: result.id,
         details: result.stop_details,
     });
+    logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
@@ -1281,8 +1312,10 @@ export async function streamClaudeCompletion(
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
     let responseId: string | undefined;
+    let transformations: InputTransformations;
 
     const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+        transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
                 responseId = streamEvent.message.id;
@@ -1300,6 +1333,7 @@ export async function streamClaudeCompletion(
                     response_id: responseId,
                     details: streamEvent.delta.stop_details,
                 });
+                logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },
