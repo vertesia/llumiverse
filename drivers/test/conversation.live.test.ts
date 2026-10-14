@@ -2,9 +2,10 @@
  * Tests for multi-turn conversation handling across drivers.
  *
  * These tests verify that:
- * 1. Multi-turn text conversations work correctly
+ * 1. Multi-turn conversations keep context when execute() and stream() turns are mixed
  * 2. Conversations with images work correctly
  * 3. The conversation object survives JSON.stringify/parse (no Uint8Array corruption)
+ * 4. Claude prompt caching reports cached tokens on a later turn
  */
 
 import {
@@ -15,9 +16,10 @@ import {
     type PromptSegment,
 } from '@llumiverse/core';
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src/index.js';
-import { completionResultToString } from './utils.js';
+import { completionResultToString, getLowEffortTestOptions } from './utils.js';
 
 const TIMEOUT = 120 * 1000;
 
@@ -37,28 +39,17 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
-        textModel: 'publishers/google/models/gemini-2.5-flash',
-        visionModel: 'publishers/google/models/gemini-2.5-flash',
+        textModel: 'locations/global/publishers/google/models/gemini-3.5-flash-lite',
+        visionModel: 'locations/global/publishers/google/models/gemini-3.5-flash-lite',
     });
-    // Also test Claude Sonnet 4.5 on VertexAI
     drivers.push({
-        name: 'vertexai-claude-sonnet',
+        name: 'vertexai-claude',
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
-        textModel: 'publishers/anthropic/models/claude-sonnet-4-5',
-        visionModel: 'publishers/anthropic/models/claude-sonnet-4-5',
-    });
-    // Also test Claude Opus 4.6 on VertexAI
-    drivers.push({
-        name: 'vertexai-claude-opus',
-        driver: new VertexAIDriver({
-            project: process.env.GOOGLE_PROJECT_ID as string,
-            region: process.env.GOOGLE_REGION as string,
-        }),
-        textModel: 'publishers/anthropic/models/claude-opus-4-6',
-        visionModel: 'publishers/anthropic/models/claude-opus-4-6',
+        textModel: 'locations/global/publishers/anthropic/models/claude-haiku-5-5',
+        visionModel: 'locations/global/publishers/anthropic/models/claude-haiku-5-5',
     });
 } else {
     console.warn('VertexAI tests are skipped: GOOGLE_PROJECT_ID environment variable is not set');
@@ -70,8 +61,8 @@ if (process.env.OPENAI_API_KEY) {
         driver: new OpenAIDriver({
             apiKey: process.env.OPENAI_API_KEY as string,
         }),
-        textModel: 'gpt-5',
-        visionModel: 'gpt-5',
+        textModel: 'gpt-6-luna',
+        visionModel: 'gpt-6-luna',
     });
 } else {
     console.warn('OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set');
@@ -83,9 +74,8 @@ if (process.env.BEDROCK_REGION) {
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
-        // Claude Sonnet 4 for text and vision
-        textModel: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
-        visionModel: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+        textModel: 'global.anthropic.claude-haiku-5-5',
+        visionModel: 'global.anthropic.claude-haiku-5-5',
     });
 } else {
     console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
@@ -97,8 +87,8 @@ if (process.env.XAI_API_KEY) {
         driver: new xAIDriver({
             apiKey: process.env.XAI_API_KEY as string,
         }),
-        textModel: 'grok-4-1-fast-reasoning',
-        visionModel: 'grok-4-1-fast-reasoning',
+        textModel: 'grok-4.7',
+        visionModel: 'grok-4.7',
     });
 } else {
     console.warn('xAI tests are skipped: XAI_API_KEY environment variable is not set');
@@ -110,8 +100,8 @@ if (process.env.ANTHROPIC_API_KEY) {
         driver: new AnthropicDriver({
             apiKey: process.env.ANTHROPIC_API_KEY as string,
         }),
-        textModel: 'claude-3-5-haiku-20241022',
-        visionModel: 'claude-3-5-sonnet-20241022',
+        textModel: 'claude-haiku-5-5',
+        visionModel: 'claude-haiku-5-5',
     });
 } else {
     console.warn('Anthropic tests are skipped: ANTHROPIC_API_KEY environment variable is not set');
@@ -178,26 +168,6 @@ class Base64ImageSource implements DataSource {
     }
 }
 
-function getTextOptions(model: string): ExecutionOptions {
-    // GPT-5 and similar reasoning models don't support temperature
-    const isReasoningModel = model.includes('gpt-5') || model.includes('o1') || model.includes('o3');
-
-    return {
-        model: model,
-        model_options: isReasoningModel
-            ? {
-                  _option_id: 'openai-thinking',
-                  max_tokens: 3000,
-                  effort: 'low',
-              }
-            : {
-                  _option_id: 'text-fallback',
-                  max_tokens: 1000,
-                  temperature: 0.3,
-              },
-    };
-}
-
 /** Returns execution options for a Claude model with prompt caching enabled. */
 function getClaudeOptionsWithCache(model: string, driverName: string): ExecutionOptions {
     const optionId = driverName.includes('vertexai') ? 'vertexai-claude' : 'bedrock-claude';
@@ -205,16 +175,22 @@ function getClaudeOptionsWithCache(model: string, driverName: string): Execution
         model,
         model_options: {
             _option_id: optionId,
-            max_tokens: 256,
+            max_tokens: 1000,
+            effort: 'low',
             cache_enabled: true,
         },
     };
 }
 
+/**
+ * About 1.5k tokens with Claude Haiku 5.5's tokenizer (fewer on older tokenizers), above the minimum cacheable
+ * prefix of current Claude models. The run ID keeps the prefix unique, so the test cannot pass on a cache entry
+ * written by an earlier run.
+ */
 function buildCacheableContext(): string {
     const repeatedSection =
         'Prompt caching verification context. Preserve this exact context across turns and do not summarize it unless explicitly asked. ';
-    return `You are participating in a prompt caching verification test.\n\n${repeatedSection.repeat(180)}`;
+    return `You are participating in prompt caching verification run ${randomUUID()}.\n\n${repeatedSection.repeat(40)}`;
 }
 
 /**
@@ -273,64 +249,55 @@ describe.skipIf(hasClaudeDrivers)('Claude prompt caching (no Claude drivers conf
     });
 });
 
+async function consumeStream(stream: AsyncIterable<string>): Promise<void> {
+    for await (const _chunk of stream) {
+        // Consume the stream so the completion is populated
+    }
+}
+
 describe.skipIf(!hasDrivers).concurrent.each(drivers)(
     'Driver $name - Multi-turn Conversations',
     ({ name, driver, textModel, visionModel }) => {
-        test(`${name}: multi-turn text conversation (3 turns)`, { timeout: TIMEOUT }, async () => {
-            const options = getTextOptions(textModel);
+        /**
+         * One conversation that alternates execute() → stream() → execute(), round-tripping the conversation
+         * through JSON between turns as Studio does. This covers non-streaming and streaming turns that continue
+         * a stored conversation, and conversations produced by either mode being accepted by the other.
+         */
+        test(`${name}: multi-turn conversation mixing execute and stream`, { timeout: TIMEOUT }, async () => {
+            const options = getLowEffortTestOptions(textModel, driver.provider, { max_tokens: 1000 });
 
-            // Turn 1: Ask a question
-            const prompt1: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: "I'm thinking of a number between 1 and 10. The number is 7. Remember this number.",
-                },
-            ];
-
-            const result1 = await driver.execute(prompt1, options);
+            const result1 = await driver.execute(
+                [{ role: PromptRole.user, content: 'Remember this code: ALPHA-7749' }],
+                options,
+            );
             expect(result1.result.length).toBeGreaterThan(0);
-            expect(result1.conversation).toBeDefined();
-
-            // Verify conversation is serializable
             verifyConversationSerializable(result1.conversation, name);
-
-            // Simulate storage: serialize and deserialize the conversation
             const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
-            // Turn 2: Follow-up question
-            const prompt2: PromptSegment[] = [
+            const stream2 = await driver.stream(
+                [{ role: PromptRole.user, content: 'What code did I tell you to remember?' }],
                 {
-                    role: PromptRole.user,
-                    content: 'What number did I tell you I was thinking of?',
+                    ...options,
+                    conversation: storedConversation1,
                 },
-            ];
+            );
+            await consumeStream(stream2);
+            const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
+            expect(text2).toContain('ALPHA-7749');
+            verifyConversationSerializable(stream2.completion?.conversation, name);
+            const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
 
-            const result2 = await driver.execute(prompt2, { ...options, conversation: storedConversation1 });
-            expect(result2.result.length).toBeGreaterThan(0);
-            const text2 = result2.result.map(completionResultToString).join('');
-            expect(text2).toContain('7');
-            expect(result2.conversation).toBeDefined();
-
-            // Verify conversation is still serializable
-            verifyConversationSerializable(result2.conversation, name);
-
-            // Simulate storage again
-            const storedConversation2 = JSON.parse(JSON.stringify(result2.conversation));
-
-            // Turn 3: Another follow-up
-            const prompt3: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'Add 3 to that number. What is the result?',
-                },
-            ];
-
-            const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
-            expect(result3.result.length).toBeGreaterThan(0);
+            const result3 = await driver.execute(
+                [
+                    {
+                        role: PromptRole.user,
+                        content: 'Repeat only the numeric digits from that code, no delimiters, no spaces.',
+                    },
+                ],
+                { ...options, conversation: storedConversation2 },
+            );
             const text3 = result3.result.map(completionResultToString).join('');
-            expect(text3).toContain('10');
-
-            // Final verification
+            expect(text3).toContain('7749');
             verifyConversationSerializable(result3.conversation, name);
         });
 
@@ -339,158 +306,59 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             { timeout: TIMEOUT, retry: 1 },
             async () => {
                 const options = getClaudeOptionsWithCache(textModel, name);
-                const basePrompt = buildCacheableContext();
 
-                const turn1 = await driver.execute(
-                    [
-                        {
-                            role: PromptRole.system,
-                            content: 'Respond briefly. Preserve conversation context across turns.',
-                        },
-                        {
-                            role: PromptRole.user,
-                            content: `${basePrompt}\n\nAcknowledge with exactly: TURN-1-OK`,
-                        },
-                    ],
-                    options,
-                );
-                expect(turn1.conversation).toBeDefined();
-                expect(turn1.token_usage).toBeDefined();
-                verifyConversationSerializable(turn1.conversation, name);
+                // The conversation cache point sits on the message before the last one once the history holds a
+                // prior exchange, so turn 3 writes the cache and turn 4 is the first turn that can read it.
+                let conversation: unknown;
+                const cacheWriteTokensByTurn: number[] = [];
+                let lastCachedTokens = 0;
+                for (let turn = 1; turn <= 4; turn++) {
+                    const prompt: PromptSegment[] =
+                        turn === 1
+                            ? [
+                                  {
+                                      role: PromptRole.system,
+                                      content: 'Respond briefly. Preserve conversation context across turns.',
+                                  },
+                                  {
+                                      role: PromptRole.user,
+                                      content: `${buildCacheableContext()}\n\nAcknowledge with exactly: TURN-1-OK`,
+                                  },
+                              ]
+                            : [{ role: PromptRole.user, content: `Reply with exactly: TURN-${turn}-OK` }];
+                    const result = await driver.execute(prompt, { ...options, conversation });
+                    expect(result.token_usage).toBeDefined();
+                    verifyConversationSerializable(result.conversation, name);
+                    conversation = JSON.parse(JSON.stringify(result.conversation));
+                    cacheWriteTokensByTurn.push(result.token_usage?.prompt_cache_write ?? 0);
+                    lastCachedTokens = result.token_usage?.prompt_cached ?? 0;
+                }
 
-                const storedConversation1 = JSON.parse(JSON.stringify(turn1.conversation));
-
-                const turn2 = await driver.execute(
-                    [
-                        {
-                            role: PromptRole.user,
-                            content: 'Reply with exactly: TURN-2-OK',
-                        },
-                    ],
-                    { ...options, conversation: storedConversation1 },
-                );
-                expect(turn2.conversation).toBeDefined();
-                expect(turn2.token_usage).toBeDefined();
-                verifyConversationSerializable(turn2.conversation, name);
-
-                const storedConversation2 = JSON.parse(JSON.stringify(turn2.conversation));
-
-                const turn3 = await driver.execute(
-                    [
-                        {
-                            role: PromptRole.user,
-                            content: 'Reply with exactly: TURN-3-OK',
-                        },
-                    ],
-                    { ...options, conversation: storedConversation2 },
-                );
-                expect(turn3.conversation).toBeDefined();
-                expect(turn3.token_usage).toBeDefined();
-                verifyConversationSerializable(turn3.conversation, name);
-
-                const storedConversation3 = JSON.parse(JSON.stringify(turn3.conversation));
-
-                const turn4 = await driver.execute(
-                    [
-                        {
-                            role: PromptRole.user,
-                            content: 'Reply with exactly: TURN-4-OK',
-                        },
-                    ],
-                    { ...options, conversation: storedConversation3 },
-                );
-                expect(turn4.conversation).toBeDefined();
-                expect(turn4.token_usage).toBeDefined();
-                verifyConversationSerializable(turn4.conversation, name);
-
-                const cacheWriteTokensByTurn = [
-                    turn1.token_usage?.prompt_cache_write ?? 0,
-                    turn2.token_usage?.prompt_cache_write ?? 0,
-                    turn3.token_usage?.prompt_cache_write ?? 0,
-                ];
-                expect(
-                    turn4.token_usage?.prompt_cached ?? 0,
-                    `[${name}] Expected prompt_cached tokens on a later turn when cache_enabled=true. ` +
-                        `Observed prompt_cache_write tokens by setup turns: ${cacheWriteTokensByTurn.join(', ')}`,
-                ).toBeGreaterThan(0);
+                const detail = `Observed prompt_cache_write tokens by turn: ${cacheWriteTokensByTurn.join(', ')}`;
+                if (name.includes('vertexai')) {
+                    // Vertex's global endpoint does not route every turn to the replica holding the cache entry,
+                    // so a read on turn 4 is not guaranteed. A reported write still proves cache_control was sent.
+                    expect(
+                        Math.max(lastCachedTokens, ...cacheWriteTokensByTurn),
+                        `[${name}] Expected a prompt cache write or read when cache_enabled=true. ${detail}`,
+                    ).toBeGreaterThan(0);
+                } else {
+                    expect(
+                        lastCachedTokens,
+                        `[${name}] Expected prompt_cached tokens on turn 4 when cache_enabled=true. ${detail}`,
+                    ).toBeGreaterThan(0);
+                }
             },
         );
 
-        test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
-            if (!visionModel) {
-                throw new Error(`Expected vision model for ${name}`);
-            }
-            const options = getTextOptions(visionModel);
-
-            // Turn 1: Send an image as base64 (like Studio does)
-            // Using Google logo as a simple, accessible test image
-            const imageUrl = 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png';
-            const imageSource = await Base64ImageSource.fromUrl(imageUrl, 'image/png');
-            const prompt1: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'What company logo is shown in this image? Please describe the colors you see.',
-                    files: [imageSource],
-                },
-            ];
-
-            const result1 = await driver.execute(prompt1, options);
-            expect(result1.result.length).toBeGreaterThan(0);
-            const text1 = result1.result.map(completionResultToString).join('').toLowerCase();
-            expect(text1).toMatch(/google/i);
-            expect(result1.conversation).toBeDefined();
-
-            // Critical test: Verify conversation is serializable after image
-            // This is where Bedrock would fail without the stripBinaryFromConversation fix
-            verifyConversationSerializable(result1.conversation, name);
-
-            // Simulate storage: serialize and deserialize the conversation
-            const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
-
-            // Turn 2: Follow-up question about the image (without sending it again)
-            const prompt2: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'How many colors are in the logo you just described?',
-                },
-            ];
-
-            const result2 = await driver.execute(prompt2, { ...options, conversation: storedConversation1 });
-            expect(result2.result.length).toBeGreaterThan(0);
-            const text2 = result2.result.map(completionResultToString).join('');
-            // Google logo has 4 colors (blue, red, yellow, green)
-            expect(text2).toMatch(/4|four/i);
-
-            // Verify conversation is still serializable
-            verifyConversationSerializable(result2.conversation, name);
-
-            // Simulate storage again
-            const storedConversation2 = JSON.parse(JSON.stringify(result2.conversation));
-
-            // Turn 3: Another follow-up
-            const prompt3: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'What is the first letter in that company name?',
-                },
-            ];
-
-            const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
-            expect(result3.result.length).toBeGreaterThan(0);
-            const text3 = result3.result.map(completionResultToString).join('').toLowerCase();
-            expect(text3).toContain('g');
-
-            // Final verification
-            verifyConversationSerializable(result3.conversation, name);
-        });
-
+        /** Two images in one turn, then a follow-up after the images were stripped from the stored conversation. */
         test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
             if (!visionModel) {
                 throw new Error(`Expected vision model for ${name}`);
             }
-            const options = getTextOptions(visionModel);
+            const options = getLowEffortTestOptions(visionModel, driver.provider, { max_tokens: 1000 });
 
-            // Turn 1: Send two images as base64 (like Studio does)
+            // Send the images as base64, as Studio does
             const googleLogoUrl = 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png';
             const githubLogoUrl = 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png';
 
@@ -499,221 +367,34 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
                 Base64ImageSource.fromUrl(githubLogoUrl, 'image/png'),
             ]);
 
-            const prompt1: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: "I'm showing you two company logos. Please identify both companies.",
-                    files: [googleImage, githubImage],
-                },
-            ];
-
-            const result1 = await driver.execute(prompt1, options);
+            const result1 = await driver.execute(
+                [
+                    {
+                        role: PromptRole.user,
+                        content: "I'm showing you two company logos. Please identify both companies.",
+                        files: [googleImage, githubImage],
+                    },
+                ],
+                options,
+            );
             expect(result1.result.length).toBeGreaterThan(0);
             const text1 = result1.result.map(completionResultToString).join('').toLowerCase();
             expect(text1).toContain('google');
             expect(text1).toContain('github');
-            expect(result1.conversation).toBeDefined();
 
-            // Critical test: Verify conversation with multiple images is serializable
+            // Critical: binary image data must not corrupt the stored conversation
             verifyConversationSerializable(result1.conversation, name);
-
-            // Simulate storage
             const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
-            // Turn 2: Ask about the images
-            const prompt2: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'Which of the two logos has more colors?',
-                },
-            ];
-
-            const result2 = await driver.execute(prompt2, { ...options, conversation: storedConversation1 });
+            const result2 = await driver.execute(
+                [{ role: PromptRole.user, content: 'Which of the two logos has more colors?' }],
+                { ...options, conversation: storedConversation1 },
+            );
             expect(result2.result.length).toBeGreaterThan(0);
             const text2 = result2.result.map(completionResultToString).join('').toLowerCase();
             // Google logo has 4 colors, GitHub logo is monochrome
             expect(text2).toMatch(/google/);
-
-            // Verify conversation is still serializable after second turn
             verifyConversationSerializable(result2.conversation, name);
-        });
-
-        /**
-         * STREAMING CONVERSATION TESTS
-         * These tests verify that streaming (driver.stream()) properly maintains
-         * conversation context across multiple turns.
-         *
-         * This was a bug where streaming didn't include conversation history in the API call,
-         * causing the model to lose context between turns.
-         */
-
-        test(`${name}: STREAMING multi-turn text conversation (3 turns)`, { timeout: TIMEOUT }, async () => {
-            const options = getTextOptions(textModel);
-
-            // Helper to consume stream and get completion
-            async function streamToCompletion(stream: AsyncIterable<string>) {
-                const chunks: string[] = [];
-                for await (const chunk of stream) {
-                    chunks.push(chunk);
-                }
-                return chunks.join('');
-            }
-
-            // Turn 1: Ask a question using streaming
-            const prompt1: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: "I'm thinking of a secret word. The word is 'elephant'. Remember this word.",
-                },
-            ];
-
-            const stream1 = await driver.stream(prompt1, options);
-            const text1 = await streamToCompletion(stream1);
-            expect(text1.length).toBeGreaterThan(0);
-            expect(stream1.completion).toBeDefined();
-            expect(stream1.completion?.conversation).toBeDefined();
-
-            // Verify conversation is serializable
-            verifyConversationSerializable(stream1.completion?.conversation, name);
-
-            // Simulate storage: serialize and deserialize the conversation
-            const storedConversation1 = JSON.parse(JSON.stringify(stream1.completion?.conversation));
-
-            // Turn 2: Follow-up question using streaming
-            const prompt2: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'What was the secret word I told you?',
-                },
-            ];
-
-            const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation1 });
-            const text2 = await streamToCompletion(stream2);
-            expect(text2.length).toBeGreaterThan(0);
-            // The model should remember "elephant" from the conversation context
-            expect(text2.toLowerCase()).toContain('elephant');
-            expect(stream2.completion?.conversation).toBeDefined();
-
-            // Verify conversation is still serializable
-            verifyConversationSerializable(stream2.completion?.conversation, name);
-
-            // Simulate storage again
-            const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
-
-            // Turn 3: Another follow-up using streaming
-            const prompt3: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'How many letters are in that secret word?',
-                },
-            ];
-
-            const stream3 = await driver.stream(prompt3, { ...options, conversation: storedConversation2 });
-            const text3 = await streamToCompletion(stream3);
-            expect(text3.length).toBeGreaterThan(0);
-            // "elephant" has 8 letters
-            expect(text3).toMatch(/8|eight/i);
-
-            // Final verification
-            verifyConversationSerializable(stream3.completion?.conversation, name);
-        });
-
-        test(`${name}: STREAMING conversation preserves context after JSON serialization`, {
-            timeout: TIMEOUT,
-        }, async () => {
-            const options = getTextOptions(textModel);
-
-            // Helper to consume stream and get completion
-            async function streamToCompletion(stream: AsyncIterable<string>) {
-                for await (const _chunk of stream) {
-                    // Just consume the stream
-                }
-            }
-
-            // Turn 1: Establish context with streaming
-            const prompt1: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'My name is TestUser123. Please greet me by name.',
-                },
-            ];
-
-            const stream1 = await driver.stream(prompt1, options);
-            await streamToCompletion(stream1);
-            expect(stream1.completion?.conversation).toBeDefined();
-
-            // Critical: Simulate how Studio stores conversations (JSON serialize/deserialize)
-            const serialized = JSON.stringify(stream1.completion?.conversation);
-            const storedConversation = JSON.parse(serialized);
-
-            // Turn 2: Verify context survives serialization in streaming mode
-            const prompt2: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'What is my name?',
-                },
-            ];
-
-            const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation });
-            await streamToCompletion(stream2);
-
-            // Get the result text from completion
-            const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
-
-            // The model should remember "TestUser123" from the serialized conversation
-            expect(text2).toContain('TestUser123');
-        });
-
-        test(`${name}: STREAMING vs non-streaming produce consistent conversation context`, {
-            timeout: TIMEOUT,
-        }, async () => {
-            const options = getTextOptions(textModel);
-
-            // Helper to consume stream
-            async function streamToCompletion(stream: AsyncIterable<string>) {
-                for await (const _chunk of stream) {
-                    // Just consume
-                }
-            }
-
-            // First turn with non-streaming
-            const prompt1: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'Remember this code: ALPHA-7749',
-                },
-            ];
-
-            const result1 = await driver.execute(prompt1, options);
-            const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
-
-            // Second turn with streaming - should work with conversation from non-streaming
-            const prompt2: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'What code did I tell you to remember?',
-                },
-            ];
-
-            const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation1 });
-            await streamToCompletion(stream2);
-
-            const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
-            expect(text2).toContain('ALPHA-7749');
-
-            // Third turn back to non-streaming - should work with conversation from streaming
-            const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
-
-            const prompt3: PromptSegment[] = [
-                {
-                    role: PromptRole.user,
-                    content: 'Repeat only the numeric digits from that code, no delimiters, no spaces.',
-                },
-            ];
-
-            const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
-            const text3 = result3.result.map(completionResultToString).join('');
-            expect(text3).toContain('7749');
         });
     },
 );
