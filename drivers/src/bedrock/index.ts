@@ -83,6 +83,7 @@ import {
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    isAnthropicApiError,
     isAnthropicSdkError,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
@@ -408,6 +409,22 @@ function bedrockExceptionName(error: AnthropicError): string | undefined {
  * Reports the service tier Bedrock applied, which InvokeModel returns in a response header rather than in the
  * message usage. Wraps the client the shared Claude helpers call, setting `usage.service_tier` from the header.
  */
+/**
+ * A client-side fault while reading a Messages API response stream, such as an event chunk the SDK cannot decode.
+ * The request reached Bedrock and the stream broke, so it can be retried.
+ */
+class BedrockStreamError extends Error {
+    constructor(readonly sdkError: AnthropicError) {
+        super(sdkError.message, { cause: sdkError });
+        this.name = 'BedrockStreamError';
+    }
+}
+
+/** SDK errors that are not API errors (HTTP, connection, abort) can only come from reading the stream itself. */
+function classifyStreamError(error: unknown): unknown {
+    return isAnthropicSdkError(error) && !isAnthropicApiError(error) ? new BedrockStreamError(error) : error;
+}
+
 function withBedrockServiceTier(client: AnthropicBedrock) {
     type StreamArgs = Parameters<AnthropicBedrock['messages']['stream']>;
     type BedrockMessage = Awaited<ReturnType<ReturnType<AnthropicBedrock['messages']['stream']>['finalMessage']>>;
@@ -423,13 +440,22 @@ function withBedrockServiceTier(client: AnthropicBedrock) {
                 );
                 return {
                     abort: () => stream.abort(),
-                    finalMessage: async (): Promise<BedrockMessage> =>
-                        applyTier(await stream.finalMessage(), await tier),
+                    finalMessage: async (): Promise<BedrockMessage> => {
+                        try {
+                            return applyTier(await stream.finalMessage(), await tier);
+                        } catch (error) {
+                            throw classifyStreamError(error);
+                        }
+                    },
                     async *[Symbol.asyncIterator]() {
-                        for await (const event of stream) {
-                            yield event.type === 'message_start'
-                                ? { ...event, message: applyTier(event.message, await tier) }
-                                : event;
+                        try {
+                            for await (const event of stream) {
+                                yield event.type === 'message_start'
+                                    ? { ...event, message: applyTier(event.message, await tier) }
+                                    : event;
+                            }
+                        } catch (error) {
+                            throw classifyStreamError(error);
                         }
                     },
                 };
@@ -438,7 +464,10 @@ function withBedrockServiceTier(client: AnthropicBedrock) {
     };
 }
 
-export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest | ClaudePrompt;
+/** A Claude prompt for the Messages API, tagged by `formatPrompt` so later steps follow its routing decision. */
+export type BedrockClaudePrompt = ClaudePrompt & { _is_claude_messages: true };
+
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest | BedrockClaudePrompt;
 
 function isBedrockClaudeModel(model: string): boolean {
     return model.toLowerCase().includes('claude');
@@ -452,16 +481,8 @@ function usesClaudeMessagesApi(options: Pick<ExecutionOptions, 'model' | 'conver
     return isBedrockClaudeModel(options.model) && !isConverseConversation(options.conversation);
 }
 
-/**
- * Whether a formatted prompt is in Anthropic Messages format. Converse and Nova content blocks carry no `type`.
- * {@link usesClaudeMessagesApi} picks the format in `formatPrompt`; later steps follow the prompt they receive.
- */
-function isMessagesShapedPrompt(prompt: BedrockPrompt): prompt is ClaudePrompt {
-    return !('modelId' in prompt) && !('mediaSource' in prompt) && !isConverseConversation(prompt);
-}
-
-function isClaudeMessagesPrompt(prompt: BedrockPrompt, model: string): prompt is ClaudePrompt {
-    return isBedrockClaudeModel(model) && isMessagesShapedPrompt(prompt);
+function isClaudeMessagesPrompt(prompt: BedrockPrompt): prompt is BedrockClaudePrompt {
+    return '_is_claude_messages' in prompt && prompt._is_claude_messages === true;
 }
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
@@ -814,7 +835,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
         if (usesClaudeMessagesApi(opts)) {
-            return await formatClaudePrompt(segments, opts, this.logger);
+            return { ...(await formatClaudePrompt(segments, opts, this.logger)), _is_claude_messages: true };
         }
         return await formatConversePrompt(segments, opts);
     }
@@ -826,8 +847,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if ('modelId' in prompt) {
             return formatConversePromptForDebug(prompt);
         }
-        if (isMessagesShapedPrompt(prompt)) {
-            return formatClaudeDebugPrompt(prompt);
+        if (isClaudeMessagesPrompt(prompt)) {
+            return { ...formatClaudeDebugPrompt(prompt), _is_claude_messages: true };
         }
         return formatNovaPromptForDebug(prompt);
     }
@@ -846,6 +867,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * @returns A standardized LlumiverseError
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        if (error instanceof BedrockStreamError) {
+            const formatted = this.formatClaudeMessagesError(error.sdkError, context);
+            return new LlumiverseError(formatted.message, true, context, error, formatted.code, error.name);
+        }
         // Claude on the Messages API fails with Anthropic SDK errors.
         if (isAnthropicSdkError(error)) {
             return this.formatClaudeMessagesError(error, context);
@@ -903,10 +928,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const cause = error.cause instanceof Error ? error.cause.message : undefined;
             if (cause && !message.includes(cause)) message = `${message}: ${cause}`;
             if (requestId && !message.includes(requestId)) message = `${message} (Request ID: ${requestId})`;
-            // The SDK's event-stream decoder raises a client-side error for a corrupt chunk: a transport fault
-            // worth retrying, unlike the configuration errors that error type usually means.
-            const retryable = error.message.startsWith('Could not parse a Bedrock chunk') || formatted.retryable;
-            return new LlumiverseError(message, retryable, context, error, formatted.code, formatted.name);
+            return new LlumiverseError(message, formatted.retryable, context, error, formatted.code, formatted.name);
         }
         // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
         // non-retryable as on the Converse route.
@@ -1297,7 +1319,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ConverseRequest | ClaudePrompt | undefined {
-        if (isClaudeMessagesPrompt(prompt, options.model)) {
+        if (isClaudeMessagesPrompt(prompt)) {
             return buildClaudeStreamingConversation(prompt, result, toolUse, options, this.provider);
         }
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
@@ -1395,7 +1417,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
         }
-        if (isClaudeMessagesPrompt(prompt, options.model)) {
+        if (isClaudeMessagesPrompt(prompt)) {
             return executeClaudeCompletion(
                 withBedrockServiceTier(this.getAnthropicService()),
                 prompt,
@@ -1588,7 +1610,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options, signal);
         }
-        if (isClaudeMessagesPrompt(prompt, options.model)) {
+        if (isClaudeMessagesPrompt(prompt)) {
             return streamClaudeCompletion(
                 withBedrockServiceTier(this.getAnthropicService()),
                 prompt,

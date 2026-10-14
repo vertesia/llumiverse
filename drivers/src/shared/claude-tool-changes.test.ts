@@ -5,8 +5,6 @@ import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
     executeClaudeCompletion,
-    fixOrphanedToolResults,
-    fixOrphanedToolUse,
     getClaudePayload,
     streamClaudeCompletion,
 } from './claude-messages.js';
@@ -491,7 +489,7 @@ describe('append-only Claude tool changes', () => {
     });
 });
 
-describe('orphan repair around system messages', () => {
+describe('orphan repair around stored system messages', () => {
     const toolUse = {
         role: 'assistant',
         content: [{ type: 'tool_use', id: 't1', name: 'a', input: {} }],
@@ -505,16 +503,23 @@ describe('orphan repair around system messages', () => {
         content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }],
     } as MessageParam;
 
-    it('keeps tool results whose tool_use sits before a system message', () => {
-        expect(fixOrphanedToolResults([toolUse, system, result])).toEqual([toolUse, system, result]);
+    const payloadMessages = (messages: MessageParam[]) => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt = { ...declared, messages: [...declared.messages, ...messages] };
+        return getClaudePayload({ model: MODEL, tools: [tool('a'), tool('b')] }, prompt).payload.messages;
+    };
+
+    it('keeps tool results whose tool_use precedes a stored system message', () => {
+        expect(payloadMessages([toolUse, system, result]).slice(1)).toEqual([toolUse, result, system]);
     });
 
-    it('adds interrupted results to the user turn after a system message', () => {
-        const fixed = fixOrphanedToolUse([toolUse, system, { role: 'user', content: 'next' }]);
-        expect(fixed[2].content).toEqual([
+    it('adds interrupted results to the user turn after a stored system message', () => {
+        const messages = payloadMessages([toolUse, system, { role: 'user', content: 'next' }]);
+        expect(messages[2].content).toEqual([
             expect.objectContaining({ type: 'tool_result', tool_use_id: 't1' }),
             { type: 'text', text: 'next' },
         ]);
+        expect(messages[3]).toEqual(system);
     });
 });
 

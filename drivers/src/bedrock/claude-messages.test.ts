@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { type ClaudePrompt, formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
 import { MID_CONVERSATION_TOOL_CHANGES_BETA } from '../shared/claude-tool-changes.js';
 import { isConverseConversation, isIncompatibleWithConverse } from './converse.js';
-import { BedrockDriver, type BedrockPrompt } from './index.js';
+import { type BedrockClaudePrompt, BedrockDriver, type BedrockPrompt } from './index.js';
 
 const MODEL = 'us.anthropic.claude-sonnet-5-5';
 const segments: PromptSegment[] = [{ role: PromptRole.user, content: 'hello' }];
@@ -138,7 +138,10 @@ describe('Bedrock Claude on the Messages API', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
 
         const fresh = await driver.createPrompt(segments, { model: MODEL });
-        expect(fresh).toEqual({ messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }] });
+        expect(fresh).toEqual({
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+            _is_claude_messages: true,
+        });
 
         const legacy = await driver.createPrompt(segments, {
             model: MODEL,
@@ -337,11 +340,27 @@ describe('Bedrock Claude on the Messages API', () => {
         expect(formatted.retryable).toBe(true);
     });
 
-    it('retries a corrupt stream chunk', () => {
-        const driver = new BedrockDriver({ region: 'us-east-1' });
-        const error = new AnthropicError('Could not parse a Bedrock chunk into JSON: {');
-        const context = { provider: 'bedrock', model: MODEL, operation: 'stream' as const };
-        expect(driver.formatLlumiverseError(error, context).retryable).toBe(true);
+    it('retries a client-side fault raised while reading the response stream', async () => {
+        const { driver } = driverWithClaudeClient();
+        Reflect.set(driver, '_anthropicService', {
+            messages: {
+                stream: () => ({
+                    // biome-ignore lint/correctness/useYield: the stream fails before its first event
+                    async *[Symbol.asyncIterator]() {
+                        throw new AnthropicError('Could not parse a Bedrock chunk into JSON: {');
+                    },
+                    finalMessage: async () => message(),
+                    withResponse: async () => ({ response: tierResponse() }),
+                }),
+            },
+        });
+        const prompt = await driver.createPrompt(segments, { model: MODEL });
+        const context = { provider: 'bedrock', model: MODEL, operation: 'execute' as const };
+        const failure = await driver.requestTextCompletion(prompt, { model: MODEL }).catch((error: unknown) => error);
+        const formatted = driver.formatLlumiverseError(failure, context);
+        expect(formatted.retryable).toBe(true);
+        expect(formatted.message).toContain('Could not parse a Bedrock chunk');
+        // Outside the stream, a client-side SDK error is a configuration error.
         expect(driver.formatLlumiverseError(new AnthropicError('other'), context).retryable).toBe(false);
     });
 
@@ -354,7 +373,7 @@ describe('Bedrock Claude on the Messages API', () => {
 
     it('sends a Claude prompt with no messages to the Messages API', async () => {
         const { driver, stream } = driverWithClaudeClient();
-        await driver.requestTextCompletion({ messages: [] }, { model: MODEL });
+        await driver.requestTextCompletion({ messages: [], _is_claude_messages: true }, { model: MODEL });
         expect(stream).toHaveBeenCalledOnce();
     });
 
@@ -385,7 +404,8 @@ describe('Bedrock Claude on the Messages API', () => {
 
         const image = 'A'.repeat(5_000);
         const pdf = 'B'.repeat(5_000);
-        const binary: ClaudePrompt = {
+        const binary: BedrockClaudePrompt = {
+            _is_claude_messages: true,
             messages: [
                 {
                     role: 'user',
@@ -422,7 +442,10 @@ describe('Bedrock Claude on the Messages API', () => {
     it('builds the streamed conversation in the format of the prompt', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const options = { model: MODEL } as ExecutionOptions;
-        const messagesPrompt: ClaudePrompt = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] };
+        const messagesPrompt: BedrockClaudePrompt = {
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+            _is_claude_messages: true,
+        };
         const messagesConversation = driver.buildStreamingConversation(
             messagesPrompt,
             [{ type: 'text', value: 'ok' }],

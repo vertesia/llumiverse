@@ -616,9 +616,7 @@ export function fixOrphanedToolUse(input: MessageParam[]): MessageParam[] {
             );
 
             if (toolUseBlocks.length > 0) {
-                // A system message (e.g. a tool change) may sit between the tool_use and its results.
-                let nextIndex = i + 1;
-                while (messages[nextIndex]?.role === 'system') nextIndex++;
+                const nextIndex = i + 1;
                 const nextMessage = messages[nextIndex];
 
                 if (nextMessage && nextMessage.role === 'user' && Array.isArray(nextMessage.content)) {
@@ -690,10 +688,8 @@ export function fixOrphanedToolResults(messages: MessageParam[]): MessageParam[]
             result.push(message);
             continue;
         }
-        // Collect the tool_use ids declared by the preceding assistant message, looking past system messages.
-        let prevIndex = i - 1;
-        while (messages[prevIndex]?.role === 'system') prevIndex--;
-        const prev = messages[prevIndex];
+        // Collect the tool_use ids declared by the immediately preceding assistant message.
+        const prev = messages[i - 1];
         const allowedIds = new Set<string>();
         if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
             for (const block of prev.content) {
@@ -1528,7 +1524,8 @@ export function isAnthropicSdkError(error: unknown): error is AnthropicError {
     return error instanceof AnthropicError || errorClassNames(error).has('AnthropicError');
 }
 
-function isAnthropicApiError(error: unknown): error is APIError {
+/** Whether an error is an Anthropic SDK API error (HTTP, connection, abort), from any copy of the SDK. */
+export function isAnthropicApiError(error: unknown): error is APIError {
     if (error instanceof APIError) return true;
     const classes = errorClassNames(error);
     return classes.has('APIError') && classes.has('AnthropicError');
