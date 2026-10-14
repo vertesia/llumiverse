@@ -875,13 +875,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             // worth retrying, unlike the configuration errors that error type usually means.
             const corruptChunk = error.message.startsWith('Could not parse a Bedrock chunk');
             const requestId = apiError.headers?.get('x-amzn-requestid');
-            if (!corruptChunk && (!requestId || formatted.message.includes(requestId))) return formatted;
-            const message =
-                requestId && !formatted.message.includes(requestId)
-                    ? `${formatted.message} (Request ID: ${requestId})`
-                    : formatted.message;
-            const retryable = corruptChunk ? true : formatted.retryable;
-            return new LlumiverseError(message, retryable, context, error, formatted.code, formatted.name);
+            const missingId = !!requestId && !formatted.message.includes(requestId);
+            if (!corruptChunk && !missingId) return formatted;
+            return new LlumiverseError(
+                missingId ? `${formatted.message} (Request ID: ${requestId})` : formatted.message,
+                corruptChunk || formatted.retryable,
+                context,
+                error,
+                formatted.code,
+                formatted.name,
+            );
         }
         // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
         // non-retryable as on the Converse route.

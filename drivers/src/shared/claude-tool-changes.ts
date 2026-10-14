@@ -119,21 +119,20 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     if (!requestedTools || requestedTools.length === 0) return conversation;
     // One definition per name; a later duplicate wins, as it does when replacing a declared tool.
     const requested = [...new Map(requestedTools.map((tool) => [tool.name, withoutRequestFields(tool)])).values()];
-    let state = getClaudeToolState(conversation);
+    const state = getClaudeToolState(conversation);
 
     if (!state) {
-        // Tool-change blocks without stored state (e.g. a rebuilt conversation that lost its metadata) may name
-        // tools this declaration does not include.
-        conversation = { ...conversation, messages: stripClaudeToolChanges(conversation.messages) };
-        if (!conversation.messages.some((message) => message.role === 'assistant')) {
-            return setClaudeToolState(conversation, {
+        // The first declaration loads its tools up front: the API rejects a `tools` array whose tools are all
+        // deferred, so tools first declared after earlier turns (which ran without tracked tools) change the
+        // tools those turns were bound to once. Tool-change blocks without stored state (e.g. a rebuilt
+        // conversation that lost its metadata) may name tools this declaration does not include; drop them.
+        return setClaudeToolState(
+            { ...conversation, messages: stripClaudeToolChanges(conversation.messages) },
+            {
                 declared: requested.map((definition) => ({ definition, deferred: false })),
                 visible: requested.map((tool) => tool.name),
-            });
-        }
-        // Earlier turns ran without these tools tracked (no tools, or a model without tool changes): declare them
-        // deferred and announce them, so the tools those turns were bound to stay unchanged.
-        state = { declared: [], visible: [] };
+            },
+        );
     }
 
     const declared = [...state.declared];

@@ -295,7 +295,7 @@ export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  * @returns true if the model accepts mid-conversation tool changes
  */
 export function supportsMidConversationToolChanges(modelString: string): boolean {
-    if (/claude-mythos-preview(?:-|\b)/i.test(modelString)) return false;
+    if (/claude-mythos-preview\b/i.test(modelString)) return false;
     switch (parseClaudeVersion(modelString)?.variant) {
         case 'opus':
             return isClaudeVersionGTE(modelString, 4, 8);

@@ -249,10 +249,7 @@ describe('append-only Claude tool changes', () => {
             ],
         } as unknown as ClaudePrompt;
         const next = applyClaudeToolChanges(rebuilt, [tool('a') as Tool]);
-        // Only the new announcement remains; the orphaned block naming 'gone' is removed.
-        expect(next.messages.filter((m) => m.role === 'system')).toEqual([
-            { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'a' } }] },
-        ]);
+        expect(next.messages.some((m) => m.role === 'system')).toBe(false);
         expect(getClaudeToolState(next)?.visible).toEqual(['a']);
     });
 
@@ -283,7 +280,7 @@ describe('append-only Claude tool changes', () => {
                 { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
                 { role: 'system', content: [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'b' } }] },
             ],
-            ['user', 'system'],
+            ['user'],
         ],
     ])('keeps tool changes between a user and an assistant turn: %s', (_case, messages, roles) => {
         const prompt = { messages, _llumiverse_meta: { turnNumber: 0, claude_tools: { declared: [], visible: [] } } };
@@ -299,7 +296,7 @@ describe('append-only Claude tool changes', () => {
         expect(payload.messages.map((m) => m.role)).toEqual(roles);
     });
 
-    it('declares tools again, deferred, after a turn without tool-change support', async () => {
+    it('declares tools again, loaded up front, after a turn without tool-change support', async () => {
         const t1 = await turn(firstPrompt, [tool('a'), tool('b')], undefined, assistantToolUse('c1', 'a'));
         const other = await turn(
             toolResult('c1'),
@@ -311,24 +308,15 @@ describe('append-only Claude tool changes', () => {
         );
         expect(getClaudeToolState(other.conversation)).toBeUndefined();
 
-        // Earlier turns keep the tools they ran with; the re-declared tools are deferred and announced.
+        // The API rejects a tools array whose tools are all deferred, so a new declaration loads them up front.
         const back = await turn(
             toolResult('c2'),
             [tool('a'), tool('c')],
             other.conversation,
             assistantToolUse('c3', 'a'),
         );
-        expect(back.payload.tools).toEqual([
-            { ...tool('a'), defer_loading: true },
-            { ...tool('c'), defer_loading: true },
-        ]);
-        expect(back.payload.messages.at(-1)).toEqual({
-            role: 'system',
-            content: [
-                { type: 'tool_addition', tool: { type: 'tool_reference', name: 'a' } },
-                { type: 'tool_addition', tool: { type: 'tool_reference', name: 'c' } },
-            ],
-        });
+        expect(back.payload.tools).toEqual([tool('a'), tool('c')]);
+        expect(back.payload.messages.some((m) => m.role === 'system')).toBe(false);
     });
 
     it('keeps a real tool result when a tool change sat between split result turns', () => {
@@ -381,7 +369,7 @@ describe('append-only Claude tool changes', () => {
         expect(Array.isArray(user?.content) && user.content.map((b) => b.type)).toEqual(['tool_result', 'text']);
     });
 
-    it('keeps only the last change per tool when pending changes merge', () => {
+    it('cancels a tool added and removed while its changes were pending', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const prompt = {
             ...declared,
@@ -393,10 +381,7 @@ describe('append-only Claude tool changes', () => {
             ],
         } as unknown as ClaudePrompt;
         const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a')] }, prompt);
-        expect(payload.messages.at(-1)).toEqual({
-            role: 'system',
-            content: [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'b' } }],
-        });
+        expect(payload.messages.map((m) => m.role)).toEqual(['user']);
     });
 
     it('announces a tool listed twice once', () => {

@@ -1022,10 +1022,12 @@ function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessagePar
     const result: MessageParam[] = [];
     let pending: MessageParam[] = [];
     const flush = () => {
-        if (pending.length === 0) return;
-        if (result[result.length - 1]?.role !== 'user') result.push(claudeContinueTurn());
-        result.push(pending.length === 1 ? pending[0] : mergeToolChangeMessages(pending));
+        const merged = pending.length === 1 ? pending[0] : mergeToolChangeMessages(pending);
         pending = [];
+        // Changes that cancel out leave nothing to announce.
+        if (!merged || (Array.isArray(merged.content) && merged.content.length === 0)) return;
+        if (result[result.length - 1]?.role !== 'user') result.push(claudeContinueTurn());
+        result.push(merged);
     };
     for (const message of messages) {
         if (message.role === 'system') {
@@ -1041,18 +1043,25 @@ function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessagePar
     return result;
 }
 
-/** One system message for several pending ones; for each tool only its last change applies. */
+/**
+ * One system message for several pending ones. Each stored change was a real change when it was made, so the
+ * changes to one tool alternate between addition and removal: an even number cancels out, an odd number leaves
+ * the last one.
+ */
 function mergeToolChangeMessages(messages: MessageParam[]): MessageParam {
     const blocks = messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []));
-    const toolName = (block: unknown) => (block as { tool?: { name?: string } }).tool?.name;
-    const lastChange = new Map<string, unknown>();
+    const toolName = (block: unknown) =>
+        isClaudeToolChangeBlock(block) ? (block as { tool?: { name?: string } }).tool?.name : undefined;
+    const changes = new Map<string, unknown[]>();
     for (const block of blocks) {
         const name = toolName(block);
-        if (name && isClaudeToolChangeBlock(block)) lastChange.set(name, block);
+        if (name) changes.set(name, [...(changes.get(name) ?? []), block]);
     }
     const content = blocks.filter((block) => {
         const name = toolName(block);
-        return !name || !isClaudeToolChangeBlock(block) || lastChange.get(name) === block;
+        if (!name) return true;
+        const forTool = changes.get(name) ?? [];
+        return forTool.length % 2 === 1 && forTool[forTool.length - 1] === block;
     });
     return { role: 'system', content } as MessageParam;
 }
