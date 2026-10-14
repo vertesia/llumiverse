@@ -209,7 +209,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     requireClaudePrompt(prompt),
                     options,
                     this.logger,
-                    'anthropic',
+                    'bedrock-mantle',
                     this.getDriverRequestOptions(options, signal),
                 );
             default:

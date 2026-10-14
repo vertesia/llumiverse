@@ -22,7 +22,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from '@anthropic-ai/sdk/error';
-import type { AnthropicBeta, BetaMessage } from '@anthropic-ai/sdk/resources/beta.js';
+import type { AnthropicBeta, BetaMessage, BetaRawMessageDeltaEvent } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -1054,9 +1054,25 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
 
-/** `input_transformations` is only typed on the beta message; it is present when the binding beta was sent. */
-function inputTransformations(message: Message): BetaMessage['input_transformations'] {
-    return (message as Partial<Pick<BetaMessage, 'input_transformations'>>).input_transformations;
+type InputTransformations = BetaMessage['input_transformations'];
+
+/**
+ * Track the final `input_transformations` (only typed on beta events; present when the binding beta was sent).
+ * `message_start` carries it, and the final `message_delta` replaces it after a server-side model fallback,
+ * which the stable SDK accumulator drops, so both paths read it from the raw events.
+ */
+function trackInputTransformations(current: InputTransformations, event: RawMessageStreamEvent): InputTransformations {
+    switch (event.type) {
+        case 'message_start':
+            return (event.message as Partial<Pick<BetaMessage, 'input_transformations'>>).input_transformations;
+        case 'message_delta':
+            return (
+                (event as Partial<Pick<BetaRawMessageDeltaEvent, 'input_transformations'>>).input_transformations ??
+                current
+            );
+        default:
+            return current;
+    }
 }
 
 /**
@@ -1083,9 +1099,13 @@ export async function executeClaudeCompletion(
         { ...payload, model: requestModel ?? payload.model } as MessageStreamParams,
         transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
     );
+    let transformations: InputTransformations;
+    for await (const event of responseStream) {
+        transformations = trackInputTransformations(transformations, event);
+    }
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
-    logClaudeInputTransformations(logger, inputTransformations(result), { provider, model: options.model });
+    logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
@@ -1130,20 +1150,19 @@ export async function streamClaudeCompletion(
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
+    let transformations: InputTransformations;
 
     const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+        transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
-                logClaudeInputTransformations(logger, inputTransformations(streamEvent.message), {
-                    provider,
-                    model: options.model,
-                });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
                 } satisfies CompletionChunkObject;
             case 'message_delta':
                 logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });
+                logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },

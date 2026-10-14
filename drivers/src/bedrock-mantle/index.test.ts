@@ -437,7 +437,12 @@ describe('BedrockMantleDriver protocol execution', () => {
             },
         } satisfies Anthropic.Message;
         const finalMessage = vi.fn(async () => message);
-        const stream = vi.fn(() => ({ finalMessage }));
+        const stream = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'message_start' as const, message };
+            },
+            finalMessage,
+        }));
         const messagesClient = { messages: { stream } };
         Reflect.set(driver, 'anthropicService', messagesClient);
         const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });

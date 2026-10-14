@@ -180,6 +180,15 @@ describe('resolveClaudeThinking', () => {
             expect(resolved.betas).toEqual([THINKING_BINDING_BETA]);
         });
 
+        it.each(['claude-opus-6', 'claude-sonnet-6-1', 'claude-fable-6'])(
+            'defaults to bound adaptive thinking without an effort on %s',
+            (model) => {
+                const resolved = resolveClaudeThinking(model);
+                expect(resolved.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: dropBlock });
+                expect(resolved.betas).toEqual([THINKING_BINDING_BETA]);
+            },
+        );
+
         it('leaves between-tools thinking unbound, which rejects block_binding', () => {
             const resolved = resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode: 'between_tools' });
             expect(resolved.thinking).toEqual({ type: 'between_tools' });

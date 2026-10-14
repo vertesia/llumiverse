@@ -79,7 +79,7 @@ export function resolveClaudeThinking(
     const budgetTokens = options?.thinking_budget_tokens;
     const version = parseClaudeVersion(model);
     const defaultAdaptiveThinking =
-        (version?.major === 5 && ['opus', 'sonnet', 'fable', 'mythos'].includes(version.variant)) ||
+        (version != null && version.major >= 5 && ['opus', 'sonnet', 'fable', 'mythos'].includes(version.variant)) ||
         (version?.variant === 'haiku' && isClaudeVersionGTE(model, 5, 5));
     // Adaptive thinking is active when the caller supplies an effort level on a
     // model that supports it. Extended thinking is active when a budget is set.

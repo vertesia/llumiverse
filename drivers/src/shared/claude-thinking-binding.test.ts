@@ -18,6 +18,27 @@ function messageWith(input_transformations: unknown[]): Message {
     } as unknown as Message;
 }
 
+function startEvents(message: Message): RawMessageStreamEvent[] {
+    return [{ type: 'message_start', message }];
+}
+
+/** The final message_delta carries the array only after a server-side model fallback, replacing message_start's. */
+function closingEvents(input_transformations?: unknown[]): RawMessageStreamEvent[] {
+    return [
+        {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn', stop_sequence: null },
+            usage: { output_tokens: 3 },
+            ...(input_transformations && { input_transformations }),
+        } as unknown as RawMessageStreamEvent,
+        { type: 'message_stop' },
+    ];
+}
+
+function fallbackEvents(input_transformations: unknown[]): RawMessageStreamEvent[] {
+    return [...startEvents(messageWith([])), ...closingEvents(input_transformations)];
+}
+
 function sdkStream(events: RawMessageStreamEvent[], finalMessage: Message) {
     return {
         async *[Symbol.asyncIterator]() {
@@ -44,7 +65,8 @@ const droppedLog = expect.objectContaining({
 
 describe('Claude thinking block binding', () => {
     it('sends the binding beta header and logs blocks the API dropped', async () => {
-        const stream = vi.fn(() => sdkStream([], messageWith(dropped)));
+        const message = messageWith(dropped);
+        const stream = vi.fn(() => sdkStream(startEvents(message), message));
         const logger = testLogger();
         await executeClaudeCompletion(
             { messages: { stream } } as never,
@@ -68,23 +90,38 @@ describe('Claude thinking block binding', () => {
     it('ignores input transformation types it does not recognise', async () => {
         const logger = testLogger();
         const message = messageWith([{ type: 'future_transformation', path: 'messages.0' }]);
-        const client = { messages: { stream: () => sdkStream([], message) } } as never;
+        const client = { messages: { stream: () => sdkStream(startEvents(message), message) } } as never;
         await executeClaudeCompletion(client, prompt, { model: 'claude-sonnet-5-5' }, logger);
         expect(logger.warn).not.toHaveBeenCalled();
     });
 
     it('does not log when no block was transformed', async () => {
         const logger = testLogger();
-        const client = { messages: { stream: () => sdkStream([], messageWith([])) } } as never;
+        const message = messageWith([]);
+        const client = { messages: { stream: () => sdkStream(startEvents(message), message) } } as never;
         await executeClaudeCompletion(client, prompt, { model: 'claude-sonnet-5-5' }, logger);
         expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    it('logs drops reported on message_start when streaming', async () => {
+    it('logs drops reported after a server-side fallback', async () => {
+        const logger = testLogger();
+        // The stable SDK accumulator drops the delta's array, so the final message reports none.
+        const client = { messages: { stream: () => sdkStream(fallbackEvents(dropped), messageWith([])) } } as never;
+        await executeClaudeCompletion(client, prompt, { model: 'claude-sonnet-5-5' }, logger);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn).toHaveBeenCalledWith(
+            droppedLog,
+            '[Claude] Replayed thinking blocks no longer match the request',
+        );
+    });
+
+    it.each([
+        ['message_start', (message: Message) => [...startEvents(message), ...closingEvents()]],
+        ['a fallback message_delta', () => fallbackEvents(dropped)],
+    ])('logs drops reported on %s once when streaming', async (_source, events) => {
         const logger = testLogger();
         const message = messageWith(dropped);
-        const events = [{ type: 'message_start', message }] as RawMessageStreamEvent[];
-        const client = { messages: { stream: () => sdkStream(events, message) } } as never;
+        const client = { messages: { stream: () => sdkStream(events(message), message) } } as never;
         const stream = await streamClaudeCompletion(client, prompt, { model: 'claude-sonnet-5-5' }, logger);
         for await (const _chunk of stream) {
             // drain
