@@ -151,8 +151,7 @@ if (process.env.GROQ_API_KEY) {
             apiKey: process.env.GROQ_API_KEY as string,
         }),
         // gpt-oss-20b is Groq's cheapest self-serve model; qwen3.8-27b covers Groq's Qwen output cap and effort levels.
-        // Tool calling on Groq's gpt-oss is not covered here:
-        // https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
+        // Both take Groq's native structured outputs. Tool calling is covered in tools.live.test.ts.
         models: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
     });
 } else {

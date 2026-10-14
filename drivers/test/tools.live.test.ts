@@ -13,7 +13,7 @@ import { type AbstractDriver, type ExecutionOptions, PromptRole, type PromptSegm
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
+import { BedrockDriver, GroqDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
 import { completionResultToString, getLowEffortTestOptions } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
@@ -66,6 +66,18 @@ if (process.env.BEDROCK_REGION) {
     });
 } else {
     console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
+}
+
+if (process.env.GROQ_API_KEY) {
+    drivers.push({
+        name: 'groq',
+        driver: new GroqDriver({
+            apiKey: process.env.GROQ_API_KEY,
+        }),
+        models: ['openai/gpt-oss-20b'],
+    });
+} else {
+    console.warn('Groq tests are skipped: GROQ_API_KEY environment variable is not set');
 }
 
 const TOOL_PROMPT: PromptSegment[] = [{ role: PromptRole.user, content: 'What is the weather in Paris?' }];
