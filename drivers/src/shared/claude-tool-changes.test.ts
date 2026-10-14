@@ -211,6 +211,39 @@ describe('append-only Claude tool changes', () => {
         expect(payload.messages.slice(-3).map((m) => m.role)).toEqual(['assistant', 'user', 'system']);
     });
 
+    it('restores a user turn before a stored tool change whose user turn orphan repair dropped', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const prompt: ClaudePrompt = {
+            ...declared,
+            messages: [
+                ...declared.messages,
+                { role: 'assistant', content: 'no tool call' },
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'gone', content: 'x' }] },
+                {
+                    role: 'system',
+                    content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }],
+                } as unknown as MessageParam,
+                { role: 'assistant', content: 'done' },
+                { role: 'user', content: 'next' },
+            ],
+        };
+        const { payload } = getClaudePayload({ model: MODEL, tools: [tool('a'), tool('b')] }, prompt);
+        const roles = payload.messages.map((m) => m.role);
+        expect(roles.slice(1)).toEqual(['assistant', 'user', 'system', 'assistant', 'user']);
+    });
+
+    it('announces a tool listed twice once', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
+        const next = applyClaudeToolChanges(
+            { ...declared, messages: [...declared.messages, { role: 'user', content: 'more' }] },
+            [tool('a') as Tool, tool('b') as Tool, tool('b') as Tool],
+        );
+        expect(next.messages.at(-1)).toEqual({
+            role: 'system',
+            content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }],
+        });
+    });
+
     it('keeps agent cache breakpoints off tool-change messages', () => {
         const declared = applyClaudeToolChanges(start(), [tool('a') as Tool]);
         const prompt = applyClaudeToolChanges(

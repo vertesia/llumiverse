@@ -131,7 +131,7 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
             // once, and the model sees the current schema.
             declared[index] = { ...declared[index], definition };
         }
-        if (!visible.has(definition.name)) additions.push(definition.name);
+        if (!visible.has(definition.name) && !additions.includes(definition.name)) additions.push(definition.name);
     }
     const requestedNames = new Set(requested.map((tool) => tool.name));
     const removals = state.visible.filter((name) => !requestedNames.has(name));

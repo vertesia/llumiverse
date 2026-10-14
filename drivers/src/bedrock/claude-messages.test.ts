@@ -169,6 +169,18 @@ describe('Bedrock Claude on the Messages API', () => {
         }
     });
 
+    it('keeps a configured credential provider when a Bedrock bearer token is set in the environment', () => {
+        vi.stubEnv('AWS_BEARER_TOKEN_BEDROCK', 'env-token');
+        try {
+            const credentials = async () => ({ accessKeyId: 'k', secretAccessKey: 's' });
+            const driver = new BedrockDriver({ region: 'us-east-1', credentials });
+            const service = Reflect.get(driver, 'getAnthropicService').call(driver);
+            expect(service.authToken).toBeNull();
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
     it('applies the Bedrock retry rules to the exception named in x-amzn-errortype', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const error = new BadRequestError(

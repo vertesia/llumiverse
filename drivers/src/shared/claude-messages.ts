@@ -847,8 +847,7 @@ export function getClaudePayload(
     // guaranteed 400 into a graceful continue — the same behavior pre-4.6
     // models applied implicitly by treating the trailing turn as prefill.
     // Older models are left untouched: prefill there can be intentional.
-    // Trailing tool-change system messages are skipped: the continuation turn goes before them, since a system
-    // message must follow a user turn.
+    // Trailing tool-change system messages are skipped: the continuation turn goes before them.
     if (isClaudeVersionGTE(modelName, 4, 6)) {
         let insertAt = sanitizedMessages.length;
         while (insertAt > 0 && sanitizedMessages[insertAt - 1].role === 'system') insertAt--;
@@ -860,6 +859,7 @@ export function getClaudePayload(
             ];
         }
     }
+    sanitizedMessages = ensureUserTurnBeforeSystemMessages(sanitizedMessages);
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
@@ -1001,6 +1001,22 @@ export function getClaudePayload(
         betas.length > 0 ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined;
 
     return { payload, requestOptions };
+}
+
+/**
+ * A system message must follow a user turn. Orphan repair can drop the user turn a stored tool-change message
+ * followed (a turn holding only orphaned tool results); add a continuation turn before such a system message.
+ */
+function ensureUserTurnBeforeSystemMessages(messages: MessageParam[]): MessageParam[] {
+    const result: MessageParam[] = [];
+    for (const message of messages) {
+        const previous = result[result.length - 1];
+        if (message.role === 'system' && previous && previous.role === 'assistant') {
+            result.push(claudeContinueTurn());
+        }
+        result.push(message);
+    }
+    return result;
 }
 
 function containsToolChanges(messages: MessageParam[]): boolean {

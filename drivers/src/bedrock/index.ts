@@ -713,6 +713,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                           // Reuse the AWS SDK client's credential provider (the configured one or the default
                           // chain), which caches resolved credentials across requests.
                           providerChainResolver: async () => this.getExecutor().config.credentials,
+                          // A configured provider must win over an AWS_BEARER_TOKEN_BEDROCK environment token.
+                          ...(credentials && { apiKey: null as unknown as undefined }),
                       });
         }
         return this._anthropicService;
