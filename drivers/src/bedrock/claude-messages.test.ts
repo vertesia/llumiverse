@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { APIError, BadRequestError } from '@anthropic-ai/sdk/error';
+import { AnthropicError, APIError, BadRequestError } from '@anthropic-ai/sdk/error';
 import { type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { formatAnthropicLlumiverseError, isAnthropicSdkError } from '../shared/claude-messages.js';
@@ -247,12 +247,29 @@ describe('Bedrock Claude on the Messages API', () => {
         // The SDK throws a plain APIError (no status) for an SSE error event.
         const streamError = (type: string) =>
             new APIError(undefined, { type: 'error', error: { type, message: 'm' } }, undefined, new Headers());
+        // Not in the Bedrock rules: a client fault, as on the Converse route.
+        expect(driver.formatLlumiverseError(streamError('modelTimeoutException'), context).retryable).toBe(false);
         const throttled = driver.formatLlumiverseError(streamError('throttlingException'), context);
         expect(throttled.retryable).toBe(true);
         expect(throttled.message).toBe('[bedrock] ThrottlingException: m');
         // A client fault in the Bedrock API model, non-retryable as on the Converse route.
         expect(driver.formatLlumiverseError(streamError('modelStreamErrorException'), context).retryable).toBe(false);
         expect(driver.formatLlumiverseError(streamError('validationException'), context).retryable).toBe(false);
+    });
+
+    it('retries a corrupt stream chunk', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const error = new AnthropicError('Could not parse a Bedrock chunk into JSON: {');
+        const context = { provider: 'bedrock', model: MODEL, operation: 'stream' as const };
+        expect(driver.formatLlumiverseError(error, context).retryable).toBe(true);
+        expect(driver.formatLlumiverseError(new AnthropicError('other'), context).retryable).toBe(false);
+    });
+
+    it('drops the Messages API client with the other provider resources', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const first = Reflect.get(driver, 'getAnthropicService').call(driver);
+        Reflect.get(driver, 'destroyProviderResources').call(driver);
+        expect(Reflect.get(driver, 'getAnthropicService').call(driver)).not.toBe(first);
     });
 
     it('sends a Claude prompt with no messages to the Messages API', async () => {

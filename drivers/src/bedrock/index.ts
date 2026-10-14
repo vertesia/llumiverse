@@ -740,7 +740,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     /** Execution options for the Claude Messages route, with the Bedrock output-limit clamp applied. */
     private claudeMessagesOptions(options: ExecutionOptions): ExecutionOptions {
         const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
-        const maxTokens = this.claudeMaxTokens(options);
+        const maxTokens = this.clampedClaudeMaxTokens(options);
         return { ...options, model_options: { ...modelOptions, max_tokens: maxTokens } as ModelOptions };
     }
 
@@ -748,7 +748,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * Compatibility exception: retain the existing Claude output-limit clamp (see maxTokenFallbackClaude),
      * logging when it changes the caller's value.
      */
-    private claudeMaxTokens(options: StatelessExecutionOptions): number {
+    private clampedClaudeMaxTokens(options: StatelessExecutionOptions): number {
         const modelOptions = options.model_options as BedrockClaudeOptions | undefined;
         const maxTokens = maxTokenFallbackClaude(options);
         if (modelOptions?.max_tokens !== undefined && modelOptions.max_tokens !== maxTokens) {
@@ -866,14 +866,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      */
     private formatClaudeMessagesError(error: AnthropicError, context: LlumiverseErrorContext): LlumiverseError {
         const formatted = formatAnthropicLlumiverseError(error, context);
-        const exceptionName = bedrockExceptionName(error);
-        if (!exceptionName) return formatted;
-        const retryable =
-            // A client fault in the Bedrock API model; Converse reports it as non-retryable too.
-            exceptionName === 'ModelStreamErrorException'
-                ? false
-                : (this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ?? formatted.retryable);
         const apiError = error as { status?: number; error?: unknown; headers?: Headers | null };
+        const exceptionName = bedrockExceptionName(error);
+        if (!exceptionName) {
+            // The SDK's event-stream decoder raises a client-side error for a corrupt chunk: a transport fault
+            // worth retrying, unlike the configuration errors that error type usually means.
+            const corruptChunk = error.message.startsWith('Could not parse a Bedrock chunk');
+            return corruptChunk
+                ? new LlumiverseError(formatted.message, true, context, error, formatted.code, formatted.name)
+                : formatted;
+        }
+        // Exceptions raised mid-stream (no HTTP status) that the Bedrock rules do not list are client faults,
+        // non-retryable as on the Converse route.
+        const retryable =
+            this.isBedrockErrorRetryable(exceptionName, undefined, undefined) ??
+            (apiError.status === undefined ? false : formatted.retryable);
         // HTTP errors carry { message }; exceptions raised mid-stream carry { error: { type, message } }.
         const body = apiError.error as { message?: unknown; error?: { message?: unknown } } | undefined;
         const bodyMessage = body?.message ?? body?.error?.message;
@@ -1719,7 +1726,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             // Needs max_tokens to be set — and caller-provided values clamped to
             // the model's output limit (both handled by maxTokenFallbackClaude).
-            model_options.max_tokens = this.claudeMaxTokens(options);
+            model_options.max_tokens = this.clampedClaudeMaxTokens(options);
             // Only models without sampling restrictions support top_k
             if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
@@ -2378,6 +2385,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         this._service?.destroy();
         this._executor = undefined;
         this._service = undefined;
+        // Its credential resolver and fetch belong to the resources released above.
+        this._anthropicService = undefined;
     }
 }
 
