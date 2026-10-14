@@ -79,3 +79,25 @@ export function getAdvertisedTestOptions(options: ExecutionOptions, provider: st
         ),
     };
 }
+
+/**
+ * Success-smoke options: low effort where the model supports it, no sampling controls unless a test passes them,
+ * and only the controls the model advertises.
+ */
+export function getLowEffortTestOptions(
+    model: string,
+    provider: string,
+    modelOptions: Record<string, unknown> = {},
+): ExecutionOptions {
+    return getAdvertisedTestOptions(
+        {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                effort: 'low',
+                ...modelOptions,
+            } as ExecutionOptions['model_options'],
+        },
+        provider,
+    );
+}

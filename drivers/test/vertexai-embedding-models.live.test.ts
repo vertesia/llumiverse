@@ -5,15 +5,11 @@ import { VertexAIDriver } from '../src/index.js';
 const TIMEOUT = 30000;
 const TEXT = 'Hello world';
 
+// One model per Vertex request path; gemini-embedding-2 (the default) is covered by embeddings.live.test.ts.
 const VERTEX_TEXT_MODELS = [
-    'gemini-embedding-001',
-    'gemini-embedding-2',
-    'text-embedding-005',
-    'text-embedding-004',
-    //"text-embedding-003",  Confirmed deprecated
-    //"embedding-001", Confirmed deprecated
-    'multimodalembedding@001',
-    'text-multilingual-embedding-002',
+    'gemini-embedding-001', // embedContent, regional, one input per call
+    'text-embedding-005', // embedContent, regional, grouped inputs
+    'multimodalembedding@001', // legacy multimodal predict
 ] as const;
 
 let vertex: VertexAIDriver | undefined;

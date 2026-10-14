@@ -69,17 +69,6 @@ if (vertex) {
     const vertexDriver = vertex;
     describe('VertexAI: embeddings generation', () => {
         test(
-            'embeddings for text',
-            async () => {
-                const r = await firstValues(vertexDriver)({ type: 'text', text: TEXT });
-                expect(r.results).toHaveLength(1);
-                expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
-                expect(r.model).toBe('gemini-embedding-2');
-            },
-            TIMEOUT,
-        );
-
-        test(
             'embeddings for image (multimodal)',
             async () => {
                 const r = await firstValues(vertexDriver)({ type: 'image', source: imageDataSource() });
@@ -101,6 +90,7 @@ if (vertex) {
                 expect(r.results).toHaveLength(2);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.results[1].outputs[0].values.length).toBeGreaterThan(0);
+                expect(r.model).toBe('gemini-embedding-2');
             },
             TIMEOUT,
         );
@@ -134,18 +124,6 @@ if (openai) {
     const openaiDriver = openai;
     describe('OpenAI: embeddings generation', () => {
         test(
-            'embeddings for text',
-            async () => {
-                const r = await firstValues(openaiDriver)({ type: 'text', text: TEXT });
-                expect(r.results).toHaveLength(1);
-                expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
-                expect(r.model).toBe('text-embedding-3-small');
-                expect(r.usage?.input_tokens).toBeGreaterThan(0);
-            },
-            TIMEOUT,
-        );
-
-        test(
             'embeddings for batched text inputs',
             async () => {
                 const r = await openaiDriver.generateEmbeddings({
@@ -155,6 +133,9 @@ if (openai) {
                     ],
                 });
                 expect(r.results).toHaveLength(2);
+                expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
+                expect(r.model).toBe('text-embedding-3-small');
+                expect(r.usage?.input_tokens).toBeGreaterThan(0);
             },
             TIMEOUT,
         );
@@ -182,9 +163,13 @@ if (watsonx) {
         test(
             'embeddings for text',
             async () => {
-                const r = await firstValues(watsonxDriver)({ type: 'text', text: TEXT });
+                // The driver default (ibm/slate-125m-english-rtrvr) has been withdrawn from watsonx.ai.
+                const r = await watsonxDriver.generateEmbeddings({
+                    inputs: [{ type: 'text', text: TEXT }],
+                    model: 'ibm/granite-embedding-278m-multilingual',
+                });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
-                expect(r.model).toBe('ibm/slate-125m-english-rtrvr');
+                expect(r.model).toBe('ibm/granite-embedding-278m-multilingual');
             },
             TIMEOUT,
         );
