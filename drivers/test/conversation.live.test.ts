@@ -183,14 +183,15 @@ function getClaudeOptionsWithCache(model: string, driverName: string): Execution
 }
 
 /**
- * About 1.5k tokens with Claude Haiku 5.5's tokenizer (fewer on older tokenizers), above the minimum cacheable
- * prefix of current Claude models. The run ID keeps the prefix unique, so the test cannot pass on a cache entry
- * written by an earlier run.
+ * About 6.7k tokens with Claude Haiku 5.5's tokenizer. Vertex's global and multi-region endpoints route a request
+ * to the region holding its cache only when they recognise the prompt; with prompts under roughly 4.7k tokens a
+ * later turn that extends the conversation often lands elsewhere and misses. Larger prompts read reliably, as
+ * real conversations do. The run ID keeps the prefix unique, so the test cannot pass on an earlier run's cache.
  */
 function buildCacheableContext(): string {
     const repeatedSection =
         'Prompt caching verification context. Preserve this exact context across turns and do not summarize it unless explicitly asked. ';
-    return `You are participating in prompt caching verification run ${randomUUID()}.\n\n${repeatedSection.repeat(40)}`;
+    return `You are participating in prompt caching verification run ${randomUUID()}.\n\n${repeatedSection.repeat(180)}`;
 }
 
 /**
@@ -334,20 +335,11 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
                     lastCachedTokens = result.token_usage?.prompt_cached ?? 0;
                 }
 
-                const detail = `Observed prompt_cache_write tokens by turn: ${cacheWriteTokensByTurn.join(', ')}`;
-                if (name.includes('vertexai')) {
-                    // Vertex's global endpoint does not route every turn to the replica holding the cache entry,
-                    // so a read on turn 4 is not guaranteed. A reported write still proves cache_control was sent.
-                    expect(
-                        Math.max(lastCachedTokens, ...cacheWriteTokensByTurn),
-                        `[${name}] Expected a prompt cache write or read when cache_enabled=true. ${detail}`,
-                    ).toBeGreaterThan(0);
-                } else {
-                    expect(
-                        lastCachedTokens,
-                        `[${name}] Expected prompt_cached tokens on turn 4 when cache_enabled=true. ${detail}`,
-                    ).toBeGreaterThan(0);
-                }
+                expect(
+                    lastCachedTokens,
+                    `[${name}] Expected prompt_cached tokens on turn 4 when cache_enabled=true. ` +
+                        `Observed prompt_cache_write tokens by turn: ${cacheWriteTokensByTurn.join(', ')}`,
+                ).toBeGreaterThan(0);
             },
         );
 
