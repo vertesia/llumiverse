@@ -127,6 +127,9 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
             );
             expect(checkpoint.finish_reason).not.toBe('tool_use');
             expect(checkpoint.result.length).toBeGreaterThan(0);
+            // The tool call and result must reach the model as text, not be dropped.
+            const summary = checkpoint.result.map(completionResultToString).join('');
+            expect(summary, `[${model}] Checkpoint summary lost the tool data`).toMatch(/15|paris/i);
         },
     );
 });

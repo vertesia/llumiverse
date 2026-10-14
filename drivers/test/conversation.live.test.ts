@@ -183,8 +183,9 @@ function getClaudeOptionsWithCache(model: string, driverName: string): Execution
 }
 
 /**
- * About 1.5k tokens: above the minimum cacheable prefix of current Claude models. The run ID keeps the prefix unique,
- * so the test cannot pass on a cache entry written by an earlier run.
+ * About 1.5k tokens with Claude Haiku 5.5's tokenizer (fewer on older tokenizers), above the minimum cacheable
+ * prefix of current Claude models. The run ID keeps the prefix unique, so the test cannot pass on a cache entry
+ * written by an earlier run.
  */
 function buildCacheableContext(): string {
     const repeatedSection =
