@@ -317,6 +317,66 @@ describe('TogetherAIDriver', () => {
         ]);
     });
 
+    describe('streamed usage', () => {
+        const usage = { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 };
+        const base = { object: 'chat.completion.chunk' as const, created: 1, model: 'test-model' };
+        const text = {
+            ...base,
+            id: 'chunk-1',
+            choices: [{ index: 0, finish_reason: null, delta: { content: 'blue' } }],
+        };
+
+        async function streamWith(chunks: unknown[]) {
+            const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () =>
+                (async function* () {
+                    yield* chunks;
+                })(),
+            );
+            driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+            const stream = await driver.stream([{ role: PromptRole.user, content: 'Sky?' }], { model: 'test-model' });
+            for await (const _chunk of stream) {
+                // Consume the stream to populate the final completion.
+            }
+            return { request: (create.mock.calls[0] as unknown[])[0] as Record<string, unknown>, stream };
+        }
+
+        it('asks Together to include usage on streams only', async () => {
+            const { request } = await streamWith([text]);
+            expect(request.stream_options).toEqual({ include_usage: true });
+
+            const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () => ({
+                id: 'completion-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test-model',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+                usage,
+            }));
+            driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+            await driver.execute([{ role: PromptRole.user, content: 'Sky?' }], { model: 'test-model' });
+            expect((create.mock.calls[0] as unknown[])[0]).not.toHaveProperty('stream_options');
+        });
+
+        it('reports usage from the final top-level usage chunk', async () => {
+            const { stream } = await streamWith([
+                text,
+                { ...base, id: 'chunk-2', choices: [{ index: 0, finish_reason: 'stop', delta: {} }] },
+                { ...base, id: 'chunk-3', choices: [], usage },
+            ]);
+            expect(stream.completion?.token_usage).toMatchObject({ prompt: 5, result: 2, total: 7 });
+        });
+
+        it('reports usage that a model nests inside a choice', async () => {
+            const { stream } = await streamWith([
+                text,
+                { ...base, id: 'chunk-2', choices: [{ index: 0, finish_reason: 'stop', delta: {}, usage }] },
+            ]);
+            expect(stream.completion?.token_usage).toMatchObject({ prompt: 5, result: 2, total: 7 });
+        });
+    });
+
     it('classifies Together transport timeouts as retryable llumiverse errors', () => {
         const driver = new TogetherAIDriver({ apiKey: 'test-key' });
         const error = driver.formatLlumiverseError(new APIConnectionTimeoutError({ message: 'timed out' }), {
