@@ -162,7 +162,7 @@ describe('Bedrock Mantle metadata', () => {
         expect(options._option_id).toBe('bedrock-mantle-responses');
         expect(optionNames).toContain('max_tokens');
         expect(optionNames).toContain('effort');
-        expect(optionNames).toContain('reasoning_effort');
+        expect(optionNames).not.toContain('reasoning_effort');
         expect(optionNames).toContain('verbosity');
         expect(optionNames).toContain('image_detail');
         expect(optionNames).not.toContain('stop_sequence');
@@ -224,7 +224,7 @@ describe('Bedrock Mantle metadata', () => {
         expect(optionNames).toContain('temperature');
         expect(optionNames).toContain('top_p');
         expect(optionNames).toContain('effort');
-        expect(optionNames).toContain('reasoning_effort');
+        expect(optionNames).not.toContain('reasoning_effort');
         expect(optionNames).toContain('image_detail');
         expect(optionNames).not.toContain('verbosity');
         expect(optionNames).not.toContain('stop_sequence');
@@ -432,9 +432,7 @@ describe('current Bedrock GPT families', () => {
             if (effort?.type !== OptionType.enum) throw new Error('Missing effort options');
             expect(Object.values(effort.enum)).toContain('xhigh');
             expect(Object.values(effort.enum).includes('none')).toBe(allowsNone);
-            expect(options.options.find((item) => item.name === 'reasoning_effort')).toMatchObject({
-                enum: effort.enum,
-            });
+            expect(options.options.map((item) => item.name)).not.toContain('reasoning_effort');
         }
     });
 });
