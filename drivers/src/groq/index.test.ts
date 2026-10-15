@@ -225,6 +225,79 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(completion.original_response).toBe(response);
     });
 
+    describe('structured outputs', () => {
+        const resultSchema = {
+            type: 'object' as const,
+            properties: { color: { type: 'string' as const } },
+            required: ['color'],
+            additionalProperties: false,
+        };
+
+        async function requestFor(model: string, withTools = false) {
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () => ({
+                id: 'groq-so',
+                object: 'chat.completion',
+                created: 1,
+                model,
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop',
+                        logprobs: null,
+                        message: { role: 'assistant', content: '{"color":"blue"}' },
+                    },
+                ],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }));
+            setGroqCreate(driver, create);
+            const options = {
+                model,
+                result_schema: resultSchema,
+                ...(withTools && {
+                    tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' as const } }],
+                }),
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Sky?' }], options);
+            await driver.requestTextCompletion(prompt, options);
+            return (create.mock.calls as unknown[][])[0][0] as { response_format?: unknown; messages: unknown[] };
+        }
+
+        it.each(['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'qwen/qwen3.9-32b'])(
+            'sends a strict json_schema response_format for %s',
+            async (model) => {
+                const request = await requestFor(model);
+                expect(request.response_format).toEqual({
+                    type: 'json_schema',
+                    json_schema: { name: 'output', strict: true, schema: expect.objectContaining({ type: 'object' }) },
+                });
+            },
+        );
+
+        it('keeps gpt-oss-safeguard in best-effort mode', async () => {
+            const request = await requestFor('openai/gpt-oss-safeguard-20b');
+            expect(request.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: false } });
+        });
+
+        it.each(['qwen/qwen3.6-27b', 'meta-llama/llama-4-scout-17b-16e-instruct'])(
+            'leaves %s on prompt instructions',
+            async (model) => {
+                const request = await requestFor(model);
+                expect(request.response_format).toBeUndefined();
+            },
+        );
+
+        it('omits response_format when tools are offered, which Groq rejects', async () => {
+            const request = await requestFor('openai/gpt-oss-20b', true);
+            expect(request.response_format).toBeUndefined();
+        });
+
+        it('keeps the schema instruction in the prompt alongside response_format', async () => {
+            const request = await requestFor('openai/gpt-oss-20b');
+            expect(JSON.stringify(request.messages)).toContain('<response_schema>');
+        });
+    });
+
     it('reports the prompt tokens served from the Groq prompt cache', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key', endpoint_url: 'https://groq.example.test' });
         const create = vi.fn(async () => ({
