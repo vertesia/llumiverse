@@ -13,7 +13,6 @@ import {
     MistralAIDriver,
     OpenAIDriver,
     OpenAIResponsesDriver,
-    TogetherAIDriver,
     VertexAIDriver,
     WatsonxDriver,
     xAIDriver,
@@ -56,20 +55,6 @@ if (process.env.MISTRAL_API_KEY) {
     });
 } else {
     console.warn('MistralAI tests are skipped: MISTRAL_API_KEY environment variable is not set');
-}
-
-if (process.env.TOGETHER_API_KEY) {
-    drivers.push({
-        name: 'togetherai',
-        driver: new TogetherAIDriver({
-            apiKey: process.env.TOGETHER_API_KEY as string,
-        }),
-        // A cheap serverless reasoning model with a reasoning-effort control, so the smoke's low effort reaches it.
-        // Qwen3.5-9B had none and sometimes reasoned until max_tokens without answering.
-        models: ['zai-org/GLM-5.3-Flash'],
-    });
-} else {
-    console.warn('TogetherAI tests are skipped: TOGETHER_API_KEY environment variable is not set');
 }
 
 if (process.env.OPENAI_API_KEY) {
