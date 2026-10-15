@@ -64,8 +64,9 @@ if (process.env.TOGETHER_API_KEY) {
         driver: new TogetherAIDriver({
             apiKey: process.env.TOGETHER_API_KEY as string,
         }),
-        // A cheap current serverless model; Together serves gpt-oss-20b only on dedicated endpoints.
-        models: ['Qwen/Qwen3.5-9B'],
+        // A cheap serverless reasoning model with a reasoning-effort control, so the smoke's low effort reaches it.
+        // Qwen3.5-9B had none and sometimes reasoned until max_tokens without answering.
+        models: ['zai-org/GLM-5.3-Flash'],
     });
 } else {
     console.warn('TogetherAI tests are skipped: TOGETHER_API_KEY environment variable is not set');

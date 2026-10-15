@@ -12,8 +12,8 @@ import { getLowEffortTestOptions, parseCompletionResultsToJson } from './utils.j
 
 const TIMEOUT = 90 * 1000;
 /**
- * Room for reasoning models (Qwen, MiniMax, DeepSeek) to think before they answer; at 2048 Qwen3.5-9B on Together
- * spent the whole budget reasoning. 8192 is the lowest documented output limit among the smoke models.
+ * Room for reasoning models (Qwen, MiniMax, DeepSeek) to think before they answer. 8192 is the lowest documented
+ * output limit among the smoke models.
  */
 const SMOKE_MAX_TOKENS = 8192;
 
