@@ -198,18 +198,19 @@ export class GeminiContextCacheManager {
     }
 
     /**
-     * Vertex said the model has no explicit context cache (e.g. Gemini 4 Argon). Skip creates for it for a while
-     * instead of paying a failed create on every call; the expiry lets a later provider rollout be picked up.
+     * Vertex said the model has no explicit context cache in this location (e.g. Gemini 4 Argon). Skip creates for it
+     * for a while instead of paying a failed create on every call; the expiry lets a later provider rollout be picked up.
      */
-    markModelUnsupported(model: string): void {
-        this.unsupportedModelsUntilMs.set(model, Date.now() + UNSUPPORTED_MODEL_RECHECK_MS);
+    markModelUnsupported(location: string, model: string): void {
+        this.unsupportedModelsUntilMs.set(`${location}:${model}`, Date.now() + UNSUPPORTED_MODEL_RECHECK_MS);
     }
 
-    isModelUnsupported(model: string): boolean {
-        const untilMs = this.unsupportedModelsUntilMs.get(model);
+    isModelUnsupported(location: string, model: string): boolean {
+        const key = `${location}:${model}`;
+        const untilMs = this.unsupportedModelsUntilMs.get(key);
         if (untilMs === undefined) return false;
         if (untilMs > Date.now()) return true;
-        this.unsupportedModelsUntilMs.delete(model);
+        this.unsupportedModelsUntilMs.delete(key);
         return false;
     }
 
@@ -498,7 +499,7 @@ async function planGeminiContextCache(
     if (options.model.toLowerCase().includes('image')) return { diagnostic: baseDiagnostic('disabled') };
     const manager = driver.getGeminiContextCacheManager?.();
     if (!manager) return { diagnostic: baseDiagnostic('disabled') };
-    if (manager.isModelUnsupported(payload.model)) return { diagnostic: baseDiagnostic('unsupported_model') };
+    if (manager.isModelUnsupported(location, payload.model)) return { diagnostic: baseDiagnostic('unsupported_model') };
     if (!Array.isArray(payload.contents)) return { diagnostic: baseDiagnostic('fallback_provider_error') };
 
     const prefix = deriveGeminiCachePrefix(prompt);
@@ -543,6 +544,7 @@ async function planGeminiContextCache(
             manager,
             contentHash,
             managerKey,
+            location,
             model: payload.model,
             prefix,
             tools,
@@ -596,6 +598,7 @@ interface AdoptOrCreateCacheParams {
     manager: GeminiContextCacheManager;
     contentHash: string;
     managerKey: string;
+    location: string;
     model: string;
     prefix: GeminiCachePrefix;
     tools: Tool[] | undefined;
@@ -618,6 +621,7 @@ async function adoptOrCreateCache({
     manager,
     contentHash,
     managerKey,
+    location,
     model,
     prefix,
     tools,
@@ -634,6 +638,7 @@ async function adoptOrCreateCache({
             client,
             manager,
             managerKey,
+            location,
             model,
             prefix,
             tools,
@@ -679,6 +684,7 @@ async function adoptOrCreateCache({
             client,
             manager,
             managerKey,
+            location,
             model,
             prefix,
             tools,
@@ -701,6 +707,7 @@ async function coordinateAdoptOrCreateCache({
     client,
     manager,
     managerKey,
+    location,
     model,
     prefix,
     tools,
@@ -798,6 +805,7 @@ async function coordinateAdoptOrCreateCache({
                     client,
                     manager,
                     managerKey,
+                    location,
                     model,
                     prefix,
                     tools,
@@ -844,6 +852,7 @@ async function createCache({
     client,
     manager,
     managerKey,
+    location,
     model,
     prefix,
     tools,
@@ -881,7 +890,11 @@ async function createCache({
             return { path: 'minimum_token_rejection', providerStatus: status };
         }
         if (isExplicitCacheUnsupportedError(error)) {
-            manager.markModelUnsupported(model);
+            manager.markModelUnsupported(location, model);
+            driver.logger.info(
+                { model, location },
+                '[VertexAI] Gemini context cache: model has no explicit caching here, skipping creates for an hour',
+            );
             return { path: 'unsupported_model', providerStatus: status };
         }
 

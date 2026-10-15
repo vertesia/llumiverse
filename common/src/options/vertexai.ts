@@ -613,9 +613,9 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             integer: true,
             step: 200,
             description: isGeminiLongDecodeModel(model)
-                ? 'The maximum number of tokens to generate, including thinking. Above 65,536, generation continues ' +
-                  'across requests (long decode) up to the 1,048,576-token limit shared with the input; each ' +
-                  'continuation re-reads the prompt and output so far at the cached-input rate.'
+                ? 'The maximum number of tokens to generate, including thinking. Above the per-request cap (65,536 ' +
+                  'streaming, 32,768 otherwise), generation continues across requests (long decode) up to the ' +
+                  'window shared with the input; each continuation re-reads the prompt and output so far.'
                 : 'The maximum number of tokens to generate',
         },
     ];

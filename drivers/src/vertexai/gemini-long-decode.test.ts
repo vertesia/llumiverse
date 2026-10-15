@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GoogleGenAI } from '@google/genai';
-import { PromptRole } from '@llumiverse/core';
+import { type HttpTimeoutOptions, PromptRole } from '@llumiverse/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from './index.js';
-import { applyGeminiLongDecodeTimeout } from './models/gemini.js';
+import { applyGeminiLongDecodeStreamTimeout } from './models/gemini.js';
 
 const MODEL = 'gemini-4-argon';
 
@@ -71,13 +71,15 @@ describe('Gemini long decode', () => {
         const warn = vi.fn();
         const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
         const driver = new VertexAIDriver({ project: 'test', region: 'global', geminiContextCache: false, logger });
+        const httpOptions = (
+            driver as unknown as { getGoogleGenAIHttpOptions(): { fetch: typeof fetch } }
+        ).getGoogleGenAIHttpOptions();
+        // Every continuation request must go through the driver fetch, which applies the driver's HTTP timeouts.
+        const driverFetch = vi.fn(httpOptions.fetch);
         const client = new GoogleGenAI({
             vertexai: true,
             apiKey: 'test',
-            httpOptions: {
-                ...(driver as unknown as { getGoogleGenAIHttpOptions(): object }).getGoogleGenAIHttpOptions(),
-                baseUrl: `http://127.0.0.1:${port}`,
-            },
+            httpOptions: { ...httpOptions, fetch: driverFetch, baseUrl: `http://127.0.0.1:${port}` },
         });
         vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
         const prompt = [{ role: PromptRole.user, content: 'Write a long proof.' }];
@@ -108,6 +110,7 @@ describe('Gemini long decode', () => {
             expect(warn).not.toHaveBeenCalled();
 
             expect(bodies).toHaveLength(2);
+            expect(driverFetch).toHaveBeenCalledTimes(2);
             expect(bodies[0]).not.toHaveProperty('continuationToken');
             expect(bodies[1]).toMatchObject({ continuationToken: 'tok-1' });
             // The continuation resends the original request instead of appending the partial output.
@@ -120,28 +123,42 @@ describe('Gemini long decode', () => {
     });
 });
 
-describe('applyGeminiLongDecodeTimeout', () => {
-    const driver = { getRequestTimeoutMs: () => 15 * 60_000 };
+describe('applyGeminiLongDecodeStreamTimeout', () => {
+    const driver = (httpTimeout?: HttpTimeoutOptions, defaultMs = 15 * 60_000) => ({
+        options: { project: 'test', region: 'global', httpTimeout },
+        getRequestTimeoutMs: () => defaultMs,
+    });
 
-    it('raises the default deadline to cover one 20-minute long-decode request', () => {
+    it('raises the built-in deadline to cover one 20-minute streamed long-decode request', () => {
         const payload = { model: MODEL, contents: [], config: { maxOutputTokens: 65_537 } };
-        applyGeminiLongDecodeTimeout(driver, {}, payload);
+        applyGeminiLongDecodeStreamTimeout(driver(), {}, payload);
         expect(payload.config).toEqual({ maxOutputTokens: 65_537, httpOptions: { timeout: 21 * 60_000 } });
     });
 
-    it.each([
-        ['no max_tokens', {}, {}],
-        ['a single-request max_tokens', { maxOutputTokens: 65_536 }, {}],
-        ['a caller-supplied timeout', { maxOutputTokens: 200_000 }, { httpTimeout: { headersTimeout: 1_000 } }],
-    ])('leaves the request unchanged with %s', (_case, config, options) => {
-        const payload = { model: MODEL, contents: [], config: { ...config } };
-        applyGeminiLongDecodeTimeout(driver, options, payload);
-        expect(payload.config).toEqual(config);
+    it('still raises it when the caller only sets connection timeouts', () => {
+        const payload = { model: MODEL, contents: [], config: { maxOutputTokens: 200_000 } };
+        applyGeminiLongDecodeStreamTimeout(
+            driver({ connectTimeout: 5_000 }),
+            { httpTimeout: { keepAliveTimeout: 1 } },
+            payload,
+        );
+        expect(payload.config).toEqual({ maxOutputTokens: 200_000, httpOptions: { timeout: 21 * 60_000 } });
     });
 
-    it('keeps a driver default that is already long enough', () => {
-        const payload = { model: MODEL, contents: [], config: { maxOutputTokens: 200_000 } };
-        applyGeminiLongDecodeTimeout({ getRequestTimeoutMs: () => 30 * 60_000 }, {}, payload);
-        expect(payload.config).toEqual({ maxOutputTokens: 200_000 });
+    it.each([
+        ['no max_tokens', driver(), {}, {}],
+        ['a single-request max_tokens', driver(), {}, { maxOutputTokens: 65_536 }],
+        [
+            'a per-call response timeout',
+            driver(),
+            { httpTimeout: { headersTimeout: 1_000 } },
+            { maxOutputTokens: 200_000 },
+        ],
+        ['a driver response timeout', driver({ bodyTimeout: 600_000 }), {}, { maxOutputTokens: 200_000 }],
+        ['a long enough default', driver(undefined, 30 * 60_000), {}, { maxOutputTokens: 200_000 }],
+    ])('leaves the request unchanged with %s', (_case, target, options, config) => {
+        const payload = { model: MODEL, contents: [], config: { ...config } };
+        applyGeminiLongDecodeStreamTimeout(target, options, payload);
+        expect(payload.config).toEqual(config);
     });
 });
