@@ -54,6 +54,7 @@ export const PromptCachePathSchema = z
         'fallback_wait_timeout',
         'minimum_token_rejection',
         'unusable_resource_recreated',
+        'unsupported_model',
     ])
     .meta({ id: 'PromptCachePath' });
 
