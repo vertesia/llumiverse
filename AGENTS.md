@@ -36,13 +36,13 @@ still inspect them.
 
 ### Verification Scope
 
-Prefer sparse, change-scoped verification in llumiverse unless the user explicitly asks for a full provider sweep. Many driver tests make live network calls and can produce heavy output or fail on unrelated local credentials.
+Prefer sparse, change-scoped verification in llumiverse unless the user explicitly asks for a full provider sweep. Live tests call provider APIs and can produce heavy output or fail on unrelated local credentials.
 
 - For common package changes, run `cd common && pnpm lint`, `pnpm typecheck:test`, and the specific functional Vitest files that cover the edit.
 - For driver changes, run `cd drivers && pnpm lint`, `pnpm typecheck:test`, and targeted functional tests for the touched driver or behavior.
 - Run `pnpm build` from the Llumiverse root for the normal workspace build; it uses Turbo to order package dependencies.
 - Use `pnpm clean:outputs && pnpm build` only when diagnosing stale generated artifacts or a failed build after branch changes.
-- Files named `*.live.test.ts` call provider APIs and may consume quota or tokens; run only the affected provider/model suite, while running functional tests freely.
+- Files named `*.live.test.ts` call provider APIs and may consume quota or tokens; run only the affected provider/model suite, while running functional tests freely. Only live files in the allow list in `.github/workflows/build-and-test.yml` run in CI; see "Testing" in `README.md` for the three tiers.
 - Use `LLUMIVERSE_LIVE_PROVIDERS` and `LLUMIVERSE_LIVE_MODELS` with `drivers/test/model-smoke.live.test.ts` to select exact live smoke targets instead of relying on a Vitest name filter.
 - Run the full `pnpm test` / `pnpm -r test` only when the change affects broad cross-provider behavior or when requested. If skipped, report the scoped commands that were run.
 
@@ -183,17 +183,20 @@ The following functions are exported from `@llumiverse/core` for advanced use ca
 
 ## Testing
 
-Live tests (`*.live.test.ts`) call provider APIs; each provider's tests run only when its credentials are set in
-your local environment and are skipped otherwise.
+Tests are functional (`*.test.ts`, no provider calls), live (`*.live.test.ts`, run on demand), or live and in CI
+(live files in the allow list in `.github/workflows/build-and-test.yml`). `README.md` ("Testing") documents the tiers
+and the credentials each provider needs. A test that calls a provider must be in a `*.live.test.ts` file.
 
-Live tests in `drivers/test/`:
-- `model-smoke.live.test.ts` - Curated smoke coverage: listing, execute, streaming with a schema, max_tokens at the
-  documented limit, and image input, for one or two small current models per provider
-- `conversation.live.test.ts` - Multi-turn conversations mixing execute and stream, images, and Claude prompt caching
-- `tools.live.test.ts` - Tool call, tool result, then a `tools=[]` checkpoint turn
-- `embeddings.live.test.ts` - Embeddings with each provider's default model
-- `vertexai-embedding-models.live.test.ts` - One Vertex embedding model per request path
-- `api-key-list-models.live.test.ts` - Gemini API key model listing
+Live tests in CI, under `drivers/test/`:
+- `model-smoke.live.test.ts` - Curated smoke coverage for a small set of models across providers
+- `conversation.live.test.ts` - Multi-turn conversations, images in conversations, Claude prompt caching
+- `tools.live.test.ts` - Tool call, tool result, then a summary with tools turned off
+- `embeddings.live.test.ts` - Embeddings per provider
+
+Live tests run on demand:
+- `max-tokens-limit.live.test.ts` - Each smoke model at its documented output limit (`live-smoke-drivers.ts` holds the shared model list)
+- `vertexai-embedding-models.live.test.ts` - Older Vertex embedding models, one per request path
+- `api-key-list-models.live.test.ts` - Gemini model listing with an API key
 
 Live tests use small, current models so a retirement does not break CI, and build options with
 `getLowEffortTestOptions()` from `drivers/test/utils.ts`: low effort where supported, no `temperature`, and only the
