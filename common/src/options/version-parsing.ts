@@ -50,6 +50,18 @@ export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, 
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** Grok reasoning-effort values by generation; the Grok 4.20 multi-agent line is a separate exception. */
+export function getGrokReasoningEffortLevels(model: string): readonly string[] | undefined {
+    const grok420Index = model.indexOf('grok-4.20');
+    if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
+        return ['low', 'medium', 'high', 'xhigh'];
+    }
+    if (isSingleDigitGrokVersionGte(model, 4, 6)) return ['low', 'medium', 'high', 'xhigh'];
+    if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
+    if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
+    return undefined;
+}
+
 /**
  * Gemini Flash 3.7+ and every Gemini 4+ chat tier (including named tiers such as Argon) reject candidate count and
  * penalties and no longer use sampling controls.

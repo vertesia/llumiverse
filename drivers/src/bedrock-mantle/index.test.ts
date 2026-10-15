@@ -276,7 +276,7 @@ describe('BedrockMantleDriver model listing', () => {
                     provider: Providers.bedrock_mantle,
                     can_stream: true,
                     output_modalities: ['text'],
-                    tool_support: undefined,
+                    tool_support: true,
                 }),
             ]),
         );

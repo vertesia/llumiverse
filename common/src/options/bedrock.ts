@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { getBedrockModelKnowledge, mistralLargeGeneration } from '../capability/bedrock-models.js';
 import type {
     BedrockAI21OptionsSchema,
     BedrockClaudeOptionsSchema,
@@ -23,7 +23,12 @@ import {
     buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction, isOpenAIGptVersionGTE, supportsNovaReasoning } from './version-parsing.js';
+import {
+    getGrokReasoningEffortLevels,
+    hasSamplingParameterRestriction,
+    isOpenAIGptVersionGTE,
+    supportsNovaReasoning,
+} from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -96,6 +101,8 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     }
     // Mistral models
     else if (model.includes('mistral')) {
+        // Mistral Large 4+ publishes no output limit, so do not cap it with the legacy family default.
+        if ((mistralLargeGeneration(model) ?? 0) >= 4) return undefined;
         if (model.includes('8x7b')) {
             return 4096;
         }
@@ -350,6 +357,25 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             value: [],
             description: 'The generation will halt if one of the stop sequences is output',
         });
+
+        const grokEffortLevels = model.includes('xai.grok-') ? getGrokReasoningEffortLevels(model) : undefined;
+        if (grokEffortLevels) {
+            // Grok reasoning models reject stop sequences, and take effort through the Converse reasoning field.
+            // https://docs.x.ai/docs/guides/reasoning
+            return {
+                _option_id: 'bedrock-converse',
+                options: [
+                    ...baseConverseOptions.filter((option) => option.name !== 'stop_sequence'),
+                    {
+                        name: 'effort',
+                        type: OptionType.enum,
+                        enum: Object.fromEntries(grokEffortLevels.map((value) => [value, value])),
+                        description:
+                            'The reasoning effort of the model, which affects the quality and speed of the response',
+                    },
+                ],
+            };
+        }
 
         if (model.includes('claude')) {
             // Opus 4.7+ models don't support top_k

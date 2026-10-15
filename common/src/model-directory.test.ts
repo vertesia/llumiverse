@@ -274,6 +274,47 @@ describe('central model directory', () => {
         expect(compatibleOptions.options.map((option) => option.name)).not.toContain('safe_prompt');
     });
 
+    it.each(['mistral-large-4', 'mistral-large-4-0', 'mistral-large-5'])(
+        'describes Mistral Large 4+ reasoning and context for %s',
+        (model) => {
+            const profile = resolveModelProfile(model, Providers.mistralai);
+            expect(profile).toMatchObject({
+                family: 'mistral',
+                context_window: 1_000_000,
+                capabilities: { input: { text: true, image: true }, tool_support: true },
+                reasoning_effort_levels: ['none', 'high'],
+            });
+            expect(profile.max_output_tokens).toBeUndefined();
+        },
+    );
+
+    it('keeps earlier Mistral Large releases on their documented limits', () => {
+        expect(resolveModelProfile('mistral-large-2411', Providers.mistralai)).toMatchObject({
+            context_window: 256_000,
+        });
+        expect(resolveModelProfile('mistral-large-2411', Providers.mistralai).reasoning_effort_levels).toBeUndefined();
+    });
+
+    it('describes DeepSeek V4 limits and V4.1 Flash image input', () => {
+        expect(resolveModelProfile('deepseek-v4-pro', Providers.openai_compatible)).toMatchObject({
+            context_window: 1_048_576,
+            max_output_tokens: 393_216,
+            capabilities: { input: { image: false } },
+        });
+        expect(
+            resolveModelProfile('deepseek/deepseek-v4.1-flash', Providers.openai_compatible).capabilities.input.image,
+        ).toBe(true);
+        const vertex = resolveModelProfile(
+            'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
+            Providers.vertexai,
+        );
+        expect(vertex).toMatchObject({
+            context_window: 1_048_576,
+            max_output_tokens: 1_048_576,
+            capabilities: { input: { text: true, image: true }, tool_support: true },
+        });
+    });
+
     it('reapplies exact source semantics after provider overlays', () => {
         for (const provider of [Providers.openai, Providers.azure_foundry, Providers.bedrock]) {
             expect(resolveModelProfile('gpt-image-1', provider).capabilities).toMatchObject({

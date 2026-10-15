@@ -8,6 +8,7 @@ import { getVertexAIModelLimits } from './capability/vertexai-limits.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
 import { getGeminiModelLimits } from './options/gemini-limits.js';
 import {
+    getGrokReasoningEffortLevels,
     getOpenAIReasoningEffortLevels,
     hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
@@ -252,6 +253,16 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             };
         }
         case 'deepseek':
+            return {
+                // DeepSeek V4.1 Flash adds image input; earlier and non-Flash DeepSeek models remain text-only.
+                input: {
+                    text: true,
+                    image: isModelFamilyVersionGTE(model, 'deepseek-v', 4, 1) && model.includes('flash'),
+                },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'kimi':
         case 'minimax':
         case 'glm':
@@ -439,14 +450,10 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     if (provider === Providers.mistralai && family === 'mistral') {
         return getMistralModelKnowledge(model).reasoning_effort_levels;
     }
-    if (provider === Providers.xai && family === 'grok') {
-        const grok420Index = model.indexOf('grok-4.20');
-        if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
-            return ['low', 'medium', 'high', 'xhigh'];
-        }
-        if (isSingleDigitGrokVersionGte(model, 4, 6)) return ['low', 'medium', 'high', 'xhigh'];
-        if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
-        if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
+    // Bedrock Runtime hosts Grok with the same reasoning controls as xAI.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html
+    if ((provider === Providers.xai || provider === Providers.bedrock) && family === 'grok') {
+        return getGrokReasoningEffortLevels(model);
     }
     return undefined;
 }

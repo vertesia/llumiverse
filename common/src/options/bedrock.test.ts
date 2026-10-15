@@ -455,6 +455,55 @@ describe('Bedrock Converse GPT options', () => {
     );
 });
 
+describe('Bedrock open-weight model cards', () => {
+    it.each([
+        ['zai.glm-4.7', 203_000, 131_072],
+        ['zai.glm-4.7-flash', 203_000, 131_072],
+        ['zai.glm-5', 200_000, 131_072],
+        ['global.zai.glm-5.3', 1_000_000, 131_072],
+        ['moonshotai.kimi-k2.5', 256_000, 16_384],
+        ['global.moonshotai.kimi-k3', 1_000_000, undefined],
+        ['global.xai.grok-4.7', 500_000, undefined],
+        ['xai.grok-4.3', 1_000_000, undefined],
+        ['mistral.mistral-large-4-0', 1_000_000, undefined],
+    ])('resolves documented limits for %s', (model, context_window, max_output_tokens) => {
+        const knowledge = getBedrockModelKnowledge(model);
+        expect(knowledge.context_window).toBe(context_window);
+        expect(knowledge.max_output_tokens).toBe(max_output_tokens);
+        expect(getMaxTokensLimitBedrock(model)).toBe(max_output_tokens);
+    });
+
+    it.each(['moonshot.kimi-k2-thinking', 'global.moonshotai.kimi-k3', 'zai.glm-5', 'global.zai.glm-5.3'])(
+        'reports client-side tool support for %s',
+        (model) => {
+            expect(resolveModelProfile(model, Providers.bedrock).capabilities.tool_support).toBe(true);
+            expect(resolveModelProfile(model, Providers.bedrock_mantle).capabilities).toMatchObject({
+                tool_support: true,
+                tool_support_streaming: true,
+            });
+        },
+    );
+
+    it('keeps the dated Mistral Large 2402 release on its legacy limits', () => {
+        expect(getBedrockModelKnowledge('mistral.mistral-large-2402-v1:0')).toMatchObject({
+            context_window: 32_000,
+            max_output_tokens: 4_096,
+            input: { image: false },
+        });
+    });
+
+    it('exposes Grok effort without stop sequences on Bedrock Runtime', () => {
+        const options = getOptions('global.xai.grok-4.7', Providers.bedrock);
+        const names = options.options.map((item) => item.name);
+        expect(options._option_id).toBe('bedrock-converse');
+        expect(names).not.toContain('stop_sequence');
+        const effort = options.options.find((item) => item.name === 'effort');
+        if (effort?.type !== OptionType.enum) throw new Error('Missing effort option');
+        expect(Object.values(effort.enum)).toEqual(['low', 'medium', 'high', 'xhigh']);
+        expect(effort).not.toHaveProperty('default');
+    });
+});
+
 describe('Bedrock Nova reasoning metadata', () => {
     it.each(['amazon.nova-lite-1-5-v1:0', 'us.amazon.nova-2-lite-v1:0', 'global.amazon.nova-3-lite-v1:0'])(
         'exposes extended thinking for %s',

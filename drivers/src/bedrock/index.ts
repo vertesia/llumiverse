@@ -1552,6 +1552,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ...(options.result_schema && { format: { strict: true } }),
                 },
             };
+        } else if (options.model.includes('xai.grok-')) {
+            // Grok on Bedrock reads effort from the same reasoning field as GPT; omission keeps the provider default.
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html
+            const effort = resolveOpenAIEffort(
+                options.model_options as BedrockConverseOptions | undefined,
+                this.logger,
+                options.model,
+            );
+            additionalField = { ...(effort !== undefined && { reasoning: { effort } }) };
         } else if (options.model.includes('gpt-oss')) {
             const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
             additionalField = {
