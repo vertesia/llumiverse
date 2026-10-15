@@ -74,6 +74,11 @@ jobs:
       - name: Build workspace
         run: pnpm build
 
+      # Functional tests run before cloud sign-in and without provider keys, so a test that calls a provider fails
+      # here instead of passing silently. Provider calls belong in *.live.test.ts files (see README "Testing").
+      - name: Typecheck and functional tests
+        run: pnpm typecheck:test && npx vitest --exclude '**/*.live.test.ts'
+
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         id: gauth
@@ -88,17 +93,6 @@ jobs:
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
           role-session-name: github-actions
           aws-region: us-east-1
-
-      - name: Typecheck and functional tests
-        env:
-          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          BEDROCK_REGION: us-east-1
-          GOOGLE_PROJECT_ID: dengenlabs
-          GOOGLE_REGION: us-central1
-        run: pnpm typecheck:test && npx vitest --exclude '**/*.live.test.ts'
 
       - name: Curated live provider smoke tests
         env:
