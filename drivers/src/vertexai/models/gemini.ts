@@ -612,12 +612,13 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?:
     }
 }
 
+// Gemini 2.5 Flash Image left this rule when it moved from preview to GA with regional endpoints.
 function isGlobalOnlyGeminiImageModel(model: string): boolean {
-    return model.includes('gemini-2.5-flash-image') || model.includes('gemini-nano-banana');
+    return model.includes('gemini-nano-banana');
 }
 
 /**
- * Gemini models without single-region endpoints: the image families are served only from `global`, and Gemini 4+
+ * Gemini models without single-region endpoints: Nano Banana is served only from `global`, and Gemini 4+
  * chat models from `global` and the `us`/`eu` multi-regions. Listing and request routing both use this rule.
  * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
  */

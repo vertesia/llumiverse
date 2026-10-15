@@ -9,7 +9,8 @@ describe('Gemini region resolution', () => {
         ['gemini-3.8-flash', undefined, undefined],
         ['gemini-3.8-flash', 'us-central1', 'us-central1'],
         ['gemini-nano-banana-2.1', 'us-central1', 'global'],
-        ['gemini-2.5-flash-image', undefined, 'global'],
+        ['gemini-2.5-flash-image', undefined, undefined],
+        ['gemini-2.5-flash-image', 'us-central1', 'us-central1'],
     ])('resolves %s with location %s to %s', (model, explicitRegion, expected) => {
         expect(resolveGeminiRegion(model, explicitRegion)).toBe(expected);
     });
