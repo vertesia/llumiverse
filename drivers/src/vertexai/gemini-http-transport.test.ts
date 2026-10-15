@@ -22,6 +22,8 @@ it.each(['execute', 'stream'] as const)('applies per-call transport timeouts to 
     const client = new GoogleGenAI({
         apiKey: 'test',
         httpOptions: {
+            // Use the driver's own transport options so the test covers the fetch hook the driver gives the SDK.
+            ...(driver as unknown as { getGoogleGenAIHttpOptions(): object }).getGoogleGenAIHttpOptions(),
             baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
             timeout: 5_000,
         },

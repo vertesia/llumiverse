@@ -269,6 +269,7 @@ describe('driver HTTP timeout wiring', () => {
                 httpTimeout?: HttpTimeoutOptions,
             ) => {
                 timeout: number;
+                fetch: typeof fetch;
                 headers?: Record<string, string>;
             };
             getAnthropicVertexClientOptions: (
@@ -285,9 +286,11 @@ describe('driver HTTP timeout wiring', () => {
 
         expect(internals.getGoogleGenAIHttpOptions()).toEqual({
             timeout: 3_000,
+            fetch: driverFetch(driver),
         });
         expect(internals.getGoogleGenAIHttpOptions('flex')).toEqual({
             timeout: 3_000,
+            fetch: driverFetch(driver),
             headers: {
                 'X-Vertex-AI-LLM-Request-Type': 'shared',
                 'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
@@ -295,6 +298,7 @@ describe('driver HTTP timeout wiring', () => {
         });
         expect(internals.getGoogleGenAIHttpOptions('future-tier')).toEqual({
             timeout: 3_000,
+            fetch: driverFetch(driver),
             headers: {
                 'X-Vertex-AI-LLM-Request-Type': 'shared',
                 'X-Vertex-AI-LLM-Shared-Request-Type': 'future-tier',
@@ -302,6 +306,7 @@ describe('driver HTTP timeout wiring', () => {
         });
         expect(internals.getGoogleGenAIHttpOptions('default')).toEqual({
             timeout: 3_000,
+            fetch: driverFetch(driver),
         });
         expect(
             internals.getGoogleGenAIHttpOptions(undefined, {
@@ -310,6 +315,7 @@ describe('driver HTTP timeout wiring', () => {
             }),
         ).toEqual({
             timeout: 20_000,
+            fetch: driverFetch(driver),
         });
 
         const anthropicOptions = internals.getAnthropicVertexClientOptions('global', {});
