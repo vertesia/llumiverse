@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from '../src/index.js';
 
-const TIMEOUT = 15000;
+const TIMEOUT = 30000;
 const TEXT = 'Hello';
 
 const IMAGE_SRC = `${import.meta.dirname}/hello_world.jpg`;

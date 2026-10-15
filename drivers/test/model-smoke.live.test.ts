@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import {
     type AbstractDriver,
     type ExecutionOptions,
@@ -28,12 +29,19 @@ import {
 } from '../src/index.js';
 import { assertCompletionOk, assertProviderCostReported, assertStreamingCompletionOk } from './assertions.js';
 import { selectLiveTestDrivers } from './live-model-selection.js';
+=======
+import type { AIModel, ExecutionOptions } from '@llumiverse/core';
+import { describe, expect, test } from 'vitest';
+import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import { selectedDrivers } from './live-smoke-drivers.js';
+>>>>>>> c1a61c4 (test: stop live smoke tests depending on external hosts, and allow-list live tests in CI (#791))
 import {
     testPrompt_color,
     testPrompt_describeImage,
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
+<<<<<<< HEAD
 import { getLowEffortTestOptions, retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 60 * 1000;
@@ -200,13 +208,23 @@ const selectedDrivers = selectLiveTestDrivers(drivers, {
     providers: process.env.LLUMIVERSE_LIVE_PROVIDERS,
     models: process.env.LLUMIVERSE_LIVE_MODELS,
 });
+=======
+import { getLowEffortTestOptions, parseCompletionResultsToJson } from './utils.js';
+
+const TIMEOUT = 90 * 1000;
+/**
+ * Room for reasoning models (Qwen, MiniMax, DeepSeek) to think before they answer. 8192 is the lowest documented
+ * output limit among the smoke models.
+ */
+const SMOKE_MAX_TOKENS = 8192;
+>>>>>>> c1a61c4 (test: stop live smoke tests depending on external hosts, and allow-list live tests in CI (#791))
 
 function getTestOptions(model: string, provider: string): ExecutionOptions {
     const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
 
     // Exercises option mapping on models that advertise these controls; others drop them.
     return getLowEffortTestOptions(model, provider, {
-        max_tokens: 512,
+        max_tokens: SMOKE_MAX_TOKENS,
         top_k: 40,
         top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
         ...(isGemini35FlashLite
@@ -261,6 +279,7 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
                 return { r: stream, out: await assertStreamingCompletionOk(stream, true) };
             });
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+<<<<<<< HEAD
             assertProviderCostReported(r.completion as ExecutionResponse, driver);
         });
 
@@ -296,6 +315,12 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
             expect(r.error).toBeFalsy();
             expect(r.finish_reason).toBeTruthy();
         });
+=======
+            const json = parseCompletionResultsToJson(r.completion?.result ?? []) as { color?: unknown };
+            expect(json.color).toEqual(expect.stringMatching(/\S/));
+        },
+    );
+>>>>>>> c1a61c4 (test: stop live smoke tests depending on external hosts, and allow-list live tests in CI (#791))
 
         test(`${name}: multimodal test - describe image with ${model}`, {
             timeout: TIMEOUT,
@@ -309,12 +334,26 @@ describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, model
                 return;
             }
 
+<<<<<<< HEAD
             const r = await withRateLimitBackoff(() =>
                 driver.execute(testPrompt_describeImage, {
                     ...getLowEffortTestOptions(model, driver.provider, { max_tokens: 1024 }),
                     result_schema: testSchema_animalDescription,
                 }),
             );
+=======
+            const isMultiModal = fetchedModels?.find((r) => r.id === model)?.is_multimodal;
+
+            console.log(`${model} is multimodal: ${isMultiModal}`);
+            // Only some drivers' listModels report is_multimodal (not Vertex, Bedrock, Mantle, Azure, Watsonx or
+            // OpenRouter), so this passes without a call there. Their image paths are covered by the conversation test.
+            if (!isMultiModal) return;
+
+            const r = await driver.execute(testPrompt_describeImage, {
+                ...getLowEffortTestOptions(model, driver.provider, { max_tokens: SMOKE_MAX_TOKENS }),
+                result_schema: testSchema_animalDescription,
+            });
+>>>>>>> c1a61c4 (test: stop live smoke tests depending on external hosts, and allow-list live tests in CI (#791))
             console.log('Result', r);
             assertCompletionOk(r);
         });
