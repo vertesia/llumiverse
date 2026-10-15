@@ -199,6 +199,14 @@ if (process.env.XAI_API_KEY) {
     console.warn('xAI tests are skipped: XAI_API_KEY environment variable is not set');
 }
 
+/**
+ * The max_tokens-at-limit check is a debugging step for when a model's documented output limit changes, not a smoke
+ * test. Claude providers count max_tokens against the output-tokens-per-minute quota when a request starts, so a call at
+ * the full limit can use most of a minute's quota and push the smoke tests running beside it into rate limits. CI does
+ * not set this; set LLUMIVERSE_LIVE_MAX_TOKENS_LIMIT=1 to run it.
+ */
+const runMaxTokensLimitTest = process.env.LLUMIVERSE_LIVE_MAX_TOKENS_LIMIT === '1';
+
 const selectedDrivers = selectLiveTestDrivers(drivers, {
     providers: process.env.LLUMIVERSE_LIVE_PROVIDERS,
     models: process.env.LLUMIVERSE_LIVE_MODELS,
@@ -263,7 +271,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         },
     );
 
-    test.for(models)(
+    test.skipIf(!runMaxTokensLimitTest).for(models)(
         `${name}: max_tokens at documented limit on %s`,
         {
             timeout: TIMEOUT,
