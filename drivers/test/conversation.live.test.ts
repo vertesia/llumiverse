@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src/index.js';
 import { answerText } from './assertions.js';
-import { getLowEffortTestOptions } from './utils.js';
+import { getLowEffortTestOptions, retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 120 * 1000;
 
@@ -260,35 +260,39 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             const options = getLowEffortTestOptions(textModel, driver.provider, { max_tokens: 1000 });
 
             // A plain personal fact: credential-like tokens ("Remember this code: ...") trip Gemini's safety filter.
-            const result1 = await driver.execute(
-                [{ role: PromptRole.user, content: 'I went to Paris last summer.' }],
-                options,
+            const result1 = await withRateLimitBackoff(() =>
+                driver.execute([{ role: PromptRole.user, content: 'I went to Paris last summer.' }], options),
             );
             expect(result1.result.length).toBeGreaterThan(0);
             verifyConversationSerializable(result1.conversation, name);
             const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
-            const stream2 = await driver.stream(
-                [{ role: PromptRole.user, content: 'Which city did I go to last summer?' }],
-                {
-                    ...options,
-                    conversation: storedConversation1,
-                },
-            );
-            await consumeStream(stream2);
+            const stream2 = await withRateLimitBackoff(async () => {
+                const stream = await driver.stream(
+                    [{ role: PromptRole.user, content: 'Which city did I go to last summer?' }],
+                    {
+                        ...options,
+                        conversation: storedConversation1,
+                    },
+                );
+                await consumeStream(stream);
+                return stream;
+            });
             const text2 = stream2.completion ? answerText(stream2.completion) : '';
             expect(text2).toContain('Paris');
             verifyConversationSerializable(stream2.completion?.conversation, name);
             const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
 
-            const result3 = await driver.execute(
-                [
-                    {
-                        role: PromptRole.user,
-                        content: 'Which country is that city in? Answer with the country name only.',
-                    },
-                ],
-                { ...options, conversation: storedConversation2 },
+            const result3 = await withRateLimitBackoff(() =>
+                driver.execute(
+                    [
+                        {
+                            role: PromptRole.user,
+                            content: 'Which country is that city in? Answer with the country name only.',
+                        },
+                    ],
+                    { ...options, conversation: storedConversation2 },
+                ),
             );
             const text3 = answerText(result3);
             expect(text3).toContain('France');
@@ -297,7 +301,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
 
         test.skipIf(!name.includes('claude'))(
             `${name}: multi-turn prompt caching reports token usage`,
-            { timeout: TIMEOUT, retry: 1 },
+            { timeout: TIMEOUT, retry: retryUnlessRateLimited(1) },
             async () => {
                 const options = getClaudeOptionsWithCache(textModel, name);
 
@@ -320,7 +324,9 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
                                   },
                               ]
                             : [{ role: PromptRole.user, content: `Reply with exactly: TURN-${turn}-OK` }];
-                    const result = await driver.execute(prompt, { ...options, conversation });
+                    const result = await withRateLimitBackoff(() =>
+                        driver.execute(prompt, { ...options, conversation }),
+                    );
                     expect(result.token_usage).toBeDefined();
                     verifyConversationSerializable(result.conversation, name);
                     conversation = JSON.parse(JSON.stringify(result.conversation));
@@ -348,15 +354,17 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             const circleImage = Base64ImageSource.fromTestFile('red_circle.png');
             const triangleImage = Base64ImageSource.fromTestFile('blue_triangle.png');
 
-            const result1 = await driver.execute(
-                [
-                    {
-                        role: PromptRole.user,
-                        content: "I'm showing you two images. Name the shape and its colour in each one.",
-                        files: [circleImage, triangleImage],
-                    },
-                ],
-                options,
+            const result1 = await withRateLimitBackoff(() =>
+                driver.execute(
+                    [
+                        {
+                            role: PromptRole.user,
+                            content: "I'm showing you two images. Name the shape and its colour in each one.",
+                            files: [circleImage, triangleImage],
+                        },
+                    ],
+                    options,
+                ),
             );
             expect(result1.result.length).toBeGreaterThan(0);
             const text1 = answerText(result1).toLowerCase();
@@ -367,9 +375,11 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             verifyConversationSerializable(result1.conversation, name);
             const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
-            const result2 = await driver.execute(
-                [{ role: PromptRole.user, content: 'What colour was the triangle? Answer with the colour only.' }],
-                { ...options, conversation: storedConversation1 },
+            const result2 = await withRateLimitBackoff(() =>
+                driver.execute(
+                    [{ role: PromptRole.user, content: 'What colour was the triangle? Answer with the colour only.' }],
+                    { ...options, conversation: storedConversation1 },
+                ),
             );
             expect(result2.result.length).toBeGreaterThan(0);
             const text2 = answerText(result2).toLowerCase();
