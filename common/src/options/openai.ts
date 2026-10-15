@@ -544,6 +544,11 @@ export function getOpenAiCompatibleOptions(
             if (item.name === SharedOptions.max_tokens && maxOutputTokens !== undefined) {
                 return { ...item, max: maxOutputTokens } as ModelOptionInfoItem;
             }
+            if (item.name === SharedOptions.max_tokens && profile.context_window !== undefined) {
+                // A known model without a published output limit must not inherit the legacy GPT text-model cap.
+                const { max: _legacyMax, ...withoutMax } = item as ModelOptionInfoItem & { max?: number };
+                return withoutMax as ModelOptionInfoItem;
+            }
             if (item.name === SharedOptions.effort && item.type === OptionType.enum) {
                 if (!profileEffortLevels) return null;
                 const enumValues = item.enum as Record<string, string>;

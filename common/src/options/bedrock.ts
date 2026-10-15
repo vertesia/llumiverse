@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { isMistralLargeGte } from '../capability/mistral.js';
 import type {
     BedrockAI21OptionsSchema,
     BedrockClaudeOptionsSchema,
@@ -23,7 +24,13 @@ import {
     buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction, isOpenAIGptVersionGTE, supportsNovaReasoning } from './version-parsing.js';
+import {
+    getGrokReasoningEffortLevels,
+    hasSamplingParameterRestriction,
+    isOpenAIGptVersionGTE,
+    isPegasus15OrLater,
+    supportsNovaReasoning,
+} from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -96,6 +103,8 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     }
     // Mistral models
     else if (model.includes('mistral')) {
+        // Mistral Large 4+ publishes no output limit, so do not cap it with the legacy family default.
+        if (isMistralLargeGte(model, 4)) return undefined;
         if (model.includes('8x7b')) {
             return 4096;
         }
@@ -351,6 +360,25 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             description: 'The generation will halt if one of the stop sequences is output',
         });
 
+        const grokEffortLevels = model.includes('xai.grok-') ? getGrokReasoningEffortLevels(model) : undefined;
+        if (grokEffortLevels) {
+            // Grok reasoning models reject stop sequences, and take effort through the Converse reasoning field.
+            // https://docs.x.ai/docs/guides/reasoning
+            return {
+                _option_id: 'bedrock-converse',
+                options: [
+                    ...baseConverseOptions.filter((option) => option.name !== 'stop_sequence'),
+                    {
+                        name: 'effort',
+                        type: OptionType.enum,
+                        enum: Object.fromEntries(grokEffortLevels.map((value) => [value, value])),
+                        description:
+                            'The reasoning effort of the model, which affects the quality and speed of the response',
+                    },
+                ],
+            };
+        }
+
         if (model.includes('claude')) {
             // Opus 4.7+ models don't support top_k
             const claudeConverseOptions: ModelOptionInfoItem[] = hasSamplingRestriction
@@ -558,14 +586,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             };
         } else if (model.includes('twelvelabs')) {
             if (model.includes('pegasus')) {
+                // Pegasus offers only the Standard tier, so no service tier choice is listed.
                 const pegasusOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: 'service_tier',
-                        type: OptionType.enum,
-                        enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
-                        default: 'default',
-                        description: 'Select the Amazon Bedrock processing tier for this request.',
-                    },
                     {
                         name: 'temperature',
                         type: OptionType.numeric,
@@ -578,8 +600,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     {
                         name: 'max_tokens',
                         type: OptionType.numeric,
-                        min: 1,
-                        max: 4096,
+                        // Pegasus 1.5 requires at least 512 output tokens.
+                        min: isPegasus15OrLater(model) ? 512 : 1,
+                        max: getMaxTokensLimitBedrock(model),
                         integer: true,
                         step: 100,
                         description: 'The maximum number of tokens to generate',

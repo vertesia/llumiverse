@@ -41,6 +41,15 @@ export function isModelFamilyVersionGTE(
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** Qwen writes minor versions after a dot (`qwen3.5`); a dash starts the size (`qwen3-235b`), not a minor version. */
+export function isQwenVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.toLowerCase().match(/qwen(\d+)(?:\.(\d+))?/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
 /** Grok 4.20 is a separate line; do not order it after single-digit releases such as 4.7. */
 export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
     const match = model.match(/grok-(\d+)(?:\.(\d))?(?:[-_.]|$)/);
@@ -50,11 +59,53 @@ export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, 
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
-/** Gemini Flash 3.7+ rejects candidate count and penalties and no longer uses sampling controls. */
-export function hasGeminiSamplingRestriction(model: string): boolean {
+/** TwelveLabs Pegasus 1.5 changed its limits, response fields and structured-output request shape. */
+export function isPegasus15OrLater(model: string): boolean {
+    return isModelFamilyVersionGTE(model, 'pegasus-', 1, 5);
+}
+
+/** DeepSeek versions appear as `deepseek.v3.2` (Bedrock) and `deepseek-v3.2` elsewhere. */
+export function isDeepSeekVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
     return (
-        model.includes('flash') && !/(?:image|tts|transcribe|live)/.test(model) && isGeminiModelVersionGte(model, '3.7')
+        isModelFamilyVersionGTE(model, 'deepseek.v', targetMajor, targetMinor) ||
+        isModelFamilyVersionGTE(model, 'deepseek-v', targetMajor, targetMinor)
     );
+}
+
+/** Meta Muse models (`muse-spark-1.3`, `muse-wonder`, `muse-glimmer-30b`). */
+export function isMetaMuseModel(model: string): boolean {
+    return /(?:^|[-_.])muse-/.test(model);
+}
+
+/** Kimi versions use a dotted minor (`kimi-k2.5`); a dash introduces a date snapshot (`kimi-k2-0905`). */
+export function isKimiVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.match(/kimi-k(\d+)(?:\.(\d+))?/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
+/** Grok reasoning-effort values by generation; the Grok 4.20 multi-agent line is a separate exception. */
+export function getGrokReasoningEffortLevels(model: string): readonly string[] | undefined {
+    const grok420Index = model.indexOf('grok-4.20');
+    if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
+        return ['low', 'medium', 'high', 'xhigh'];
+    }
+    if (isSingleDigitGrokVersionGte(model, 4, 6)) return ['low', 'medium', 'high', 'xhigh'];
+    if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
+    if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
+    return undefined;
+}
+
+/**
+ * Gemini Flash 3.7+ and every Gemini 4+ chat tier (including named tiers such as Argon) reject candidate count and
+ * penalties and no longer use sampling controls.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+ */
+export function hasGeminiSamplingRestriction(model: string): boolean {
+    if (/(?:image|tts|transcribe|live)/.test(model)) return false;
+    return isGeminiModelVersionGte(model, '4.0') || (model.includes('flash') && isGeminiModelVersionGte(model, '3.7'));
 }
 
 /** Nova Lite reasoning starts with 1.5; numbered Nova 2+ Lite models inherit it. */
@@ -102,9 +153,9 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
         return { major: 5, minor: 0, variant: 'mythos' };
     }
 
-    // Match pattern: claude-[variant-]-{major}-[optional minor]
-    // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
+    // Match pattern: claude-[variant-]-{major}-[optional minor]; aggregators such as OpenRouter write the minor
+    // version after a dot (`claude-opus-4.6`). The minor version is limited to 1-2 digits to avoid matching dates.
+    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:[-.](\d{1,2}))?(?:-|\b)/i);
     if (match) {
         const variant = match[1].toLowerCase();
         if (!isClaudeVariant(variant)) return null;
@@ -114,7 +165,7 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     }
 
     // Fallback for older format: claude-3-7-sonnet-20250219
-    const fallbackMatch = modelString.match(/claude-(\d+)-(\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
+    const fallbackMatch = modelString.match(/claude-(\d+)[-.](\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
     if (fallbackMatch) {
         const major = parseInt(fallbackMatch[1], 10);
         const minor = parseInt(fallbackMatch[2], 10);

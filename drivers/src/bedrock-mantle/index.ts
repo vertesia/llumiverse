@@ -53,10 +53,12 @@ class BedrockMantleResponsesDelegate extends OpenAIResponsesDriverBase {
     }
 }
 
-function modelDisplayName(model: string): string {
+function modelDisplayName(model: string, owner: string): string {
     const modelName = model.slice(model.indexOf('.') + 1);
     if (model.startsWith('openai.')) return modelName.replace(/^gpt-/i, 'GPT-');
     if (model.startsWith('xai.')) return modelName.replace(/^grok-/i, 'Grok ');
+    // IDs such as `deepseek.v3.1` hold only a version after the publisher; keep the publisher so the name is usable.
+    if (/^[a-z]?\d/i.test(modelName)) return `${owner} ${modelName.charAt(0).toUpperCase()}${modelName.slice(1)}`;
     return modelName;
 }
 
@@ -302,7 +304,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                 return [
                     {
                         id: model.id,
-                        name: modelDisplayName(model.id),
+                        name: modelDisplayName(model.id, info.owner),
                         provider: this.provider,
                         owner: info.owner,
                         type: ModelType.Text,

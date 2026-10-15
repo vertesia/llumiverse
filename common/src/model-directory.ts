@@ -8,9 +8,14 @@ import { getVertexAIModelLimits } from './capability/vertexai-limits.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
 import { getGeminiModelLimits } from './options/gemini-limits.js';
 import {
+    getGrokReasoningEffortLevels,
     getOpenAIReasoningEffortLevels,
+    hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
+    isKimiVersionGte,
+    isMetaMuseModel,
     isModelFamilyVersionGTE,
+    isQwenVersionGte,
     isSingleDigitGrokVersionGte,
 } from './options/version-parsing.js';
 import type { ModelCapabilities } from './types.js';
@@ -81,7 +86,13 @@ function normalizeSourceModelId(model: string): string {
     const sourceQualified = normalized.includes('::') ? (normalized.split('::').pop() ?? normalized) : normalized;
     const slash = sourceQualified.lastIndexOf('/');
     const leaf = slash === -1 ? sourceQualified : sourceQualified.slice(slash + 1);
-    return leaf.replace(/^(?:global|us|eu|apac)\./, '').replace(/^(?:openai|anthropic|google|xai)\./, '');
+    return (
+        leaf
+            .replace(/^(?:global|us|eu|apac)\./, '')
+            .replace(/^(?:openai|anthropic|google|xai)\./, '')
+            // OpenRouter routing variants (`:batch`, `:free`, ...) select a serving mode, not a different model.
+            .replace(/:(?:batch|free|nitro|floor|extended|exacto|online|thinking)$/, '')
+    );
 }
 
 function getModelAliases(model: string): string[] {
@@ -122,6 +133,10 @@ function inferFamily(model: string): { family: string; source_provider?: string 
     ) {
         return { family: 'mistral', source_provider: 'mistralai' };
     }
+    // Models offered through aggregators such as OpenRouter; there is no first-party driver for these makers.
+    if (isMetaMuseModel(normalized)) return { family: 'muse', source_provider: 'meta' };
+    if (/(?:^|[-_.])mimo-v\d/.test(normalized)) return { family: 'mimo', source_provider: 'xiaomi' };
+    if (/(?:^|[-_.])step-\d/.test(normalized)) return { family: 'step', source_provider: 'stepfun' };
     for (const family of ['llama', 'qwen', 'deepseek', 'gemma', 'mistral', 'kimi', 'minimax', 'glm']) {
         if (normalized.includes(family)) return { family };
     }
@@ -252,10 +267,63 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             };
         }
         case 'deepseek':
+            return {
+                // DeepSeek V4.1 Flash adds image input; earlier and non-Flash DeepSeek models remain text-only.
+                input: {
+                    text: true,
+                    image: isModelFamilyVersionGTE(model, 'deepseek-v', 4, 1) && model.includes('flash'),
+                },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'kimi':
-        case 'minimax':
+            return {
+                // Kimi K2.5 added image input; later generations keep it.
+                input: { text: true, image: isKimiVersionGte(model, 2, 5) },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'glm':
             return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
+        case 'minimax': {
+            // MiniMax M3 adds image and video input. https://openrouter.ai/minimax/minimax-m3
+            const isM3OrLater = isModelFamilyVersionGTE(model, 'minimax-m', 3, 0);
+            return {
+                input: { text: true, image: isM3OrLater, video: isM3OrLater },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        }
+        // Source modalities as published on OpenRouter: Muse Wonder and MiMo also accept audio.
+        case 'muse':
+            return {
+                input: {
+                    text: true,
+                    image: true,
+                    video: !model.includes('glimmer'),
+                    audio: model.includes('wonder'),
+                },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        case 'mimo':
+            return {
+                input: { text: true, image: true, video: true, audio: true },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        case 'step':
+            return {
+                input: { text: true, image: true, video: true },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'nemotron':
             return {
                 input: { text: true, image: model.includes('nemotron-nano-12b') },
@@ -300,7 +368,8 @@ function getCanonicalLimits(
     if (sourceModel.includes('gemini')) return getGeminiModelLimits(sourceModel);
     if (family === 'nemotron') {
         if (sourceModel.includes('nemotron-super-')) return { context_window: 256_000, max_output_tokens: 32_768 };
-        const generation = sourceModel.match(/nemotron-nano-(\d+)-/)?.[1];
+        // NVIDIA also names models generation-first (`nemotron-3-super-120b`, `nemotron-3.5-lightning`).
+        const generation = (sourceModel.match(/nemotron-nano-(\d+)-/) ?? sourceModel.match(/nemotron-(\d+)[.-]/))?.[1];
         return {
             context_window: generation && Number(generation) >= 3 ? 256_000 : 128_000,
             max_output_tokens: 8_192,
@@ -345,7 +414,7 @@ function applyProviderOverlay(
         if (/gpt-oss-(?:20b|120b)(?:-|$)/.test(sourceModel)) {
             return { capabilities, context_window: 131_072, max_output_tokens: 65_536 };
         }
-        if (isModelFamilyVersionGTE(sourceModel, 'qwen', 3, 8) && sourceModel.includes('-27b')) {
+        if (isQwenVersionGte(sourceModel, 3, 8) && sourceModel.includes('-27b')) {
             return { capabilities, context_window: 131_072, max_output_tokens: 16_384 };
         }
     }
@@ -399,12 +468,19 @@ function applyProviderOverlay(
 }
 
 function getReasoningEffortLevels(model: string, family: string, provider: Providers): readonly string[] | undefined {
-    if (provider === Providers.groq && !model.includes('coder') && isModelFamilyVersionGTE(model, 'qwen', 3, 8)) {
+    if (provider === Providers.groq && !model.includes('coder') && isQwenVersionGte(model, 3, 8)) {
         return ['none', 'low', 'medium', 'high'];
     }
     // The 0813 release changed DeepSeek V4 Pro effort levels; earlier snapshots keep their own defaults.
     if (provider === Providers.togetherai && model.includes('deepseek-v4-pro-0813')) return ['high', 'max'];
     if (provider === Providers.groq && /qwen3(?:\.6-27b|-32b)(?:-|$)/.test(model)) return ['none'];
+    // Together serves Qwen 3.5-3.7 as hybrid reasoning models: thinking is on by default and can only be switched off,
+    // which the driver sends as `reasoning: { enabled: false }`. Qwen 3.8 takes low/medium/xhigh effort instead.
+    // https://docs.together.ai/docs/inference/chat/reasoning, https://www.together.ai/models/qwen3-8-flash
+    if (provider === Providers.togetherai && family === 'qwen' && !model.includes('coder')) {
+        if (isQwenVersionGte(model, 3, 8)) return ['low', 'medium', 'xhigh'];
+        if (isQwenVersionGte(model, 3, 5)) return ['none'];
+    }
     if (family === 'gpt') {
         if (model.includes('gpt-oss')) {
             if (provider === Providers.groq && model.includes('safeguard')) return undefined;
@@ -432,19 +508,34 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         return undefined;
     }
     if (family === 'gemini' && isOpenAICompatibleTransport(provider) && isGeminiModelVersionGte(model, '3.5')) {
+        // Sampling-restricted generations (Flash 3.7+, Gemini 4+) reject `minimal`, matching native Vertex metadata.
+        if (hasGeminiSamplingRestriction(model)) return ['low', 'medium', 'high'];
         return ['minimal', 'low', 'medium', 'high'];
     }
+    // GLM 5.3 replaces thinking on/off with low/high/max effort (default max). https://docs.z.ai/guides/llm/glm-5.3
+    if (
+        family === 'glm' &&
+        isModelFamilyVersionGTE(model, 'glm-', 5, 3) &&
+        (isOpenAICompatibleTransport(provider) || provider === Providers.togetherai || provider === Providers.mistralai)
+    ) {
+        return ['low', 'high', 'max'];
+    }
+    if (isOpenAICompatibleTransport(provider) && family === 'muse') {
+        // Muse models always reason; Spark 1.3+ and Wonder add max. https://openrouter.ai/meta
+        if (model.includes('glimmer')) return ['low', 'medium', 'high', 'xhigh'];
+        if (model.includes('wonder') || isModelFamilyVersionGTE(model, 'muse-spark-', 1, 3)) {
+            return ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+        }
+        return ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    }
+    if (isOpenAICompatibleTransport(provider) && family === 'step') return ['low', 'medium', 'high'];
     if (provider === Providers.mistralai && family === 'mistral') {
         return getMistralModelKnowledge(model).reasoning_effort_levels;
     }
-    if (provider === Providers.xai && family === 'grok') {
-        const grok420Index = model.indexOf('grok-4.20');
-        if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
-            return ['low', 'medium', 'high', 'xhigh'];
-        }
-        if (isSingleDigitGrokVersionGte(model, 4, 6)) return ['low', 'medium', 'high', 'xhigh'];
-        if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
-        if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
+    // Bedrock Runtime hosts Grok with the same reasoning controls as xAI.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html
+    if ((provider === Providers.xai || provider === Providers.bedrock) && family === 'grok') {
+        return getGrokReasoningEffortLevels(model);
     }
     return undefined;
 }

@@ -82,6 +82,7 @@ describe('Vertex open MaaS catalog', () => {
         expect(catalog).toEqual({
             'deepseek-ai/deepseek-r1-0528-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.2-maas': ['global'],
+            'deepseek-ai/deepseek-v4.1-flash-maas': ['global'],
             'google/gemma-4-26b-a4b-it-maas': ['global'],
             'meta/llama-3.3-70b-instruct-maas': ['us-central1'],
             'meta/llama-4-maverick-17b-128e-instruct-maas': ['us-east5'],
@@ -207,6 +208,17 @@ describe('Vertex open MaaS catalog', () => {
             payload: expect.objectContaining({
                 model: 'meta/llama-4-maverick-17b-128e-instruct-maas',
             }),
+        });
+    });
+
+    it('routes DeepSeek V4.1 Flash to the global OpenAI-compatible endpoint', async () => {
+        const { post, getFetchClientForRegion } = await requestForModel(
+            'publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
+        );
+
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('global', undefined);
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({ model: 'deepseek-ai/deepseek-v4.1-flash-maas' }),
         });
     });
 

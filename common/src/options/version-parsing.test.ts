@@ -6,6 +6,7 @@ import {
     isClaudeVersionGTE,
     isGeminiModelVersionGte,
     isOpenAIGptVersionGTE,
+    isQwenVersionGte,
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
@@ -72,6 +73,24 @@ describe('Claude model version parsing', () => {
             });
         },
     );
+});
+
+describe('Claude dotted versions from aggregators', () => {
+    it.each([
+        ['anthropic/claude-opus-4.6', { major: 4, minor: 6, variant: 'opus' }],
+        ['anthropic/claude-sonnet-4.6:batch', { major: 4, minor: 6, variant: 'sonnet' }],
+        ['anthropic/claude-3.7-sonnet', { major: 3, minor: 7, variant: 'sonnet' }],
+        ['claude-sonnet-4-20250514', { major: 4, minor: 0, variant: 'sonnet' }],
+    ])('parses %s', (model, expected) => {
+        expect(parseClaudeVersion(model)).toEqual(expected);
+    });
+
+    it('treats a dotted Claude 4.6+ model like its dashed form', () => {
+        expect(supportsEffort('anthropic/claude-opus-4.6')).toBe(supportsEffort('claude-opus-4-6'));
+        expect(getAvailableEffortLevels('anthropic/claude-opus-4.8')).toEqual(
+            getAvailableEffortLevels('claude-opus-4-8'),
+        );
+    });
 });
 
 describe('OpenAI GPT model version parsing', () => {
@@ -240,5 +259,20 @@ describe('supportsClaudeForcedToolChoice', () => {
         'gpt-5',
     ])('accepts a forced tool choice on %s', (model) => {
         expect(supportsClaudeForcedToolChoice(model)).toBe(true);
+    });
+});
+
+describe('Qwen model version parsing', () => {
+    it.each([
+        ['Qwen/Qwen3.5-9B', 3, 5, true],
+        ['qwen3.8-flash', 3, 8, true],
+        ['Qwen/Qwen4-Plus', 3, 8, true],
+        ['Qwen/Qwen3.7-Max', 3, 8, false],
+        // A dash starts the model size, not a minor version.
+        ['Qwen/Qwen3-235B-A22B-Instruct-2507-tput', 3, 5, false],
+        ['qwen/qwen3-32b', 3, 8, false],
+        ['llama-3.3-70b', 3, 0, false],
+    ] as const)('%s >= %d.%d is %s', (model, major, minor, expected) => {
+        expect(isQwenVersionGte(model, major, minor)).toBe(expected);
     });
 });
