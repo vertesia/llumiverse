@@ -88,7 +88,12 @@ import {
 import { generateBedrockEmbeddings } from './embeddings.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
 import { forceUploadFile } from './s3.js';
-import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
+import {
+    formatTwelvelabsPegasusPrompt,
+    pegasusTokenUsage,
+    type TwelvelabsPegasusRequest,
+    type TwelvelabsPegasusResponse,
+} from './twelvelabs.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 
@@ -1222,7 +1227,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
-        const result = JSON.parse(body);
+        const result = JSON.parse(body) as TwelvelabsPegasusResponse;
 
         // Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`.
         // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus-1-5.html
@@ -1232,6 +1237,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             result: result.message ? [{ type: 'text' as const, value: result.message }] : [],
             service_tier: res.serviceTier,
             finish_reason: finishReason,
+            token_usage: pegasusTokenUsage(result),
             original_response: options.include_original_response ? result : undefined,
         };
     }
