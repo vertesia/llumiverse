@@ -22,6 +22,7 @@ import {
     GeminiContextCacheRequiredError,
     geminiCacheContentHash,
     geminiCacheDisplayName,
+    isExplicitCacheUnsupportedError,
     isMinimumTokenCountError,
     stripLeadingParts,
 } from './gemini-context-cache.js';
@@ -184,7 +185,8 @@ function routePrefixDisplayName(model = MODEL): string {
 
 function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
     const warn = vi.fn();
-    const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() } as unknown as Logger;
+    const info = vi.fn();
+    const logger = { debug: vi.fn(), info, warn, error: vi.fn() } as unknown as Logger;
     const requests: GenerateContentParameters[] = [];
     const generateContent = vi.fn(async (request: GenerateContentParameters) => {
         requests.push(request);
@@ -224,7 +226,7 @@ function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
         logger,
         ...options,
     });
-    return { driver, warn, requests, generateContent, generateContentStream, create, update, list, listed };
+    return { driver, warn, info, requests, generateContent, generateContentStream, create, update, list, listed };
 }
 
 function cachedOptions(overrides: Partial<ExecutionOptions> = {}): ExecutionOptions {
@@ -351,6 +353,35 @@ describe('Gemini explicit context caching', () => {
         expect(requests[0].config?.cachedContent).toBe(CACHE_NAME);
         // Vertex rejects a request that repeats the cached system instruction.
         expect(requests[0].config?.systemInstruction).toBeUndefined();
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('caches a system-only prefix without sending empty contents', async () => {
+        const { driver, create, requests, warn } = makeDriver();
+        // Like @google/genai, which throws before sending when `contents` is an empty array.
+        create.mockImplementation(async (params: CreateCachedContentParameters) => {
+            if (Array.isArray(params.config?.contents) && params.config.contents.length === 0) {
+                throw new Error('contents are required');
+            }
+            return cachedContent();
+        });
+        const prompt: GenerateContentPrompt = {
+            system: { role: 'user', parts: [{ text: CATALOG_TEXT }] },
+            contents: [{ role: 'user', parts: [{ text: 'Photo 42: route it.' }] }],
+        };
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            driver,
+            prompt,
+            cachedOptions(),
+        );
+
+        expect(create.mock.calls[0][0].config).toMatchObject({ systemInstruction: prompt.system });
+        expect(create.mock.calls[0][0].config?.contents).toBeUndefined();
+        expect(completion.prompt_cache_diagnostic).toMatchObject({ path: 'created', explicit_cache_used: true });
+        expect(requests[0].config?.cachedContent).toBe(CACHE_NAME);
+        expect(requests[0].config?.systemInstruction).toBeUndefined();
+        expect(requests[0].contents).toEqual(prompt.contents);
         expect(warn).not.toHaveBeenCalled();
     });
 
@@ -507,6 +538,48 @@ describe('Gemini explicit context caching', () => {
 
     it('does not classify a minimum TTL error as a minimum token error', () => {
         expect(isMinimumTokenCountError(apiError(400, 'TTL must be at least the minimum of 60 seconds.'))).toBe(false);
+    });
+
+    it('skips explicit caching for a model Vertex reports as unsupported, then rechecks later', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            const { driver, create, requests, warn, info } = makeDriver();
+            create.mockRejectedValue(apiError(400, `Model \`${MODEL}\` does not support explicit context caching.`));
+            const model = new GeminiModelDefinition(MODEL);
+
+            const first = await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+            const second = await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+
+            expect(create).toHaveBeenCalledTimes(1);
+            expect(first.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model', provider_status: 400 });
+            expect(second.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model' });
+            expect(requests.map((request) => request.config?.cachedContent)).toEqual([undefined, undefined]);
+            expect(warn).not.toHaveBeenCalled();
+            expect(info).toHaveBeenCalledTimes(1);
+            await expect(
+                model.requestTextCompletion(
+                    driver,
+                    baliseRoutePrompt(),
+                    cachedOptions({ prompt_cache_mode: 'required' }),
+                ),
+            ).rejects.toBeInstanceOf(GeminiContextCacheRequiredError);
+
+            vi.setSystemTime(Date.now() + 61 * 60_000);
+            await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+            expect(create).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('classifies only the unsupported-model rejection as unsupported', () => {
+        expect(
+            isExplicitCacheUnsupportedError(
+                apiError(400, 'Model `gemini-4-argon` does not support explicit context caching.'),
+            ),
+        ).toBe(true);
+        expect(isExplicitCacheUnsupportedError(apiError(400, 'Cached content is too small.'))).toBe(false);
+        expect(isExplicitCacheUnsupportedError(apiError(404, 'does not support explicit context caching'))).toBe(false);
     });
 
     it('rediscovers, then recreates once, when the resource has gone', async () => {
