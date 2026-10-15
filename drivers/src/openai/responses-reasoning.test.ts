@@ -57,6 +57,46 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it.each(['minimax/minimax-m3', 'minimax/minimax-m4'])(
+        'supplements native structured output for %s on OpenAI-compatible Responses',
+        async (model) => {
+            const create = vi.fn(async (_request: unknown) => response());
+            const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+            const options = {
+                model,
+                result_schema: { type: 'object' as const, properties: { value: { type: 'string' as const } } },
+            };
+            const prompt = await driver.createPrompt(
+                [{ role: PromptRole.user, content: 'Return the value.' }],
+                options,
+            );
+
+            await driver.requestTextCompletion(prompt, options);
+
+            expect(JSON.stringify(prompt)).toContain('<response_schema>');
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({ text: expect.objectContaining({ format: expect.anything() }) }),
+            );
+        },
+    );
+
+    it('keeps native structured output for MiniMax on OpenAI', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create, Providers.openai);
+        const options = {
+            model: 'minimax/minimax-m3',
+            result_schema: { type: 'object' as const, properties: { value: { type: 'string' as const } } },
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Return the value.' }], options);
+
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(JSON.stringify(prompt)).not.toContain('<response_schema>');
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.objectContaining({ format: expect.anything() }) }),
+        );
+    });
+
     it.each(
         ([Providers.openai, Providers.azure_openai, Providers.openai_compatible] as const).flatMap((provider) =>
             [42, 0, undefined].flatMap((seed) => [false, true].map((streaming) => ({ provider, seed, streaming }))),

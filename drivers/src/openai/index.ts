@@ -530,8 +530,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             });
         }
         const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
-        const resultSchema =
-            supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
+        const nativeSchemaOnly =
+            supportsSchema(options.model, this.provider) && !supplementsSchemaInPrompt(options.model, this.provider);
+        const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
         return formatOpenAILikeMultimodalPrompt(segments, {
             ...options,
             result_schema: resultSchema,
@@ -1200,6 +1201,16 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
         }
     }
     return items;
+}
+
+/**
+ * Prompt-schema supplement alongside native structured output. OpenRouter routes `minimax/` models across many
+ * hosts, and most do not enforce a JSON schema: some downgrade it to JSON mode and return `{}`, others ignore it.
+ * The prompt schema gives every host the shape, while hosts that enforce the schema still receive it natively.
+ * Applies to OpenAI-compatible endpoints, where the model ID carries the publisher prefix.
+ */
+function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
+    return provider === Providers.openai_compatible && /^minimax\//i.test(model);
 }
 
 //Structured output support is typically aligned with tool use support
