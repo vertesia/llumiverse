@@ -13,6 +13,7 @@ import {
     getConversationMeta,
     type HttpTimeoutOptions,
     incrementConversationTurn,
+    isGeminiModelVersionGte,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
@@ -996,7 +997,11 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
     const modelName = modelId.split('/').pop() ?? modelId;
     return (
         publisher === 'xai' ||
-        (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || modelName.includes('gemini-nano-banana')))
+        (publisher === 'google' &&
+            (isGeminiOmniVideoModel(modelName) ||
+                modelName.includes('gemini-nano-banana') ||
+                // Gemini 4+ has no single-region endpoints; it is listed through its global variant.
+                isGeminiModelVersionGte(modelName, '4.0')))
     );
 }
 
