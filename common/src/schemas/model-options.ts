@@ -125,7 +125,8 @@ export const MistralTextOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-        effort: z.enum(['none', 'high']).optional(),
+        // Mistral's own models take none/high; hosted models such as GLM 5.3 take low/high/max.
+        effort: ReasoningEffortSchema.optional(),
         random_seed: z.number().int().optional(),
         safe_prompt: z.boolean().optional(),
         parallel_tool_calls: z.boolean().optional(),
