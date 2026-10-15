@@ -1953,7 +1953,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['nova-reel', 'nova-sonic', 'titan-image-generator', 'rerank'],
+            // Sonic is a bidirectional speech-to-speech stream (every generation, e.g. `nova-2-sonic`), not Converse.
+            amazon: ['nova-reel', 'nova-sonic', 'nova-2-sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],
