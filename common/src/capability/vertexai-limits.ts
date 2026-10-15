@@ -10,8 +10,10 @@ interface VertexAIModelLimits {
 const MODEL_LIMITS: Readonly<Record<string, VertexAIModelLimits>> = {
     'glm-5.2-maas': { context_window: 1_000_000, max_output_tokens: 64_000 },
     'deepseek-v3.1-maas': { context_window: 163_840, max_output_tokens: 32_768 },
+    // Google lists 1,048,576 for both context and output; DeepSeek caps V4.1 Flash output at 384K.
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash
-    'deepseek-v4.1-flash-maas': { context_window: 1_048_576, max_output_tokens: 1_048_576 },
+    // https://api-docs.deepseek.com/quick_start/pricing
+    'deepseek-v4.1-flash-maas': { context_window: 1_048_576, max_output_tokens: 393_216 },
     'grok-4.7': { context_window: 524_288 },
     'grok-4.6': { context_window: 524_288 },
     'grok-4.3': { context_window: 200_000 },

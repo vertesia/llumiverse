@@ -295,6 +295,49 @@ describe('central model directory', () => {
         expect(resolveModelProfile('mistral-large-2411', Providers.mistralai).reasoning_effort_levels).toBeUndefined();
     });
 
+    it.each([
+        ['z-ai/glm-5.3', Providers.openai_compatible],
+        ['zai-org/GLM-5.3', Providers.togetherai],
+        ['zai-glm-5-3', Providers.mistralai],
+    ])('describes GLM 5.3 limits and effort for %s', (model, provider) => {
+        expect(resolveModelProfile(model, provider)).toMatchObject({
+            family: 'glm',
+            context_window: 1_000_000,
+            max_output_tokens: 131_072,
+            reasoning_effort_levels: ['low', 'high', 'max'],
+        });
+    });
+
+    it('keeps Mistral prompt mode off hosted third-party models', () => {
+        const names = getOptions('zai-glm-5-3', Providers.mistralai).options.map((option) => option.name);
+        expect(names).toContain('effort');
+        expect(names).not.toContain('prompt_mode');
+        expect(getOptions('mistral-large-4', Providers.mistralai).options.map((option) => option.name)).toContain(
+            'prompt_mode',
+        );
+    });
+
+    it.each([
+        ['meta/muse-spark-1.3', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+        ['meta/muse-wonder', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+        ['meta/muse-spark-1.1', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh']],
+        ['meta/muse-glimmer-30b', 'muse', 131_072, undefined, ['low', 'medium', 'high', 'xhigh']],
+        ['stepfun/step-5-preview', 'step', 1_048_576, 64_000, ['low', 'medium', 'high']],
+        ['xiaomi/mimo-v2.6-pro', 'mimo', 1_050_000, 131_072, undefined],
+        ['minimax/minimax-m3', 'minimax', 1_048_576, 512_000, undefined],
+    ])('describes OpenRouter-hosted %s', (model, family, context_window, max_output_tokens, effort) => {
+        const profile = resolveModelProfile(model, Providers.openai_compatible);
+        expect(profile).toMatchObject({ family, context_window, capabilities: { tool_support: true } });
+        expect(profile.max_output_tokens).toBe(max_output_tokens);
+        expect(profile.capabilities.input.image).toBe(true);
+        expect(profile.reasoning_effort_levels).toEqual(effort);
+        const maxTokens = getOptions(model, Providers.openai_compatible).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+        if (maxTokens?.type !== 'numeric') throw new Error('Missing max_tokens option');
+        expect(maxTokens.max).toBe(max_output_tokens);
+    });
+
     it('describes DeepSeek V4 limits and V4.1 Flash image input', () => {
         expect(resolveModelProfile('deepseek-v4-pro', Providers.openai_compatible)).toMatchObject({
             context_window: 1_048_576,
@@ -310,7 +353,7 @@ describe('central model directory', () => {
         );
         expect(vertex).toMatchObject({
             context_window: 1_048_576,
-            max_output_tokens: 1_048_576,
+            max_output_tokens: 393_216,
             capabilities: { input: { text: true, image: true }, tool_support: true },
         });
     });

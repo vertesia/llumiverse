@@ -123,6 +123,10 @@ function inferFamily(model: string): { family: string; source_provider?: string 
     ) {
         return { family: 'mistral', source_provider: 'mistralai' };
     }
+    // Models offered through aggregators such as OpenRouter; there is no first-party driver for these makers.
+    if (/(?:^|[-_.])muse-/.test(normalized)) return { family: 'muse', source_provider: 'meta' };
+    if (/(?:^|[-_.])mimo-v\d/.test(normalized)) return { family: 'mimo', source_provider: 'xiaomi' };
+    if (/(?:^|[-_.])step-\d/.test(normalized)) return { family: 'step', source_provider: 'stepfun' };
     for (const family of ['llama', 'qwen', 'deepseek', 'gemma', 'mistral', 'kimi', 'minimax', 'glm']) {
         if (normalized.includes(family)) return { family };
     }
@@ -264,9 +268,37 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support_streaming: true,
             };
         case 'kimi':
-        case 'minimax':
         case 'glm':
             return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
+        case 'minimax':
+            return {
+                // MiniMax M3 adds image and video input. https://openrouter.ai/minimax/minimax-m3
+                input: {
+                    text: true,
+                    image: isModelFamilyVersionGTE(model, 'minimax-m', 3, 0),
+                    video: isModelFamilyVersionGTE(model, 'minimax-m', 3, 0),
+                },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        // Muse, MiMo and Step also accept audio (Wonder, MiMo), but this release line has no OpenAI-compatible
+        // audio transport, so only the modalities it can send are advertised.
+        case 'muse':
+            return {
+                input: { text: true, image: true, video: !model.includes('glimmer') },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        case 'mimo':
+        case 'step':
+            return {
+                input: { text: true, image: true, video: true },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'nemotron':
             return {
                 input: { text: true, image: model.includes('nemotron-nano-12b') },
@@ -447,6 +479,25 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         if (hasGeminiSamplingRestriction(model)) return ['low', 'medium', 'high'];
         return ['minimal', 'low', 'medium', 'high'];
     }
+    // GLM 5.3 replaces thinking on/off with low/high/max effort (default max). https://docs.z.ai/guides/llm/glm-5.3
+    if (
+        family === 'glm' &&
+        isModelFamilyVersionGTE(model, 'glm-', 5, 3) &&
+        (provider === Providers.openai_compatible ||
+            provider === Providers.togetherai ||
+            provider === Providers.mistralai)
+    ) {
+        return ['low', 'high', 'max'];
+    }
+    if (provider === Providers.openai_compatible && family === 'muse') {
+        // Muse models always reason; Spark 1.3+ and Wonder add max. https://openrouter.ai/meta
+        if (model.includes('glimmer')) return ['low', 'medium', 'high', 'xhigh'];
+        if (model.includes('wonder') || isModelFamilyVersionGTE(model, 'muse-spark-', 1, 3)) {
+            return ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+        }
+        return ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    }
+    if (provider === Providers.openai_compatible && family === 'step') return ['low', 'medium', 'high'];
     if (provider === Providers.mistralai && family === 'mistral') {
         return getMistralModelKnowledge(model).reasoning_effort_levels;
     }

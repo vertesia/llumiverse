@@ -38,6 +38,7 @@ import type {
     ChatCompletionRequestTool,
     ChatCompletionResponse,
     ContentChunk,
+    ReasoningEffort,
     ToolCall,
 } from '@mistralai/mistralai/models/components';
 import {
@@ -410,10 +411,11 @@ function buildMistralRequest(
         promptCacheKey: options.prompt_cache_key,
         n: 1,
         tools: options.tools?.map(toMistralTool),
+        // Mistral serves models with different effort sets (e.g. GLM's low/high/max); the provider validates them.
         reasoningEffort:
-            modelOptions?.effort === 'none' || modelOptions?.effort === 'high' ? modelOptions.effort : undefined,
+            typeof modelOptions?.effort === 'string' ? (modelOptions.effort as ReasoningEffort) : undefined,
         stream,
-    } satisfies ChatCompletionRequest & { reasoningEffort?: 'none' | 'high' };
+    } satisfies ChatCompletionRequest;
 }
 
 function toMistralTool(tool: ToolDefinition): ChatCompletionRequestTool {

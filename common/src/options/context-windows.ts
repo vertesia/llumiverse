@@ -69,9 +69,16 @@ export function getMaxOutputTokens(model: string): number | undefined {
     // Kimi
     if (model.includes('kimi-k2-thinking')) return 262_144;
     // MiniMax
+    if (isModelFamilyVersionGTE(model, 'minimax-m', 3, 0)) return 512_000;
     if (model.includes('minimax-m2')) return 196_608;
     // ZAI GLM
+    if (isModelFamilyVersionGTE(model, 'glm-', 5, 3)) return 131_072;
     if (model.includes('glm-')) return 32_768;
+    // Xiaomi MiMo and StepFun Step, as published for their OpenRouter listings
+    if (isModelFamilyVersionGTE(model, 'mimo-v', 2, 6)) return 131_072;
+    if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 64_000;
+    // Meta publishes no Muse output limit, and hosting providers report different caps.
+    if (/(?:^|[-_.])muse-/.test(model)) return undefined;
     // Gemma
     if (model.includes('gemma-4')) return 128_000;
     // Llama
@@ -142,9 +149,16 @@ export function getContextWindowSize(model: string): number | undefined {
     // Kimi
     if (model.includes('kimi-k2-thinking')) return 262_144;
     // MiniMax
+    if (isModelFamilyVersionGTE(model, 'minimax-m', 3, 0)) return 1_048_576;
     if (model.includes('minimax-m2')) return 196_608;
     // ZAI GLM
+    if (isModelFamilyVersionGTE(model, 'glm-', 5, 3)) return 1_000_000;
     if (model.includes('glm-')) return 128_000;
+    // Meta Muse (Glimmer is the small 128K model), Xiaomi MiMo and StepFun Step
+    if (model.includes('muse-glimmer')) return 131_072;
+    if (/(?:^|[-_.])muse-/.test(model)) return 1_048_576;
+    if (isModelFamilyVersionGTE(model, 'mimo-v', 2, 6)) return 1_050_000;
+    if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 1_048_576;
     // Gemma
     if (model.includes('gemma-4')) return 256_000;
     // Llama

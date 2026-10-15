@@ -58,7 +58,8 @@ export function getMistralOptions(
                   } satisfies ModelOptionInfoItem,
               ]
             : []),
-        ...(supportsReasoning || model.toLowerCase().includes('magistral')
+        // Mistral's reasoning prompt applies to its own models, not to hosted third-party models such as GLM.
+        ...((supportsReasoning || model.toLowerCase().includes('magistral')) && profile.family === 'mistral'
             ? [
                   {
                       name: 'prompt_mode',
@@ -66,6 +67,10 @@ export function getMistralOptions(
                       enum: { Reasoning: 'reasoning' },
                       description: 'Apply Mistral reasoning prompt instructions.',
                   } satisfies ModelOptionInfoItem,
+              ]
+            : []),
+        ...(supportsReasoning || model.toLowerCase().includes('magistral')
+            ? [
                   {
                       name: 'include_thoughts',
                       type: OptionType.boolean,
