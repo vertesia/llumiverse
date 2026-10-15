@@ -1207,7 +1207,7 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
  * Prompt-schema supplement alongside native structured output. OpenRouter routes `minimax/` models across many
  * hosts, and most do not enforce a JSON schema: some downgrade it to JSON mode and return `{}`, others ignore it.
  * The prompt schema gives every host the shape, while hosts that enforce the schema still receive it natively.
- * Applies to OpenAI-compatible endpoints, where the model ID carries the publisher prefix.
+ * A family rule: it applies to any OpenAI-compatible endpoint serving a `minimax/` model ID, not only OpenRouter.
  */
 function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
     return provider === Providers.openai_compatible && /^minimax\//i.test(model);

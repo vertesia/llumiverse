@@ -75,7 +75,9 @@ describe('OpenAI Responses reasoning', () => {
 
             expect(JSON.stringify(prompt)).toContain('<response_schema>');
             expect(create).toHaveBeenCalledWith(
-                expect.objectContaining({ text: expect.objectContaining({ format: expect.anything() }) }),
+                expect.objectContaining({
+                    text: expect.objectContaining({ format: expect.objectContaining({ type: 'json_schema' }) }),
+                }),
             );
         },
     );
@@ -93,7 +95,9 @@ describe('OpenAI Responses reasoning', () => {
 
         expect(JSON.stringify(prompt)).not.toContain('<response_schema>');
         expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({ text: expect.objectContaining({ format: expect.anything() }) }),
+            expect.objectContaining({
+                text: expect.objectContaining({ format: expect.objectContaining({ type: 'json_schema' }) }),
+            }),
         );
     });
 

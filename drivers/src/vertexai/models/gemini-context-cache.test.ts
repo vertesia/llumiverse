@@ -185,7 +185,8 @@ function routePrefixDisplayName(model = MODEL): string {
 
 function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
     const warn = vi.fn();
-    const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() } as unknown as Logger;
+    const info = vi.fn();
+    const logger = { debug: vi.fn(), info, warn, error: vi.fn() } as unknown as Logger;
     const requests: GenerateContentParameters[] = [];
     const generateContent = vi.fn(async (request: GenerateContentParameters) => {
         requests.push(request);
@@ -225,7 +226,7 @@ function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
         logger,
         ...options,
     });
-    return { driver, warn, requests, generateContent, generateContentStream, create, update, list, listed };
+    return { driver, warn, info, requests, generateContent, generateContentStream, create, update, list, listed };
 }
 
 function cachedOptions(overrides: Partial<ExecutionOptions> = {}): ExecutionOptions {
@@ -542,7 +543,7 @@ describe('Gemini explicit context caching', () => {
     it('skips explicit caching for a model Vertex reports as unsupported, then rechecks later', async () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         try {
-            const { driver, create, requests, warn } = makeDriver();
+            const { driver, create, requests, warn, info } = makeDriver();
             create.mockRejectedValue(apiError(400, `Model \`${MODEL}\` does not support explicit context caching.`));
             const model = new GeminiModelDefinition(MODEL);
 
@@ -554,6 +555,7 @@ describe('Gemini explicit context caching', () => {
             expect(second.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model' });
             expect(requests.map((request) => request.config?.cachedContent)).toEqual([undefined, undefined]);
             expect(warn).not.toHaveBeenCalled();
+            expect(info).toHaveBeenCalledTimes(1);
             await expect(
                 model.requestTextCompletion(
                     driver,
