@@ -857,7 +857,9 @@ async function createCache({
         const created = await client.caches.create({
             model,
             config: {
-                contents: prefix.contents,
+                // A system-only prefix has no contents. Vertex accepts that, but the SDK throws on an empty array
+                // before sending, so leave the field out.
+                contents: prefix.contents.length > 0 ? prefix.contents : undefined,
                 systemInstruction: prefix.system,
                 tools,
                 toolConfig,

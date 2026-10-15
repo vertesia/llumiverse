@@ -355,6 +355,35 @@ describe('Gemini explicit context caching', () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
+    it('caches a system-only prefix without sending empty contents', async () => {
+        const { driver, create, requests, warn } = makeDriver();
+        // Like @google/genai, which throws before sending when `contents` is an empty array.
+        create.mockImplementation(async (params: CreateCachedContentParameters) => {
+            if (Array.isArray(params.config?.contents) && params.config.contents.length === 0) {
+                throw new Error('contents are required');
+            }
+            return cachedContent();
+        });
+        const prompt: GenerateContentPrompt = {
+            system: { role: 'user', parts: [{ text: CATALOG_TEXT }] },
+            contents: [{ role: 'user', parts: [{ text: 'Photo 42: route it.' }] }],
+        };
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            driver,
+            prompt,
+            cachedOptions(),
+        );
+
+        expect(create.mock.calls[0][0].config).toMatchObject({ systemInstruction: prompt.system });
+        expect(create.mock.calls[0][0].config?.contents).toBeUndefined();
+        expect(completion.prompt_cache_diagnostic).toMatchObject({ path: 'created', explicit_cache_used: true });
+        expect(requests[0].config?.cachedContent).toBe(CACHE_NAME);
+        expect(requests[0].config?.systemInstruction).toBeUndefined();
+        expect(requests[0].contents).toEqual(prompt.contents);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
     it('reuses the memoized cache without listing or creating again', async () => {
         const { driver, create, list, requests } = makeDriver();
         const model = new GeminiModelDefinition(MODEL);
