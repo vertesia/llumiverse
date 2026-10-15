@@ -1,4 +1,8 @@
-import { isModelFamilyVersionGTE, isSingleDigitGrokVersionGte } from '../options/version-parsing.js';
+import {
+    isGeminiLongDecodeModel,
+    isModelFamilyVersionGTE,
+    isSingleDigitGrokVersionGte,
+} from '../options/version-parsing.js';
 
 interface VertexAIModelLimits {
     context_window?: number;
@@ -30,6 +34,10 @@ export function getVertexAIModelLimits(model: string): VertexAIModelLimits {
     const modelName = model.toLowerCase().split('/').pop() ?? '';
     const exact = MODEL_LIMITS[modelName];
     if (exact) return exact;
+    // Vertex long decodes continue output across requests, so the output limit is the whole unified window. A single
+    // request still returns at most 65,536 tokens, which is the limit on transports without continuation.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+    if (isGeminiLongDecodeModel(modelName)) return { context_window: 1_048_576, max_output_tokens: 1_048_576 };
     if (modelName.endsWith('-maas') && isModelFamilyVersionGTE(modelName, 'glm-', 5, 2)) {
         return MODEL_LIMITS['glm-5.2-maas'];
     }

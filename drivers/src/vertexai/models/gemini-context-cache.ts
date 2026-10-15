@@ -121,6 +121,8 @@ const CREATE_PERMIT_WAIT_MS = 1_500;
 const CREATE_PERMIT_LEASE_MS = 60_000;
 const MAX_CONCURRENT_CREATES_PER_LOCATION = 2;
 const DEFAULT_QUOTA_COOLDOWN_MS = 30_000;
+/** How long a model Vertex reported as lacking explicit caching is skipped before a create is tried again. */
+const UNSUPPORTED_MODEL_RECHECK_MS = 60 * 60_000;
 
 export interface GeminiContextCacheManagerOptions {
     /** TTL used when an execution does not carry `prompt_cache_ttl_seconds`. */
@@ -149,6 +151,7 @@ interface GeminiContextCacheResolution {
 export class GeminiContextCacheManager {
     private readonly entries = new Map<string, GeminiContextCacheEntry>();
     private readonly uncacheable = new Set<string>();
+    private readonly unsupportedModelsUntilMs = new Map<string, number>();
     private readonly pending = new Map<string, Promise<GeminiContextCacheResolution>>();
     private createCooldownUntilMs = 0;
     private activeCreates = 0;
@@ -192,6 +195,22 @@ export class GeminiContextCacheManager {
             const oldest = this.uncacheable.values().next();
             if (!oldest.done) this.uncacheable.delete(oldest.value);
         }
+    }
+
+    /**
+     * Vertex said the model has no explicit context cache (e.g. Gemini 4 Argon). Skip creates for it for a while
+     * instead of paying a failed create on every call; the expiry lets a later provider rollout be picked up.
+     */
+    markModelUnsupported(model: string): void {
+        this.unsupportedModelsUntilMs.set(model, Date.now() + UNSUPPORTED_MODEL_RECHECK_MS);
+    }
+
+    isModelUnsupported(model: string): boolean {
+        const untilMs = this.unsupportedModelsUntilMs.get(model);
+        if (untilMs === undefined) return false;
+        if (untilMs > Date.now()) return true;
+        this.unsupportedModelsUntilMs.delete(model);
+        return false;
     }
 
     getLocalCooldownUntil(): number | undefined {
@@ -349,6 +368,14 @@ export function isMinimumTokenCountError(error: unknown): boolean {
     return /minimum token|min_?total_?token|too (?:small|few).*token|at least \d+ tokens/i.test(errorMessage(error));
 }
 
+/** Vertex rejects cache creation for a model with no explicit context cache support. */
+export function isExplicitCacheUnsupportedError(error: unknown): boolean {
+    if (errorStatus(error) !== 400) return false;
+    return /does not support explicit (?:context )?cach|explicit (?:context )?caching is not supported/i.test(
+        errorMessage(error),
+    );
+}
+
 /**
  * The named resource cannot be used: it expired, was deleted, belongs to another project, or the
  * caller lost permission on it. Recoverable by forgetting it and building a new one.
@@ -471,6 +498,7 @@ async function planGeminiContextCache(
     if (options.model.toLowerCase().includes('image')) return { diagnostic: baseDiagnostic('disabled') };
     const manager = driver.getGeminiContextCacheManager?.();
     if (!manager) return { diagnostic: baseDiagnostic('disabled') };
+    if (manager.isModelUnsupported(payload.model)) return { diagnostic: baseDiagnostic('unsupported_model') };
     if (!Array.isArray(payload.contents)) return { diagnostic: baseDiagnostic('fallback_provider_error') };
 
     const prefix = deriveGeminiCachePrefix(prompt);
@@ -849,6 +877,10 @@ async function createCache({
         if (isMinimumTokenCountError(error)) {
             manager.markUncacheable(managerKey);
             return { path: 'minimum_token_rejection', providerStatus: status };
+        }
+        if (isExplicitCacheUnsupportedError(error)) {
+            manager.markModelUnsupported(model);
+            return { path: 'unsupported_model', providerStatus: status };
         }
 
         // This is not a provider retry loop. In auto mode the cache-create 429 is swallowed so the

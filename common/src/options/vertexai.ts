@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { getVertexAIModelLimits } from '../capability/vertexai-limits.js';
 import { resolveModelProfile } from '../model-directory.js';
 import type {
     ImagenOptionsSchema,
@@ -30,6 +31,7 @@ import {
 import {
     hasGeminiSamplingRestriction,
     hasSamplingParameterRestriction,
+    isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
 } from './version-parsing.js';
@@ -610,7 +612,11 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             max: max_tokens_limit,
             integer: true,
             step: 200,
-            description: 'The maximum number of tokens to generate',
+            description: isGeminiLongDecodeModel(model)
+                ? 'The maximum number of tokens to generate, including thinking. Above 65,536, generation continues ' +
+                  'across requests (long decode) up to the 1,048,576-token limit shared with the input; each ' +
+                  'continuation re-reads the prompt and output so far at the cached-input rate.'
+                : 'The maximum number of tokens to generate',
         },
     ];
 
@@ -816,6 +822,8 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
 }
 
 function getGeminiMaxTokensLimit(model: string): number | undefined {
+    const vertexLimit = getVertexAIModelLimits(model).max_output_tokens;
+    if (vertexLimit !== undefined) return vertexLimit;
     if (isGeminiModelVersionGte(model, '2.0') || /(?:nano-banana|omni|transcribe|live|robotics|tts)/.test(model)) {
         return getMaxOutputTokens(model);
     }

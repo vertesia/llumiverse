@@ -47,24 +47,31 @@ describe('Vertex AI MaaS metadata', () => {
         ['gemini-nano-banana-2.1', 131_072, 32_768],
         ['gemini-4-pro-image', 65_536, 32_768],
         ['gemini-4-flash-image', 131_072, 32_768],
-        ['gemini-4-flash', 1_048_576, 65_536],
-        ['gemini-4-argon', 1_048_576, 65_536],
-        ['gemini-4-argon-cyber-permissive', 1_048_576, 65_536],
-    ] as const)('aligns Gemini limits across public metadata for %s', (model, context, output) => {
-        const qualified = `locations/global/publishers/google/models/${model}`;
-        for (const id of [model, qualified]) {
-            expect(getContextWindowSize(id)).toBe(context);
-            expect(getMaxOutputTokens(id)).toBe(output);
-            expect(getMaxTokensLimitVertexAi(id)).toBe(output);
-            expect(resolveModelProfile(id, Providers.vertexai)).toMatchObject({
-                context_window: context,
-                max_output_tokens: output,
-            });
-            expect(getVertexAiOptions(id).options.find((item) => item.name === 'max_tokens')).toMatchObject({
-                max: output,
-            });
-        }
-    });
+        // Gemini 4+ chat models continue output across requests on Vertex (long decode), up to the unified window.
+        ['gemini-4-flash', 1_048_576, 65_536, 1_048_576],
+        ['gemini-4-argon', 1_048_576, 65_536, 1_048_576],
+        ['gemini-4-argon-cyber-permissive', 1_048_576, 65_536, 1_048_576],
+        ['gemini-5-pro', 1_048_576, 65_536, 1_048_576],
+    ] as const)(
+        'aligns Gemini limits across public metadata for %s',
+        (model, context, output, vertexOutput: number = output) => {
+            const qualified = `locations/global/publishers/google/models/${model}`;
+            for (const id of [model, qualified]) {
+                expect(getContextWindowSize(id)).toBe(context);
+                expect(getMaxOutputTokens(id)).toBe(output);
+                expect(getMaxTokensLimitVertexAi(id)).toBe(vertexOutput);
+                expect(resolveModelProfile(id, Providers.vertexai)).toMatchObject({
+                    context_window: context,
+                    max_output_tokens: vertexOutput,
+                });
+                // Transports without continuation keep the single-request cap.
+                expect(resolveModelProfile(id, Providers.openrouter).max_output_tokens).toBe(output);
+                expect(getVertexAiOptions(id).options.find((item) => item.name === 'max_tokens')).toMatchObject({
+                    max: vertexOutput,
+                });
+            }
+        },
+    );
 
     it.each(['gemini-omni-flash-preview', 'gemini-omni-1.1-flash-preview'])(
         'uses dedicated video limits without adding a chat max_tokens control for %s',

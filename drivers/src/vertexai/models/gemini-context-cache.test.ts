@@ -22,6 +22,7 @@ import {
     GeminiContextCacheRequiredError,
     geminiCacheContentHash,
     geminiCacheDisplayName,
+    isExplicitCacheUnsupportedError,
     isMinimumTokenCountError,
     stripLeadingParts,
 } from './gemini-context-cache.js';
@@ -507,6 +508,46 @@ describe('Gemini explicit context caching', () => {
 
     it('does not classify a minimum TTL error as a minimum token error', () => {
         expect(isMinimumTokenCountError(apiError(400, 'TTL must be at least the minimum of 60 seconds.'))).toBe(false);
+    });
+
+    it('skips explicit caching for a model Vertex reports as unsupported, then rechecks later', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            const { driver, create, requests } = makeDriver();
+            create.mockRejectedValue(apiError(400, `Model \`${MODEL}\` does not support explicit context caching.`));
+            const model = new GeminiModelDefinition(MODEL);
+
+            const first = await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+            const second = await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+
+            expect(create).toHaveBeenCalledTimes(1);
+            expect(first.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model', provider_status: 400 });
+            expect(second.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model' });
+            expect(requests.map((request) => request.config?.cachedContent)).toEqual([undefined, undefined]);
+            await expect(
+                model.requestTextCompletion(
+                    driver,
+                    baliseRoutePrompt(),
+                    cachedOptions({ prompt_cache_mode: 'required' }),
+                ),
+            ).rejects.toBeInstanceOf(GeminiContextCacheRequiredError);
+
+            vi.setSystemTime(Date.now() + 61 * 60_000);
+            await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+            expect(create).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('classifies only the unsupported-model rejection as unsupported', () => {
+        expect(
+            isExplicitCacheUnsupportedError(
+                apiError(400, 'Model `gemini-4-argon` does not support explicit context caching.'),
+            ),
+        ).toBe(true);
+        expect(isExplicitCacheUnsupportedError(apiError(400, 'Cached content is too small.'))).toBe(false);
+        expect(isExplicitCacheUnsupportedError(apiError(404, 'does not support explicit context caching'))).toBe(false);
     });
 
     it('rediscovers, then recreates once, when the resource has gone', async () => {

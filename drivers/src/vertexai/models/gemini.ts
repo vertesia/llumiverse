@@ -237,6 +237,32 @@ function getProminentPeopleOption(
     }
 }
 
+/** Google's per-request output cap; a larger maxOutputTokens makes the SDK continue across requests (long decode). */
+const GEMINI_SINGLE_REQUEST_MAX_OUTPUT_TOKENS = 65_536;
+/** Vertex bounds each long-decode request at 20 minutes; leave a minute for transport overhead. */
+const GEMINI_LONG_DECODE_REQUEST_TIMEOUT_MS = 21 * 60_000;
+
+/**
+ * Exception for long decodes: the SDK applies its timeout to each continuation request, and the driver's default
+ * deadline is shorter than the 20 minutes Vertex allows one of them. Raise only the default; a per-call
+ * `httpTimeout` is caller input and stays as supplied.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
+ */
+export function applyGeminiLongDecodeTimeout(
+    driver: Pick<VertexAIDriver, 'getRequestTimeoutMs'>,
+    options: Pick<ExecutionOptions, 'httpTimeout'>,
+    payload: GenerateContentParameters,
+): void {
+    const maxOutputTokens = payload.config?.maxOutputTokens;
+    if (options.httpTimeout || !maxOutputTokens || maxOutputTokens <= GEMINI_SINGLE_REQUEST_MAX_OUTPUT_TOKENS) return;
+    const defaultTimeoutMs = driver.getRequestTimeoutMs();
+    if (defaultTimeoutMs >= GEMINI_LONG_DECODE_REQUEST_TIMEOUT_MS) return;
+    payload.config = {
+        ...payload.config,
+        httpOptions: { ...payload.config?.httpOptions, timeout: GEMINI_LONG_DECODE_REQUEST_TIMEOUT_MS },
+    };
+}
+
 export function getGeminiPayload(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
@@ -1126,6 +1152,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const payload = getGeminiPayload(options, prompt, 'execute', driver.logger);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
+        applyGeminiLongDecodeTimeout(driver, options, payload);
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
         const cacheExecution = await generateWithGeminiContextCache(
@@ -1237,6 +1264,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const payload = getGeminiPayload(options, prompt, 'stream', driver.logger);
         payload.config = { ...payload.config, abortSignal: signal };
+        applyGeminiLongDecodeTimeout(driver, options, payload);
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,
