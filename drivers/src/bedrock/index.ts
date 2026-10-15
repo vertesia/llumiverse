@@ -1963,29 +1963,31 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             zai: [],
         };
 
+        // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.
+        const getPublisherKey = (providerName: string): string | undefined => {
+            const normalizedProvider = providerName.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return supportedPublishers.find((provider) => normalizedProvider.includes(provider));
+        };
+
         // Helper function to check if model should be filtered out
         const shouldIncludeModel = (modelId?: string, providerName?: string): boolean => {
             if (!modelId || !providerName) return false;
-
-            // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.
-            const normalizedProvider = providerName.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-            // Check if provider is supported
-            const isProviderSupported = supportedPublishers.some((provider) => normalizedProvider.includes(provider));
-
-            if (!isProviderSupported) return false;
-
-            // Check if model is in the unsupported list for its provider
-            for (const provider of supportedPublishers) {
-                if (normalizedProvider.includes(provider)) {
-                    const unsupportedModels =
-                        unsupportedModelsByPublisher[provider as keyof typeof unsupportedModelsByPublisher] || [];
-                    return !unsupportedModels.some((unsupported) => modelId.toLowerCase().includes(unsupported));
-                }
-            }
-
-            return true;
+            const publisherKey = getPublisherKey(providerName);
+            if (!publisherKey) return false;
+            const unsupportedModels =
+                unsupportedModelsByPublisher[publisherKey as keyof typeof unsupportedModelsByPublisher] || [];
+            return !unsupportedModels.some((unsupported) => modelId.toLowerCase().includes(unsupported));
         };
+
+        // Inference profiles carry no publisher name, so reuse the foundation catalog's display name (e.g. "Z.ai",
+        // "Moonshot AI") to keep profiles grouped with the publisher's other models instead of under the match key.
+        const publisherDisplayNames = new Map<string, string>();
+        for (const m of foundationModelsList.modelSummaries) {
+            const publisherKey = m.providerName ? getPublisherKey(m.providerName) : undefined;
+            if (publisherKey && m.providerName && !publisherDisplayNames.has(publisherKey)) {
+                publisherDisplayNames.set(publisherKey, m.providerName);
+            }
+        }
 
         foundationModels = foundationModels.filter((m) => shouldIncludeModel(m.modelId, m.providerName));
 
@@ -2077,7 +2079,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         id: p.inferenceProfileArn ?? p.inferenceProfileId,
                         name: p.inferenceProfileName ?? p.inferenceProfileArn,
                         provider: this.provider,
-                        owner: providerName,
+                        owner: publisherDisplayNames.get(providerName) ?? providerName,
                         ...modelMetadata,
                     };
 
