@@ -66,6 +66,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
     // DeepSeek V3.1 is omitted because Vertex returns FAILED_PRECONDITION for its documented region.
     {
         publisher: 'deepseek-ai',
+        model: 'deepseek-v4.1-flash-maas',
+        requestPublisher: 'deepseek-ai',
+        regions: GLOBAL_REGIONS,
+    },
+    {
+        publisher: 'deepseek-ai',
         model: 'deepseek-v3.2-maas',
         requestPublisher: 'deepseek-ai',
         regions: GLOBAL_REGIONS,

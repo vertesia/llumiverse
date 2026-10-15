@@ -10,6 +10,8 @@ interface VertexAIModelLimits {
 const MODEL_LIMITS: Readonly<Record<string, VertexAIModelLimits>> = {
     'glm-5.2-maas': { context_window: 1_000_000, max_output_tokens: 64_000 },
     'deepseek-v3.1-maas': { context_window: 163_840, max_output_tokens: 32_768 },
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash
+    'deepseek-v4.1-flash-maas': { context_window: 1_048_576, max_output_tokens: 1_048_576 },
     'grok-4.7': { context_window: 524_288 },
     'grok-4.6': { context_window: 524_288 },
     'grok-4.3': { context_window: 200_000 },
@@ -28,6 +30,9 @@ export function getVertexAIModelLimits(model: string): VertexAIModelLimits {
     if (exact) return exact;
     if (modelName.endsWith('-maas') && isModelFamilyVersionGTE(modelName, 'glm-', 5, 2)) {
         return MODEL_LIMITS['glm-5.2-maas'];
+    }
+    if (modelName.endsWith('-flash-maas') && isModelFamilyVersionGTE(modelName, 'deepseek-v', 4, 1)) {
+        return MODEL_LIMITS['deepseek-v4.1-flash-maas'];
     }
     if (isSingleDigitGrokVersionGte(modelName, 4, 6)) return MODEL_LIMITS['grok-4.7'];
     if (isSingleDigitGrokVersionGte(modelName, 4, 3)) return MODEL_LIMITS['grok-4.3'];

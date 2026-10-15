@@ -8,6 +8,11 @@ import {
     parseOpenAIGptVersion,
 } from './version-parsing.js';
 
+/** DeepSeek V4 moved to a 1M context with up to 384K output. https://api-docs.deepseek.com/quick_start/pricing */
+function isDeepSeekV4OrLater(model: string): boolean {
+    return isModelFamilyVersionGTE(model, 'deepseek.v', 4, 0) || isModelFamilyVersionGTE(model, 'deepseek-v', 4, 0);
+}
+
 function isDeepSeekV32OrLater(model: string): boolean {
     return isModelFamilyVersionGTE(model, 'deepseek.v', 3, 2) || isModelFamilyVersionGTE(model, 'deepseek-v', 3, 2);
 }
@@ -54,6 +59,7 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (model.includes('mistral')) return 8_192;
     // DeepSeek
     if (model.includes('deepseek-r1-0528')) return 32_768;
+    if (isDeepSeekV4OrLater(model)) return 393_216;
     if (isDeepSeekV32OrLater(model)) return 65_536;
     if (model.includes('deepseek')) return 128_000;
     // Qwen
@@ -125,6 +131,7 @@ export function getContextWindowSize(model: string): number | undefined {
         return getMistralModelKnowledge(model).context_window;
     }
     // DeepSeek
+    if (isDeepSeekV4OrLater(model)) return 1_048_576;
     if (isDeepSeekV32OrLater(model)) return 163_840;
     if (model.includes('deepseek-r1-0528')) return 163_840;
     if (model.includes('deepseek')) return 128_000;
