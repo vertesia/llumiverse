@@ -87,6 +87,28 @@ describe('legacy Converse: Bedrock provider-specific model options', () => {
     );
 });
 
+describe('Bedrock Converse Grok options', () => {
+    it('transports supplied Grok effort through the reasoning field', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const model = 'global.xai.grok-4.7';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-converse', effort: 'xhigh', max_tokens: 100 } },
+        );
+        expect(request.additionalModelRequestFields).toEqual({ reasoning: { effort: 'xhigh' } });
+    });
+
+    it('omits the reasoning field when Grok effort is not supplied', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const model = 'us.xai.grok-4.7';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model, model_options: { _option_id: 'bedrock-converse', max_tokens: 100 } },
+        );
+        expect(request.additionalModelRequestFields).toBeUndefined();
+    });
+});
+
 describe('Bedrock Converse closed-weight GPT options', () => {
     it('warns when canonical GPT effort overrides a conflicting alias', () => {
         const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };

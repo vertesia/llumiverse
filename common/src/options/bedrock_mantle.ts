@@ -179,19 +179,13 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
     }
 
     if (reasoningEffortEnum) {
+        // `reasoning_effort` stays accepted as a legacy alias (effort wins), but is not advertised as a second control.
         options.push({
             name: 'effort',
             type: OptionType.enum,
             enum: reasoningEffortEnum,
             default: reasoningEffortDefault,
             description: 'The reasoning effort of the model, which affects the quality and speed of the response',
-        });
-        options.push({
-            name: 'reasoning_effort',
-            type: OptionType.enum,
-            enum: reasoningEffortEnum,
-            default: reasoningEffortDefault,
-            description: 'Alias for effort; controls how much reasoning the model performs before responding',
         });
     }
 
@@ -225,14 +219,14 @@ function getChatCompletionsOptions(model: string): ModelOptionsInfo {
         .filter((option) => allowedOptions.has(option.name))
         .map((option) => (option.name === 'max_tokens' ? { ...option, max: maxOutputTokens } : option));
     if (model.toLowerCase().includes('gpt-oss')) {
-        const effortOption: ModelOptionInfoItem = {
+        // `reasoning_effort` stays accepted as a legacy alias (effort wins), but is not advertised as a second control.
+        options.push({
             name: 'effort',
             type: OptionType.enum,
             enum: { low: 'low', medium: 'medium', high: 'high' },
             default: 'medium',
             description: 'Controls how much reasoning the model performs before responding',
-        };
-        options.push(effortOption, { ...effortOption, name: 'reasoning_effort' });
+        });
     }
     return {
         _option_id: 'bedrock-mantle-chat-completions',

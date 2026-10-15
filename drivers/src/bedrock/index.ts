@@ -108,7 +108,13 @@ import {
 import { generateBedrockEmbeddings } from './embeddings.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
 import { forceUploadFile } from './s3.js';
-import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
+import {
+    formatTwelvelabsPegasusPrompt,
+    pegasusFinishReason,
+    pegasusTokenUsage,
+    type TwelvelabsPegasusRequest,
+    type TwelvelabsPegasusResponse,
+} from './twelvelabs.js';
 
 export type { BedrockDriverOptions } from '../driver-options.js';
 
@@ -1544,25 +1550,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
-        const result = JSON.parse(body);
-
-        // Extract the response according to TwelveLabs Pegasus format
-        let finishReason: string | undefined;
-        switch (result.finishReason) {
-            case 'stop':
-                finishReason = 'stop';
-                break;
-            case 'length':
-                finishReason = 'length';
-                break;
-            default:
-                finishReason = result.finishReason;
-        }
+        const result = JSON.parse(body) as TwelvelabsPegasusResponse;
 
         return {
             result: result.message ? [{ type: 'text' as const, value: result.message }] : [],
             service_tier: res.serviceTier,
-            finish_reason: finishReason,
+            finish_reason: pegasusFinishReason(result),
+            token_usage: pegasusTokenUsage(result),
             original_response: options.include_original_response ? result : undefined,
         };
     }
@@ -1597,29 +1591,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     const body = decoder.decode(chunk.chunk.bytes);
 
                     try {
-                        const result = JSON.parse(body);
-
-                        // Extract streaming response according to TwelveLabs Pegasus format
-                        let finishReason: string | undefined;
-                        if (result.finishReason) {
-                            switch (result.finishReason) {
-                                case 'stop':
-                                    finishReason = 'stop';
-                                    break;
-                                case 'length':
-                                    finishReason = 'length';
-                                    break;
-                                default:
-                                    finishReason = result.finishReason;
-                            }
-                        }
+                        const result = JSON.parse(body) as TwelvelabsPegasusResponse & { delta?: string };
 
                         return {
                             result:
                                 result.delta || result.message
                                     ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
                                     : [],
-                            finish_reason: finishReason,
+                            finish_reason: pegasusFinishReason(result),
                             service_tier: res.serviceTier,
                         } satisfies CompletionChunkObject;
                     } catch {
@@ -1912,6 +1891,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ...(options.result_schema && { format: { strict: true } }),
                 },
             };
+        } else if (options.model.includes('xai.grok-')) {
+            // Grok on Bedrock reads effort from the same reasoning field as GPT; omission keeps the provider default.
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html
+            const effort = resolveOpenAIEffort(
+                options.model_options as BedrockConverseOptions | undefined,
+                this.logger,
+                options.model,
+            );
+            additionalField = { ...(effort !== undefined && { reasoning: { effort } }) };
         } else if (options.model.includes('gpt-oss')) {
             const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
             additionalField = {
@@ -2323,9 +2311,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'moonshotai',
             'nvidia',
             'zai',
+            'xai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['nova-reel', 'nova-sonic', 'nova-2-sonic', 'titan-image-generator', 'rerank'],
+            // Sonic is a bidirectional speech-to-speech stream (every generation, e.g. `nova-2-sonic`), not Converse.
+            amazon: ['nova-reel', 'sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],
@@ -2342,31 +2332,34 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             moonshotai: [],
             nvidia: [],
             zai: [],
+            xai: [],
+        };
+
+        // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.
+        const getPublisherKey = (providerName: string): string | undefined => {
+            const normalizedProvider = providerName.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return supportedPublishers.find((provider) => normalizedProvider.includes(provider));
         };
 
         // Helper function to check if model should be filtered out
         const shouldIncludeModel = (modelId?: string, providerName?: string): boolean => {
             if (!modelId || !providerName) return false;
-
-            // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.
-            const normalizedProvider = providerName.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-            // Check if provider is supported
-            const isProviderSupported = supportedPublishers.some((provider) => normalizedProvider.includes(provider));
-
-            if (!isProviderSupported) return false;
-
-            // Check if model is in the unsupported list for its provider
-            for (const provider of supportedPublishers) {
-                if (normalizedProvider.includes(provider)) {
-                    const unsupportedModels =
-                        unsupportedModelsByPublisher[provider as keyof typeof unsupportedModelsByPublisher] || [];
-                    return !unsupportedModels.some((unsupported) => modelId.toLowerCase().includes(unsupported));
-                }
-            }
-
-            return true;
+            const publisherKey = getPublisherKey(providerName);
+            if (!publisherKey) return false;
+            const unsupportedModels =
+                unsupportedModelsByPublisher[publisherKey as keyof typeof unsupportedModelsByPublisher] || [];
+            return !unsupportedModels.some((unsupported) => modelId.toLowerCase().includes(unsupported));
         };
+
+        // Inference profiles carry no publisher name, so reuse the foundation catalog's display name (e.g. "Z.ai",
+        // "Moonshot AI") to keep profiles grouped with the publisher's other models instead of under the match key.
+        const publisherDisplayNames = new Map<string, string>();
+        for (const m of foundationModelsList.modelSummaries) {
+            const publisherKey = m.providerName ? getPublisherKey(m.providerName) : undefined;
+            if (publisherKey && m.providerName && !publisherDisplayNames.has(publisherKey)) {
+                publisherDisplayNames.set(publisherKey, m.providerName);
+            }
+        }
 
         foundationModels = foundationModels.filter((m) => shouldIncludeModel(m.modelId, m.providerName));
 
@@ -2458,7 +2451,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         id: p.inferenceProfileArn ?? p.inferenceProfileId,
                         name: p.inferenceProfileName ?? p.inferenceProfileArn,
                         provider: this.provider,
-                        owner: providerName,
+                        owner: publisherDisplayNames.get(providerName) ?? providerName,
                         ...modelMetadata,
                     };
 

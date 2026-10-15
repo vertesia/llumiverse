@@ -1,5 +1,11 @@
-import { parseClaudeVersion } from '../options/version-parsing.js';
+import {
+    isKimiVersionGte,
+    isPegasus15OrLater,
+    isSingleDigitGrokVersionGte,
+    parseClaudeVersion,
+} from '../options/version-parsing.js';
 import type { ModelCapabilities, ModelModalities } from '../types.js';
+import { isMistralLargeGte } from './mistral.js';
 
 export type BedrockEndpoint = 'runtime' | 'mantle';
 
@@ -70,13 +76,9 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
         model.includes('google.gemma') ||
         includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b']) ||
         isFamilyVersionGte(model, 'meta.llama', 4) ||
-        includesAny(model, [
-            'mistral.magistral-',
-            'mistral.ministral-3-',
-            'mistral.mistral-large-3-',
-            'mistral.pixtral-',
-        ]) ||
-        isFamilyVersionGte(model, 'kimi-k', 2, 5) ||
+        includesAny(model, ['mistral.magistral-', 'mistral.ministral-3-', 'mistral.pixtral-']) ||
+        isMistralLargeGte(model, 3) ||
+        isKimiVersionGte(model, 2, 5) ||
         model.includes('nemotron-nano-12b') ||
         model.includes('qwen3-vl') ||
         model.includes('palmyra-vision') ||
@@ -86,7 +88,9 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
         (model.includes('amazon.nova') && !model.includes('nova-micro')) ||
         model.includes('twelvelabs.pegasus') ||
         isFamilyVersionGte(model, 'google.gemma-', 4);
-    const audio = includesAny(model, ['nova-sonic', 'mistral.voxtral-']) || model.includes('google.gemma-4-e2b');
+    // AWS lists Voxtral with text input only (no audio), and live Converse/Mantle audio requests were unreliable, so it
+    // is described as a text model here. https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-small-24b-2507.html
+    const audio = model.includes('nova-sonic') || model.includes('google.gemma-4-e2b');
 
     return {
         input: { text: !model.includes('nova-sonic-v1'), image, video, audio, embed: false },
@@ -135,6 +139,10 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         if (model.includes('claude-3-haiku')) return { context_window: 200_000, max_output_tokens: 4_096 };
     }
     if (model.includes('cohere.command-r')) return { context_window: 128_000, max_output_tokens: 4_096 };
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus-1-5.html
+    if (isPegasus15OrLater(model)) return { max_output_tokens: 98_304 };
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
+    if (model.includes('twelvelabs.pegasus-')) return { max_output_tokens: 4_096 };
     if (isFamilyVersionGte(model, 'deepseek.v', 3, 2)) {
         return { context_window: 163_840, max_output_tokens: 8_192 };
     }
@@ -164,6 +172,9 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         return { context_window: 196_000, max_output_tokens: 8_192 };
     }
     if (model.includes('minimax.minimax-m2')) return { context_window: 1_000_000, max_output_tokens: 8_192 };
+    // Mistral Large 4 publishes a 1M context but no output limit; later generations inherit it.
+    // https://docs.mistral.ai/models/mistral-large-4-0
+    if (isMistralLargeGte(model, 4)) return { context_window: 1_000_000 };
     if (includesAny(model, ['mistral.devstral-2', 'mistral.mistral-large-3'])) {
         return { context_window: 256_000, max_output_tokens: 32_768 };
     }
@@ -181,6 +192,8 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     ) {
         return { context_window: 32_000, max_output_tokens: model.includes('voxtral') ? undefined : 4_096 };
     }
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html (no output limit stated)
+    if (isKimiVersionGte(model, 3, 0)) return { context_window: 1_000_000 };
     if (includesAny(model, ['moonshot.kimi-k2', 'moonshotai.kimi-k2'])) {
         return { context_window: 256_000, max_output_tokens: 16_384 };
     }
@@ -213,10 +226,17 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     if (includesAny(model, ['writer.palmyra-x4', 'writer.palmyra-x5'])) {
         return { context_window: 128_000, max_output_tokens: 8_192 };
     }
-    if (model.startsWith('xai.grok-')) return { context_window: 1_000_000 };
-    if (includesAny(model, ['zai.glm-4.7', 'zai.glm-4.6']))
-        return { context_window: 203_000, max_output_tokens: 4_096 };
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-7.html
+    if (model.startsWith('xai.grok-')) {
+        return { context_window: isSingleDigitGrokVersionGte(model, 4, 7) ? 500_000 : 1_000_000 };
+    }
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5-3.html
+    if (isFamilyVersionGte(model, 'zai.glm-', 5, 3)) return { context_window: 1_000_000, max_output_tokens: 131_072 };
     if (model.includes('zai.glm-5')) return { context_window: 200_000, max_output_tokens: 131_072 };
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-4-7.html
+    if (includesAny(model, ['zai.glm-4.7', 'zai.glm-4.6'])) {
+        return { context_window: 203_000, max_output_tokens: 131_072 };
+    }
     return {};
 }
 
@@ -263,8 +283,12 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
     } else if (includesAny(model, ['mistral.mistral-large', 'mistral.pixtral'])) {
         toolSupport = true;
     } else if (model.includes('twelvelabs.pegasus')) {
-        toolSupport = true;
+        // Pegasus runs through InvokeModel with a single prompt and video; its request has no tools field.
+        toolSupport = false;
     } else if (model.includes('writer.palmyra')) {
+        toolSupport = true;
+    } else if (includesAny(model, ['moonshot.kimi-', 'moonshotai.kimi-', 'zai.glm-'])) {
+        // AWS documents client-side tool calling for Kimi and GLM; streamed Converse tool use is unverified.
         toolSupport = true;
     }
 

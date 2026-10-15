@@ -37,8 +37,8 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 export * from './embeddings/batch.js';
 
 import { getListedVertexMistralModels } from './mistral-models.js';
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
-import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { NON_GLOBAL_ANTHROPIC_MODELS, resolveAnthropicVertexRegion } from './models/claude.js';
+import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './models/gemini.js';
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
@@ -93,7 +93,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
-    anthropicClient: AnthropicVertex | undefined;
+    /** One client per Vertex location, since Claude generations are served from different endpoint types. */
+    private anthropicClients: Map<string, AnthropicVertex> = new Map();
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
@@ -111,7 +112,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         super(options);
 
         this.aiplatform = undefined;
-        this.anthropicClient = undefined;
         this.fetchClient = undefined;
         this.googleGenAI = undefined;
         this.googleGenAIRegion = undefined;
@@ -300,30 +300,25 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public async getAnthropicClient(
-        region: string = this.options.region,
+        region?: string,
         httpTimeout?: HttpTimeoutOptions,
+        model?: string,
     ): Promise<AnthropicVertex> {
-        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const getRegionPrefix = (r: string) => r.split('-')[0];
-        const regionPrefix = getRegionPrefix(region);
-        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
-
-        const defaultRegionPrefix = getRegionPrefix(this.options.region);
-        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
+        const mappedRegion = resolveAnthropicVertexRegion(region, this.options.region, model);
 
         // Get auth client to avoid version mismatch with GoogleAuth generic types
         const authClient = await this.getAuthClient();
 
-        // If mapped region is different from default mapped region, create one-off client
-        if (httpTimeout || mappedRegion !== defaultMappedRegion) {
+        if (httpTimeout) {
             return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
         }
 
-        //Lazy initialization for default region
-        if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+        let client = this.anthropicClients.get(mappedRegion);
+        if (!client) {
+            client = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+            this.anthropicClients.set(mappedRegion, client);
         }
-        return this.anthropicClient;
+        return client;
     }
 
     public async getAIPlatformClient(): Promise<v1beta1.ModelServiceClient> {
@@ -988,7 +983,7 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
     const modelName = modelId.split('/').pop() ?? modelId;
     return (
         publisher === 'xai' ||
-        (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || modelName.includes('gemini-nano-banana')))
+        (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || isGeminiWithoutRegionalEndpoints(modelName)))
     );
 }
 

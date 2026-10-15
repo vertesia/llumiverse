@@ -171,6 +171,22 @@ describe('MistralAIDriver official SDK transport', () => {
         );
     });
 
+    it.each(['low', 'max'] as const)('forwards hosted-model effort %s for provider validation', async (effort) => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const complete = vi.fn(async () => ({
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant' as const, content: 'Done' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'Think' }] },
+            { model: 'zai-glm-5-3', model_options: { _option_id: 'mistral-text', effort } },
+        );
+
+        expect(complete).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: effort }));
+    });
+
     it('preserves signed thinking for replay after JSON roundtrip while projecting thoughts by default', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key' });
         const response = {
