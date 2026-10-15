@@ -15,6 +15,7 @@ import {
     isKimiVersionGte,
     isMetaMuseModel,
     isModelFamilyVersionGTE,
+    isQwenVersionGte,
     isSingleDigitGrokVersionGte,
 } from './options/version-parsing.js';
 import type { ModelCapabilities } from './types.js';
@@ -413,7 +414,7 @@ function applyProviderOverlay(
         if (/gpt-oss-(?:20b|120b)(?:-|$)/.test(sourceModel)) {
             return { capabilities, context_window: 131_072, max_output_tokens: 65_536 };
         }
-        if (isModelFamilyVersionGTE(sourceModel, 'qwen', 3, 8) && sourceModel.includes('-27b')) {
+        if (isQwenVersionGte(sourceModel, 3, 8) && sourceModel.includes('-27b')) {
             return { capabilities, context_window: 131_072, max_output_tokens: 16_384 };
         }
     }
@@ -467,12 +468,19 @@ function applyProviderOverlay(
 }
 
 function getReasoningEffortLevels(model: string, family: string, provider: Providers): readonly string[] | undefined {
-    if (provider === Providers.groq && !model.includes('coder') && isModelFamilyVersionGTE(model, 'qwen', 3, 8)) {
+    if (provider === Providers.groq && !model.includes('coder') && isQwenVersionGte(model, 3, 8)) {
         return ['none', 'low', 'medium', 'high'];
     }
     // The 0813 release changed DeepSeek V4 Pro effort levels; earlier snapshots keep their own defaults.
     if (provider === Providers.togetherai && model.includes('deepseek-v4-pro-0813')) return ['high', 'max'];
     if (provider === Providers.groq && /qwen3(?:\.6-27b|-32b)(?:-|$)/.test(model)) return ['none'];
+    // Together serves Qwen 3.5-3.7 as hybrid reasoning models: thinking is on by default and can only be switched off,
+    // which the driver sends as `reasoning: { enabled: false }`. Qwen 3.8 takes low/medium/xhigh effort instead.
+    // https://docs.together.ai/docs/inference/chat/reasoning, https://www.together.ai/models/qwen3-8-flash
+    if (provider === Providers.togetherai && family === 'qwen' && !model.includes('coder')) {
+        if (isQwenVersionGte(model, 3, 8)) return ['low', 'medium', 'xhigh'];
+        if (isQwenVersionGte(model, 3, 5)) return ['none'];
+    }
     if (family === 'gpt') {
         if (model.includes('gpt-oss')) {
             if (provider === Providers.groq && model.includes('safeguard')) return undefined;

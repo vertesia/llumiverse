@@ -279,7 +279,8 @@ describe('GroqDriver shared Chat Completions transport', () => {
             expect(request.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: false } });
         });
 
-        it.each(['qwen/qwen3.6-27b', 'meta-llama/llama-4-scout-17b-16e-instruct'])(
+        // qwen3-32b is Qwen 3, not 3.32: the dash starts the size.
+        it.each(['qwen/qwen3.6-27b', 'qwen/qwen3-32b', 'meta-llama/llama-4-scout-17b-16e-instruct'])(
             'leaves %s on prompt instructions',
             async (model) => {
                 const request = await requestFor(model);

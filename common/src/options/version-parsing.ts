@@ -41,6 +41,15 @@ export function isModelFamilyVersionGTE(
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** Qwen writes minor versions after a dot (`qwen3.5`); a dash starts the size (`qwen3-235b`), not a minor version. */
+export function isQwenVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.toLowerCase().match(/qwen(\d+)(?:\.(\d+))?/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
 /** Grok 4.20 is a separate line; do not order it after single-digit releases such as 4.7. */
 export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
     const match = model.match(/grok-(\d+)(?:\.(\d))?(?:[-_.]|$)/);

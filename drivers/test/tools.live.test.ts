@@ -14,7 +14,12 @@ import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
 import { BedrockDriver, GroqDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
-import { completionResultToString, getLowEffortTestOptions } from './utils.js';
+import {
+    completionResultToString,
+    getLowEffortTestOptions,
+    retryUnlessRateLimited,
+    withRateLimitBackoff,
+} from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 
@@ -100,13 +105,13 @@ const TOOL_DEF = {
 describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
     test.each(models)(
         `${name}: tool call, tool result, then tools=[] checkpoint for %s`,
-        { timeout: TIMEOUT, retry: 1 },
+        { timeout: TIMEOUT, retry: retryUnlessRateLimited(1) },
         async (model) => {
             const options = getLowEffortTestOptions(model, driver.provider, { max_tokens: 1000 });
             const toolOptions: ExecutionOptions = { ...options, tools: [TOOL_DEF] };
 
             // Step 1: the model calls the tool
-            const toolCall = await driver.execute(TOOL_PROMPT, toolOptions);
+            const toolCall = await withRateLimitBackoff(() => driver.execute(TOOL_PROMPT, toolOptions));
             const toolUse = toolCall.tool_use;
             if (!toolUse) {
                 throw new Error('Expected tool use in first driver response');
@@ -118,9 +123,11 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
             expect(toolCall.conversation).toBeDefined();
 
             // Step 2: the model uses the tool result
-            const toolAnswer = await driver.execute(
-                [{ role: PromptRole.tool, tool_use_id: toolUse[0].id, content: '15 degrees celsius, sunny' }],
-                { ...toolOptions, conversation: toolCall.conversation },
+            const toolAnswer = await withRateLimitBackoff(() =>
+                driver.execute(
+                    [{ role: PromptRole.tool, tool_use_id: toolUse[0].id, content: '15 degrees celsius, sunny' }],
+                    { ...toolOptions, conversation: toolCall.conversation },
+                ),
             );
             const answer = toolAnswer.result.map(completionResultToString).join('');
             expect(answer, `[${model}] Tool result not found in response`).toContain('15');
@@ -128,15 +135,17 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
             expect(toolAnswer.conversation).toBeDefined();
 
             // Step 3: checkpoint summary with tools=[] over a conversation holding tool blocks
-            const checkpoint = await driver.execute(
-                [
-                    {
-                        role: PromptRole.user,
-                        content:
-                            'Summarize what happened in this conversation. Do NOT call any tools — just output text.',
-                    },
-                ],
-                { ...options, tools: [], conversation: toolAnswer.conversation },
+            const checkpoint = await withRateLimitBackoff(() =>
+                driver.execute(
+                    [
+                        {
+                            role: PromptRole.user,
+                            content:
+                                'Summarize what happened in this conversation. Do NOT call any tools — just output text.',
+                        },
+                    ],
+                    { ...options, tools: [], conversation: toolAnswer.conversation },
+                ),
             );
             expect(checkpoint.finish_reason).not.toBe('tool_use');
             expect(checkpoint.result.length).toBeGreaterThan(0);

@@ -6,6 +6,51 @@ import { TogetherAIDriver } from './index.js';
 
 describe('TogetherAIDriver', () => {
     it.each([
+        ['Qwen/Qwen3.5-9B', 'none', { reasoning: { enabled: false } }, 'reasoning_effort'],
+        ['Qwen/Qwen3.8-Flash', 'xhigh', { reasoning_effort: 'xhigh' }, 'reasoning'],
+    ])('sends %s effort %s as Together expects', async (model, effort, expected, absentField) => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async () => ({
+            id: 'completion-1',
+            object: 'chat.completion',
+            created: 1,
+            model,
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+        const options = {
+            model,
+            model_options: ModelOptionsSchema.parse({ _option_id: 'openai-text', effort }),
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], options);
+        await driver.requestTextCompletion(prompt, options);
+        const request = (create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+        expect(request).toMatchObject(expected);
+        expect(request).not.toHaveProperty(absentField);
+    });
+
+    it('leaves Together reasoning untouched when effort is omitted', async () => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async () => ({
+            id: 'completion-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'Qwen/Qwen3.5-9B',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+        const options = {
+            model: 'Qwen/Qwen3.5-9B',
+            model_options: ModelOptionsSchema.parse({ _option_id: 'openai-text' }),
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], options);
+        await driver.requestTextCompletion(prompt, options);
+        const request = (create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+        expect(request.reasoning).toBeUndefined();
+        expect(request.reasoning_effort).toBeUndefined();
+    });
+
+    it.each([
         [false, false],
         [false, true],
         [true, false],
@@ -270,6 +315,66 @@ describe('TogetherAIDriver', () => {
             { id: 'call_a', tool_name: 'first_tool', tool_input: { value: 1 } },
             { id: 'call_b', tool_name: 'second_tool', tool_input: { value: 2 } },
         ]);
+    });
+
+    describe('streamed usage', () => {
+        const usage = { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 };
+        const base = { object: 'chat.completion.chunk' as const, created: 1, model: 'test-model' };
+        const text = {
+            ...base,
+            id: 'chunk-1',
+            choices: [{ index: 0, finish_reason: null, delta: { content: 'blue' } }],
+        };
+
+        async function streamWith(chunks: unknown[]) {
+            const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () =>
+                (async function* () {
+                    yield* chunks;
+                })(),
+            );
+            driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+            const stream = await driver.stream([{ role: PromptRole.user, content: 'Sky?' }], { model: 'test-model' });
+            for await (const _chunk of stream) {
+                // Consume the stream to populate the final completion.
+            }
+            return { request: (create.mock.calls[0] as unknown[])[0] as Record<string, unknown>, stream };
+        }
+
+        it('asks Together to include usage on streams only', async () => {
+            const { request } = await streamWith([text]);
+            expect(request.stream_options).toEqual({ include_usage: true });
+
+            const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () => ({
+                id: 'completion-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test-model',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+                usage,
+            }));
+            driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+            await driver.execute([{ role: PromptRole.user, content: 'Sky?' }], { model: 'test-model' });
+            expect((create.mock.calls[0] as unknown[])[0]).not.toHaveProperty('stream_options');
+        });
+
+        it('reports usage from the final top-level usage chunk', async () => {
+            const { stream } = await streamWith([
+                text,
+                { ...base, id: 'chunk-2', choices: [{ index: 0, finish_reason: 'stop', delta: {} }] },
+                { ...base, id: 'chunk-3', choices: [], usage },
+            ]);
+            expect(stream.completion?.token_usage).toMatchObject({ prompt: 5, result: 2, total: 7 });
+        });
+
+        it('reports usage that a model nests inside a choice', async () => {
+            const { stream } = await streamWith([
+                text,
+                { ...base, id: 'chunk-2', choices: [{ index: 0, finish_reason: 'stop', delta: {}, usage }] },
+            ]);
+            expect(stream.completion?.token_usage).toMatchObject({ prompt: 5, result: 2, total: 7 });
+        });
     });
 
     it('classifies Together transport timeouts as retryable llumiverse errors', () => {
