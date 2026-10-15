@@ -31,6 +31,12 @@ const RECORD_MODEL_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: true,
     },
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash
+    'deepseek-v4.1-flash-maas': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
 };
 
 // Default family capabilities intentionally describe the latest known behavior for a model family.
@@ -233,6 +239,8 @@ export function getModelCapabilitiesVertexAI(model: string): {
     // Later generations inherit the latest known Vertex capabilities, including hosted-model differences.
     if (isModelFamilyVersionGTE(normalized, 'gemma-', 4, 0))
         return RECORD_MODEL_CAPABILITIES['gemma-4-26b-a4b-it-maas'];
+    if (normalized.endsWith('-flash-maas') && isModelFamilyVersionGTE(normalized, 'deepseek-v', 4, 1))
+        return RECORD_MODEL_CAPABILITIES['deepseek-v4.1-flash-maas'];
     if (isModelFamilyVersionGTE(normalized, 'mistral-small-', 2503, 0))
         return RECORD_MODEL_CAPABILITIES['mistral-small-2503'];
     if (isModelFamilyVersionGTE(normalized, 'mistral-medium-', 3, 0))

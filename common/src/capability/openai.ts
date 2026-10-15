@@ -90,6 +90,12 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, OpenAIModelCapability> = {
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: false,
     },
+    // o3-mini is text-only; o4-mini reintroduced image input.
+    'o3-mini': {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
     'o1-preview': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },

@@ -72,6 +72,24 @@ describe('Claude model version parsing', () => {
     );
 });
 
+describe('Claude dotted versions from aggregators', () => {
+    it.each([
+        ['anthropic/claude-opus-4.6', { major: 4, minor: 6, variant: 'opus' }],
+        ['anthropic/claude-sonnet-4.6:batch', { major: 4, minor: 6, variant: 'sonnet' }],
+        ['anthropic/claude-3.7-sonnet', { major: 3, minor: 7, variant: 'sonnet' }],
+        ['claude-sonnet-4-20250514', { major: 4, minor: 0, variant: 'sonnet' }],
+    ])('parses %s', (model, expected) => {
+        expect(parseClaudeVersion(model)).toEqual(expected);
+    });
+
+    it('treats a dotted Claude 4.6+ model like its dashed form', () => {
+        expect(supportsEffort('anthropic/claude-opus-4.6')).toBe(supportsEffort('claude-opus-4-6'));
+        expect(getAvailableEffortLevels('anthropic/claude-opus-4.8')).toEqual(
+            getAvailableEffortLevels('claude-opus-4-8'),
+        );
+    });
+});
+
 describe('OpenAI GPT model version parsing', () => {
     it.each([
         ['gpt-5', { major: 5, minor: 0 }],

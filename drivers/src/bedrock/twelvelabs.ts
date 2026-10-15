@@ -1,6 +1,8 @@
 import {
     type DataSource,
     type ExecutionOptions,
+    type ExecutionTokenUsage,
+    isPegasus15OrLater,
     type JSONSchema,
     PromptRole,
     type PromptSegment,
@@ -13,12 +15,12 @@ import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 export interface TwelvelabsPegasusRequest {
     inputPrompt: string;
     temperature?: number;
+    // Pegasus takes the schema directly under `jsonSchema`, not the OpenAI `json_schema` wrapper. Pegasus 1.2 rejects
+    // a `type` field, while Pegasus 1.5 requires `type: 'json_schema'` (verified against both models).
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
     responseFormat?: {
-        type: 'json_schema';
-        json_schema: {
-            name: string;
-            schema: JSONSchema;
-        };
+        type?: 'json_schema';
+        jsonSchema: JSONSchema;
     };
     mediaSource: {
         base64String?: string;
@@ -32,7 +34,27 @@ export interface TwelvelabsPegasusRequest {
 
 export interface TwelvelabsPegasusResponse {
     message: string;
-    finishReason: 'stop' | 'length';
+    /** Pegasus 1.2 */
+    finishReason?: 'stop' | 'length';
+    /** Pegasus 1.5 */
+    stopReason?: 'stop' | 'length';
+    input_tokens?: number;
+    output_tokens?: number;
+}
+
+/** Pegasus responses report token counts alongside the message. */
+export function pegasusTokenUsage(response: TwelvelabsPegasusResponse): ExecutionTokenUsage | undefined {
+    if (response.input_tokens === undefined && response.output_tokens === undefined) return undefined;
+    return {
+        prompt: response.input_tokens,
+        result: response.output_tokens,
+        total: (response.input_tokens ?? 0) + (response.output_tokens ?? 0),
+    };
+}
+
+/** Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`. */
+export function pegasusFinishReason(response: TwelvelabsPegasusResponse): string | undefined {
+    return response.finishReason ?? response.stopReason;
 }
 
 // TwelveLabs Marengo Request/Response Types
@@ -140,13 +162,9 @@ export async function formatTwelvelabsPegasusPrompt(
 
     // Add response format if result schema is specified
     if (options.result_schema) {
-        request.responseFormat = {
-            type: 'json_schema',
-            json_schema: {
-                name: 'response',
-                schema: options.result_schema,
-            },
-        };
+        request.responseFormat = isPegasus15OrLater(options.model)
+            ? { type: 'json_schema', jsonSchema: options.result_schema }
+            : { jsonSchema: options.result_schema };
     }
 
     return request;

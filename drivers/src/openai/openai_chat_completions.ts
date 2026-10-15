@@ -13,6 +13,7 @@ import {
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
+    isDeepSeekVersionGte,
     isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
@@ -304,7 +305,7 @@ type OpenAIChatReasoningReplayPolicy = 'none' | 'omit' | 'active_tool_turn' | 'f
 function getOpenAIChatReasoningReplayPolicy(model: string | undefined): OpenAIChatReasoningReplayPolicy {
     const modelId = model?.toLowerCase() ?? '';
     if (/deepseek-(?:r1|reasoner)|deepseek\.r1/.test(modelId)) return 'omit';
-    if (/deepseek-v4(?:-|$)/.test(modelId)) return 'full_tool_history';
+    if (isDeepSeekVersionGte(modelId, 4, 0)) return 'full_tool_history';
     if (/deepseek-v3\.2(?:-|$)/.test(modelId)) return 'active_tool_turn';
     return 'none';
 }

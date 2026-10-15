@@ -1,3 +1,4 @@
+import { isClaudeVersionGTE } from '@llumiverse/common';
 import {
     type AIModel,
     type Completion,
@@ -28,6 +29,32 @@ export const ANTHROPIC_REGIONS: Record<string, string> = {
 };
 
 export const NON_GLOBAL_ANTHROPIC_MODELS = ['claude-3-5', 'claude-3'];
+
+/** Multi-region locations that serve Claude generations without single-region endpoints. */
+const ANTHROPIC_MULTI_REGIONS: Record<string, string> = {
+    us: 'us',
+    europe: 'eu',
+};
+
+/**
+ * Resolve the Vertex location for a Claude request. Single-region endpoints serve Claude up to the Sonnet 4.6
+ * generation; newer models are served only from `global` and the `us`/`eu` multi-regions, so the driver's default
+ * region maps to those for 4.7+ models. A location the caller names in the model path is kept as-is.
+ * https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai
+ */
+export function resolveAnthropicVertexRegion(
+    explicitRegion: string | undefined,
+    driverRegion: string,
+    model?: string,
+): string {
+    const region = explicitRegion ?? driverRegion;
+    if (region === 'global' || region === 'us' || region === 'eu') return region;
+    const prefix = region.split('-')[0];
+    if (explicitRegion === undefined && model && isClaudeVersionGTE(model, 4, 7)) {
+        return ANTHROPIC_MULTI_REGIONS[prefix] ?? 'global';
+    }
+    return ANTHROPIC_REGIONS[prefix] || region;
+}
 
 /**
  * Parse a VertexAI model path (e.g. "locations/us-east5/claude-3-5-sonnet") into
@@ -75,7 +102,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         signal?: AbortSignal,
     ): Promise<Completion> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
+        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout, resolvedOptions.model);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&
@@ -101,7 +128,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
+        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout, resolvedOptions.model);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&

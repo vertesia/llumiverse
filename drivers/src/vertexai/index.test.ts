@@ -77,6 +77,13 @@ describe('VertexAIDriver listModels', () => {
         ]);
     });
 
+    it('lists Gemini 4+ only with its global location id', async () => {
+        const modelIds = (await new TestVertexAIDriver().listModels()).map((model) => model.id);
+
+        expect(modelIds).toContain('locations/global/publishers/google/models/gemini-4-future');
+        expect(modelIds).not.toContain('publishers/google/models/gemini-4-future');
+    });
+
     it('lists Nano Banana globally and excludes versioned Live models from both catalogs', async () => {
         const models = await new TestVertexAIDriver([
             { name: 'models/gemini-3.8-live', supportedActions: ['generateContent'] },

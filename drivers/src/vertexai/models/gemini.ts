@@ -612,6 +612,27 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?:
     }
 }
 
+// Gemini 2.5 Flash Image left this rule when it moved from preview to GA with regional endpoints.
+function isGlobalOnlyGeminiImageModel(model: string): boolean {
+    return model.includes('gemini-nano-banana');
+}
+
+/**
+ * Gemini models without single-region endpoints: Nano Banana is served only from `global`, and Gemini 4+
+ * chat models from `global` and the `us`/`eu` multi-regions. Listing and request routing both use this rule.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+ */
+export function isGeminiWithoutRegionalEndpoints(model: string): boolean {
+    return isGlobalOnlyGeminiImageModel(model) || isGeminiModelVersionGte(model, '4.0');
+}
+
+/** A request without a location goes to `global`; a caller-named Gemini 4 multi-region location is kept. */
+export function resolveGeminiRegion(model: string, explicitRegion: string | undefined): string | undefined {
+    if (isGlobalOnlyGeminiImageModel(model)) return 'global';
+    if (explicitRegion === undefined && isGeminiWithoutRegionalEndpoints(model)) return 'global';
+    return explicitRegion;
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
     model: AIModel;
 
@@ -815,10 +836,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes('gemini-2.5-flash-image') || options.model.includes('gemini-nano-banana')) {
-            region = 'global'; // These image-generation families are available only in the global region.
-        }
+        region = resolveGeminiRegion(options.model, region);
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
@@ -931,9 +949,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        if (options.model.includes('gemini-2.5-flash-image') || options.model.includes('gemini-nano-banana')) {
-            region = 'global'; // These image-generation families are available only in the global region.
-        }
+        region = resolveGeminiRegion(options.model, region);
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
