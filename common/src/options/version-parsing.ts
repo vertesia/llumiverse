@@ -50,6 +50,24 @@ export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, 
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** TwelveLabs Pegasus 1.5 changed its limits, response fields and structured-output request shape. */
+export function isPegasus15OrLater(model: string): boolean {
+    return isModelFamilyVersionGTE(model, 'pegasus-', 1, 5);
+}
+
+/** DeepSeek versions appear as `deepseek.v3.2` (Bedrock) and `deepseek-v3.2` elsewhere. */
+export function isDeepSeekVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    return (
+        isModelFamilyVersionGTE(model, 'deepseek.v', targetMajor, targetMinor) ||
+        isModelFamilyVersionGTE(model, 'deepseek-v', targetMajor, targetMinor)
+    );
+}
+
+/** Meta Muse models (`muse-spark-1.3`, `muse-wonder`, `muse-glimmer-30b`). */
+export function isMetaMuseModel(model: string): boolean {
+    return /(?:^|[-_.])muse-/.test(model);
+}
+
 /** Kimi versions use a dotted minor (`kimi-k2.5`); a dash introduces a date snapshot (`kimi-k2-0905`). */
 export function isKimiVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
     const match = model.match(/kimi-k(\d+)(?:\.(\d+))?/);
@@ -158,13 +176,6 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
  * @param targetMinor - Target minor version
  * @returns true if the model version is >= target version, false otherwise
  */
-/** Rewrite dotted Claude versions (`claude-opus-4.6`, `claude-3.7-sonnet`) to the dashed provider form. */
-export function normalizeClaudeVersionSeparator(model: string): string {
-    return model
-        .replace(/(claude-(?:opus|sonnet|haiku|fable|mythos)-\d+)\.(\d{1,2})(?=[-:]|$)/gi, '$1-$2')
-        .replace(/claude-(\d+)\.(\d+)-/gi, 'claude-$1-$2-');
-}
-
 export function isClaudeVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
     const version = parseClaudeVersion(modelString);
     if (!version) {

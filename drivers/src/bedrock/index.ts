@@ -90,6 +90,7 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '.
 import { forceUploadFile } from './s3.js';
 import {
     formatTwelvelabsPegasusPrompt,
+    pegasusFinishReason,
     pegasusTokenUsage,
     type TwelvelabsPegasusRequest,
     type TwelvelabsPegasusResponse,
@@ -1229,14 +1230,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const body = decoder.decode(res.body);
         const result = JSON.parse(body) as TwelvelabsPegasusResponse;
 
-        // Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`.
-        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus-1-5.html
-        const finishReason: string | undefined = result.finishReason ?? result.stopReason;
-
         return {
             result: result.message ? [{ type: 'text' as const, value: result.message }] : [],
             service_tier: res.serviceTier,
-            finish_reason: finishReason,
+            finish_reason: pegasusFinishReason(result),
             token_usage: pegasusTokenUsage(result),
             original_response: options.include_original_response ? result : undefined,
         };
@@ -1272,17 +1269,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     const body = decoder.decode(chunk.chunk.bytes);
 
                     try {
-                        const result = JSON.parse(body);
-
-                        // Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`.
-                        const finishReason: string | undefined = result.finishReason ?? result.stopReason;
+                        const result = JSON.parse(body) as TwelvelabsPegasusResponse & { delta?: string };
 
                         return {
                             result:
                                 result.delta || result.message
                                     ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
                                     : [],
-                            finish_reason: finishReason,
+                            finish_reason: pegasusFinishReason(result),
                             service_tier: res.serviceTier,
                         } satisfies CompletionChunkObject;
                     } catch {

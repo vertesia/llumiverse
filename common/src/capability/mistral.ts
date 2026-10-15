@@ -35,16 +35,19 @@ function isMistralMedium35OrLater(model: string): boolean {
     );
 }
 
-/** Mistral Large 4 (`mistral-large-4`, `mistral-large-4-0`); `-latest` is not documented as pointing to it yet. */
-function isMistralLarge4OrLater(model: string): boolean {
-    const generation = model.match(/mistral-large-(\d{1,2})(?:[-_.]|$)/)?.[1];
-    return generation !== undefined && Number(generation) >= 4;
+/**
+ * Mistral Large uses small semantic generations (`mistral-large-4`, `mistral.mistral-large-3-...`); dated legacy ids such
+ * as `mistral-large-2402` are not generations. `-latest` is not documented as pointing to Large 4 yet.
+ */
+export function isMistralLargeGte(model: string, targetGeneration: number): boolean {
+    const generation = model.toLowerCase().match(/mistral-large-(\d{1,2})(?:[-_.:]|$)/)?.[1];
+    return generation !== undefined && Number(generation) >= targetGeneration;
 }
 
 export function isMistralAdjustableReasoningModel(model: string): boolean {
     const normalized = model.toLowerCase();
     return (
-        isMistralSmall4OrLater(normalized) || isMistralMedium35OrLater(normalized) || isMistralLarge4OrLater(normalized)
+        isMistralSmall4OrLater(normalized) || isMistralMedium35OrLater(normalized) || isMistralLargeGte(normalized, 4)
     );
 }
 
@@ -66,7 +69,7 @@ function hasMistralVision(model: string): boolean {
 
 function getMistralContextWindow(model: string): number | undefined {
     // https://docs.mistral.ai/models/mistral-large-4-0
-    if (isMistralLarge4OrLater(model)) return 1_000_000;
+    if (isMistralLargeGte(model, 4)) return 1_000_000;
     if (model.includes('voxtral-small') || model.includes('voxtral-mini')) return 32_000;
     if (model.includes('magistral-')) {
         const version = model.match(/magistral-(?:small|medium)-(\d{4})(?:[-_.]|$)/)?.[1];

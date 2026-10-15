@@ -13,7 +13,6 @@ import {
     getConversationMeta,
     type HttpTimeoutOptions,
     incrementConversationTurn,
-    isGeminiModelVersionGte,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
@@ -40,7 +39,7 @@ export * from './embeddings/batch.js';
 
 import { getListedVertexMistralModels } from './mistral-models.js';
 import { NON_GLOBAL_ANTHROPIC_MODELS, resolveAnthropicVertexRegion } from './models/claude.js';
-import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './models/gemini.js';
 import {
     type GeminiContextCacheCoordinationKey,
     type GeminiContextCacheCoordinator,
@@ -117,8 +116,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
-    anthropicClient: AnthropicVertex | undefined;
-    anthropicClientRegion: string | undefined;
+    /** One client per Vertex location, since Claude generations are served from different endpoint types. */
+    private anthropicClients: Map<string, AnthropicVertex> = new Map();
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
@@ -136,7 +135,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         super(options);
 
         this.aiplatform = undefined;
-        this.anthropicClient = undefined;
         this.fetchClient = undefined;
         this.googleGenAI = undefined;
         this.googleGenAIRegion = undefined;
@@ -338,12 +336,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
         }
 
-        // Lazy initialization, reusing the client while requests target the same location
-        if (!this.anthropicClient || this.anthropicClientRegion !== mappedRegion) {
-            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
-            this.anthropicClientRegion = mappedRegion;
+        let client = this.anthropicClients.get(mappedRegion);
+        if (!client) {
+            client = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+            this.anthropicClients.set(mappedRegion, client);
         }
-        return this.anthropicClient;
+        return client;
     }
 
     public async getAIPlatformClient(): Promise<v1beta1.ModelServiceClient> {
@@ -997,11 +995,7 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
     const modelName = modelId.split('/').pop() ?? modelId;
     return (
         publisher === 'xai' ||
-        (publisher === 'google' &&
-            (isGeminiOmniVideoModel(modelName) ||
-                modelName.includes('gemini-nano-banana') ||
-                // Gemini 4+ has no single-region endpoints; it is listed through its global variant.
-                isGeminiModelVersionGte(modelName, '4.0')))
+        (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || isGeminiWithoutRegionalEndpoints(modelName)))
     );
 }
 

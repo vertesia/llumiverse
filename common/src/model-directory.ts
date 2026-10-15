@@ -13,6 +13,7 @@ import {
     hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
     isKimiVersionGte,
+    isMetaMuseModel,
     isModelFamilyVersionGTE,
     isSingleDigitGrokVersionGte,
 } from './options/version-parsing.js';
@@ -131,7 +132,7 @@ function inferFamily(model: string): { family: string; source_provider?: string 
         return { family: 'mistral', source_provider: 'mistralai' };
     }
     // Models offered through aggregators such as OpenRouter; there is no first-party driver for these makers.
-    if (/(?:^|[-_.])muse-/.test(normalized)) return { family: 'muse', source_provider: 'meta' };
+    if (isMetaMuseModel(normalized)) return { family: 'muse', source_provider: 'meta' };
     if (/(?:^|[-_.])mimo-v\d/.test(normalized)) return { family: 'mimo', source_provider: 'xiaomi' };
     if (/(?:^|[-_.])step-\d/.test(normalized)) return { family: 'step', source_provider: 'stepfun' };
     for (const family of ['llama', 'qwen', 'deepseek', 'gemma', 'mistral', 'kimi', 'minimax', 'glm']) {
@@ -284,18 +285,16 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             };
         case 'glm':
             return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
-        case 'minimax':
+        case 'minimax': {
+            // MiniMax M3 adds image and video input. https://openrouter.ai/minimax/minimax-m3
+            const isM3OrLater = isModelFamilyVersionGTE(model, 'minimax-m', 3, 0);
             return {
-                // MiniMax M3 adds image and video input. https://openrouter.ai/minimax/minimax-m3
-                input: {
-                    text: true,
-                    image: isModelFamilyVersionGTE(model, 'minimax-m', 3, 0),
-                    video: isModelFamilyVersionGTE(model, 'minimax-m', 3, 0),
-                },
+                input: { text: true, image: isM3OrLater, video: isM3OrLater },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
             };
+        }
         // Muse, MiMo and Step also accept audio (Wonder, MiMo), but this release line has no OpenAI-compatible
         // audio transport, so only the modalities it can send are advertised.
         case 'muse':

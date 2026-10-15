@@ -20,6 +20,7 @@ export function getMistralOptions(
 ): ModelOptionsInfo {
     const compatible = getOpenAiCompatibleOptions(model, options, profile);
     const supportsReasoning = profile.reasoning_effort_levels?.length;
+    const offersReasoningControls = supportsReasoning || model.toLowerCase().includes('magistral');
     const compatibleOptions = compatible.options
         .filter((item) => item.name !== 'image_detail' && item.name !== 'extra_body')
         .map((item): ModelOptionInfoItem => {
@@ -59,7 +60,7 @@ export function getMistralOptions(
               ]
             : []),
         // Mistral's reasoning prompt applies to its own models, not to hosted third-party models such as GLM.
-        ...((supportsReasoning || model.toLowerCase().includes('magistral')) && profile.family === 'mistral'
+        ...(offersReasoningControls && profile.family === 'mistral'
             ? [
                   {
                       name: 'prompt_mode',
@@ -69,7 +70,7 @@ export function getMistralOptions(
                   } satisfies ModelOptionInfoItem,
               ]
             : []),
-        ...(supportsReasoning || model.toLowerCase().includes('magistral')
+        ...(offersReasoningControls
             ? [
                   {
                       name: 'include_thoughts',

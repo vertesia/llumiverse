@@ -1,22 +1,34 @@
 import { getMistralModelKnowledge } from '../capability/mistral.js';
 import { getGeminiModelLimits } from './gemini-limits.js';
 import {
-    isClaudeVersionGTE,
+    isDeepSeekVersionGte,
     isKimiVersionGte,
+    isMetaMuseModel,
     isModelFamilyVersionGTE,
     isOpenAIGptProModel,
     isOpenAIGptVersionGTE,
-    normalizeClaudeVersionSeparator,
+    parseClaudeVersion,
     parseOpenAIGptVersion,
 } from './version-parsing.js';
 
-/** DeepSeek V4 moved to a 1M context with up to 384K output. https://api-docs.deepseek.com/quick_start/pricing */
-function isDeepSeekV4OrLater(model: string): boolean {
-    return isModelFamilyVersionGTE(model, 'deepseek.v', 4, 0) || isModelFamilyVersionGTE(model, 'deepseek-v', 4, 0);
-}
-
-function isDeepSeekV32OrLater(model: string): boolean {
-    return isModelFamilyVersionGTE(model, 'deepseek.v', 3, 2) || isModelFamilyVersionGTE(model, 'deepseek-v', 3, 2);
+/** Claude limits by parsed generation, so dashed (`claude-opus-4-6`) and dotted (`claude-opus-4.6`) ids agree. */
+function getClaudeLimits(model: string): { context_window: number; max_output_tokens: number } {
+    const claude = parseClaudeVersion(model);
+    const atLeast = (major: number, minor: number) =>
+        !!claude && (claude.major > major || (claude.major === major && claude.minor >= minor));
+    const isOpus = claude?.variant === 'opus';
+    // Sonnet 4.6 supports 128K output on Anthropic and Vertex; Bedrock Runtime overrides it to 64K.
+    const isLongContext = atLeast(4, 7) || ((isOpus || claude?.variant === 'sonnet') && atLeast(4, 6));
+    let max_output_tokens = 4_096; // Claude 3 older
+    if (isLongContext) max_output_tokens = 128_000;
+    else if (isOpus && atLeast(4, 5)) max_output_tokens = 64_000;
+    else if (isOpus && atLeast(4, 0))
+        max_output_tokens = 32_000; // Opus 4.0, 4.1
+    else if (atLeast(3, 7))
+        max_output_tokens = 64_000; // Sonnet 4.x, Haiku 4.5; 3.7 defaults to 64K
+    else if (atLeast(3, 5)) max_output_tokens = 8_192;
+    else if (model.includes('opus-')) max_output_tokens = 32_000; // Preserve the legacy undated-Opus metadata.
+    return { context_window: isLongContext ? 1_000_000 : 200_000, max_output_tokens };
 }
 
 /**
@@ -24,20 +36,8 @@ function isDeepSeekV32OrLater(model: string): boolean {
  * Provider-specific limits must be applied by the provider option/capability layer.
  */
 export function getMaxOutputTokens(model: string): number | undefined {
-    model = normalizeClaudeVersionSeparator(model.toLowerCase());
-    // Claude models
-    if (model.includes('claude')) {
-        if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
-        if (model.includes('opus-4-6')) return 128_000;
-        // Sonnet 4.6 supports 128K on Anthropic and Vertex; Bedrock Runtime overrides it to 64K.
-        if (model.includes('sonnet') && isClaudeVersionGTE(model, 4, 6)) return 128_000;
-        if (model.includes('opus-4-5')) return 64_000;
-        if (model.includes('opus-')) return 32_000; // Opus 4.0, 4.1
-        if (model.includes('-4-')) return 64_000; // Sonnet 4.x, Haiku 4.5
-        if (model.includes('-3-7')) return 64_000; // 128K with beta header, default 64K
-        if (model.includes('-3-5')) return 8_192;
-        return 4_096; // Claude 3 older
-    }
+    model = model.toLowerCase();
+    if (model.includes('claude')) return getClaudeLimits(model).max_output_tokens;
     // Gemini models
     if (model.includes('gemini')) return getGeminiModelLimits(model).max_output_tokens;
     // OpenAI o-series
@@ -62,8 +62,9 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (model.includes('mistral')) return 8_192;
     // DeepSeek
     if (model.includes('deepseek-r1-0528')) return 32_768;
-    if (isDeepSeekV4OrLater(model)) return 393_216;
-    if (isDeepSeekV32OrLater(model)) return 65_536;
+    // DeepSeek V4 moved to a 1M context with up to 384K output. https://api-docs.deepseek.com/quick_start/pricing
+    if (isDeepSeekVersionGte(model, 4, 0)) return 393_216;
+    if (isDeepSeekVersionGte(model, 3, 2)) return 65_536;
     if (model.includes('deepseek')) return 128_000;
     // Qwen
     if (model.includes('qwen3-next')) return 262_144;
@@ -81,7 +82,7 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (isModelFamilyVersionGTE(model, 'mimo-v', 2, 6)) return 131_072;
     if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 64_000;
     // Meta publishes no Muse output limit, and hosting providers report different caps.
-    if (/(?:^|[-_.])muse-/.test(model)) return undefined;
+    if (isMetaMuseModel(model)) return undefined;
     // Gemma
     if (model.includes('gemma-4')) return 128_000;
     // Llama
@@ -107,15 +108,8 @@ export function getMaxInputTokens(model: string): number | undefined {
  * Returns the known context window size (input + output), or undefined rather than guessing for an unknown model.
  */
 export function getContextWindowSize(model: string): number | undefined {
-    model = normalizeClaudeVersionSeparator(model.toLowerCase());
-    // Claude models
-    if (model.includes('claude')) {
-        if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
-        if (model.includes('opus-4-6') || (model.includes('sonnet') && isClaudeVersionGTE(model, 4, 6))) {
-            return 1_000_000;
-        }
-        return 200_000;
-    }
+    model = model.toLowerCase();
+    if (model.includes('claude')) return getClaudeLimits(model).context_window;
     // Gemini models
     if (model.includes('gemini')) return getGeminiModelLimits(model).context_window;
     // OpenAI o-series (check before gpt-4 to avoid false matches)
@@ -141,8 +135,8 @@ export function getContextWindowSize(model: string): number | undefined {
         return getMistralModelKnowledge(model).context_window;
     }
     // DeepSeek
-    if (isDeepSeekV4OrLater(model)) return 1_048_576;
-    if (isDeepSeekV32OrLater(model)) return 163_840;
+    if (isDeepSeekVersionGte(model, 4, 0)) return 1_048_576;
+    if (isDeepSeekVersionGte(model, 3, 2)) return 163_840;
     if (model.includes('deepseek-r1-0528')) return 163_840;
     if (model.includes('deepseek')) return 128_000;
     // Qwen
@@ -161,7 +155,7 @@ export function getContextWindowSize(model: string): number | undefined {
     if (model.includes('glm-')) return 128_000;
     // Meta Muse (Glimmer is the small 128K model), Xiaomi MiMo and StepFun Step
     if (model.includes('muse-glimmer')) return 131_072;
-    if (/(?:^|[-_.])muse-/.test(model)) return 1_048_576;
+    if (isMetaMuseModel(model)) return 1_048_576;
     if (isModelFamilyVersionGTE(model, 'mimo-v', 2, 6)) return 1_050_000;
     if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 1_048_576;
     // Gemma

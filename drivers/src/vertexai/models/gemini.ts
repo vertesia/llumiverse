@@ -612,14 +612,23 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?:
     }
 }
 
+function isGlobalOnlyGeminiImageModel(model: string): boolean {
+    return model.includes('gemini-2.5-flash-image') || model.includes('gemini-nano-banana');
+}
+
 /**
- * Gemini image families are served only from `global`. Gemini 4+ chat models are served from `global` and the
- * `us`/`eu` multi-regions, so a request without a location goes to `global` while a caller-named location is kept.
+ * Gemini models without single-region endpoints: the image families are served only from `global`, and Gemini 4+
+ * chat models from `global` and the `us`/`eu` multi-regions. Listing and request routing both use this rule.
  * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
  */
+export function isGeminiWithoutRegionalEndpoints(model: string): boolean {
+    return isGlobalOnlyGeminiImageModel(model) || isGeminiModelVersionGte(model, '4.0');
+}
+
+/** A request without a location goes to `global`; a caller-named Gemini 4 multi-region location is kept. */
 export function resolveGeminiRegion(model: string, explicitRegion: string | undefined): string | undefined {
-    if (model.includes('gemini-2.5-flash-image') || model.includes('gemini-nano-banana')) return 'global';
-    if (explicitRegion === undefined && isGeminiModelVersionGte(model, '4.0')) return 'global';
+    if (isGlobalOnlyGeminiImageModel(model)) return 'global';
+    if (explicitRegion === undefined && isGeminiWithoutRegionalEndpoints(model)) return 'global';
     return explicitRegion;
 }
 

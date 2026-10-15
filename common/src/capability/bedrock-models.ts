@@ -1,5 +1,11 @@
-import { isSingleDigitGrokVersionGte, parseClaudeVersion } from '../options/version-parsing.js';
+import {
+    isKimiVersionGte,
+    isPegasus15OrLater,
+    isSingleDigitGrokVersionGte,
+    parseClaudeVersion,
+} from '../options/version-parsing.js';
 import type { ModelCapabilities, ModelModalities } from '../types.js';
+import { isMistralLargeGte } from './mistral.js';
 
 export type BedrockEndpoint = 'runtime' | 'mantle';
 
@@ -12,12 +18,6 @@ export interface BedrockModelKnowledge {
 
 function includesAny(model: string, patterns: string[]): boolean {
     return patterns.some((pattern) => model.includes(pattern));
-}
-
-/** Mistral Large uses small semantic generations (3, 4); `mistral-large-2402` is a dated legacy ID. */
-export function mistralLargeGeneration(model: string): number | undefined {
-    const generation = model.match(/mistral\.mistral-large-(\d{1,2})(?:[-.:]|$)/)?.[1];
-    return generation === undefined ? undefined : Number(generation);
 }
 
 function isFamilyVersionGte(model: string, family: string, targetMajor: number, targetMinor = 0): boolean {
@@ -77,8 +77,8 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
         includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b']) ||
         isFamilyVersionGte(model, 'meta.llama', 4) ||
         includesAny(model, ['mistral.magistral-', 'mistral.ministral-3-', 'mistral.pixtral-']) ||
-        (mistralLargeGeneration(model) ?? 0) >= 3 ||
-        isFamilyVersionGte(model, 'kimi-k', 2, 5) ||
+        isMistralLargeGte(model, 3) ||
+        isKimiVersionGte(model, 2, 5) ||
         model.includes('nemotron-nano-12b') ||
         model.includes('qwen3-vl') ||
         model.includes('palmyra-vision') ||
@@ -140,7 +140,7 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     }
     if (model.includes('cohere.command-r')) return { context_window: 128_000, max_output_tokens: 4_096 };
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus-1-5.html
-    if (isFamilyVersionGte(model, 'twelvelabs.pegasus-', 1, 5)) return { max_output_tokens: 98_304 };
+    if (isPegasus15OrLater(model)) return { max_output_tokens: 98_304 };
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
     if (model.includes('twelvelabs.pegasus-')) return { max_output_tokens: 4_096 };
     if (isFamilyVersionGte(model, 'deepseek.v', 3, 2)) {
@@ -174,7 +174,7 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     if (model.includes('minimax.minimax-m2')) return { context_window: 1_000_000, max_output_tokens: 8_192 };
     // Mistral Large 4 publishes a 1M context but no output limit; later generations inherit it.
     // https://docs.mistral.ai/models/mistral-large-4-0
-    if ((mistralLargeGeneration(model) ?? 0) >= 4) return { context_window: 1_000_000 };
+    if (isMistralLargeGte(model, 4)) return { context_window: 1_000_000 };
     if (includesAny(model, ['mistral.devstral-2', 'mistral.mistral-large-3'])) {
         return { context_window: 256_000, max_output_tokens: 32_768 };
     }
@@ -193,7 +193,7 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         return { context_window: 32_000, max_output_tokens: model.includes('voxtral') ? undefined : 4_096 };
     }
     // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html (no output limit stated)
-    if (isFamilyVersionGte(model, 'kimi-k', 3)) return { context_window: 1_000_000 };
+    if (isKimiVersionGte(model, 3, 0)) return { context_window: 1_000_000 };
     if (includesAny(model, ['moonshot.kimi-k2', 'moonshotai.kimi-k2'])) {
         return { context_window: 256_000, max_output_tokens: 16_384 };
     }

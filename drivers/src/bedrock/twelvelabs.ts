@@ -2,6 +2,7 @@ import {
     type DataSource,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    isPegasus15OrLater,
     type JSONSchema,
     PromptRole,
     type PromptSegment,
@@ -51,9 +52,9 @@ export function pegasusTokenUsage(response: TwelvelabsPegasusResponse): Executio
     };
 }
 
-function isPegasus15OrLater(model: string): boolean {
-    const match = model.match(/pegasus-(\d+)-(\d+)/);
-    return !!match && (Number(match[1]) > 1 || (Number(match[1]) === 1 && Number(match[2]) >= 5));
+/** Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`. */
+export function pegasusFinishReason(response: TwelvelabsPegasusResponse): string | undefined {
+    return response.finishReason ?? response.stopReason;
 }
 
 // TwelveLabs Marengo Request/Response Types

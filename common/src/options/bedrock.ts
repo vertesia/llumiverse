@@ -1,5 +1,6 @@
 import type { z } from 'zod';
-import { getBedrockModelKnowledge, mistralLargeGeneration } from '../capability/bedrock-models.js';
+import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { isMistralLargeGte } from '../capability/mistral.js';
 import type {
     BedrockAI21OptionsSchema,
     BedrockClaudeOptionsSchema,
@@ -27,6 +28,7 @@ import {
     getGrokReasoningEffortLevels,
     hasSamplingParameterRestriction,
     isOpenAIGptVersionGTE,
+    isPegasus15OrLater,
     supportsNovaReasoning,
 } from './version-parsing.js';
 
@@ -102,7 +104,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     // Mistral models
     else if (model.includes('mistral')) {
         // Mistral Large 4+ publishes no output limit, so do not cap it with the legacy family default.
-        if ((mistralLargeGeneration(model) ?? 0) >= 4) return undefined;
+        if (isMistralLargeGte(model, 4)) return undefined;
         if (model.includes('8x7b')) {
             return 4096;
         }
@@ -599,7 +601,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         name: 'max_tokens',
                         type: OptionType.numeric,
                         // Pegasus 1.5 requires at least 512 output tokens.
-                        min: getBedrockModelKnowledge(model).max_output_tokens === 4_096 ? 1 : 512,
+                        min: isPegasus15OrLater(model) ? 512 : 1,
                         max: getMaxTokensLimitBedrock(model),
                         integer: true,
                         step: 100,
