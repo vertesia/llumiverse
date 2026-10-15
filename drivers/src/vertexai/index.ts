@@ -38,7 +38,7 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 export * from './embeddings/batch.js';
 
 import { getListedVertexMistralModels } from './mistral-models.js';
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
+import { NON_GLOBAL_ANTHROPIC_MODELS, resolveAnthropicVertexRegion } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import {
     type GeminiContextCacheCoordinationKey,
@@ -117,6 +117,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
+    anthropicClientRegion: string | undefined;
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
@@ -323,28 +324,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public async getAnthropicClient(
-        region: string = this.options.region,
+        region?: string,
         httpTimeout?: HttpTimeoutOptions,
+        model?: string,
     ): Promise<AnthropicVertex> {
-        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const getRegionPrefix = (r: string) => r.split('-')[0];
-        const regionPrefix = getRegionPrefix(region);
-        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
-
-        const defaultRegionPrefix = getRegionPrefix(this.options.region);
-        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
+        const mappedRegion = resolveAnthropicVertexRegion(region, this.options.region, model);
 
         // Get auth client to avoid version mismatch with GoogleAuth generic types
         const authClient = await this.getAuthClient();
 
-        // If mapped region is different from default mapped region, create one-off client
-        if (httpTimeout || mappedRegion !== defaultMappedRegion) {
+        if (httpTimeout) {
             return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
         }
 
-        //Lazy initialization for default region
-        if (!this.anthropicClient) {
+        // Lazy initialization, reusing the client while requests target the same location
+        if (!this.anthropicClient || this.anthropicClientRegion !== mappedRegion) {
             this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+            this.anthropicClientRegion = mappedRegion;
         }
         return this.anthropicClient;
     }
