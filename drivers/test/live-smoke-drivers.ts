@@ -12,7 +12,7 @@ import {
     GroqDriver,
     MistralAIDriver,
     OpenAIDriver,
-    OpenAIResponsesDriver,
+    OpenRouterDriver,
     TogetherAIDriver,
     VertexAIDriver,
     WatsonxDriver,
@@ -107,7 +107,6 @@ if (process.env.BEDROCK_REGION) {
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
-        //Use foundation models and inference profiles to test the driver
         // One global and one regional (us.) inference profile.
         models: ['global.anthropic.claude-haiku-5-5', 'us.amazon.nova-2-lite-v1:0'],
     });
@@ -119,8 +118,8 @@ if (process.env.BEDROCK_MANTLE_REGION) {
     drivers.push({
         name: 'bedrock-mantle',
         driver: new BedrockMantleDriver({ region: process.env.BEDROCK_MANTLE_REGION }),
-        // Mantle does not list Claude Haiku 5.5 yet; Haiku 4.5 is its smallest Claude model.
         // One model per Mantle protocol: Responses (gpt-6-luna), Chat Completions (gpt-oss-20b) and Messages (Claude).
+        // Mantle does not list Claude Haiku 5.5 yet; Haiku 4.5 is its smallest Claude model.
         models: ['openai.gpt-6-luna', 'openai.gpt-oss-20b', 'anthropic.claude-haiku-4-5'],
     });
 } else {
@@ -134,8 +133,7 @@ if (process.env.GROQ_API_KEY) {
             apiKey: process.env.GROQ_API_KEY as string,
         }),
         // gpt-oss-20b is Groq's cheapest self-serve model; qwen3.8-27b covers Groq's Qwen output cap and effort levels.
-        // Tool calling on Groq's gpt-oss is not covered here:
-        // https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
+        // Both take Groq's native structured outputs. Tool calling is covered in tools.live.test.ts.
         models: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
     });
 } else {
@@ -159,11 +157,10 @@ if (process.env.WATSONX_API_KEY) {
 if (process.env.OPENROUTER_API_KEY) {
     drivers.push({
         name: 'openrouter',
-        driver: new OpenAIResponsesDriver({
+        driver: new OpenRouterDriver({
             apiKey: process.env.OPENROUTER_API_KEY,
-            endpoint: 'https://openrouter.ai/api/v1',
         }),
-        // qwen/qwen3.8-flash was dropped: its upstream on OpenRouter answered 429 on most runs, outlasting the retries.
+        // qwen/qwen3.8-flash was dropped: its upstream on OpenRouter answered 429 on most runs, outlasting the backoff.
         models: ['minimax/minimax-m3', 'deepseek/deepseek-v4-flash', 'google/gemini-3.5-flash-lite'],
     });
 } else {

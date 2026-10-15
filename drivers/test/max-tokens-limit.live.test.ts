@@ -15,18 +15,18 @@ import {
 } from '@llumiverse/core';
 import { describe, expect, test } from 'vitest';
 import { selectedDrivers } from './live-smoke-drivers.js';
-import { getLowEffortTestOptions } from './utils.js';
+import { getLowEffortTestOptions, retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 
-describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
-    test.for(models)(
-        `${name}: max_tokens at documented limit on %s`,
-        {
+// Drivers run in parallel; one model's requests stay in order so a throttled model is not sent several at once.
+describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
+    describe.each(models)('%s', (model) => {
+        test(`${name}: max_tokens at documented limit on ${model}`, {
             timeout: TIMEOUT,
-            retry: 1,
-        },
-        async (model, context) => {
+            retry: retryUnlessRateLimited(1),
+            concurrent: false,
+        }, async (context) => {
             // Use provider-specific limits where available; unknown Vertex limits must remain unknown.
             let limit: number | undefined;
             if (driver.provider === 'bedrock') {
@@ -49,10 +49,10 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             const options = getLowEffortTestOptions(model, driver.provider, { max_tokens: limit });
             // Guard against the advertised-options filter dropping the option this test is about.
             expect((options.model_options as { max_tokens?: number } | undefined)?.max_tokens).toBe(limit);
-            const r = await driver.execute(shortPrompt, options);
+            const r = await withRateLimitBackoff(() => driver.execute(shortPrompt, options));
             // If the provider rejects our limit value, r.error will be set
             expect(r.error).toBeFalsy();
             expect(r.finish_reason).toBeTruthy();
-        },
-    );
+        });
+    });
 });

@@ -183,27 +183,6 @@ The following functions are exported from `@llumiverse/core` for advanced use ca
 
 ## Testing
 
-<<<<<<< HEAD
-Live tests (`*.live.test.ts`) call provider APIs; each provider's tests run only when its credentials are set in
-your local environment and are skipped otherwise.
-
-Live tests in `drivers/test/`:
-- `model-smoke.live.test.ts` - Curated smoke coverage: listing, execute, streaming with a schema, max_tokens at the
-  documented limit, and image input, for one or two small current models per provider
-- `conversation.live.test.ts` - Multi-turn conversations mixing execute and stream, images, and Claude prompt caching
-- `tools.live.test.ts` - Tool call, tool result, then a `tools=[]` checkpoint turn
-- `embeddings.live.test.ts` - Embeddings with each provider's default model
-- `vertexai-embedding-models.live.test.ts` - One Vertex embedding model per request path
-- `api-key-list-models.live.test.ts` - Gemini API key model listing
-
-Live tests use small, current models so a retirement does not break CI, and build options with
-`getLowEffortTestOptions()` from `drivers/test/utils.ts`: low effort where supported, no `temperature`, and only the
-controls the model advertises.
-
-Functional tests run without credentials: colocated `*.test.ts` files under `common/src`, `core/src` and
-`drivers/src`, plus `core/test/` and `drivers/test/` (for example `core/test/conversation-strip.test.ts` for the
-conversation stripping utilities and `drivers/test/image-gen.test.ts` for the Nova Canvas payload).
-=======
 Tests are functional (`*.test.ts`, no provider calls), live (`*.live.test.ts`, run on demand), or live and in CI
 (live files in the allow list in `.github/workflows/build-and-test.yml`). `README.md` ("Testing") documents the tiers
 and the credentials each provider needs. A test that calls a provider must be in a `*.live.test.ts` file.
@@ -218,7 +197,14 @@ Live tests run on demand:
 - `max-tokens-limit.live.test.ts` - Each smoke model at its documented output limit (`live-smoke-drivers.ts` holds the shared model list)
 - `vertexai-embedding-models.live.test.ts` - Older Vertex embedding models, one per request path
 - `api-key-list-models.live.test.ts` - Gemini model listing with an API key
->>>>>>> c1a61c4 (test: stop live smoke tests depending on external hosts, and allow-list live tests in CI (#791))
+
+Live tests use small, current models so a retirement does not break CI, and build options with
+`getLowEffortTestOptions()` from `drivers/test/utils.ts`: low effort where supported, no `temperature`, and only the
+controls the model advertises.
+
+Functional tests run without credentials: colocated `*.test.ts` files under `common/src`, `core/src` and
+`drivers/src`, plus `core/test/` and `drivers/test/` (for example `core/test/conversation-strip.test.ts` for the
+conversation stripping utilities and `drivers/test/image-gen.test.ts` for the Nova Canvas payload).
 
 ## Adding a New Driver
 

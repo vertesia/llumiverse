@@ -54,10 +54,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     }
     console.log(out.join(''));
     const r = stream.completion as ExecutionResponse;
-<<<<<<< HEAD
-=======
     expect(r.error, truncationHint(r)).toBeFalsy();
->>>>>>> c1a61c4 (test: stop live smoke tests depending on external hosts, and allow-list live tests in CI (#791))
     if (jsonMode) {
         // The structured answer comes from the completion, which keeps reasoning separate from the answer.
         const jsonResult = parseCompletionResultsToJson(r.result);
