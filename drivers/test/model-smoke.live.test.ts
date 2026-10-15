@@ -11,14 +11,18 @@ import {
 import { getLowEffortTestOptions, parseCompletionResultsToJson } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
+/**
+ * Room for reasoning models (Qwen, MiniMax, DeepSeek) to think before they answer; at 2048 Qwen3.5-9B on Together
+ * spent the whole budget reasoning. 8192 is the lowest documented output limit among the smoke models.
+ */
+const SMOKE_MAX_TOKENS = 8192;
 
 function getTestOptions(model: string, provider: string): ExecutionOptions {
     const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
 
     // Exercises option mapping on models that advertise these controls; others drop them.
-    // max_tokens leaves room for reasoning models (Qwen, MiniMax, DeepSeek) to think before they answer.
     return getLowEffortTestOptions(model, provider, {
-        max_tokens: 2048,
+        max_tokens: SMOKE_MAX_TOKENS,
         top_k: 40,
         top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
         ...(isGemini35FlashLite
@@ -90,7 +94,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             if (!isMultiModal) return;
 
             const r = await driver.execute(testPrompt_describeImage, {
-                ...getLowEffortTestOptions(model, driver.provider, { max_tokens: 1024 }),
+                ...getLowEffortTestOptions(model, driver.provider, { max_tokens: SMOKE_MAX_TOKENS }),
                 result_schema: testSchema_animalDescription,
             });
             console.log('Result', r);
