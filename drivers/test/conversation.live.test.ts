@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src/index.js';
 import { answerText } from './assertions.js';
-import { completionResultToString, getLowEffortTestOptions } from './utils.js';
+import { getLowEffortTestOptions } from './utils.js';
 
 const TIMEOUT = 120 * 1000;
 
@@ -359,7 +359,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
                 options,
             );
             expect(result1.result.length).toBeGreaterThan(0);
-            const text1 = result1.result.map(completionResultToString).join('').toLowerCase();
+            const text1 = answerText(result1).toLowerCase();
             expect(text1).toContain('circle');
             expect(text1).toContain('triangle');
 
@@ -372,7 +372,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
                 { ...options, conversation: storedConversation1 },
             );
             expect(result2.result.length).toBeGreaterThan(0);
-            const text2 = result2.result.map(completionResultToString).join('').toLowerCase();
+            const text2 = answerText(result2).toLowerCase();
             // The images were stripped from the stored conversation, so this relies on the earlier turn's context
             expect(text2).toContain('blue');
             verifyConversationSerializable(result2.conversation, name);
