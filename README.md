@@ -228,6 +228,36 @@ const data = response.result[0].value;
 console.log(data.sentiment); // "positive"
 ```
 
+## Testing
+
+Tests fall into three tiers, chosen by file name and by the allow list in
+[`.github/workflows/build-and-test.yml`](.github/workflows/build-and-test.yml):
+
+| Tier | Files | Calls providers | Runs in CI |
+| --- | --- | --- | --- |
+| Functional | `*.test.ts` | No: provider calls are mocked | Yes, all of them |
+| Live | `*.live.test.ts` | Yes, using your credentials | No; run on demand |
+| Live in CI | `*.live.test.ts` listed in the CI allow list | Yes | Yes, on every push and pull request |
+
+A test that calls a provider must live in a `*.live.test.ts` file. Live files in CI are the curated smoke set:
+`model-smoke`, `conversation`, `tools` and `embeddings` (all under `drivers/test/`). Other live files cover
+debugging or slower checks, such as `max-tokens-limit.live.test.ts`, which sends each smoke model a request at its
+documented output limit. To add a live file to CI, add its path to the allow list.
+
+```bash
+# Functional tests: no credentials needed
+pnpm exec vitest run --exclude '**/*.live.test.ts'
+
+# One live file, narrowed to a provider or model
+LLUMIVERSE_LIVE_PROVIDERS=google-vertex pnpm exec vitest run drivers/test/model-smoke.live.test.ts
+```
+
+Live tests run only for providers whose credentials are set, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
+`WATSONX_API_KEY` (with `WATSONX_PROJECT_ID` and `WATSONX_ENDPOINT_URL`), `AZURE_OPENAI_KEY` (with
+`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`), `BEDROCK_REGION`, `BEDROCK_MANTLE_REGION`, and
+`GOOGLE_PROJECT_ID` with `GOOGLE_REGION`. Tests for other providers are skipped.
+
 ## Contributing
 
 We welcome contributions! Whether it's a new driver, a bug fix, or a docs improvement.
