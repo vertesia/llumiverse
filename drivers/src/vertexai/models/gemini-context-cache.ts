@@ -1104,7 +1104,10 @@ export async function generateWithGeminiContextCache<T>(
 
 function logCacheDiagnostic(driver: VertexAIDriver, diagnostic: PromptCacheDiagnostic): void {
     const fields = { prompt_cache: diagnostic };
-    if (
+    // A model without explicit caching is expected, not degraded; createCache logs it once at info.
+    if (diagnostic.path === 'unsupported_model') {
+        driver.logger.debug?.(fields, '[VertexAI] Gemini explicit context cache path');
+    } else if (
         diagnostic.provider_status !== undefined ||
         diagnostic.path === 'fallback_coordination_unavailable' ||
         diagnostic.path === 'fallback_wait_timeout'

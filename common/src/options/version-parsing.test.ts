@@ -4,6 +4,7 @@ import {
     getGeminiModelVersion,
     getOpenAIReasoningEffortLevels,
     isClaudeVersionGTE,
+    isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
     isOpenAIGptVersionGTE,
     parseClaudeVersion,
@@ -258,5 +259,24 @@ describe('supportsClaudeForcedToolChoice', () => {
         'gpt-5',
     ])('accepts a forced tool choice on %s', (model) => {
         expect(supportsClaudeForcedToolChoice(model)).toBe(true);
+    });
+});
+
+describe('Gemini long decode', () => {
+    it.each([
+        ['gemini-4-argon', true],
+        ['gemini-4-argon-cyber-permissive', true],
+        ['gemini-4-flash', true],
+        ['locations/global/publishers/google/models/gemini-5-pro', true],
+        ['gemini-3.8-flash', false],
+        ['gemini-4-flash-image', false],
+        ['gemini-4-flash-tts', false],
+        ['gemini-4-flash-live', false],
+        ['gemini-4-flash-native-audio', false],
+        ['gemini-4-flash-transcribe', false],
+        ['gemini-4-robotics', false],
+        ['gemini-embedding-4', false],
+    ])('classifies %s', (model, expected) => {
+        expect(isGeminiLongDecodeModel(model)).toBe(expected);
     });
 });

@@ -542,7 +542,7 @@ describe('Gemini explicit context caching', () => {
     it('skips explicit caching for a model Vertex reports as unsupported, then rechecks later', async () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         try {
-            const { driver, create, requests } = makeDriver();
+            const { driver, create, requests, warn } = makeDriver();
             create.mockRejectedValue(apiError(400, `Model \`${MODEL}\` does not support explicit context caching.`));
             const model = new GeminiModelDefinition(MODEL);
 
@@ -553,6 +553,7 @@ describe('Gemini explicit context caching', () => {
             expect(first.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model', provider_status: 400 });
             expect(second.prompt_cache_diagnostic).toMatchObject({ path: 'unsupported_model' });
             expect(requests.map((request) => request.config?.cachedContent)).toEqual([undefined, undefined]);
+            expect(warn).not.toHaveBeenCalled();
             await expect(
                 model.requestTextCompletion(
                     driver,

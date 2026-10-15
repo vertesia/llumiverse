@@ -134,30 +134,41 @@ describe('Gemini long decode', () => {
         }
     });
 
-    it('returns the partial output as length when a stream cannot be continued', async () => {
-        // A CONTINUATION without a token leaves the SDK nothing to resume from.
-        const { port, close } = await startLongDecodeServer([
-            {
-                text: 'partial',
-                finishReason: 'CONTINUATION',
-                usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
-            },
-        ]);
-        const { driver } = connectDriver(port);
-        try {
-            const stream = await driver.stream([{ role: PromptRole.user, content: 'Write a long proof.' }], {
+    it.each(['execute', 'stream'] as const)(
+        'returns the partial output as length when %s cannot be continued',
+        async (mode) => {
+            // A CONTINUATION without a token leaves the SDK nothing to resume from.
+            const { port, close } = await startLongDecodeServer([
+                {
+                    text: 'partial',
+                    finishReason: 'CONTINUATION',
+                    usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+                },
+            ]);
+            const { driver } = connectDriver(port);
+            const prompt = [{ role: PromptRole.user, content: 'Write a long proof.' }];
+            const options = {
                 model: MODEL,
                 model_options: { _option_id: 'vertexai-gemini' as const, max_tokens: 200_000 },
-            });
-            let text = '';
-            for await (const chunk of stream) text += chunk;
-            expect(text).toBe('partial');
-            expect(stream.completion?.finish_reason).toBe('length');
-        } finally {
-            driver.destroy();
-            await close();
-        }
-    });
+            };
+            try {
+                if (mode === 'execute') {
+                    const response = await driver.execute(prompt, options);
+                    expect(response.result).toEqual([{ type: 'text', value: 'partial' }]);
+                    expect(response.finish_reason).toBe('length');
+                } else {
+                    const stream = await driver.stream(prompt, options);
+                    let text = '';
+                    for await (const chunk of stream) text += chunk;
+                    expect(text).toBe('partial');
+                    expect(stream.completion?.finish_reason).toBe('length');
+                }
+            } finally {
+                driver.destroy();
+                await close();
+            }
+        },
+    );
 });
 
 describe('applyGeminiLongDecodeStreamTimeout', () => {
