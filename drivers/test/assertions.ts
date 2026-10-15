@@ -7,8 +7,23 @@ import {
 import { expect } from 'vitest';
 import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
 
+/** Answer text without reasoning, so a response that only "thought" does not count as an answer. */
+export function answerText(r: Pick<ExecutionResponse, 'result'>): string {
+    return r.result
+        .filter((result) => result.type !== 'thoughts')
+        .map(completionResultToString)
+        .join('');
+}
+
+/** Points at max_tokens when a failed check is explained by a truncated response. */
+function truncationHint(r: ExecutionResponse): string {
+    return r.finish_reason === 'length'
+        ? ' The response was cut off at max_tokens (finish_reason "length"): raise max_tokens for this model.'
+        : '';
+}
+
 export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?: AbstractDriver) {
-    expect(r.error).toBeFalsy();
+    expect(r.error, truncationHint(r)).toBeFalsy();
     expect(r.prompt).toBeTruthy();
     //TODO: This just checks for existence of the object,
     //could do with more thorough test however not all models support token_usage.
@@ -18,9 +33,7 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
         expect(r.token_usage).toBeTruthy();
     }
     expect(r.finish_reason).toBeTruthy();
-    //if r.result is string, it should be longer than 2
-    const stringResult = r.result.map(completionResultToString).join('');
-    expect(stringResult.length).toBeGreaterThan(2);
+    expect(answerText(r).length, `Expected a non-empty answer.${truncationHint(r)}`).toBeGreaterThan(2);
 }
 
 export async function assertStreamingCompletionOk(stream: CompletionStream, jsonMode: boolean = false) {
@@ -31,6 +44,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     }
     console.log(out.join(''));
     const r = stream.completion as ExecutionResponse;
+    expect(r.error, truncationHint(r)).toBeFalsy();
     const jsonObject = jsonMode ? extractAndParseJSON(out.join('')) : undefined;
     const jsonResult = jsonMode ? parseCompletionResultsToJson(r.result) : undefined;
     console.log(jsonObject);
@@ -39,12 +53,10 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
         expect(jsonResult).toStrictEqual(jsonObject);
     }
 
-    expect(r.error).toBeFalsy();
     expect(r.prompt).toBeTruthy();
     expect(r.token_usage).toBeTruthy();
     expect(r.finish_reason).toBeTruthy();
-    const stringResult = r.result.map(completionResultToString).join('');
-    expect(stringResult.length).toBeGreaterThan(2);
+    expect(answerText(r).length, `Expected a non-empty answer.${truncationHint(r)}`).toBeGreaterThan(2);
 
     return out;
 }

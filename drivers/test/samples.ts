@@ -16,7 +16,6 @@ export const testPrompt_color: PromptSegment[] = [
     },
 ];
 
-//json schema with 2 properties object and color
 export const testSchema_color: JSONSchema = {
     type: 'object',
     properties: {
@@ -24,6 +23,8 @@ export const testSchema_color: JSONSchema = {
             type: 'string',
         },
     },
+    required: ['color'],
+    additionalProperties: false,
 };
 
 export const testPrompt_describeImage: PromptSegment[] = [
