@@ -6,7 +6,7 @@ import {
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
-    isModelFamilyVersionGTE,
+    isQwenVersionGte,
     type JSONSchema,
     type Logger,
     ModelType,
@@ -219,7 +219,7 @@ function toGroqResponseFormat(
 ): ChatCompletionCreateParamsNonStreaming['response_format'] {
     if (!options.result_schema || (payload.tools?.length ?? 0) > 0) return undefined;
     const model = payload.model.toLowerCase().split('/').pop() ?? '';
-    if (!model.startsWith('gpt-oss-') && !isModelFamilyVersionGTE(model, 'qwen', 3, 8)) return undefined;
+    if (!model.startsWith('gpt-oss-') && !isQwenVersionGte(model, 3, 8)) return undefined;
     const formatted = formatOpenAISchema(options.result_schema as JSONSchema);
     return {
         type: 'json_schema',

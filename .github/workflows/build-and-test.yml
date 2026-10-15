@@ -81,6 +81,8 @@ jobs:
       - name: Build workspace
         run: pnpm build
 
+      # Functional tests run before cloud sign-in and without provider keys, so a test that calls a provider fails
+      # here instead of passing silently. Provider calls belong in *.live.test.ts files (see README "Testing").
       - name: Typecheck and functional tests
         run: pnpm typecheck:test && pnpm test:unit
 
@@ -111,7 +113,13 @@ jobs:
           BEDROCK_MANTLE_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
-        run: npx vitest --exclude '**/!(*.live).test.ts' --exclude '.github/**'
+        # Allow list: only these live files run in CI. Other *.live.test.ts files run on demand (see README "Testing").
+        run: >-
+          npx vitest
+          drivers/test/model-smoke.live.test.ts
+          drivers/test/conversation.live.test.ts
+          drivers/test/tools.live.test.ts
+          drivers/test/embeddings.live.test.ts
 
   notify-repo-composableai:
     name: Notify vertesia/composableai of new commit
