@@ -17,9 +17,11 @@ import {
 } from '@llumiverse/core';
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src/index.js';
-import { completionResultToString, getLowEffortTestOptions } from './utils.js';
+import { answerText } from './assertions.js';
+import { getLowEffortTestOptions } from './utils.js';
 
 const TIMEOUT = 120 * 1000;
 
@@ -151,20 +153,10 @@ class Base64ImageSource implements DataSource {
         });
     }
 
-    static async fromUrl(url: string, mimeType: string = 'image/png'): Promise<Base64ImageSource> {
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch image from url: ${url}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        const base64 = btoa(binary);
-        const name = url.split('/').pop() || 'image';
-        return new Base64ImageSource(base64, mimeType, name);
+    /** Loads an image committed next to this test, so the test never depends on a remote host. */
+    static fromTestFile(file: string, mimeType: string = 'image/png'): Base64ImageSource {
+        const base64 = readFileSync(new URL(`./${file}`, import.meta.url)).toString('base64');
+        return new Base64ImageSource(base64, mimeType, file);
     }
 }
 
@@ -267,8 +259,9 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
         test(`${name}: multi-turn conversation mixing execute and stream`, { timeout: TIMEOUT }, async () => {
             const options = getLowEffortTestOptions(textModel, driver.provider, { max_tokens: 1000 });
 
+            // A plain personal fact: credential-like tokens ("Remember this code: ...") trip Gemini's safety filter.
             const result1 = await driver.execute(
-                [{ role: PromptRole.user, content: 'Remember this code: ALPHA-7749' }],
+                [{ role: PromptRole.user, content: 'I went to Paris last summer.' }],
                 options,
             );
             expect(result1.result.length).toBeGreaterThan(0);
@@ -276,15 +269,15 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
             const stream2 = await driver.stream(
-                [{ role: PromptRole.user, content: 'What code did I tell you to remember?' }],
+                [{ role: PromptRole.user, content: 'Which city did I go to last summer?' }],
                 {
                     ...options,
                     conversation: storedConversation1,
                 },
             );
             await consumeStream(stream2);
-            const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
-            expect(text2).toContain('ALPHA-7749');
+            const text2 = stream2.completion ? answerText(stream2.completion) : '';
+            expect(text2).toContain('Paris');
             verifyConversationSerializable(stream2.completion?.conversation, name);
             const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
 
@@ -292,13 +285,13 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
                 [
                     {
                         role: PromptRole.user,
-                        content: 'Repeat only the numeric digits from that code, no delimiters, no spaces.',
+                        content: 'Which country is that city in? Answer with the country name only.',
                     },
                 ],
                 { ...options, conversation: storedConversation2 },
             );
-            const text3 = result3.result.map(completionResultToString).join('');
-            expect(text3).toContain('7749');
+            const text3 = answerText(result3);
+            expect(text3).toContain('France');
             verifyConversationSerializable(result3.conversation, name);
         });
 
@@ -350,42 +343,38 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             }
             const options = getLowEffortTestOptions(visionModel, driver.provider, { max_tokens: 1000 });
 
-            // Send the images as base64, as Studio does
-            const googleLogoUrl = 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png';
-            const githubLogoUrl = 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png';
-
-            const [googleImage, githubImage] = await Promise.all([
-                Base64ImageSource.fromUrl(googleLogoUrl, 'image/png'),
-                Base64ImageSource.fromUrl(githubLogoUrl, 'image/png'),
-            ]);
+            // Send the images as base64, as Studio does. Both were drawn with ImageMagick for these tests
+            // (512x512, one solid shape on white), so they carry no third-party content.
+            const circleImage = Base64ImageSource.fromTestFile('red_circle.png');
+            const triangleImage = Base64ImageSource.fromTestFile('blue_triangle.png');
 
             const result1 = await driver.execute(
                 [
                     {
                         role: PromptRole.user,
-                        content: "I'm showing you two company logos. Please identify both companies.",
-                        files: [googleImage, githubImage],
+                        content: "I'm showing you two images. Name the shape and its colour in each one.",
+                        files: [circleImage, triangleImage],
                     },
                 ],
                 options,
             );
             expect(result1.result.length).toBeGreaterThan(0);
-            const text1 = result1.result.map(completionResultToString).join('').toLowerCase();
-            expect(text1).toContain('google');
-            expect(text1).toContain('github');
+            const text1 = answerText(result1).toLowerCase();
+            expect(text1).toContain('circle');
+            expect(text1).toContain('triangle');
 
             // Critical: binary image data must not corrupt the stored conversation
             verifyConversationSerializable(result1.conversation, name);
             const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
             const result2 = await driver.execute(
-                [{ role: PromptRole.user, content: 'Which of the two logos has more colors?' }],
+                [{ role: PromptRole.user, content: 'What colour was the triangle? Answer with the colour only.' }],
                 { ...options, conversation: storedConversation1 },
             );
             expect(result2.result.length).toBeGreaterThan(0);
-            const text2 = result2.result.map(completionResultToString).join('').toLowerCase();
-            // Google logo has 4 colors, GitHub logo is monochrome
-            expect(text2).toMatch(/google/);
+            const text2 = answerText(result2).toLowerCase();
+            // The images were stripped from the stored conversation, so this relies on the earlier turn's context
+            expect(text2).toContain('blue');
             verifyConversationSerializable(result2.conversation, name);
         });
     },
