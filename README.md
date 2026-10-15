@@ -253,7 +253,7 @@ LLUMIVERSE_LIVE_PROVIDERS=google-vertex pnpm exec vitest run drivers/test/model-
 ```
 
 Live tests run only for providers whose credentials are set, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`MISTRAL_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
+`MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
 `WATSONX_API_KEY` (with `WATSONX_PROJECT_ID` and `WATSONX_ENDPOINT_URL`), `AZURE_OPENAI_KEY` (with
 `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`), `BEDROCK_REGION`, `BEDROCK_MANTLE_REGION`, and
 `GOOGLE_PROJECT_ID` with `GOOGLE_REGION`. Tests for other providers are skipped.
