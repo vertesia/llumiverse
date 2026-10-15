@@ -500,6 +500,16 @@ describe('Bedrock open-weight model cards', () => {
         expect(options.options.find((item) => item.name === 'max_tokens')).toMatchObject({ min, max });
     });
 
+    it('describes Voxtral on Bedrock as text-only, unlike the native Mistral API', () => {
+        for (const provider of [Providers.bedrock, Providers.bedrock_mantle]) {
+            expect(resolveModelProfile('mistral.voxtral-small-24b-2507', provider).capabilities.input).toMatchObject({
+                text: true,
+                audio: false,
+            });
+        }
+        expect(resolveModelProfile('voxtral-small-latest', Providers.mistralai).capabilities.input.audio).toBe(true);
+    });
+
     it('keeps the dated Mistral Large 2402 release on its legacy limits', () => {
         expect(getBedrockModelKnowledge('mistral.mistral-large-2402-v1:0')).toMatchObject({
             context_window: 32_000,

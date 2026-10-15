@@ -88,7 +88,9 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
         (model.includes('amazon.nova') && !model.includes('nova-micro')) ||
         model.includes('twelvelabs.pegasus') ||
         isFamilyVersionGte(model, 'google.gemma-', 4);
-    const audio = includesAny(model, ['nova-sonic', 'mistral.voxtral-']) || model.includes('google.gemma-4-e2b');
+    // AWS lists Voxtral with text input only (no audio), and live Converse/Mantle audio requests were unreliable, so it
+    // is described as a text model here. https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-small-24b-2507.html
+    const audio = model.includes('nova-sonic') || model.includes('google.gemma-4-e2b');
 
     return {
         input: { text: !model.includes('nova-sonic-v1'), image, video, audio, embed: false },
