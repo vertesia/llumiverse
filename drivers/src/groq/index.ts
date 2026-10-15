@@ -6,11 +6,6 @@ import {
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
-<<<<<<< HEAD
-=======
-    isQwenVersionGte,
-    type JSONSchema,
->>>>>>> 2edad30 (feat: describe Together Qwen reasoning controls, report Together streamed usage, and fix Groq Qwen version parsing (#792))
     type Logger,
     ModelType,
     modelModalitiesToArray,
@@ -211,32 +206,6 @@ function toGroqRequest(
     return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
 }
 
-<<<<<<< HEAD
-=======
-/**
- * Groq Structured Outputs: `json_schema` on gpt-oss and Qwen 3.8+, strict (constrained decoding) except on
- * gpt-oss-safeguard. Groq rejects `response_format` together with tools, so a request with tools keeps the
- * prompt instruction alone, which this driver always sends.
- */
-function toGroqResponseFormat(
-    payload: OpenAIChatCompletionsPayload,
-    options: ExecutionOptions,
-): ChatCompletionCreateParamsNonStreaming['response_format'] {
-    if (!options.result_schema || (payload.tools?.length ?? 0) > 0) return undefined;
-    const model = payload.model.toLowerCase().split('/').pop() ?? '';
-    if (!model.startsWith('gpt-oss-') && !isQwenVersionGte(model, 3, 8)) return undefined;
-    const formatted = formatOpenAISchema(options.result_schema as JSONSchema);
-    return {
-        type: 'json_schema',
-        json_schema: {
-            name: 'output',
-            strict: formatted.strict && !model.includes('safeguard'),
-            schema: formatted.schema as Record<string, unknown>,
-        },
-    };
-}
-
->>>>>>> 2edad30 (feat: describe Together Qwen reasoning controls, report Together streamed usage, and fix Groq Qwen version parsing (#792))
 function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
     const contentParts = Array.isArray(message.content)
