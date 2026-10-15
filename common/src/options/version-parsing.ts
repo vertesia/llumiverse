@@ -101,11 +101,11 @@ export function hasGeminiSamplingRestriction(model: string): boolean {
 
 /**
  * Gemini 4+ chat models support long decodes on Vertex generateContent: output continues across requests up to the
- * unified 1,048,576-token input-plus-output limit. Specialised image, speech, live and robotics variants do not.
+ * unified 1,048,576-token input-plus-output limit. Specialised image, speech, live, audio and robotics variants do not.
  * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
  */
 export function isGeminiLongDecodeModel(model: string): boolean {
-    if (/(?:image|tts|transcribe|live|robotics|embedding|omni|nano-banana)/.test(model)) return false;
+    if (/(?:image|tts|transcribe|live|native-audio|robotics|embedding|omni|nano-banana)/.test(model)) return false;
     return isGeminiModelVersionGte(model, '4.0');
 }
 

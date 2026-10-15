@@ -262,6 +262,7 @@ export function applyGeminiLongDecodeStreamTimeout(
     const maxOutputTokens = payload.config?.maxOutputTokens;
     if (!maxOutputTokens || maxOutputTokens <= GEMINI_STREAM_REQUEST_MAX_OUTPUT_TOKENS) return;
     if (hasResponseTimeout(driver.options.httpTimeout) || hasResponseTimeout(options.httpTimeout)) return;
+    // The built-in default is shorter today; never lower it if that changes.
     if (driver.getRequestTimeoutMs() >= GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS) return;
     payload.config = {
         ...payload.config,
@@ -597,6 +598,8 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
 
 const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
+    // The SDK continues long decodes itself; a CONTINUATION left on the final response means it could not resume.
+    FinishReason.CONTINUATION,
     FinishReason.STOP,
     FinishReason.FINISH_REASON_UNSPECIFIED,
 ];
@@ -774,6 +777,7 @@ function logGeminiResponseRefusals(
 function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): string | undefined {
     switch (finishReason) {
         case FinishReason.MAX_TOKENS:
+        case FinishReason.CONTINUATION:
             return 'length';
         case FinishReason.STOP:
             return 'stop';

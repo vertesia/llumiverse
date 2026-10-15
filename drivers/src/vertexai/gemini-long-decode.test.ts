@@ -10,7 +10,14 @@ const MODEL = 'gemini-4-argon';
 
 // Two long-decode hops: the first stops at the per-request cap with a continuation token, the second finishes.
 // Each hop re-reads the prompt, so the second hop's prompt includes the first hop's output.
-const HOPS = [
+interface Hop {
+    text: string;
+    finishReason: string;
+    continuationToken?: string;
+    usageMetadata: Record<string, number>;
+}
+
+const HOPS: Hop[] = [
     {
         text: 'part one ',
         finishReason: 'CONTINUATION',
@@ -30,12 +37,12 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
     return JSON.parse(body) as Record<string, unknown>;
 }
 
-async function startLongDecodeServer() {
+async function startLongDecodeServer(hops: Hop[] = HOPS) {
     const bodies: Record<string, unknown>[] = [];
     const server = createServer((req, res) => {
         void readBody(req).then((body) => {
             bodies.push(body);
-            const hop = body.continuationToken === 'tok-1' ? HOPS[1] : HOPS[0];
+            const hop = body.continuationToken === 'tok-1' ? hops[1] : hops[0];
             const response = {
                 candidates: [
                     {
@@ -63,25 +70,30 @@ async function startLongDecodeServer() {
     return { bodies, port: (server.address() as AddressInfo).port, close };
 }
 
+function connectDriver(port: number) {
+    const warn = vi.fn();
+    const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    const driver = new VertexAIDriver({ project: 'test', region: 'global', geminiContextCache: false, logger });
+    const httpOptions = (
+        driver as unknown as { getGoogleGenAIHttpOptions(): { fetch: typeof fetch } }
+    ).getGoogleGenAIHttpOptions();
+    // Every continuation request must go through the driver fetch, which applies the driver's HTTP timeouts.
+    const driverFetch = vi.fn(httpOptions.fetch);
+    const client = new GoogleGenAI({
+        vertexai: true,
+        apiKey: 'test',
+        httpOptions: { ...httpOptions, fetch: driverFetch, baseUrl: `http://127.0.0.1:${port}` },
+    });
+    vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
+    return { driver, driverFetch, warn };
+}
+
 describe('Gemini long decode', () => {
     afterEach(() => vi.restoreAllMocks());
 
     it.each(['execute', 'stream'] as const)('continues across requests on %s', async (mode) => {
         const { bodies, port, close } = await startLongDecodeServer();
-        const warn = vi.fn();
-        const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
-        const driver = new VertexAIDriver({ project: 'test', region: 'global', geminiContextCache: false, logger });
-        const httpOptions = (
-            driver as unknown as { getGoogleGenAIHttpOptions(): { fetch: typeof fetch } }
-        ).getGoogleGenAIHttpOptions();
-        // Every continuation request must go through the driver fetch, which applies the driver's HTTP timeouts.
-        const driverFetch = vi.fn(httpOptions.fetch);
-        const client = new GoogleGenAI({
-            vertexai: true,
-            apiKey: 'test',
-            httpOptions: { ...httpOptions, fetch: driverFetch, baseUrl: `http://127.0.0.1:${port}` },
-        });
-        vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
+        const { driver, driverFetch, warn } = connectDriver(port);
         const prompt = [{ role: PromptRole.user, content: 'Write a long proof.' }];
         const options = {
             model: MODEL,
@@ -116,6 +128,31 @@ describe('Gemini long decode', () => {
             // The continuation resends the original request instead of appending the partial output.
             expect(bodies[1].contents).toEqual(bodies[0].contents);
             expect(bodies[0]).toMatchObject({ generationConfig: { maxOutputTokens: 200_000 } });
+        } finally {
+            driver.destroy();
+            await close();
+        }
+    });
+
+    it('returns the partial output as length when a stream cannot be continued', async () => {
+        // A CONTINUATION without a token leaves the SDK nothing to resume from.
+        const { port, close } = await startLongDecodeServer([
+            {
+                text: 'partial',
+                finishReason: 'CONTINUATION',
+                usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+            },
+        ]);
+        const { driver } = connectDriver(port);
+        try {
+            const stream = await driver.stream([{ role: PromptRole.user, content: 'Write a long proof.' }], {
+                model: MODEL,
+                model_options: { _option_id: 'vertexai-gemini' as const, max_tokens: 200_000 },
+            });
+            let text = '';
+            for await (const chunk of stream) text += chunk;
+            expect(text).toBe('partial');
+            expect(stream.completion?.finish_reason).toBe('length');
         } finally {
             driver.destroy();
             await close();
