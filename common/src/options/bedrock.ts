@@ -584,14 +584,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             };
         } else if (model.includes('twelvelabs')) {
             if (model.includes('pegasus')) {
+                // Pegasus offers only the Standard tier, so no service tier choice is listed.
                 const pegasusOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: 'service_tier',
-                        type: OptionType.enum,
-                        enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
-                        default: 'default',
-                        description: 'Select the Amazon Bedrock processing tier for this request.',
-                    },
                     {
                         name: 'temperature',
                         type: OptionType.numeric,
@@ -604,8 +598,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     {
                         name: 'max_tokens',
                         type: OptionType.numeric,
-                        min: 1,
-                        max: 4096,
+                        // Pegasus 1.5 requires at least 512 output tokens.
+                        min: getBedrockModelKnowledge(model).max_output_tokens === 4_096 ? 1 : 512,
+                        max: getMaxTokensLimitBedrock(model),
                         integer: true,
                         step: 100,
                         description: 'The maximum number of tokens to generate',

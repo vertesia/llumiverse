@@ -137,6 +137,10 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         if (model.includes('claude-3-haiku')) return { context_window: 200_000, max_output_tokens: 4_096 };
     }
     if (model.includes('cohere.command-r')) return { context_window: 128_000, max_output_tokens: 4_096 };
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus-1-5.html
+    if (isFamilyVersionGte(model, 'twelvelabs.pegasus-', 1, 5)) return { max_output_tokens: 98_304 };
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
+    if (model.includes('twelvelabs.pegasus-')) return { max_output_tokens: 4_096 };
     if (isFamilyVersionGte(model, 'deepseek.v', 3, 2)) {
         return { context_window: 163_840, max_output_tokens: 8_192 };
     }
@@ -277,7 +281,8 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
     } else if (includesAny(model, ['mistral.mistral-large', 'mistral.pixtral'])) {
         toolSupport = true;
     } else if (model.includes('twelvelabs.pegasus')) {
-        toolSupport = true;
+        // Pegasus runs through InvokeModel with a single prompt and video; its request has no tools field.
+        toolSupport = false;
     } else if (model.includes('writer.palmyra')) {
         toolSupport = true;
     } else if (includesAny(model, ['moonshot.kimi-', 'moonshotai.kimi-', 'zai.glm-'])) {

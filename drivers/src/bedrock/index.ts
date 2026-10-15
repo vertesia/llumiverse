@@ -1224,18 +1224,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const body = decoder.decode(res.body);
         const result = JSON.parse(body);
 
-        // Extract the response according to TwelveLabs Pegasus format
-        let finishReason: string | undefined;
-        switch (result.finishReason) {
-            case 'stop':
-                finishReason = 'stop';
-                break;
-            case 'length':
-                finishReason = 'length';
-                break;
-            default:
-                finishReason = result.finishReason;
-        }
+        // Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus-1-5.html
+        const finishReason: string | undefined = result.finishReason ?? result.stopReason;
 
         return {
             result: result.message ? [{ type: 'text' as const, value: result.message }] : [],
@@ -1277,20 +1268,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     try {
                         const result = JSON.parse(body);
 
-                        // Extract streaming response according to TwelveLabs Pegasus format
-                        let finishReason: string | undefined;
-                        if (result.finishReason) {
-                            switch (result.finishReason) {
-                                case 'stop':
-                                    finishReason = 'stop';
-                                    break;
-                                case 'length':
-                                    finishReason = 'length';
-                                    break;
-                                default:
-                                    finishReason = result.finishReason;
-                            }
-                        }
+                        // Pegasus 1.2 reports `finishReason`; Pegasus 1.5 renamed it `stopReason`.
+                        const finishReason: string | undefined = result.finishReason ?? result.stopReason;
 
                         return {
                             result:
@@ -1951,10 +1930,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'moonshotai',
             'nvidia',
             'zai',
+            'xai',
         ];
         const unsupportedModelsByPublisher = {
             // Sonic is a bidirectional speech-to-speech stream (every generation, e.g. `nova-2-sonic`), not Converse.
-            amazon: ['nova-reel', 'nova-sonic', 'nova-2-sonic', 'titan-image-generator', 'rerank'],
+            amazon: ['nova-reel', 'sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],
@@ -1971,6 +1951,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             moonshotai: [],
             nvidia: [],
             zai: [],
+            xai: [],
         };
 
         // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.

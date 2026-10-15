@@ -484,6 +484,22 @@ describe('Bedrock open-weight model cards', () => {
         },
     );
 
+    it.each([
+        ['twelvelabs.pegasus-1-2-v1:0', 1, 4_096],
+        ['us.twelvelabs.pegasus-1-2-v1:0', 1, 4_096],
+        ['global.twelvelabs.pegasus-1-5-v1:0', 512, 98_304],
+    ])('describes Pegasus as a tool-less video model for %s', (model, min, max) => {
+        expect(resolveModelProfile(model, Providers.bedrock).capabilities).toMatchObject({
+            input: { text: true, video: true },
+            output: { text: true },
+            tool_support: false,
+        });
+        const options = getOptions(model, Providers.bedrock);
+        expect(options._option_id).toBe('bedrock-twelvelabs-pegasus');
+        expect(options.options.map((item) => item.name)).not.toContain('service_tier');
+        expect(options.options.find((item) => item.name === 'max_tokens')).toMatchObject({ min, max });
+    });
+
     it('keeps the dated Mistral Large 2402 release on its legacy limits', () => {
         expect(getBedrockModelKnowledge('mistral.mistral-large-2402-v1:0')).toMatchObject({
             context_window: 32_000,

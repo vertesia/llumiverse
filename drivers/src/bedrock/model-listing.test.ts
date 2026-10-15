@@ -30,8 +30,11 @@ const DISCOVERY_CASES = [
     { id: 'zai.glm-6', discoverable: true },
     // Titan Image uses a different request schema; the current image execution path is Nova Canvas only.
     { id: 'amazon.titan-image-generator-v3', discoverable: false },
+    // Every Sonic generation is a bidirectional speech stream rather than Converse.
     { id: 'amazon.nova-sonic-v1:0', discoverable: false },
     { id: 'amazon.nova-2-sonic-v1:0', discoverable: false },
+    { id: 'amazon.nova-2-5-sonic', discoverable: false },
+    { id: 'xai.grok-4.7', discoverable: true },
     { id: 'amazon.nova-canvas-v2:0', discoverable: true },
     { id: 'unverified.model-1', discoverable: false },
 ] as const;
