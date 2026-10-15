@@ -80,7 +80,8 @@ function getMistralContextWindow(model: string): number | undefined {
         semanticVersionGte(model, 'mistral-large-', 3) ||
         /ministral-(?:3|8|14)b-(?:latest|\d{4})(?:[-_.]|$)/.test(model) ||
         model.includes('devstral-2') ||
-        model.includes('leanstral')
+        model.includes('leanstral') ||
+        datedVersionGte(model, 'codestral-', 2508)
     ) {
         return 256_000;
     }

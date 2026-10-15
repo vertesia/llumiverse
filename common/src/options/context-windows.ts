@@ -2,9 +2,11 @@ import { getMistralModelKnowledge } from '../capability/mistral.js';
 import { getGeminiModelLimits } from './gemini-limits.js';
 import {
     isClaudeVersionGTE,
+    isKimiVersionGte,
     isModelFamilyVersionGTE,
     isOpenAIGptProModel,
     isOpenAIGptVersionGTE,
+    normalizeClaudeVersionSeparator,
     parseOpenAIGptVersion,
 } from './version-parsing.js';
 
@@ -22,7 +24,7 @@ function isDeepSeekV32OrLater(model: string): boolean {
  * Provider-specific limits must be applied by the provider option/capability layer.
  */
 export function getMaxOutputTokens(model: string): number | undefined {
-    model = model.toLowerCase();
+    model = normalizeClaudeVersionSeparator(model.toLowerCase());
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
@@ -44,7 +46,8 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 100_000;
     // GPT models
     const gptVersion = parseOpenAIGptVersion(model);
-    if (model.includes('gpt-5-chat-latest')) return 16_384;
+    // GPT-5.x chat snapshots (`gpt-5-chat-latest`, `gpt-5.2-chat`) keep the smaller chat-model limits.
+    if (/gpt-5(?:\.\d+)?-chat/.test(model)) return 16_384;
     if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 128_000;
     if (model.includes('gpt-oss')) return 16_384;
@@ -104,7 +107,7 @@ export function getMaxInputTokens(model: string): number | undefined {
  * Returns the known context window size (input + output), or undefined rather than guessing for an unknown model.
  */
 export function getContextWindowSize(model: string): number | undefined {
-    model = model.toLowerCase();
+    model = normalizeClaudeVersionSeparator(model.toLowerCase());
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
@@ -118,7 +121,7 @@ export function getContextWindowSize(model: string): number | undefined {
     // OpenAI o-series (check before gpt-4 to avoid false matches)
     if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 200_000;
     // GPT models — provider-specific limits are applied by the provider overlay.
-    if (model.includes('gpt-5-chat-latest')) return 128_000;
+    if (/gpt-5(?:\.\d+)?-chat/.test(model)) return 128_000;
     if (model.includes('gpt-5.4-mini') || model.includes('gpt-5.4-nano')) return 400_000;
     if (isOpenAIGptVersionGTE(model, 5, 4)) return 1_050_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 400_000;
@@ -147,7 +150,9 @@ export function getContextWindowSize(model: string): number | undefined {
     if (model.includes('qwen3-coder')) return 262_144;
     if (model.includes('qwen')) return 262_144;
     // Kimi
-    if (model.includes('kimi-k2-thinking')) return 262_144;
+    if (isKimiVersionGte(model, 3, 0)) return 1_048_576;
+    if (isKimiVersionGte(model, 2, 5) || /kimi-k2-(?:thinking|0905)/.test(model)) return 262_144;
+    if (model.includes('kimi-k2')) return 131_072;
     // MiniMax
     if (isModelFamilyVersionGTE(model, 'minimax-m', 3, 0)) return 1_048_576;
     if (model.includes('minimax-m2')) return 196_608;
@@ -161,6 +166,9 @@ export function getContextWindowSize(model: string): number | undefined {
     if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 1_048_576;
     // Gemma
     if (model.includes('gemma-4')) return 256_000;
+    // Gemma 3 1B is 32K; the larger Gemma 3 models are 128K.
+    if (model.includes('gemma-3-1b')) return 32_768;
+    if (model.includes('gemma-3-')) return 131_072;
     // Llama
     if (isModelFamilyVersionGTE(model, 'llama-', 4, 0) || isModelFamilyVersionGTE(model, 'llama', 4, 0)) {
         return model.includes('scout') ? 10_000_000 : 1_000_000;

@@ -11,6 +11,7 @@ import { getMaxOutputTokens } from './context-windows.js';
 import {
     getAvailableEffortLevels,
     isClaudeVersionGTE,
+    normalizeClaudeVersionSeparator,
     parseClaudeVersion,
     requiresAdaptiveThinkingOnly,
 } from './version-parsing.js';
@@ -27,7 +28,7 @@ import {
  * - All others:   delegated to {@link getMaxOutputTokens}
  */
 export function getClaudeMaxTokensLimit(model: string): number {
-    if (model.includes('-3-7')) return 128000;
+    if (normalizeClaudeVersionSeparator(model).includes('-3-7')) return 128000;
     if (isClaudeVersionGTE(model, 4, 7)) return 128000;
     // Every Claude generation has a numeric canonical limit; unknown dedicated Gemini APIs do not.
     return getMaxOutputTokens(model) as number;

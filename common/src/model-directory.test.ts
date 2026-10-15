@@ -338,6 +338,43 @@ describe('central model directory', () => {
         expect(maxTokens.max).toBe(max_output_tokens);
     });
 
+    it.each([
+        ['anthropic/claude-opus-4.6', 1_000_000, 128_000],
+        ['anthropic/claude-opus-4.8:batch', 1_000_000, 128_000],
+        ['anthropic/claude-3.7-sonnet', 200_000, 64_000],
+        ['moonshotai/kimi-k3', 1_048_576, undefined],
+        ['moonshotai/kimi-k2.6', 262_144, undefined],
+        ['moonshotai/kimi-k2-0905', 262_144, undefined],
+        ['moonshotai/kimi-k2', 131_072, undefined],
+        ['nvidia/nemotron-3-super-120b-a12b', 256_000, undefined],
+        ['nvidia/nemotron-3.5-lightning', 256_000, undefined],
+        ['openai/gpt-5.2-chat', 128_000, 16_384],
+        ['google/gemma-3-27b-it', 131_072, undefined],
+        ['mistralai/codestral-2508', 256_000, undefined],
+        ['mistralai/mistral-small-2603:batch', 256_000, undefined],
+    ])('resolves aggregator id %s limits', (model, context_window, max_output_tokens) => {
+        const profile = resolveModelProfile(model, Providers.openai_compatible);
+        expect(profile.context_window).toBe(context_window);
+        if (max_output_tokens !== undefined) expect(profile.max_output_tokens).toBe(max_output_tokens);
+    });
+
+    it.each([
+        ['moonshotai/kimi-k2.5', true],
+        ['moonshotai/kimi-k3', true],
+        ['moonshotai/kimi-k2-0905', false],
+        ['openai/o3-mini', false],
+        ['openai/o4-mini', true],
+        ['mistralai/mistral-small-2603:batch', true],
+    ])('resolves aggregator id %s image input as %s', (model, image) => {
+        expect(!!resolveModelProfile(model, Providers.openai_compatible).capabilities.input.image).toBe(image);
+    });
+
+    it('applies Claude 4.6+ reasoning controls to dotted aggregator ids', () => {
+        const dotted = getOptions('anthropic/claude-opus-4.8', Providers.openai_compatible).options;
+        const dashed = getOptions('anthropic/claude-opus-4-8', Providers.openai_compatible).options;
+        expect(dotted.map((option) => option.name)).toEqual(dashed.map((option) => option.name));
+    });
+
     it('describes DeepSeek V4 limits and V4.1 Flash image input', () => {
         expect(resolveModelProfile('deepseek-v4-pro', Providers.openai_compatible)).toMatchObject({
             context_window: 1_048_576,

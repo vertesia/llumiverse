@@ -50,6 +50,15 @@ export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, 
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** Kimi versions use a dotted minor (`kimi-k2.5`); a dash introduces a date snapshot (`kimi-k2-0905`). */
+export function isKimiVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.match(/kimi-k(\d+)(?:\.(\d+))?/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
 /** Grok reasoning-effort values by generation; the Grok 4.20 multi-agent line is a separate exception. */
 export function getGrokReasoningEffortLevels(model: string): readonly string[] | undefined {
     const grok420Index = model.indexOf('grok-4.20');
@@ -117,9 +126,9 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
         return { major: 5, minor: 0, variant: 'mythos' };
     }
 
-    // Match pattern: claude-[variant-]-{major}-[optional minor]
-    // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
+    // Match pattern: claude-[variant-]-{major}-[optional minor]; aggregators such as OpenRouter write the minor
+    // version after a dot (`claude-opus-4.6`). The minor version is limited to 1-2 digits to avoid matching dates.
+    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:[-.](\d{1,2}))?(?:-|\b)/i);
     if (match) {
         const variant = match[1].toLowerCase();
         if (!isClaudeVariant(variant)) return null;
@@ -129,7 +138,7 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     }
 
     // Fallback for older format: claude-3-7-sonnet-20250219
-    const fallbackMatch = modelString.match(/claude-(\d+)-(\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
+    const fallbackMatch = modelString.match(/claude-(\d+)[-.](\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
     if (fallbackMatch) {
         const major = parseInt(fallbackMatch[1], 10);
         const minor = parseInt(fallbackMatch[2], 10);
@@ -149,6 +158,13 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
  * @param targetMinor - Target minor version
  * @returns true if the model version is >= target version, false otherwise
  */
+/** Rewrite dotted Claude versions (`claude-opus-4.6`, `claude-3.7-sonnet`) to the dashed provider form. */
+export function normalizeClaudeVersionSeparator(model: string): string {
+    return model
+        .replace(/(claude-(?:opus|sonnet|haiku|fable|mythos)-\d+)\.(\d{1,2})(?=[-:]|$)/gi, '$1-$2')
+        .replace(/claude-(\d+)\.(\d+)-/gi, 'claude-$1-$2-');
+}
+
 export function isClaudeVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
     const version = parseClaudeVersion(modelString);
     if (!version) {

@@ -12,6 +12,7 @@ import {
     getOpenAIReasoningEffortLevels,
     hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
+    isKimiVersionGte,
     isModelFamilyVersionGTE,
     isSingleDigitGrokVersionGte,
 } from './options/version-parsing.js';
@@ -83,7 +84,13 @@ function normalizeSourceModelId(model: string): string {
     const sourceQualified = normalized.includes('::') ? (normalized.split('::').pop() ?? normalized) : normalized;
     const slash = sourceQualified.lastIndexOf('/');
     const leaf = slash === -1 ? sourceQualified : sourceQualified.slice(slash + 1);
-    return leaf.replace(/^(?:global|us|eu|apac)\./, '').replace(/^(?:openai|anthropic|google|xai)\./, '');
+    return (
+        leaf
+            .replace(/^(?:global|us|eu|apac)\./, '')
+            .replace(/^(?:openai|anthropic|google|xai)\./, '')
+            // OpenRouter routing variants (`:batch`, `:free`, ...) select a serving mode, not a different model.
+            .replace(/:(?:batch|free|nitro|floor|extended|exacto|online|thinking)$/, '')
+    );
 }
 
 function getModelAliases(model: string): string[] {
@@ -268,6 +275,13 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support_streaming: true,
             };
         case 'kimi':
+            return {
+                // Kimi K2.5 added image input; later generations keep it.
+                input: { text: true, image: isKimiVersionGte(model, 2, 5) },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'glm':
             return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
         case 'minimax':
@@ -343,7 +357,8 @@ function getCanonicalLimits(
     if (sourceModel.includes('gemini')) return getGeminiModelLimits(sourceModel);
     if (family === 'nemotron') {
         if (sourceModel.includes('nemotron-super-')) return { context_window: 256_000, max_output_tokens: 32_768 };
-        const generation = sourceModel.match(/nemotron-nano-(\d+)-/)?.[1];
+        // NVIDIA also names models generation-first (`nemotron-3-super-120b`, `nemotron-3.5-lightning`).
+        const generation = (sourceModel.match(/nemotron-nano-(\d+)-/) ?? sourceModel.match(/nemotron-(\d+)[.-]/))?.[1];
         return {
             context_window: generation && Number(generation) >= 3 ? 256_000 : 128_000,
             max_output_tokens: 8_192,
