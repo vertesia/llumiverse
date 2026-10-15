@@ -6,6 +6,7 @@ import {
     isClaudeVersionGTE,
     isGeminiModelVersionGte,
     isOpenAIGptVersionGTE,
+    isQwenVersionGte,
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
@@ -170,3 +171,109 @@ describe('Gemini model version parsing', () => {
         expect(isGeminiModelVersionGte('gemini-4-pro', '3.5')).toBe(true);
     });
 });
+<<<<<<< HEAD
+=======
+
+describe('supportsMidConversationToolChanges', () => {
+    it.each([
+        'claude-opus-4-8',
+        'claude-opus-5',
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'claude-haiku-5-5',
+        'claude-fable-5',
+        'claude-fable-5-1',
+        'claude-mythos-5-1',
+        'us.anthropic.claude-sonnet-5-5',
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
+        'publishers/anthropic/models/claude-sonnet-5-5@20260901',
+        'claude-sonnet-6',
+        'claude-haiku-6',
+        'claude-opus-6',
+        'anthropic.claude-opus-4-8-v1:0',
+        'claude-opus-4-8@20260901',
+        'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
+        'claude-opus-4-10',
+        'claude-sonnet-5-6',
+        'claude-mythos-5',
+        'claude-fable-6',
+    ])('accepts %s', (model) => {
+        expect(supportsMidConversationToolChanges(model)).toBe(true);
+    });
+
+    it.each([
+        'claude-sonnet-5',
+        'claude-haiku-5',
+        'claude-opus-4-7',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5',
+        'claude-3-7-sonnet-20250219',
+        'claude-mythos-preview',
+        'gpt-5',
+        'claude-sonnet-5@20260901',
+        'claude-sonnet-5-20260901',
+        'claude-sonnet-5-v1:0',
+        'claude-opus-4',
+        'claude-opus-4-1',
+        'us.anthropic.claude-mythos-preview-v1:0',
+        'claude-mythos-preview-1',
+    ])('rejects %s', (model) => {
+        expect(supportsMidConversationToolChanges(model)).toBe(false);
+    });
+});
+
+describe('supportsClaudeForcedToolChoice', () => {
+    it.each([
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'claude-sonnet-5-6',
+        'claude-opus-6',
+        'claude-sonnet-6',
+        'us.anthropic.claude-opus-5-5-v1:0',
+        'global.anthropic.claude-sonnet-5-5',
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
+        'publishers/anthropic/models/claude-sonnet-5-5@20260901',
+        'claude-opus-5-5@20260901',
+        'claude-fable-5-1',
+        'global.anthropic.claude-fable-5-1',
+        'claude-fable-6',
+        'claude-mythos-5-1',
+    ])('rejects a forced tool choice on %s', (model) => {
+        expect(supportsClaudeForcedToolChoice(model)).toBe(false);
+    });
+
+    it.each([
+        'claude-haiku-5-5',
+        'claude-haiku-6',
+        'claude-opus-5',
+        'claude-sonnet-5',
+        'claude-sonnet-5-20260901',
+        'claude-opus-4-8',
+        'claude-sonnet-4-6',
+        'claude-fable-5',
+        'global.anthropic.claude-fable-5',
+        'claude-mythos-5',
+        'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
+        'anthropic.claude-opus-4-8-v1:0',
+        'claude-3-7-sonnet-20250219',
+        'gpt-5',
+    ])('accepts a forced tool choice on %s', (model) => {
+        expect(supportsClaudeForcedToolChoice(model)).toBe(true);
+    });
+});
+
+describe('Qwen model version parsing', () => {
+    it.each([
+        ['Qwen/Qwen3.5-9B', 3, 5, true],
+        ['qwen3.8-flash', 3, 8, true],
+        ['Qwen/Qwen4-Plus', 3, 8, true],
+        ['Qwen/Qwen3.7-Max', 3, 8, false],
+        // A dash starts the model size, not a minor version.
+        ['Qwen/Qwen3-235B-A22B-Instruct-2507-tput', 3, 5, false],
+        ['qwen/qwen3-32b', 3, 8, false],
+        ['llama-3.3-70b', 3, 0, false],
+    ] as const)('%s >= %d.%d is %s', (model, major, minor, expected) => {
+        expect(isQwenVersionGte(model, major, minor)).toBe(expected);
+    });
+});
+>>>>>>> 2edad30 (feat: describe Together Qwen reasoning controls, report Together streamed usage, and fix Groq Qwen version parsing (#792))

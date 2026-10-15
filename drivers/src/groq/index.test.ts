@@ -225,6 +225,116 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(completion.original_response).toBe(response);
     });
 
+<<<<<<< HEAD
+=======
+    describe('structured outputs', () => {
+        const resultSchema = {
+            type: 'object' as const,
+            properties: { color: { type: 'string' as const } },
+            required: ['color'],
+            additionalProperties: false,
+        };
+
+        async function requestFor(model: string, withTools = false) {
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () => ({
+                id: 'groq-so',
+                object: 'chat.completion',
+                created: 1,
+                model,
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop',
+                        logprobs: null,
+                        message: { role: 'assistant', content: '{"color":"blue"}' },
+                    },
+                ],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }));
+            setGroqCreate(driver, create);
+            const options = {
+                model,
+                result_schema: resultSchema,
+                ...(withTools && {
+                    tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' as const } }],
+                }),
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Sky?' }], options);
+            await driver.requestTextCompletion(prompt, options);
+            return (create.mock.calls as unknown[][])[0][0] as { response_format?: unknown; messages: unknown[] };
+        }
+
+        it.each(['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'qwen/qwen3.9-32b'])(
+            'sends a strict json_schema response_format for %s',
+            async (model) => {
+                const request = await requestFor(model);
+                expect(request.response_format).toEqual({
+                    type: 'json_schema',
+                    json_schema: { name: 'output', strict: true, schema: expect.objectContaining({ type: 'object' }) },
+                });
+            },
+        );
+
+        it('keeps gpt-oss-safeguard in best-effort mode', async () => {
+            const request = await requestFor('openai/gpt-oss-safeguard-20b');
+            expect(request.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: false } });
+        });
+
+        // qwen3-32b is Qwen 3, not 3.32: the dash starts the size.
+        it.each(['qwen/qwen3.6-27b', 'qwen/qwen3-32b', 'meta-llama/llama-4-scout-17b-16e-instruct'])(
+            'leaves %s on prompt instructions',
+            async (model) => {
+                const request = await requestFor(model);
+                expect(request.response_format).toBeUndefined();
+            },
+        );
+
+        it('omits response_format when tools are offered, which Groq rejects', async () => {
+            const request = await requestFor('openai/gpt-oss-20b', true);
+            expect(request.response_format).toBeUndefined();
+        });
+
+        it('keeps the schema instruction in the prompt alongside response_format', async () => {
+            const request = await requestFor('openai/gpt-oss-20b');
+            expect(JSON.stringify(request.messages)).toContain('<response_schema>');
+        });
+    });
+
+    it('reports the prompt tokens served from the Groq prompt cache', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key', endpoint_url: 'https://groq.example.test' });
+        const create = vi.fn(async () => ({
+            id: 'groq-2',
+            object: 'chat.completion',
+            created: 1,
+            model: 'moonshotai/kimi-k2-instruct',
+            choices: [
+                { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'ok' } },
+            ],
+            usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 5,
+                total_tokens: 1005,
+                prompt_tokens_details: { cached_tokens: 800 },
+            },
+        }));
+        setGroqCreate(driver, create);
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hi' }], {
+            model: 'moonshotai/kimi-k2-instruct',
+        });
+
+        const completion = await driver.requestTextCompletion(prompt, { model: 'moonshotai/kimi-k2-instruct' });
+
+        expect(completion.token_usage).toEqual({
+            prompt: 1000,
+            prompt_cached: 800,
+            prompt_new: 200,
+            result: 5,
+            total: 1005,
+        });
+    });
+
+>>>>>>> 2edad30 (feat: describe Together Qwen reasoning controls, report Together streamed usage, and fix Groq Qwen version parsing (#792))
     it('emits fragmented tool calls with the provider ID and x_groq usage', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         async function* chunks() {
