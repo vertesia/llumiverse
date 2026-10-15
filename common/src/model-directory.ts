@@ -414,7 +414,7 @@ function applyProviderOverlay(
         if (/gpt-oss-(?:20b|120b)(?:-|$)/.test(sourceModel)) {
             return { capabilities, context_window: 131_072, max_output_tokens: 65_536 };
         }
-        if (isModelFamilyVersionGTE(sourceModel, 'qwen', 3, 8) && sourceModel.includes('-27b')) {
+        if (isQwenVersionGte(sourceModel, 3, 8) && sourceModel.includes('-27b')) {
             return { capabilities, context_window: 131_072, max_output_tokens: 16_384 };
         }
     }
@@ -468,7 +468,7 @@ function applyProviderOverlay(
 }
 
 function getReasoningEffortLevels(model: string, family: string, provider: Providers): readonly string[] | undefined {
-    if (provider === Providers.groq && !model.includes('coder') && isModelFamilyVersionGTE(model, 'qwen', 3, 8)) {
+    if (provider === Providers.groq && !model.includes('coder') && isQwenVersionGte(model, 3, 8)) {
         return ['none', 'low', 'medium', 'high'];
     }
     // The 0813 release changed DeepSeek V4 Pro effort levels; earlier snapshots keep their own defaults.

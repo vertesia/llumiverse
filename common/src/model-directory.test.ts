@@ -357,6 +357,20 @@ describe('central model directory', () => {
         ).toBeUndefined();
     });
 
+    it.each([
+        ['qwen/qwen3.8-27b', ['none', 'low', 'medium', 'high']],
+        ['qwen/qwen3.6-27b', ['none']],
+        // Qwen 3 32B, not 3.32: the dash starts the size, so it keeps the Groq Qwen 3 on/off control.
+        ['qwen/qwen3-32b', ['none']],
+    ])('describes Groq reasoning control for %s', (model, levels) => {
+        expect(resolveModelProfile(model, Providers.groq).reasoning_effort_levels).toEqual(levels);
+    });
+
+    it('keeps the Groq Qwen 3.8 27B output limit off Qwen 3 models', () => {
+        expect(resolveModelProfile('qwen/qwen3.8-27b', Providers.groq).max_output_tokens).toBe(16_384);
+        expect(resolveModelProfile('qwen/qwen3-27b', Providers.groq).max_output_tokens).not.toBe(16_384);
+    });
+
     it('keeps Mistral prompt mode off hosted third-party models', () => {
         const names = getOptions('zai-glm-5-3', Providers.mistralai).options.map((option) => option.name);
         expect(names).toContain('effort');
