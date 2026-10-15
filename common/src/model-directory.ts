@@ -9,6 +9,7 @@ import { getContextWindowSize, getMaxOutputTokens } from './options/context-wind
 import { getGeminiModelLimits } from './options/gemini-limits.js';
 import {
     getOpenAIReasoningEffortLevels,
+    hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
     isSingleDigitGrokVersionGte,
@@ -431,6 +432,8 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         return undefined;
     }
     if (family === 'gemini' && provider === Providers.openai_compatible && isGeminiModelVersionGte(model, '3.5')) {
+        // Sampling-restricted generations (Flash 3.7+, Gemini 4+) reject `minimal`, matching native Vertex metadata.
+        if (hasGeminiSamplingRestriction(model)) return ['low', 'medium', 'high'];
         return ['minimal', 'low', 'medium', 'high'];
     }
     if (provider === Providers.mistralai && family === 'mistral') {

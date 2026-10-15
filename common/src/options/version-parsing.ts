@@ -50,11 +50,14 @@ export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, 
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
-/** Gemini Flash 3.7+ rejects candidate count and penalties and no longer uses sampling controls. */
+/**
+ * Gemini Flash 3.7+ and every Gemini 4+ chat tier (including named tiers such as Argon) reject candidate count and
+ * penalties and no longer use sampling controls.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+ */
 export function hasGeminiSamplingRestriction(model: string): boolean {
-    return (
-        model.includes('flash') && !/(?:image|tts|transcribe|live)/.test(model) && isGeminiModelVersionGte(model, '3.7')
-    );
+    if (/(?:image|tts|transcribe|live)/.test(model)) return false;
+    return isGeminiModelVersionGte(model, '4.0') || (model.includes('flash') && isGeminiModelVersionGte(model, '3.7'));
 }
 
 /** Nova Lite reasoning starts with 1.5; numbered Nova 2+ Lite models inherit it. */

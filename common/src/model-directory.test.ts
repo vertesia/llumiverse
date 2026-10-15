@@ -105,6 +105,9 @@ describe('central model directory', () => {
             'max',
         ]);
         expect(resolveModelProfile('gemini-4.0-flash', Providers.openai_compatible).family).toBe('gemini');
+        expect(
+            resolveModelProfile('google/gemini-4-argon', Providers.openai_compatible).reasoning_effort_levels,
+        ).toEqual(['low', 'medium', 'high']);
         expect(resolveModelProfile('anthropic/claude-opus-6', Providers.openai_compatible).family).toBe('claude');
     });
 

@@ -96,33 +96,35 @@ describe('explicit Gemini thinking controls', () => {
 });
 
 describe('Gemini Flash generation parameters', () => {
-    it.each(['gemini-3.7-flash', 'publishers/google/models/gemini-3.8-flash-cyber', 'gemini-4.0-flash'])(
-        'preserves caller parameters for provider validation on %s',
-        (model) => {
-            const payload = getGeminiPayload(
-                options(model, {
-                    temperature: 0.7,
-                    top_p: 0.9,
-                    top_k: 10,
-                    presence_penalty: 0.5,
-                    frequency_penalty: 0.5,
-                    max_tokens: 512,
-                    effort: 'low',
-                }),
-                { contents: [{ role: 'user', parts: [{ text: 'Hello' }] }] },
-            );
-            const config = JSON.parse(JSON.stringify(payload.config));
-            expect(config).not.toHaveProperty('candidateCount');
-            expect(config).toMatchObject({
+    it.each([
+        'gemini-3.7-flash',
+        'publishers/google/models/gemini-3.8-flash-cyber',
+        'gemini-4.0-flash',
+        'locations/global/publishers/google/models/gemini-4-argon',
+    ])('preserves caller parameters for provider validation on %s', (model) => {
+        const payload = getGeminiPayload(
+            options(model, {
                 temperature: 0.7,
-                topP: 0.9,
-                topK: 10,
-                presencePenalty: 0.5,
-                frequencyPenalty: 0.5,
-            });
-            expect(config).toMatchObject({ maxOutputTokens: 512, thinkingConfig: { thinkingLevel: 'LOW' } });
-        },
-    );
+                top_p: 0.9,
+                top_k: 10,
+                presence_penalty: 0.5,
+                frequency_penalty: 0.5,
+                max_tokens: 512,
+                effort: 'low',
+            }),
+            { contents: [{ role: 'user', parts: [{ text: 'Hello' }] }] },
+        );
+        const config = JSON.parse(JSON.stringify(payload.config));
+        expect(config).not.toHaveProperty('candidateCount');
+        expect(config).toMatchObject({
+            temperature: 0.7,
+            topP: 0.9,
+            topK: 10,
+            presencePenalty: 0.5,
+            frequencyPenalty: 0.5,
+        });
+        expect(config).toMatchObject({ maxOutputTokens: 512, thinkingConfig: { thinkingLevel: 'LOW' } });
+    });
 
     it('preserves sampling for earlier Flash models', () => {
         const payload = getGeminiPayload(options('gemini-3.6-flash', { temperature: 0.7, top_p: 0.9 }), {
