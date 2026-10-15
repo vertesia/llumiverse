@@ -3,8 +3,10 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from '../src/index.js';
+import { withRateLimitBackoff } from './utils.js';
 
-const TIMEOUT = 30000;
+// Leaves room for withRateLimitBackoff's 21s of waiting on a rate-limited provider.
+const TIMEOUT = 60000;
 const TEXT = 'Hello';
 
 const IMAGE_SRC = `${import.meta.dirname}/hello_world.jpg`;
@@ -60,7 +62,7 @@ if (process.env.WATSONX_API_KEY) {
 
 function firstValues(d: Driver) {
     return async (...inputs: Parameters<Driver['generateEmbeddings']>[0]['inputs']) => {
-        const r = await d.generateEmbeddings({ inputs });
+        const r = await withRateLimitBackoff(() => d.generateEmbeddings({ inputs }));
         return r;
     };
 }
@@ -81,12 +83,14 @@ if (vertex) {
         test(
             'embeddings for batched text inputs',
             async () => {
-                const r = await vertexDriver.generateEmbeddings({
-                    inputs: [
-                        { type: 'text', text: 'first' },
-                        { type: 'text', text: 'second' },
-                    ],
-                });
+                const r = await withRateLimitBackoff(() =>
+                    vertexDriver.generateEmbeddings({
+                        inputs: [
+                            { type: 'text', text: 'first' },
+                            { type: 'text', text: 'second' },
+                        ],
+                    }),
+                );
                 expect(r.results).toHaveLength(2);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.results[1].outputs[0].values.length).toBeGreaterThan(0);
@@ -126,12 +130,14 @@ if (openai) {
         test(
             'embeddings for batched text inputs',
             async () => {
-                const r = await openaiDriver.generateEmbeddings({
-                    inputs: [
-                        { type: 'text', text: 'alpha' },
-                        { type: 'text', text: 'beta' },
-                    ],
-                });
+                const r = await withRateLimitBackoff(() =>
+                    openaiDriver.generateEmbeddings({
+                        inputs: [
+                            { type: 'text', text: 'alpha' },
+                            { type: 'text', text: 'beta' },
+                        ],
+                    }),
+                );
                 expect(r.results).toHaveLength(2);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.model).toBe('text-embedding-3-small');
