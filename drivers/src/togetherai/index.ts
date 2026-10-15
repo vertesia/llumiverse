@@ -11,6 +11,7 @@ import {
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     Providers,
+    resolveModelProfile,
 } from '@llumiverse/core';
 import Together from 'together-ai';
 import { APIConnectionError, APIError, APIUserAbortError } from 'together-ai/error';
@@ -203,14 +204,25 @@ function toTogetherRequest(
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toTogetherTool),
-        // SDK enums lag provider releases; preserve explicit effort for provider validation.
-        reasoning_effort: payload.reasoning_effort as CompletionCreateParamsNonStreaming['reasoning_effort'],
+        ...(payload.reasoning_effort === 'none' && hasReasoningToggleOnly(payload.model)
+            ? // Hybrid models switch reasoning off with `reasoning.enabled`; Together has no `none` effort for them.
+              { reasoning: { enabled: false } }
+            : {
+                  // SDK enums lag provider releases; preserve explicit effort for provider validation.
+                  reasoning_effort: payload.reasoning_effort as CompletionCreateParamsNonStreaming['reasoning_effort'],
+              }),
         service_tier: payload.service_tier ?? undefined,
         stream,
     } satisfies (CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming) & {
         service_tier?: string;
     };
     return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
+}
+
+/** Hybrid reasoning models, whose only reasoning control the catalog lists is turning it off. */
+function hasReasoningToggleOnly(model: string): boolean {
+    const levels = resolveModelProfile(model, Providers.togetherai).reasoning_effort_levels;
+    return levels?.length === 1 && levels[0] === 'none';
 }
 
 function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {

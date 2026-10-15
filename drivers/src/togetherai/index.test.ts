@@ -6,6 +6,51 @@ import { TogetherAIDriver } from './index.js';
 
 describe('TogetherAIDriver', () => {
     it.each([
+        ['Qwen/Qwen3.5-9B', 'none', { reasoning: { enabled: false } }, 'reasoning_effort'],
+        ['Qwen/Qwen3.8-Flash', 'xhigh', { reasoning_effort: 'xhigh' }, 'reasoning'],
+    ])('sends %s effort %s as Together expects', async (model, effort, expected, absentField) => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async () => ({
+            id: 'completion-1',
+            object: 'chat.completion',
+            created: 1,
+            model,
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+        const options = {
+            model,
+            model_options: ModelOptionsSchema.parse({ _option_id: 'openai-text', effort }),
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], options);
+        await driver.requestTextCompletion(prompt, options);
+        const request = (create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+        expect(request).toMatchObject(expected);
+        expect(request).not.toHaveProperty(absentField);
+    });
+
+    it('leaves Together reasoning untouched when effort is omitted', async () => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async () => ({
+            id: 'completion-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'Qwen/Qwen3.5-9B',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+        const options = {
+            model: 'Qwen/Qwen3.5-9B',
+            model_options: ModelOptionsSchema.parse({ _option_id: 'openai-text' }),
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], options);
+        await driver.requestTextCompletion(prompt, options);
+        const request = (create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+        expect(request.reasoning).toBeUndefined();
+        expect(request.reasoning_effort).toBeUndefined();
+    });
+
+    it.each([
         [false, false],
         [false, true],
         [true, false],

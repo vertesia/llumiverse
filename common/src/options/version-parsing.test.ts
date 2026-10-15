@@ -6,6 +6,7 @@ import {
     isClaudeVersionGTE,
     isGeminiModelVersionGte,
     isOpenAIGptVersionGTE,
+    isQwenVersionGte,
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
@@ -258,5 +259,20 @@ describe('supportsClaudeForcedToolChoice', () => {
         'gpt-5',
     ])('accepts a forced tool choice on %s', (model) => {
         expect(supportsClaudeForcedToolChoice(model)).toBe(true);
+    });
+});
+
+describe('Qwen model version parsing', () => {
+    it.each([
+        ['Qwen/Qwen3.5-9B', 3, 5, true],
+        ['qwen3.8-flash', 3, 8, true],
+        ['Qwen/Qwen4-Plus', 3, 8, true],
+        ['Qwen/Qwen3.7-Max', 3, 8, false],
+        // A dash starts the model size, not a minor version.
+        ['Qwen/Qwen3-235B-A22B-Instruct-2507-tput', 3, 5, false],
+        ['qwen/qwen3-32b', 3, 8, false],
+        ['llama-3.3-70b', 3, 0, false],
+    ] as const)('%s >= %d.%d is %s', (model, major, minor, expected) => {
+        expect(isQwenVersionGte(model, major, minor)).toBe(expected);
     });
 });

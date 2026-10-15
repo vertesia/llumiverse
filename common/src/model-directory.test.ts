@@ -328,6 +328,35 @@ describe('central model directory', () => {
         });
     });
 
+    it.each([
+        // Hybrid generations: thinking can only be switched off.
+        ['Qwen/Qwen3.5-9B', ['none']],
+        ['Qwen/Qwen3.6-Plus', ['none']],
+        ['Qwen/Qwen3.7-Max', ['none']],
+        // Effort generations, including a plausible future release.
+        ['Qwen/Qwen3.8-Flash', ['low', 'medium', 'xhigh']],
+        ['Qwen/Qwen3.8-2.4T-A95B', ['low', 'medium', 'xhigh']],
+        ['Qwen/Qwen4-Plus', ['low', 'medium', 'xhigh']],
+        // Earlier generations and coder models have no documented Together reasoning control.
+        ['Qwen/Qwen3-235B-A22B-Instruct-2507-tput', undefined],
+        ['Qwen/Qwen3-Coder-Next', undefined],
+    ])('describes Together reasoning control for %s', (model, levels) => {
+        expect(resolveModelProfile(model, Providers.togetherai).reasoning_effort_levels).toEqual(levels);
+    });
+
+    it('advertises the Together Qwen effort levels as the effort option', () => {
+        const effortOf = (model: string) =>
+            getOptions(model, Providers.togetherai).options.find((option) => option.name === 'effort');
+        expect(effortOf('Qwen/Qwen3.5-9B')).toMatchObject({ enum: { none: 'none' } });
+        expect(effortOf('Qwen/Qwen3.8-Flash')).toMatchObject({
+            enum: { low: 'low', medium: 'medium', xhigh: 'xhigh' },
+        });
+        // The rule is Together-specific: other providers keep their own Qwen behaviour.
+        expect(
+            resolveModelProfile('qwen/qwen3.5-9b', Providers.openai_compatible).reasoning_effort_levels,
+        ).toBeUndefined();
+    });
+
     it('keeps Mistral prompt mode off hosted third-party models', () => {
         const names = getOptions('zai-glm-5-3', Providers.mistralai).options.map((option) => option.name);
         expect(names).toContain('effort');
