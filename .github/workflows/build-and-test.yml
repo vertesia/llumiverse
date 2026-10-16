@@ -8,8 +8,7 @@ on:
       - "production/**"
       - "hotfix**"
       - "repo-dispatch**"
-  pull_request:
-    types: [opened, reopened, synchronize]
+  workflow_call:
   workflow_dispatch:
 
 env:

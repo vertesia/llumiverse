@@ -8,8 +8,7 @@ on:
       - "production/**"
       - "hotfix**"
       - "repo-dispatch**"
-  pull_request:
-    types: [opened, reopened, synchronize]
+  workflow_call:
   workflow_dispatch:
 
 env:
@@ -44,7 +43,7 @@ jobs:
           node-version: 24.21.0
           package-manager-cache: false
       - name: Test automerge CI policy
-        run: node --test .github/bin/automerge-ci.node-test.mjs .github/bin/ci-approve.test.mjs
+        run: node --test .github/bin/automerge-ci.node-test.mjs .github/bin/automerge-dispatch.test.mjs .github/bin/ci-approve.test.mjs
       - name: Test automation notifications
         run: node --test .github/bin/automation-notification.test.mjs
       - name: Locate pnpm store

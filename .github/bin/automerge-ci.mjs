@@ -22,6 +22,17 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
             if (testedPr.base?.sha !== baseSha || testedPr.base?.ref !== baseBranch) return false;
         }
         const jobs = loadJobs(run.id);
+        // Ignore an intentionally empty companion run before evaluating the actual CI run.
+        if (
+            run.status === 'completed' &&
+            (run.conclusion === 'success' || run.conclusion === 'skipped') &&
+            jobs.length === 1 &&
+            policy.noOpJobs?.includes(jobs[0].name) &&
+            jobs[0].status === 'completed' &&
+            jobs[0].conclusion === 'skipped'
+        ) {
+            continue;
+        }
         const noOp = policy.noOp;
         if (
             noOp &&
@@ -37,8 +48,11 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
         ) {
             continue;
         }
-        // Never fall back past a pending, failed, cancelled or malformed real run.
-        if (run.status !== 'completed' || run.conclusion !== 'success') return false;
+        // The coordinator can fail because its other reusable workflow failed. Judge this policy's
+        // jobs independently once the run is terminal; legacy standalone runs must fully succeed.
+        if (run.status !== 'completed') return false;
+        const coordinator = Boolean(policy.workflow) && run.path === `.github/workflows/${policy.workflow}`;
+        if (!coordinator && run.conclusion !== 'success') return false;
         return (
             policy.jobs.length > 0 &&
             policy.jobs.every((required) => {
@@ -82,20 +96,33 @@ export function main(env, pr, workflows, pages = ghPages) {
     }
     if (Boolean(baseSha) !== Boolean(baseBranch)) throw new Error('Both base branch and commit are required');
     const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    const pageCache = new Map();
+    const cachedPages = (endpoint) => {
+        if (!pageCache.has(endpoint)) pageCache.set(endpoint, pages(endpoint));
+        return pageCache.get(endpoint);
+    };
+    const jobsCache = new Map();
+    const loadJobs = (id) => {
+        if (!jobsCache.has(id)) {
+            jobsCache.set(
+                id,
+                cachedPages(`repos/${repo}/actions/runs/${id}/jobs?filter=latest&per_page=100`).flatMap(
+                    (page) => page.jobs,
+                ),
+            );
+        }
+        return jobsCache.get(id);
+    };
     for (const workflow of workflows) {
         const policy = policies[workflow];
         if (!policy) throw new Error(`No CI policy for ${workflow}`);
         const query = new URLSearchParams({ branch, head_sha: sha, event: 'pull_request', per_page: '100' });
-        const runs = pages(`repos/${repo}/actions/workflows/${workflow}/runs?${query}`).flatMap(
-            (page) => page.workflow_runs,
+        const runs = [policy.workflow ?? workflow, ...(policy.fallbackWorkflows ?? [])].flatMap((source) =>
+            cachedPages(`repos/${repo}/actions/workflows/${source}/runs?${query}`).flatMap(
+                (page) => page.workflow_runs,
+            ),
         );
-        const passed = verifyWorkflow(
-            runs,
-            (id) =>
-                pages(`repos/${repo}/actions/runs/${id}/jobs?filter=latest&per_page=100`).flatMap((page) => page.jobs),
-            policy,
-            { sha, branch, pr, baseSha, baseBranch },
-        );
+        const passed = verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSha, baseBranch });
         if (!passed) {
             console.log(`Required jobs have not passed in ${workflow} for ${sha}.`);
             return false;

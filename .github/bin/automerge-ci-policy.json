@@ -1,9 +1,11 @@
 {
     "build-and-test.yml": {
+        "workflow": "pr-validation.yaml",
+        "fallbackWorkflows": ["build-and-test.yml"],
         "jobs": [
             {
-                "name": "^Build and test \\(.*\\)$",
-                "example": "Build and test (24.x)",
+                "name": "^(Build and test / )?Build and test \\(.*\\)$",
+                "example": "Build and test / Build and test (24.x)",
                 "steps": [
                     "Build workspace",
                     "Typecheck and functional tests",
@@ -13,9 +15,12 @@
         ]
     },
     "lint.yml": {
+        "workflow": "pr-validation.yaml",
+        "fallbackWorkflows": ["lint.yml"],
         "jobs": [
             {
-                "name": "^Check codebase$",
+                "name": "^(Lint / )?Check codebase$",
+                "example": "Lint / Check codebase",
                 "steps": [
                     "Test automerge CI policy",
                     "Check codebase"
