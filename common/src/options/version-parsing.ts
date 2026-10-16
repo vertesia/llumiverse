@@ -108,6 +108,16 @@ export function hasGeminiSamplingRestriction(model: string): boolean {
     return isGeminiModelVersionGte(model, '4.0') || (model.includes('flash') && isGeminiModelVersionGte(model, '3.7'));
 }
 
+/**
+ * Gemini 4+ chat models support long decodes on Vertex generateContent: output continues across requests up to the
+ * unified 1,048,576-token input-plus-output limit. Specialised image, speech, live, audio and robotics variants do not.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
+ */
+export function isGeminiLongDecodeModel(model: string): boolean {
+    if (/(?:image|tts|transcribe|live|native-audio|robotics|embedding|omni|nano-banana)/.test(model)) return false;
+    return isGeminiModelVersionGte(model, '4.0');
+}
+
 /** Nova Lite reasoning starts with 1.5; numbered Nova 2+ Lite models inherit it. */
 export function supportsNovaReasoning(model: string): boolean {
     return (

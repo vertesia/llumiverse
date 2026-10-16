@@ -188,7 +188,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     protected override runInHttpContext<T>(operation: () => T): T {
-        // GoogleGenAI uses global fetch rather than accepting the driver's fetch hook.
+        // GoogleGenAI now receives the driver fetch, but other Google clients the driver uses (such as auth token
+        // requests) still go through global fetch, so keep the scoped global dispatcher for them.
         return runWithDriverHttpAgent(this.getHttpAgent(), operation);
     }
 
@@ -202,6 +203,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
         return {
             timeout: this.getDriverRequestTimeoutMs(httpTimeout),
+            // Since @google/genai 2.29, the SDK replaces the undici dispatcher with one that disables header and body
+            // timeouts unless a fetch is supplied. Passing the driver fetch keeps the driver's per-call timeouts.
+            fetch: this.getDriverFetch(),
             ...(serviceTier && serviceTier !== 'default'
                 ? {
                       headers: {

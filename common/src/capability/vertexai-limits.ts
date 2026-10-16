@@ -1,4 +1,9 @@
-import { isModelFamilyVersionGTE, isSingleDigitGrokVersionGte } from '../options/version-parsing.js';
+import { getGeminiModelLimits } from '../options/gemini-limits.js';
+import {
+    isGeminiLongDecodeModel,
+    isModelFamilyVersionGTE,
+    isSingleDigitGrokVersionGte,
+} from '../options/version-parsing.js';
 
 interface VertexAIModelLimits {
     context_window?: number;
@@ -30,6 +35,13 @@ export function getVertexAIModelLimits(model: string): VertexAIModelLimits {
     const modelName = model.toLowerCase().split('/').pop() ?? '';
     const exact = MODEL_LIMITS[modelName];
     if (exact) return exact;
+    // Vertex long decodes continue output across requests, so output may use the whole unified input-and-output window.
+    // Transports without continuation keep the per-request cap from the canonical limits.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+    if (isGeminiLongDecodeModel(modelName)) {
+        const { context_window } = getGeminiModelLimits(modelName);
+        if (context_window !== undefined) return { context_window, max_output_tokens: context_window };
+    }
     if (modelName.endsWith('-maas') && isModelFamilyVersionGTE(modelName, 'glm-', 5, 2)) {
         return MODEL_LIMITS['glm-5.2-maas'];
     }
