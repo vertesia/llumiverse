@@ -37,6 +37,7 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { logModelRefusal } from '../shared/refusal-log.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -119,6 +120,7 @@ export type OpenAIChatCompletionsResponse = Omit<OpenAI.Chat.ChatCompletion, 'ch
 type OpenAIChatCompletionsStreamChoiceDelta = {
     role?: string;
     content?: string | null | OpenAIChatCompletionsContentPart[];
+    refusal?: OpenAI.Chat.ChatCompletionChunk.Choice.Delta['refusal'];
     reasoning_content?: string | null;
     reasoning?: string | null;
     tool_calls?: Array<{
@@ -211,6 +213,7 @@ export function normalizeOpenAIChatCompletionsResponse(
             message: {
                 role: choice.message.role,
                 content: choice.message.content,
+                refusal: choice.message.refusal,
                 reasoning_content: getOptionalString(choice.message, 'reasoning_content'),
                 reasoning: getOptionalString(choice.message, 'reasoning'),
                 tool_calls: choice.message.tool_calls?.flatMap((toolCall) =>
@@ -240,6 +243,7 @@ export async function* normalizeOpenAIChatCompletionsStream(
                 delta: {
                     role: choice.delta.role,
                     content: choice.delta.content,
+                    refusal: choice.delta.refusal,
                     reasoning_content: getOptionalString(choice.delta, 'reasoning_content'),
                     reasoning: getOptionalString(choice.delta, 'reasoning'),
                     tool_calls: choice.delta.tool_calls?.map((toolCall) => ({
@@ -865,6 +869,17 @@ function finalizeOpenAIChatCompletionsConversation(
     return processedConversation;
 }
 
+function getOpenAIChatDriverLogger(driver: unknown): Logger | undefined {
+    return (driver as { logger?: Logger } | undefined)?.logger;
+}
+
+function getOpenAIChatDriverProvider(driver: unknown): string {
+    if (typeof driver !== 'object' || driver === null || !('provider' in driver)) {
+        return Providers.openai_compatible;
+    }
+    return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
+}
+
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
@@ -1007,18 +1022,30 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(
-            conversation,
-            options,
-            false,
-            (driver as { logger?: Logger } | undefined)?.logger,
-        );
+        const provider = getOpenAIChatDriverProvider(driver);
+        const logger = getOpenAIChatDriverLogger(driver);
+        const payload = this.buildPayload(conversation, options, false, logger);
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
         const message = choice?.message;
         const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
         const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
+        const finish_reason = normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length);
+        if (message?.refusal || choice?.finish_reason === 'content_filter') {
+            logModelRefusal(logger, {
+                provider,
+                model: options.model,
+                streaming: false,
+                finish_reason,
+                provider_finish_reason: choice?.finish_reason ?? undefined,
+                response_id: result.id,
+                details: { refusal: message?.refusal ?? null } satisfies Pick<
+                    OpenAI.Chat.ChatCompletionMessage,
+                    'refusal'
+                >,
+            });
+        }
         if (
             !message ||
             (completionResults.length === 0 && !extractOpenAIChatCompletionsReasoningText(message) && !tool_use?.length)
@@ -1050,7 +1077,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             tool_use,
             token_usage: mapOpenAIChatCompletionsUsage(result.usage),
             service_tier: result.service_tier ?? undefined,
-            finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
+            finish_reason,
             original_response: options.include_original_response
                 ? ((result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result)
                 : undefined,
@@ -1071,15 +1098,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(
-            conversation,
-            options,
-            true,
-            (driver as { logger?: Logger } | undefined)?.logger,
-        );
+        const provider = getOpenAIChatDriverProvider(driver);
+        const logger = getOpenAIChatDriverLogger(driver);
+        const payload = this.buildPayload(conversation, options, true, logger);
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
+        let refusal = '';
+        let refusalLogged = false;
         let nativeContent = '';
         let nativeReasoningContent: string | undefined;
         let nativeReasoning: string | undefined;
@@ -1092,6 +1118,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
+            if (delta?.refusal) refusal += delta.refusal;
             const chunkResults: CompletionResult[] = [];
             const content = extractOpenAIChatCompletionsContentText(delta?.content);
             if (content) {
@@ -1140,13 +1167,30 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     return toolUse;
                 });
             }
+            const finish_reason = normalizeOpenAIChatCompletionsFinishReason(
+                choice?.finish_reason,
+                !!toolUseChunks?.length,
+            );
+            if (!refusalLogged && choice?.finish_reason && (refusal || choice.finish_reason === 'content_filter')) {
+                // Some providers repeat finish_reason on a trailing usage chunk; log the refusal once.
+                refusalLogged = true;
+                logModelRefusal(logger, {
+                    provider,
+                    model: options.model,
+                    streaming: true,
+                    finish_reason,
+                    provider_finish_reason: choice.finish_reason,
+                    response_id: json.id,
+                    details: { refusal: refusal || null } satisfies Pick<
+                        OpenAI.Chat.ChatCompletionChunk.Choice.Delta,
+                        'refusal'
+                    >,
+                });
+            }
             return {
                 result: includeThoughts ? chunkResults : chunkResults.filter((result) => result.type !== 'thoughts'),
                 tool_use: toolUseChunks,
-                finish_reason: normalizeOpenAIChatCompletionsFinishReason(
-                    choice?.finish_reason,
-                    !!toolUseChunks?.length,
-                ),
+                finish_reason,
                 token_usage: mapOpenAIChatCompletionsUsage(json.usage),
                 service_tier: json.service_tier ?? undefined,
             } satisfies CompletionChunkObject;
