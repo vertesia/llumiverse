@@ -236,9 +236,13 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const driver = makeDriver({
             generateContent: async (request) => {
                 requests.push(request);
+                // A fresh copy per response, as the SDK returns: the driver stamps call ids on the response
+                // in place, and the next request must echo the native content without those generated ids.
                 return {
                     usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
-                    candidates: [{ finishReason: FinishReason.STOP, content: nativeContent, safetyRatings: [] }],
+                    candidates: [
+                        { finishReason: FinishReason.STOP, content: structuredClone(nativeContent), safetyRatings: [] },
+                    ],
                 };
             },
         });
