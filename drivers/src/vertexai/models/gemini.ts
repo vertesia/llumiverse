@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { ApiError } from '@google/genai';
 import {
     type Candidate,
@@ -255,7 +256,7 @@ export function getGeminiPayload(
     // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
     // which would otherwise trip Gemini's functionCall/functionResponse pairing.
     if (payloadContents) {
-        payloadContents = fixOrphanedToolResults(payloadContents);
+        payloadContents = stripGeneratedFunctionCallIds(fixOrphanedToolResults(payloadContents));
     }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
@@ -415,13 +416,51 @@ function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
     }
 }
 
+/**
+ * Prefix of the function-call ids llumiverse generates when Vertex returns a call without one.
+ * Vertex never sees these: {@link stripGeneratedFunctionCallIds} removes them from each request.
+ */
+export const GEMINI_GENERATED_CALL_ID_PREFIX = 'llumiverse_call_';
+
+/** Function-call ids already present in a Gemini conversation. */
+function collectFunctionCallIds(contents: Content[]): Set<string> {
+    const ids = new Set<string>();
+    for (const content of contents) {
+        for (const part of content.parts ?? []) {
+            if (part.functionCall?.id) ids.add(part.functionCall.id);
+        }
+    }
+    return ids;
+}
+
+/**
+ * Give every functionCall part an id that is unique within the conversation, in place.
+ *
+ * The id is what the driver returns as `ToolUse.id`, and it stays on the stored functionCall part,
+ * so a tool result can be paired with its call later (see {@link resolveFunctionResponseTarget}).
+ * Vertex's own call id is kept when it has not been used before. A call without one, or with one
+ * that repeats an earlier call's id, gets a generated id instead. Name-based ids would collide when
+ * the model calls one tool more than once in a turn.
+ */
+function assignFunctionCallIds(parts: Part[] | undefined, usedIds: Set<string>): void {
+    for (const part of parts ?? []) {
+        const call = part.functionCall;
+        if (!call) continue;
+        if (!call.id || usedIds.has(call.id)) {
+            call.id = `${GEMINI_GENERATED_CALL_ID_PREFIX}${randomUUID()}`;
+        }
+        usedIds.add(call.id);
+    }
+}
+
+/** Build the ToolUse list for a model turn whose functionCall parts already carry their ids. */
 function collectToolUseParts(content: Content): ToolUse[] | undefined {
     const out: ToolUse[] = [];
     const parts = content.parts ?? [];
     for (const part of parts) {
         if (part.functionCall) {
             const toolUse: ToolUse = {
-                id: part.functionCall.name ?? '',
+                id: part.functionCall.id ?? part.functionCall.name ?? '',
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
             };
@@ -436,25 +475,65 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     return out.length > 0 ? out : undefined;
 }
 
-type StreamingToolUse = ToolUse & { _actual_id?: string };
+/**
+ * Find the call a tool result answers: the function name it must be sent under, and the call id
+ * to echo when the call has one.
+ *
+ * Conversations stored before tool-use ids were unique used the function name as the id and carry
+ * no matching call id, so an unmatched `tool_use_id` is still sent as the name.
+ */
+function resolveFunctionResponseTarget(
+    toolUseId: string,
+    callsById: ReadonlyMap<string, string>,
+): { id?: string; name: string } {
+    const name = callsById.get(toolUseId);
+    return name === undefined ? { name: toolUseId } : { id: toolUseId, name };
+}
+
+/** Map every functionCall id in the conversation to its function name. */
+function functionCallNamesById(contents: Content[]): Map<string, string> {
+    const names = new Map<string, string>();
+    for (const content of contents) {
+        for (const part of content.parts ?? []) {
+            const call = part.functionCall;
+            if (call?.id && call.name) names.set(call.id, call.name);
+        }
+    }
+    return names;
+}
+
+function isGeneratedFunctionCallId(id: string | undefined): boolean {
+    return !!id && id.startsWith(GEMINI_GENERATED_CALL_ID_PREFIX);
+}
 
 /**
- * Collect streamed function calls under accumulator keys that are unique per call.
- *
- * Gemini identifies a function call by name only, so `collectToolUseParts` uses the name as the
- * tool-use id and parallel calls to one tool share it. The core completion stream merges streamed
- * fragments by id, which folded such a batch into a single call: the model turn kept every
- * functionCall part but only one tool ran, and the next request was rejected by Vertex with 400
- * "number of function response parts is equal to the number of function call parts". A Gemini
- * functionCall part always arrives complete, so each one gets its own key; `_actual_id` restores
- * the name-based id once the stream is finalized.
+ * Remove generated call ids from the contents sent to Vertex, without touching the stored ones.
+ * Vertex only ever receives call ids it issued; parts that had none pair by name and position as
+ * they always have.
  */
-function collectStreamingToolUseParts(content: Content, nextCallIndex: () => number): StreamingToolUse[] | undefined {
-    return collectToolUseParts(content)?.map((tool) => ({
-        ...tool,
-        id: `${tool.id}#${nextCallIndex()}`,
-        _actual_id: tool.id,
-    }));
+export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
+    return contents.map((content) => {
+        const hasGeneratedId = content.parts?.some(
+            (part) =>
+                isGeneratedFunctionCallId(part.functionCall?.id) ||
+                isGeneratedFunctionCallId(part.functionResponse?.id),
+        );
+        if (!hasGeneratedId) return content;
+        return {
+            ...content,
+            parts: content.parts?.map((part) => {
+                if (isGeneratedFunctionCallId(part.functionCall?.id)) {
+                    const { id: _generated, ...functionCall } = part.functionCall ?? {};
+                    return { ...part, functionCall };
+                }
+                if (isGeneratedFunctionCallId(part.functionResponse?.id)) {
+                    const { id: _generated, ...functionResponse } = part.functionResponse ?? {};
+                    return { ...part, functionResponse };
+                }
+                return part;
+            }),
+        };
+    });
 }
 
 /** True when `content` is a user turn holding nothing but functionResponse parts. */
@@ -490,12 +569,12 @@ export function mergeFunctionResponseContents(contents: Content[]): Content[] {
 }
 
 /**
- * Drop functionResponse parts whose name has no matching functionCall in the
- * immediately-preceding `model` content. Gemini pairs a functionResponse to its
- * functionCall by name; a response left dangling after its call was dropped
- * (e.g. by conversation compaction/trimming, or an unmergeable parallel batch)
- * causes the API to reject the request. Mirrors the same guard added to the
- * Claude, Bedrock, and OpenAI drivers.
+ * Drop functionResponse parts that have no matching functionCall in the immediately-preceding
+ * `model` content. A response that carries a call id must match a call with that id; one without
+ * an id (conversations stored before tool-use ids were unique) matches by function name. A response
+ * left dangling after its call was dropped (e.g. by conversation compaction/trimming, or an
+ * unmergeable parallel batch) causes the API to reject the request. Mirrors the same guard added to
+ * the Claude, Bedrock, and OpenAI drivers.
  *
  * The matching model call set remains active across a run of user function-response contents, so
  * split parallel tool results are not mistaken for orphans even when this runs on contents that
@@ -505,28 +584,34 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
     if (contents.length === 0) return contents;
     const result: Content[] = [];
     let allowedNames = new Set<string>();
+    let allowedIds = new Set<string>();
+    const isAnswerToPrecedingCall = (part: Part): boolean => {
+        const response = part.functionResponse;
+        if (!response) return true;
+        return response.id ? allowedIds.has(response.id) : allowedNames.has(response.name ?? '');
+    };
     for (const content of contents) {
         if (content.role === 'model') {
-            allowedNames = new Set(
-                (content.parts ?? []).flatMap((part) => (part.functionCall?.name ? [part.functionCall.name] : [])),
-            );
+            const calls = (content.parts ?? []).flatMap((part) => (part.functionCall ? [part.functionCall] : []));
+            allowedNames = new Set(calls.flatMap((call) => (call.name ? [call.name] : [])));
+            allowedIds = new Set(calls.flatMap((call) => (call.id ? [call.id] : [])));
             result.push(content);
             continue;
         }
         if (content.role !== 'user' || !content.parts) {
             allowedNames = new Set();
+            allowedIds = new Set();
             result.push(content);
             continue;
         }
         const hasFunctionResponse = content.parts.some((part) => part.functionResponse);
         if (!hasFunctionResponse) {
             allowedNames = new Set();
+            allowedIds = new Set();
             result.push(content);
             continue;
         }
-        const filtered = content.parts.filter((part) =>
-            part.functionResponse ? allowedNames.has(part.functionResponse.name ?? '') : true,
-        );
+        const filtered = content.parts.filter(isAnswerToPrecedingCall);
         // Drop the content if every part was an orphaned functionResponse.
         if (filtered.length === 0) continue;
         result.push(filtered.length === content.parts.length ? content : { ...content, parts: filtered });
@@ -767,6 +852,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const safety: Content[] = [];
         // Media an earlier turn inlined is still in the history sent with this request.
         const inlineBudget: InlineMediaBudget = { bytes: conversationInlineBytes(options.conversation) };
+        const callNamesById = functionCallNamesById(unwrapConversationArray<Content>(options.conversation) ?? []);
 
         for (const msg of segments) {
             // Role specific handling
@@ -798,7 +884,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
                     functionResponse: {
-                        name: msg.tool_use_id,
+                        ...resolveFunctionResponseTarget(msg.tool_use_id, callNamesById),
                         response: formatFunctionResponse(msg.content || ''),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
@@ -997,6 +1083,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
 
             if (content) {
+                assignFunctionCallIds(content.parts, collectFunctionCallIds(conversation));
                 tool_use = collectToolUseParts(content);
 
                 // For recoverable tool call issues, log warning but continue processing
@@ -1085,7 +1172,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const response = cacheExecution.value;
 
         const nativeParts: Part[] = [];
-        let streamedToolCallCount = 0;
+        // A functionCall part always arrives complete in one chunk, so each gets its id on arrival.
+        const usedCallIds = collectFunctionCallIds(conversation);
         const refusalLogContext = {
             logger: driver.logger,
             provider: driver.provider,
@@ -1097,7 +1185,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             logGeminiResponseRefusals(refusalLogContext, item);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
-                    let tool_use: StreamingToolUse[] | undefined;
+                    let tool_use: ToolUse[] | undefined;
                     let finish_reason: string | undefined;
                     switch (candidate.finishReason) {
                         case FinishReason.MAX_TOKENS:
@@ -1111,10 +1199,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     }
                     const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
                     if (candidate.content?.role === 'model') {
+                        assignFunctionCallIds(candidate.content.parts, usedCallIds);
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
                         // Collect all parts in order (text and images)
                         const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
-                        tool_use = collectStreamingToolUseParts(candidate.content, () => ++streamedToolCallCount);
+                        tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = 'tool_use';
                             // Log warning for recoverable tool call issues — see the

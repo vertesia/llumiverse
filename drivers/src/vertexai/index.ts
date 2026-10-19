@@ -525,6 +525,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             for (const tool of toolUse as ToolUse<unknown>[]) {
                 const functionCallPart: Record<string, unknown> = {
                     functionCall: {
+                        // The tool-use id is the call id, so a later tool result can find this call.
+                        id: tool.id,
                         name: tool.tool_name,
                         args: tool.tool_input,
                     },

@@ -1,7 +1,8 @@
 /**
  * Unit tests for fixOrphanedToolResults (Gemini).
  *
- * Gemini pairs a `functionResponse` part to its `functionCall` part by name. A
+ * A `functionResponse` part answers the `functionCall` part with its id, or with its name when it
+ * carries no id (conversations stored before tool-use ids were unique). A
  * functionResponse left dangling after its functionCall was dropped — e.g. by
  * conversation compaction trimming the model tool-call turn, or an unmergeable
  * parallel batch — causes the Gemini/Vertex API to reject the request. This is
@@ -11,7 +12,13 @@
 import type { Content } from '@google/genai';
 import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, test } from 'vitest';
-import { fixOrphanedToolResults, getGeminiPayload, mergeFunctionResponseContents } from './gemini.js';
+import {
+    fixOrphanedToolResults,
+    GEMINI_GENERATED_CALL_ID_PREFIX,
+    getGeminiPayload,
+    mergeFunctionResponseContents,
+    stripGeneratedFunctionCallIds,
+} from './gemini.js';
 
 const OPTIONS_WITH_TOOLS = {
     model: 'gemini-2.5-flash',
@@ -189,5 +196,106 @@ describe('mergeFunctionResponseContents', () => {
         expect(result).toHaveLength(4);
         expect(result[1].parts).toHaveLength(2);
         expect(result[3].parts).toHaveLength(2);
+    });
+});
+
+describe('call ids', () => {
+    const generatedA = `${GEMINI_GENERATED_CALL_ID_PREFIX}a`;
+    const generatedB = `${GEMINI_GENERATED_CALL_ID_PREFIX}b`;
+
+    test('pairs a response with the call that has its id', () => {
+        const contents: Content[] = [
+            {
+                role: 'model',
+                parts: [
+                    { functionCall: { id: 'call_1', name: 'a', args: {} } },
+                    { functionCall: { id: 'call_2', name: 'a', args: {} } },
+                ],
+            },
+            {
+                role: 'user',
+                parts: [
+                    { functionResponse: { id: 'call_1', name: 'a', response: {} } },
+                    { functionResponse: { id: 'call_2', name: 'a', response: {} } },
+                    // Same name, but its call is not in the preceding turn.
+                    { functionResponse: { id: 'call_0', name: 'a', response: {} } },
+                ],
+            },
+        ];
+
+        const result = fixOrphanedToolResults(contents);
+
+        expect(result[1].parts?.map((part) => part.functionResponse?.id)).toEqual(['call_1', 'call_2']);
+    });
+
+    test('keeps pairing responses without an id by name', () => {
+        const contents: Content[] = [
+            { role: 'model', parts: [{ functionCall: { id: 'call_1', name: 'a', args: {} } }] },
+            { role: 'user', parts: [{ functionResponse: { name: 'a', response: {} } }] },
+        ];
+
+        expect(fixOrphanedToolResults(contents)).toEqual(contents);
+    });
+
+    test('removes generated ids from calls and responses, and keeps Vertex ids', () => {
+        const contents: Content[] = [
+            {
+                role: 'model',
+                parts: [
+                    { functionCall: { id: generatedA, name: 'a', args: {} }, thoughtSignature: 'sig' },
+                    { functionCall: { id: 'call_2', name: 'a', args: {} } },
+                ],
+            },
+            {
+                role: 'user',
+                parts: [
+                    { functionResponse: { id: generatedA, name: 'a', response: {} } },
+                    { functionResponse: { id: 'call_2', name: 'a', response: {} } },
+                ],
+            },
+        ];
+
+        const stripped = stripGeneratedFunctionCallIds(contents);
+
+        expect(stripped[0].parts).toEqual([
+            { functionCall: { name: 'a', args: {} }, thoughtSignature: 'sig' },
+            { functionCall: { id: 'call_2', name: 'a', args: {} } },
+        ]);
+        expect(stripped[1].parts).toEqual([
+            { functionResponse: { name: 'a', response: {} } },
+            { functionResponse: { id: 'call_2', name: 'a', response: {} } },
+        ]);
+        // The stored conversation keeps its ids.
+        expect(contents[0].parts?.[0].functionCall?.id).toBe(generatedA);
+    });
+
+    test('sends a payload without generated ids, after pairing on them', () => {
+        const contents: Content[] = [
+            {
+                role: 'model',
+                parts: [
+                    { functionCall: { id: generatedA, name: 'a', args: {} } },
+                    { functionCall: { id: generatedB, name: 'a', args: {} } },
+                ],
+            },
+            { role: 'user', parts: [{ functionResponse: { id: generatedA, name: 'a', response: {} } }] },
+            { role: 'user', parts: [{ functionResponse: { id: generatedB, name: 'a', response: {} } }] },
+        ];
+
+        const payload = getGeminiPayload(OPTIONS_WITH_TOOLS, { contents });
+
+        expect(payload.contents).toEqual([
+            {
+                role: 'model',
+                parts: [{ functionCall: { name: 'a', args: {} } }, { functionCall: { name: 'a', args: {} } }],
+            },
+            {
+                role: 'user',
+                parts: [
+                    { functionResponse: { name: 'a', response: {} } },
+                    { functionResponse: { name: 'a', response: {} } },
+                ],
+            },
+        ]);
     });
 });
