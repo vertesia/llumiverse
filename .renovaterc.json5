@@ -49,7 +49,8 @@
     {
       // Mark npm patch/minor updates eligible for scoped bot automerge
       // (the renovate-automerge.yaml workflow merges them once CI passes).
-      // node/npm/pnpm are excluded so runtime/package-manager bumps stay manual.
+      // node/npm are excluded so runtime/package-manager bumps stay manual; pnpm is
+      // labeled by its own rule next to the weekly package manager group.
       // @biomejs is excluded because it is a native binary that ships per-arch:
       // CI runs on amd64 but developers are typically on arm64 (Apple Silicon),
       // so biome bumps need a manual look before merging.
@@ -173,6 +174,23 @@
       "assignees": ["LeonRuggiero"],
       "rangeStrategy": "bump",
       "schedule": "* * * * 2" // Tuesday
+    },
+    {
+      // pnpm only ships through the `packageManager` field, and CI installs with the bumped
+      // version, so a green build is enough to merge it. The weekly cadence comes from the
+      // group above; majors stay unlabeled for a manual look at lockfile-format changes.
+      "description": "Mark pnpm patch/minor updates in the weekly package manager group eligible for scoped bot automerge",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "!overrides"
+      ],
+      "matchPackageNames": [
+        "pnpm"
+      ],
+      "matchUpdateTypes": ["patch", "minor"],
+      "addLabels": ["renovate-automerge"]
     },
     {
       "description": "Keep Node.js-related updates on v24 until the runtime is upgraded deliberately.",
