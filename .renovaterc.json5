@@ -229,6 +229,23 @@
       "assignees": ["mincong-h"]
     },
     {
+      // Renovate itself is pinned only for `ci:renovate` (the config validator), so a bump cannot
+      // change what ships. The lint workflow runs that validator with --strict at the new version,
+      // so a release that rejects this config fails CI and is never merged. That makes every
+      // update type, majors included, safe for scoped bot automerge. The custom regex manager is
+      // invisible to the npm rules above, so this rule sets the label, owner and cadence itself.
+      "description": "Update Renovate itself weekly, assigned to michaelva and eligible for scoped bot automerge",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchPackageNames": [
+        "renovate"
+      ],
+      "addLabels": ["renovate-automerge"],
+      "assignees": ["michaelva"],
+      "schedule": "* * * * 1" // Monday
+    },
+    {
       // Vulnerability alerts use Renovate's forced security-update path and override this rule.
       "description": "Disable non-security updates on maintained release branches",
       "matchBaseBranches": ["/^release\\/[0-9]+\\.[0-9]+$/"],
