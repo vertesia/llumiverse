@@ -1,8 +1,8 @@
 /**
- * The streaming accumulator merges tool-use fragments by `id`. Providers without call ids
- * (Gemini keys a call by its function name) must therefore stream each call under a unique
- * key and carry the provider-facing id in `_actual_id`, otherwise parallel calls to one tool
- * collapse into a single call and the follow-up request answers fewer calls than the model made.
+ * The streaming accumulator merges tool-use fragments by `id`. A driver that streams calls under
+ * synthetic keys (for example by output index) carries the provider-facing id in `_actual_id`.
+ * Each call must keep its own key, otherwise parallel calls to one tool collapse into a single
+ * call and the follow-up request answers fewer calls than the model made.
  */
 
 import { describe, expect, it } from 'vitest';

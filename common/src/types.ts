@@ -449,7 +449,9 @@ export interface ToolDefinition {
 }
 /**
  * A tool use instance represents a call to a tool.
- * The id property is used to identify the tool call.
+ * The id property is used to identify the tool call. Drivers return ids that are unique within a
+ * conversation, including when the model calls the same tool more than once in a turn, and a tool
+ * result answers the call whose id it carries as `tool_use_id`.
  */
 export interface ToolUse<ParamsT = JSONObject> {
     id: string;
