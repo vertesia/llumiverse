@@ -1,14 +1,13 @@
-import { createReadStream } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import type { JSONSchema } from '@llumiverse/core';
-import { type DataSource, PromptRole, type PromptSegment } from '@llumiverse/core';
+import { Base64DataSource, PromptRole, type PromptSegment } from '@llumiverse/core';
 import type { NovaMessagesPrompt } from '@llumiverse/core/formatters';
-import { createReadableStreamFromReadable } from 'node-web-stream-adapters';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// 512x512 JPEG fallback — within Bedrock's [320, 4096] range
-const LOCAL_FALLBACK_IMAGE = resolve(__dirname, 'test_image_1.jpg');
+// Tabby cat photo committed with the tests so the image tests never depend on a remote host (Wikimedia rate-limits
+// CI). "Domestic Short Hair Cat.jpg" by Benjamin Carr, CC0 1.0, via Wikimedia Commons:
+// https://commons.wikimedia.org/wiki/File:Domestic_Short_Hair_Cat.jpg
+// 466x786 JPEG — within Bedrock's [320, 4096] dimension range.
+const CAT_IMAGE = readFileSync(new URL('./tabby_cat.jpg', import.meta.url)).toString('base64');
 
 export const testPrompt_color: PromptSegment[] = [
     {
@@ -17,7 +16,6 @@ export const testPrompt_color: PromptSegment[] = [
     },
 ];
 
-//json schema with 2 properties object and color
 export const testSchema_color: JSONSchema = {
     type: 'object',
     properties: {
@@ -25,51 +23,16 @@ export const testSchema_color: JSONSchema = {
             type: 'string',
         },
     },
+    required: ['color'],
+    additionalProperties: false,
 };
-
-class ImageUrlSource implements DataSource {
-    constructor(
-        public url: string,
-        public mime_type: string = 'image/jpeg',
-    ) {}
-    get name() {
-        return basename(this.url);
-    }
-    async getURI(): Promise<string> {
-        return this.url;
-    }
-    async getURL(): Promise<string> {
-        return this.url;
-    }
-    async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        return fetchWithFallback(this.url);
-    }
-}
-
-/** Fetch with timeout and fallback to a local test image */
-async function fetchWithFallback(url: string): Promise<ReadableStream<string | Uint8Array>> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!res.ok || !res.body) {
-            throw new Error(`HTTP ${res.status}`);
-        }
-        return res.body;
-    } catch (err) {
-        clearTimeout(timeout);
-        console.warn(`Failed to fetch ${url} (${err}), falling back to local test image`);
-        return createReadableStreamFromReadable(createReadStream(LOCAL_FALLBACK_IMAGE));
-    }
-}
 
 export const testPrompt_describeImage: PromptSegment[] = [
     {
         content:
             'You are a lab assistant analysing images of animals, then tag the images with accurate description of the animal shown in the picture.',
         role: PromptRole.user,
-        files: [new ImageUrlSource('https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg')],
+        files: [new Base64DataSource('tabby_cat.jpg', 'image/jpeg', CAT_IMAGE)],
     },
 ];
 

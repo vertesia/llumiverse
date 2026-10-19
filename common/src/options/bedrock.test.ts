@@ -162,7 +162,7 @@ describe('Bedrock Mantle metadata', () => {
         expect(options._option_id).toBe('bedrock-mantle-responses');
         expect(optionNames).toContain('max_tokens');
         expect(optionNames).toContain('effort');
-        expect(optionNames).toContain('reasoning_effort');
+        expect(optionNames).not.toContain('reasoning_effort');
         expect(optionNames).toContain('verbosity');
         expect(optionNames).toContain('image_detail');
         expect(optionNames).not.toContain('stop_sequence');
@@ -224,7 +224,7 @@ describe('Bedrock Mantle metadata', () => {
         expect(optionNames).toContain('temperature');
         expect(optionNames).toContain('top_p');
         expect(optionNames).toContain('effort');
-        expect(optionNames).toContain('reasoning_effort');
+        expect(optionNames).not.toContain('reasoning_effort');
         expect(optionNames).toContain('image_detail');
         expect(optionNames).not.toContain('verbosity');
         expect(optionNames).not.toContain('stop_sequence');
@@ -327,7 +327,7 @@ describe('Bedrock Mantle metadata', () => {
     });
 
     it.each([
-        ['amazon.nova-2-lite-v1:0', 1_000_000, 65_536],
+        ['amazon.nova-2-lite-v1:0', 1_000_000, 65_535],
         ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 64_000],
         ['google.gemma-3-12b-it', 128_000, 8_192],
         ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
@@ -432,9 +432,7 @@ describe('current Bedrock GPT families', () => {
             if (effort?.type !== OptionType.enum) throw new Error('Missing effort options');
             expect(Object.values(effort.enum)).toContain('xhigh');
             expect(Object.values(effort.enum).includes('none')).toBe(allowsNone);
-            expect(options.options.find((item) => item.name === 'reasoning_effort')).toMatchObject({
-                enum: effort.enum,
-            });
+            expect(options.options.map((item) => item.name)).not.toContain('reasoning_effort');
         }
     });
 });
@@ -455,6 +453,81 @@ describe('Bedrock Converse GPT options', () => {
             );
         },
     );
+});
+
+describe('Bedrock open-weight model cards', () => {
+    it.each([
+        ['zai.glm-4.7', 203_000, 131_072],
+        ['zai.glm-4.7-flash', 203_000, 131_072],
+        ['zai.glm-5', 200_000, 131_072],
+        ['global.zai.glm-5.3', 1_000_000, 131_072],
+        ['moonshotai.kimi-k2.5', 256_000, 16_384],
+        ['global.moonshotai.kimi-k3', 1_000_000, undefined],
+        ['global.xai.grok-4.7', 500_000, undefined],
+        ['xai.grok-4.3', 1_000_000, undefined],
+        ['mistral.mistral-large-4-0', 1_000_000, undefined],
+    ])('resolves documented limits for %s', (model, context_window, max_output_tokens) => {
+        const knowledge = getBedrockModelKnowledge(model);
+        expect(knowledge.context_window).toBe(context_window);
+        expect(knowledge.max_output_tokens).toBe(max_output_tokens);
+        expect(getMaxTokensLimitBedrock(model)).toBe(max_output_tokens);
+    });
+
+    it.each(['moonshot.kimi-k2-thinking', 'global.moonshotai.kimi-k3', 'zai.glm-5', 'global.zai.glm-5.3'])(
+        'reports client-side tool support for %s',
+        (model) => {
+            expect(resolveModelProfile(model, Providers.bedrock).capabilities.tool_support).toBe(true);
+            expect(resolveModelProfile(model, Providers.bedrock_mantle).capabilities).toMatchObject({
+                tool_support: true,
+                tool_support_streaming: true,
+            });
+        },
+    );
+
+    it.each([
+        ['twelvelabs.pegasus-1-2-v1:0', 1, 4_096],
+        ['us.twelvelabs.pegasus-1-2-v1:0', 1, 4_096],
+        ['global.twelvelabs.pegasus-1-5-v1:0', 512, 98_304],
+    ])('describes Pegasus as a tool-less video model for %s', (model, min, max) => {
+        expect(resolveModelProfile(model, Providers.bedrock).capabilities).toMatchObject({
+            input: { text: true, video: true },
+            output: { text: true },
+            tool_support: false,
+        });
+        const options = getOptions(model, Providers.bedrock);
+        expect(options._option_id).toBe('bedrock-twelvelabs-pegasus');
+        expect(options.options.map((item) => item.name)).not.toContain('service_tier');
+        expect(options.options.find((item) => item.name === 'max_tokens')).toMatchObject({ min, max });
+    });
+
+    it('describes Voxtral on Bedrock as text-only, unlike the native Mistral API', () => {
+        for (const provider of [Providers.bedrock, Providers.bedrock_mantle]) {
+            expect(resolveModelProfile('mistral.voxtral-small-24b-2507', provider).capabilities.input).toMatchObject({
+                text: true,
+                audio: false,
+            });
+        }
+        expect(resolveModelProfile('voxtral-small-latest', Providers.mistralai).capabilities.input.audio).toBe(true);
+    });
+
+    it('keeps the dated Mistral Large 2402 release on its legacy limits', () => {
+        expect(getBedrockModelKnowledge('mistral.mistral-large-2402-v1:0')).toMatchObject({
+            context_window: 32_000,
+            max_output_tokens: 4_096,
+            input: { image: false },
+        });
+    });
+
+    it('exposes Grok effort without stop sequences on Bedrock Runtime', () => {
+        const options = getOptions('global.xai.grok-4.7', Providers.bedrock);
+        const names = options.options.map((item) => item.name);
+        expect(options._option_id).toBe('bedrock-converse');
+        expect(names).not.toContain('stop_sequence');
+        const effort = options.options.find((item) => item.name === 'effort');
+        if (effort?.type !== OptionType.enum) throw new Error('Missing effort option');
+        expect(Object.values(effort.enum)).toEqual(['low', 'medium', 'high', 'xhigh']);
+        expect(effort).not.toHaveProperty('default');
+    });
 });
 
 describe('Bedrock Nova reasoning metadata', () => {

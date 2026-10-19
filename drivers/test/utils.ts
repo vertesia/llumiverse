@@ -122,3 +122,33 @@ export function getAdvertisedTestOptions(options: ExecutionOptions, provider: st
         ),
     };
 }
+
+/** `low` when advertised, otherwise the lowest advertised level that still reasons (Mistral offers none/high). */
+function getLowestReasoningEffort(model: string, provider: string): string | undefined {
+    const effort = getOptions(model, provider as Providers).options.find((option) => option.name === 'effort');
+    if (effort?.type !== 'enum') return undefined;
+    const values = Object.values(effort.enum as Record<string, string>);
+    return values.includes('low') ? 'low' : values.find((value) => value !== 'none');
+}
+
+/**
+ * Success-smoke options: low effort where the model supports it, no sampling controls unless a test passes them,
+ * and only the controls the model advertises.
+ */
+export function getLowEffortTestOptions(
+    model: string,
+    provider: string,
+    modelOptions: Record<string, unknown> = {},
+): ExecutionOptions {
+    return getAdvertisedTestOptions(
+        {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                effort: getLowestReasoningEffort(model, provider),
+                ...modelOptions,
+            } as ExecutionOptions['model_options'],
+        },
+        provider,
+    );
+}

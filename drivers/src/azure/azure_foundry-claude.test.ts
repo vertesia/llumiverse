@@ -104,6 +104,22 @@ function setup(sourceModel?: string) {
 const segments = [{ role: PromptRole.user, content: 'What color is grass?' }];
 
 describe('Foundry Claude Messages', () => {
+    it('asks the API to drop mismatched thinking blocks for adaptive Claude Opus 5.5', async () => {
+        const { driver, requests } = setup();
+        try {
+            await driver.execute(segments, {
+                model: 'deployment::claude-opus-5-5',
+                model_options: { _option_id: 'anthropic-claude' },
+            });
+            expect(requests[0].headers.get('anthropic-beta')).toBe('thinking-binding-controls-2026-08-01');
+            expect(requests[0].body).toMatchObject({
+                thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
+            });
+        } finally {
+            driver.destroy();
+        }
+    });
+
     it.each(['deployment::claude-opus-5-5', 'deployment::claude-sonnet-5-5-20260901', 'deployment::claude-opus-6'])(
         'uses deployment names, native transport and source model rules for %s',
         async (model) => {

@@ -12,18 +12,49 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(() => new OpenRouterDriver({ apiKey: '' })).toThrow('apiKey is required');
     });
 
-    it('supplements native structured output only for GLM 5.3', async () => {
+    it('supplements native structured output only for GLM 5.3 and MiniMax', async () => {
         const driver = new OpenRouterDriver({ apiKey: 'test-key' });
         const resultSchema = { type: 'object' as const, properties: { answer: { type: 'string' as const } } };
         const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+        const hasPromptSchema = async (model: string) => {
+            const prompt = await driver.createPrompt(segments, { model, result_schema: resultSchema });
+            return prompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'));
+        };
 
-        const glmPrompt = await driver.createPrompt(segments, { model: 'z-ai/glm-5.3', result_schema: resultSchema });
-        const grokPrompt = await driver.createPrompt(segments, { model: 'x-ai/grok-4.6', result_schema: resultSchema });
+        for (const model of ['z-ai/glm-5.3', 'minimax/minimax-m3', 'minimax/minimax-m2.5', 'minimax/minimax-m4']) {
+            expect(await hasPromptSchema(model), model).toBe(true);
+        }
+        for (const model of ['x-ai/grok-4.6', 'z-ai/glm-5.4', 'openai/gpt-5.5-mini']) {
+            expect(await hasPromptSchema(model), model).toBe(false);
+        }
+    });
 
-        expect(glmPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(true);
-        expect(grokPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(
-            false,
-        );
+    it('keeps native response_format for MiniMax alongside the prompt schema', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const resultSchema = { type: 'object' as const, properties: { answer: { type: 'string' as const } } };
+        const options = { model: 'minimax/minimax-m3', result_schema: resultSchema };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Answer.' }], options);
+        const send = vi.fn(async (_request: unknown, _options?: unknown) => ({
+            id: 'generation-1',
+            object: 'chat.completion' as const,
+            created: 1,
+            model: 'minimax/minimax-m3',
+            systemFingerprint: null,
+            choices: [
+                {
+                    index: 0,
+                    finishReason: 'stop',
+                    logprobs: null,
+                    message: { role: 'assistant' as const, content: '{"answer":"blue"}' },
+                },
+            ],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        setService(driver, { chat: { send } });
+
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(send.mock.calls[0]?.[0]).toMatchObject({ chatRequest: { responseFormat: { type: 'json_schema' } } });
     });
 
     it('maps chat, structured output, tools, timeout, and the native response', async () => {

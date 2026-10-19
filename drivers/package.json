@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/drivers",
-    "version": "1.6.0-dev.20261004.083934Z",
+    "version": "1.6.0-dev.20261014.012028Z",
     "type": "module",
     "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
     "files": [
@@ -149,7 +149,7 @@
         "@azure/core-auth": "^1.11.0",
         "@azure/identity": "^4.13.3",
         "@google-cloud/aiplatform": "^7.4.1",
-        "@google/genai": "^2.25.0",
+        "@google/genai": "^2.30.0",
         "@huggingface/inference": "^4.13.30",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",

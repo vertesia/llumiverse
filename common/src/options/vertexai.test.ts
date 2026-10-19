@@ -47,22 +47,31 @@ describe('Vertex AI MaaS metadata', () => {
         ['gemini-nano-banana-2.1', 131_072, 32_768],
         ['gemini-4-pro-image', 65_536, 32_768],
         ['gemini-4-flash-image', 131_072, 32_768],
-        ['gemini-4-flash', 1_048_576, 65_536],
-    ] as const)('aligns Gemini limits across public metadata for %s', (model, context, output) => {
-        const qualified = `locations/global/publishers/google/models/${model}`;
-        for (const id of [model, qualified]) {
-            expect(getContextWindowSize(id)).toBe(context);
-            expect(getMaxOutputTokens(id)).toBe(output);
-            expect(getMaxTokensLimitVertexAi(id)).toBe(output);
-            expect(resolveModelProfile(id, Providers.vertexai)).toMatchObject({
-                context_window: context,
-                max_output_tokens: output,
-            });
-            expect(getVertexAiOptions(id).options.find((item) => item.name === 'max_tokens')).toMatchObject({
-                max: output,
-            });
-        }
-    });
+        // Gemini 4+ chat models continue output across requests on Vertex (long decode), up to the unified window.
+        ['gemini-4-flash', 1_048_576, 65_536, 1_048_576],
+        ['gemini-4-argon', 1_048_576, 65_536, 1_048_576],
+        ['gemini-4-argon-cyber-permissive', 1_048_576, 65_536, 1_048_576],
+        ['gemini-5-pro', 1_048_576, 65_536, 1_048_576],
+    ] as const)(
+        'aligns Gemini limits across public metadata for %s',
+        (model, context, output, vertexOutput: number = output) => {
+            const qualified = `locations/global/publishers/google/models/${model}`;
+            for (const id of [model, qualified]) {
+                expect(getContextWindowSize(id)).toBe(context);
+                expect(getMaxOutputTokens(id)).toBe(output);
+                expect(getMaxTokensLimitVertexAi(id)).toBe(vertexOutput);
+                expect(resolveModelProfile(id, Providers.vertexai)).toMatchObject({
+                    context_window: context,
+                    max_output_tokens: vertexOutput,
+                });
+                // Transports without continuation keep the single-request cap.
+                expect(resolveModelProfile(id, Providers.openrouter).max_output_tokens).toBe(output);
+                expect(getVertexAiOptions(id).options.find((item) => item.name === 'max_tokens')).toMatchObject({
+                    max: vertexOutput,
+                });
+            }
+        },
+    );
 
     it.each(['gemini-omni-flash-preview', 'gemini-omni-1.1-flash-preview'])(
         'uses dedicated video limits without adding a chat max_tokens control for %s',
@@ -227,6 +236,9 @@ describe('Vertex Gemini reasoning metadata', () => {
         ['gemini-3.7-flash', ['low', 'medium', 'high']],
         ['gemini-3.8-flash-cyber', ['low', 'medium', 'high']],
         ['gemini-4.0-flash', ['low', 'medium', 'high']],
+        ['gemini-4-argon', ['low', 'medium', 'high']],
+        ['gemini-4-argon-cyber-permissive', ['low', 'medium', 'high']],
+        ['gemini-4.1-argon', ['low', 'medium', 'high']],
         ['gemini-3-pro-preview', ['low', 'high']],
         ['gemini-3.1-pro-preview', ['low', 'medium', 'high']],
         ['gemini-3.1-flash-lite-image', ['minimal', 'high']],
@@ -241,7 +253,7 @@ describe('Vertex Gemini reasoning metadata', () => {
         expect(Object.values(effort.enum)).toEqual(values);
     });
 
-    it.each(['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4.0-flash'])(
+    it.each(['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4.0-flash', 'gemini-4-argon'])(
         'hides unsupported sampling options for %s',
         (model) => {
             const names = getVertexAiOptions(model).options.map((item) => item.name);
@@ -250,6 +262,19 @@ describe('Vertex Gemini reasoning metadata', () => {
             }
         },
     );
+
+    it('describes Gemini 4 Argon as a multimodal-input, text-output tool model without Flex', () => {
+        const model = 'locations/global/publishers/google/models/gemini-4-argon';
+        expect(getModelCapabilities(model, Providers.vertexai)).toMatchObject({
+            input: { text: true, image: true, video: true, audio: true },
+            output: { text: true, image: false, audio: false },
+            tool_support: true,
+        });
+        expect(isFlexSupportedGeminiModel(model)).toBe(false);
+        const names = getVertexAiOptions(model).options.map((item) => item.name);
+        expect(names).toEqual(expect.arrayContaining(['max_tokens', 'effort', 'include_thoughts']));
+        expect(names).not.toContain('service_tier');
+    });
 });
 
 describe('Gemini 2.5 thinking defaults', () => {

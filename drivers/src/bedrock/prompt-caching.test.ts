@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { formatConversePrompt } from './converse.js';
 import { BedrockDriver } from './index.js';
 
-describe('Bedrock prompt caching', () => {
+describe('Bedrock prompt caching (Converse, including Claude on the legacy Converse route)', () => {
     const imageSource = (): DataSource => ({
         name: 'page.jpg',
         mime_type: 'image/jpeg',

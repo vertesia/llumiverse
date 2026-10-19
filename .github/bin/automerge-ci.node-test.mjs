@@ -42,14 +42,35 @@ test('a completed real run remains usable after an unrelated label update', () =
         true,
     );
 });
+const coordinatorPolicy = { ...policy, workflow: 'pr-validation.yaml' };
+const coordinatorPath = '.github/workflows/pr-validation.yaml';
 for (const conclusion of ['failure', 'cancelled', 'skipped', 'neutral', 'timed_out']) {
-    test(`does not fall back past a newer ${conclusion} real run`, () => {
+    test(`accepts required jobs when the unrelated coordinator half concluded ${conclusion}`, () => {
         assert.equal(
-            verifyWorkflow([run(1), run(2, { conclusion })], () => tested, policy, context),
-            false,
+            verifyWorkflow(
+                [run(1), run(2, { conclusion, path: coordinatorPath })],
+                () => tested,
+                coordinatorPolicy,
+                context,
+            ),
+            true,
         );
     });
+    test(`rejects a standalone run that concluded ${conclusion}`, () => {
+        assert.equal(verifyWorkflow([run(2, { conclusion })], () => tested, coordinatorPolicy, context), false);
+    });
 }
+test('does not accept required jobs from an active coordinator run', () => {
+    assert.equal(
+        verifyWorkflow(
+            [run(1, { status: 'in_progress', conclusion: null, path: coordinatorPath })],
+            () => tested,
+            coordinatorPolicy,
+            context,
+        ),
+        false,
+    );
+});
 test('missing and skipped jobs or steps fail closed', () => {
     for (const jobs of [
         [],
@@ -103,24 +124,70 @@ test('API errors block merging', () => {
 test('reads all pages and validates every configured workflow', () => {
     const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
     const names = Object.keys(policies);
-    let index = -1;
+    const configuredJobs = Object.values(policies).flatMap((configured) =>
+        configured.jobs.map((required) => ({
+            ...job(required.example ?? required.name.slice(1, -1)),
+            steps: (required.steps ?? []).map((name) => job(name)),
+        })),
+    );
     const pages = (endpoint) => {
         if (endpoint.includes('/workflows/')) {
-            index++;
-            return [{ workflow_runs: [] }, { workflow_runs: [run(1)] }];
+            if (endpoint.includes('/pr-validation.yaml/')) {
+                return [{ workflow_runs: [] }, { workflow_runs: [run(1, { path: coordinatorPath })] }];
+            }
+            return [{ workflow_runs: [] }];
         }
         assert.match(endpoint, /filter=latest&per_page=100/);
-        return [
-            { jobs: [] },
-            {
-                jobs: policies[names[index]].jobs.map((required) => ({
-                    ...job(required.example ?? required.name.slice(1, -1)),
-                    steps: (required.steps ?? []).map((name) => job(name)),
-                })),
-            },
-        ];
+        return [{ jobs: [] }, { jobs: configuredJobs }];
     };
     assert.equal(main({ REPO: 'owner/repo', HEAD_BRANCH: 'fix', HEAD_SHA: 'head' }, 12, names, pages), true);
+});
+
+test('memoizes the shared coordinator run and jobs across policies', () => {
+    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    const names = Object.keys(policies);
+    const calls = new Map();
+    const pages = (endpoint) => {
+        calls.set(endpoint, (calls.get(endpoint) ?? 0) + 1);
+        if (endpoint.includes('/pr-validation.yaml/')) {
+            return [{ workflow_runs: [run(1, { path: coordinatorPath })] }];
+        }
+        if (endpoint.includes('/workflows/')) return [{ workflow_runs: [] }];
+        if (endpoint.includes('/runs/1/')) {
+            return [{
+                jobs: Object.values(policies).flatMap((configured) =>
+                    configured.jobs.map((required) => ({
+                        ...job(required.example ?? required.name.slice(1, -1)),
+                        steps: required.steps.map((name) => job(name)),
+                    })),
+                ),
+            }];
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+    };
+    assert.equal(main({ REPO: 'owner/repo', HEAD_BRANCH: 'fix', HEAD_SHA: 'head' }, 12, names, pages), true);
+    assert.equal([...calls].find(([endpoint]) => endpoint.includes('/pr-validation.yaml/'))?.[1], 1);
+    assert.equal([...calls].find(([endpoint]) => endpoint.includes('/runs/1/jobs'))?.[1], 1);
+});
+
+test('legacy PR workflows remain valid while release branches adopt the coordinator', () => {
+    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    for (const [name, configured] of Object.entries(policies)) {
+        const pages = (endpoint) => {
+            if (endpoint.includes('/pr-validation.yaml/')) return [{ workflow_runs: [] }];
+            if (endpoint.includes(`/workflows/${name}/`)) return [{ workflow_runs: [run(1)] }];
+            if (endpoint.includes('/runs/1/')) {
+                return [{
+                    jobs: configured.jobs.map((required) => ({
+                        ...job(required.example ?? required.name.slice(1, -1)),
+                        steps: required.steps.map((step) => job(step)),
+                    })),
+                }];
+            }
+            throw new Error(`Unexpected endpoint: ${endpoint}`);
+        };
+        assert.equal(main({ REPO: 'owner/repo', HEAD_BRANCH: 'fix', HEAD_SHA: 'head' }, 12, [name], pages), true);
+    }
 });
 test('all automerge workflows use trusted policy and the shared gate', () => {
     const dir = new URL('../workflows/', import.meta.url);
@@ -129,6 +196,7 @@ test('all automerge workflows use trusted policy and the shared gate', () => {
         if (!yaml.includes('required_workflows=(')) continue;
         assert.match(yaml, /ref: \$\{\{ github.workflow_sha \}\}/, file);
         assert.match(yaml, /node \.github\/bin\/automerge-ci.mjs/, file);
+        assert.match(yaml, /- "\(ci\) PR validation"/, file);
         assert.doesNotMatch(yaml, /sort_by\(\.id\) \| last/, file);
     }
 });

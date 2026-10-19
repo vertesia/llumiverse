@@ -32,6 +32,7 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    type HttpTimeoutOptions,
     hasGeminiSamplingRestriction,
     incrementConversationTurn,
     isGeminiModelVersionGte,
@@ -235,6 +236,38 @@ function getProminentPeopleOption(
         default:
             return undefined;
     }
+}
+
+/** Vertex returns at most this many tokens per streamed request; a larger maxOutputTokens continues across requests. */
+const GEMINI_STREAM_REQUEST_MAX_OUTPUT_TOKENS = 65_536;
+/** Vertex bounds each streamed long-decode request at 20 minutes; leave a minute for transport overhead. */
+const GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS = 21 * 60_000;
+
+function hasResponseTimeout(httpTimeout: HttpTimeoutOptions | undefined): boolean {
+    return httpTimeout?.headersTimeout !== undefined || httpTimeout?.bodyTimeout !== undefined;
+}
+
+/**
+ * Exception for streamed long decodes: the SDK applies its timeout to each continuation request, and Vertex allows a
+ * streamed one up to 20 minutes, longer than the built-in driver deadline. Unary continuation requests are bounded at
+ * 10 minutes and need no change. A response timeout supplied in the driver options or for this call is caller input
+ * and stays as given.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
+ */
+export function applyGeminiLongDecodeStreamTimeout(
+    driver: Pick<VertexAIDriver, 'options' | 'getRequestTimeoutMs'>,
+    options: Pick<ExecutionOptions, 'httpTimeout'>,
+    payload: GenerateContentParameters,
+): void {
+    const maxOutputTokens = payload.config?.maxOutputTokens;
+    if (!maxOutputTokens || maxOutputTokens <= GEMINI_STREAM_REQUEST_MAX_OUTPUT_TOKENS) return;
+    if (hasResponseTimeout(driver.options.httpTimeout) || hasResponseTimeout(options.httpTimeout)) return;
+    // The built-in default is shorter today; never lower it if that changes.
+    if (driver.getRequestTimeoutMs() >= GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS) return;
+    payload.config = {
+        ...payload.config,
+        httpOptions: { ...payload.config?.httpOptions, timeout: GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS },
+    };
 }
 
 export function getGeminiPayload(
@@ -565,6 +598,8 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
 
 const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
+    // The SDK continues long decodes itself; a CONTINUATION left on the final response means it could not resume.
+    FinishReason.CONTINUATION,
     FinishReason.STOP,
     FinishReason.FINISH_REASON_UNSPECIFIED,
 ];
@@ -742,12 +777,38 @@ function logGeminiResponseRefusals(
 function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): string | undefined {
     switch (finishReason) {
         case FinishReason.MAX_TOKENS:
+        case FinishReason.CONTINUATION:
             return 'length';
         case FinishReason.STOP:
             return 'stop';
         default:
             return finishReason;
     }
+}
+
+// Gemini 2.5 Flash Image left this rule when it moved from preview to GA with regional endpoints.
+function isGlobalOnlyGeminiImageModel(model: string): boolean {
+    return model.includes('gemini-nano-banana');
+}
+
+/**
+ * Gemini models without single-region endpoints: Nano Banana is served only from `global`, and Gemini 4+
+ * chat models from `global` and the `us`/`eu` multi-regions. Dedicated speech, transcription, live and image variants
+ * keep their own endpoints. Listing and request routing both use this rule.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+ */
+export function isGeminiWithoutRegionalEndpoints(model: string): boolean {
+    return (
+        isGlobalOnlyGeminiImageModel(model) ||
+        (isGeminiModelVersionGte(model, '4.0') && !/(?:tts|transcribe|live|native-audio|image)/.test(model))
+    );
+}
+
+/** A request without a location goes to `global`; a caller-named Gemini 4 multi-region location is kept. */
+export function resolveGeminiRegion(model: string, explicitRegion: string | undefined): string | undefined {
+    if (isGlobalOnlyGeminiImageModel(model)) return 'global';
+    if (explicitRegion === undefined && isGeminiWithoutRegionalEndpoints(model)) return 'global';
+    return explicitRegion;
 }
 
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
@@ -1089,10 +1150,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes('gemini-2.5-flash-image') || options.model.includes('gemini-nano-banana')) {
-            region = 'global'; // These image-generation families are available only in the global region.
-        }
+        region = resolveGeminiRegion(options.model, region);
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
@@ -1203,9 +1261,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        if (options.model.includes('gemini-2.5-flash-image') || options.model.includes('gemini-nano-banana')) {
-            region = 'global'; // These image-generation families are available only in the global region.
-        }
+        region = resolveGeminiRegion(options.model, region);
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
@@ -1217,6 +1273,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const payload = getGeminiPayload(options, prompt, 'stream', driver.logger);
         payload.config = { ...payload.config, abortSignal: signal };
+        applyGeminiLongDecodeStreamTimeout(driver, options, payload);
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,

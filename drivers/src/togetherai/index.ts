@@ -11,6 +11,7 @@ import {
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     Providers,
+    resolveModelProfile,
 } from '@llumiverse/core';
 import Together from 'together-ai';
 import { APIConnectionError, APIError, APIUserAbortError } from 'together-ai/error';
@@ -203,14 +204,28 @@ function toTogetherRequest(
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toTogetherTool),
-        // SDK enums lag provider releases; preserve explicit effort for provider validation.
-        reasoning_effort: payload.reasoning_effort as CompletionCreateParamsNonStreaming['reasoning_effort'],
+        ...(payload.reasoning_effort === 'none' && hasReasoningToggleOnly(payload.model)
+            ? // Hybrid models switch reasoning off with `reasoning.enabled`; Together has no `none` effort for them.
+              { reasoning: { enabled: false } }
+            : {
+                  // SDK enums lag provider releases; preserve explicit effort for provider validation.
+                  reasoning_effort: payload.reasoning_effort as CompletionCreateParamsNonStreaming['reasoning_effort'],
+              }),
         service_tier: payload.service_tier ?? undefined,
         stream,
+        // Together reports streamed usage only when asked; its SDK has no `stream_options` type yet.
+        ...(stream && { stream_options: { include_usage: true } }),
     } satisfies (CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming) & {
         service_tier?: string;
+        stream_options?: { include_usage: boolean };
     };
     return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
+}
+
+/** Hybrid reasoning models, whose only reasoning control the catalog lists is turning it off. */
+function hasReasoningToggleOnly(model: string): boolean {
+    const levels = resolveModelProfile(model, Providers.togetherai).reasoning_effort_levels;
+    return levels?.length === 1 && levels[0] === 'none';
 }
 
 function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
@@ -340,9 +355,19 @@ async function* normalizeTogetherStream(
                 finish_reason: normalizeTogetherFinishReason(choice.finish_reason),
                 logprobs: choice.logprobs ?? null,
             })),
-            usage: chunk.usage ?? undefined,
+            usage: chunk.usage ?? choiceUsage(chunk) ?? undefined,
         };
     }
+}
+
+/** Some Together models (e.g. Kimi K3) report streamed usage inside a choice instead of at the chunk's top level. */
+function choiceUsage(chunk: ChatCompletionChunk): ChatCompletionChunk['usage'] {
+    for (const choice of chunk.choices as Array<
+        ChatCompletionChunk.Choice & { usage?: ChatCompletionChunk['usage'] }
+    >) {
+        if (choice.usage) return choice.usage;
+    }
+    return undefined;
 }
 
 function normalizeTogetherFinishReason(reason: string | null | undefined): string | null {

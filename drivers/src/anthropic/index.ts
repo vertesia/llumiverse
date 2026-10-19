@@ -132,7 +132,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ClaudePrompt {
-        return buildClaudeStreamingConversation(prompt, result, toolUse, options);
+        return buildClaudeStreamingConversation(prompt, result, toolUse, options, this.provider);
     }
 
     formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {

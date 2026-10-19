@@ -48,7 +48,7 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
         super({
             ...options,
             resultSchemaMode: 'response_format',
-            includeResultSchemaInPromptForModel: (model) => /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model),
+            includeResultSchemaInPromptForModel: supplementsResultSchemaInPrompt,
             toolSchemaMode: 'compatible',
         });
         if (!options.apiKey) {
@@ -487,6 +487,17 @@ function asOpenRouterChatResult(response: ChatResult | OpenRouterChatStream): Ch
 function asOpenRouterChatStream(response: ChatResult | OpenRouterChatStream): OpenRouterChatStream {
     if (Symbol.asyncIterator in response) return response;
     throw new TypeError('OpenRouter returned a non-streaming result for a streaming chat request');
+}
+
+/**
+ * Prompt-schema supplement for families whose native structured output is unreliable on OpenRouter.
+ * - GLM 5.3 returns unconstrained prose despite `response_format`.
+ * - MiniMax: OpenRouter routes MiniMax models across many hosts, and most do not support `json_schema`
+ *   (some downgrade it to JSON mode, which yields `{}`; others ignore `response_format`). The prompt schema
+ *   gives every host the shape while hosts that do enforce the schema still receive it natively.
+ */
+function supplementsResultSchemaInPrompt(model: string): boolean {
+    return /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model) || /^minimax\//i.test(model);
 }
 
 function isOpenRouterChatModel(model: OpenRouterModel, provider: Providers): boolean {

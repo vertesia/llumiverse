@@ -10,6 +10,8 @@ import {
     ENGINEERING_TEAM_SLUG,
     evaluate,
     githubApi,
+    handOff,
+    handoffFor,
     isAmbiguousApprovalError,
     isTransientApiError,
     MARKER,
@@ -309,7 +311,7 @@ test('manual discovery excludes forks and unsupported bases', async () => {
             { ...pr, number: 14, head: { ...pr.head, repo: { full_name: 'fork/studio' } } },
         ],
     });
-    assert.deepEqual(await targets(api, {}, 'workflow_dispatch'), [12]);
+    assert.deepEqual(await targets(api, {}, 'repository_dispatch'), [12]);
     assert.deepEqual(api.opened, [undefined]);
 });
 
@@ -346,8 +348,11 @@ test('workflow events resolve current PRs even when the event has no PR list or 
     );
 });
 
-test('manual dispatch rejects malformed PR numbers', async () => {
-    await assert.rejects(targets(fixture(), { inputs: { pr_number: '-1' } }, 'workflow_dispatch'), /Invalid PR/);
+test('manual reconciliation rejects malformed PR numbers', async () => {
+    await assert.rejects(
+        targets(fixture(), { client_payload: { pr_number: '-1' } }, 'repository_dispatch'),
+        /Invalid PR/,
+    );
 });
 
 test('API transport scopes approval and membership calls to dedicated App tokens', async () => {
@@ -657,6 +662,9 @@ test('only server errors and dropped connections count as transient', () => {
 
 test('workflow executes only trusted scripts and observes pushes and CI completion', () => {
     const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
+    const coordinator = readFileSync(new URL('../workflows/pr-validation.yaml', import.meta.url), 'utf8');
+    const build = readFileSync(new URL('../workflows/build-and-test.yml', import.meta.url), 'utf8');
+    const lint = readFileSync(new URL('../workflows/lint.yml', import.meta.url), 'utf8');
     assert.match(workflow, /ref: \$\{\{ github.workflow_sha \}\}/);
     assert.match(workflow, /types: \[completed\]/);
     assert.match(workflow, /permission-members: read/);
@@ -666,13 +674,22 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.match(workflow, /synchronize/);
     assert.match(workflow, /converted_to_draft/);
     assert.match(workflow, /permission-pull-requests: write/);
-    assert.doesNotMatch(workflow, /permission-contents: write|pull_request_review|checkout.*head|npm install/);
+    assert.match(workflow, /Generate automerge hand-off token[\s\S]*permission-contents: write/);
+    assert.doesNotMatch(workflow, /pull_request_review|checkout.*head|npm install/);
     assert.match(workflow, /cancel-in-progress: false/);
     assert.match(workflow, /queue: max/);
     assert.match(workflow, /matrix\.branch/);
     assert.match(workflow, /CI_APPROVAL_BRANCH:/);
     assert.match(workflow, /ci-approve\.mjs --discover/);
     assert.doesNotMatch(workflow, /github\.ref_name/);
+    assert.match(workflow, /"\(ci\) PR validation"/);
+    assert.match(coordinator, /uses: \.\/\.github\/workflows\/build-and-test\.yml/);
+    assert.match(coordinator, /uses: \.\/\.github\/workflows\/lint\.yml/);
+    assert.match(coordinator, /if: github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+    for (const reusable of [build, lint]) {
+        assert.match(reusable, /^ {2}workflow_call:$/m);
+        assert.doesNotMatch(reusable, /^ {2}pull_request:$/m);
+    }
 });
 
 test('additive ruleset requires CI without changing human review or thread rules', () => {
@@ -834,16 +851,16 @@ test('settle caps a sleep at the remaining deadline', async () => {
     assert.deepEqual(sleeps, [10, 5]);
 });
 
-test('manual dispatch resolves a selected PR to its actual branch', async () => {
-    assert.deepEqual(await targetBranches(fixture(), { inputs: { pr_number: '12' } }, 'workflow_dispatch'), [
+test('manual reconciliation resolves a selected PR to its actual branch', async () => {
+    assert.deepEqual(await targetBranches(fixture(), { client_payload: { pr_number: '12' } }, 'repository_dispatch'), [
         'feature',
     ]);
 });
 
-test('bulk manual dispatch deduplicates branch jobs and scopes discovery to the locked branch', async () => {
+test('bulk manual reconciliation deduplicates branch jobs and scopes discovery to the locked branch', async () => {
     const api = fixture({ pulls: [pr, { ...pr, number: 13 }] });
-    assert.deepEqual(await targetBranches(api, {}, 'workflow_dispatch'), ['feature']);
-    await targets(api, {}, 'workflow_dispatch', 'feature');
+    assert.deepEqual(await targetBranches(api, {}, 'repository_dispatch'), ['feature']);
+    await targets(api, {}, 'repository_dispatch', 'feature');
     assert.equal(api.opened.at(-1), 'feature');
 });
 
@@ -968,4 +985,123 @@ test('no-op runs with changed or missing base metadata cannot fall back to older
             true,
         );
     }
+});
+
+const handoffs = JSON.parse(readFileSync(new URL('./ci-approve-handoffs.json', import.meta.url), 'utf8'));
+const renovate = { ...pr, head: { ...pr.head, ref: 'renovate/main-node-dependencies' } };
+
+test('a successful gate hands the exact published revision to the specialized automerge workflow', async () => {
+    const api = fixture({ pulls: [renovate] });
+    const result = await reconcile(api, 12, () => true, { handoffs });
+    assert.equal(api.writes.at(-1)[2], 'success');
+    assert.deepEqual(result.handoff, {
+        workflow: 'renovate-automerge.yaml',
+        eventType: 'ci-approved-renovate',
+        inputs: {
+            pr_number: '12',
+            head_branch: renovate.head.ref,
+            head_sha: sha,
+            base_ref: 'main',
+            base_sha: 'base',
+        },
+    });
+});
+
+test('bot PRs routed to a specialized gate are handed off without this gate approving', async () => {
+    const backport = {
+        ...pr,
+        user: { type: 'Bot', login: 'vertesia-release-bot[bot]' },
+        head: { ...pr.head, ref: 'backport-800-to-release-1.5' },
+    };
+    const api = fixture({ pulls: [backport] });
+    const result = await reconcile(api, 12, () => true, { handoffs });
+    assert.equal(result.approve, false);
+    assert.equal(result.handoff.workflow, 'backport-automerge.yaml');
+    assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+});
+
+test('no hand-off without a successful status, on a push, or for an unrouted branch', async () => {
+    assert.equal((await reconcile(fixture({ pulls: [renovate] }), 12, () => false, { handoffs })).handoff, undefined);
+    const pushed = await reconcile(fixture({ pulls: [renovate] }), 12, () => true, { handoffs, pushed: true });
+    assert.equal(pushed.handoff, undefined);
+    assert.equal((await reconcile(fixture(), 12, () => true, { handoffs })).handoff, undefined);
+    assert.equal((await reconcile(fixture({ pulls: [renovate] }), 12, () => true)).handoff, undefined);
+});
+
+test('hand-off routing matches head-branch prefixes only', () => {
+    assert.equal(handoffFor({ ...pr, head: { ...pr.head, ref: 'feat-renovate/x' } }, handoffs), undefined);
+    assert.equal(handoffFor(renovate, {}), undefined);
+});
+
+test('the hand-off dispatches a default-branch event with the published revision', async () => {
+    const calls = [];
+    const handoff = handoffFor(renovate, handoffs);
+    await handOff({ dispatch: async (...args) => calls.push(args) }, handoff);
+    assert.deepEqual(calls, [['ci-approved-renovate', handoff.inputs]]);
+});
+
+test('dispatch transport uses the scoped hand-off token and cannot select a workflow ref', async () => {
+    const calls = [];
+    const api = githubApi(
+        {
+            GITHUB_REPOSITORY: 'vertesia/llumiverse',
+            GH_TOKEN: 'actions',
+            GH_REVIEW_TOKEN: 'review-app',
+            GH_HANDOFF_TOKEN: 'handoff-app',
+        },
+        (_cmd, args, options) => {
+            calls.push({ args, options });
+            return '';
+        },
+    );
+    const inputs = handoffFor(renovate, handoffs).inputs;
+    assert.equal(await api.dispatch('ci-approved-renovate', inputs), null);
+    assert.equal(calls[0].args[1], 'repos/vertesia/llumiverse/dispatches');
+    assert.equal(calls[0].options.env.GH_TOKEN, 'handoff-app');
+    assert.deepEqual(JSON.parse(calls[0].options.input), {
+        event_type: 'ci-approved-renovate',
+        client_payload: inputs,
+    });
+    assert.throws(() => api.dispatch('../workflow', inputs), /Invalid automerge hand-off event/);
+});
+
+test('every hand-off target runs from the default branch and verifies the revision before merging', () => {
+    const eventTypes = {
+        'renovate-automerge.yaml': 'ci-approved-renovate',
+        'backport-automerge.yaml': 'ci-approved-backport',
+        'release-automerge.yaml': 'ci-approved-release',
+    };
+    for (const [prefix, file] of Object.entries(handoffs)) {
+        const workflow = readFileSync(new URL(`../workflows/${file}`, import.meta.url), 'utf8');
+        for (const input of ['pr_number', 'head_branch', 'head_sha', 'base_ref', 'base_sha']) {
+            assert.match(workflow, new RegExp(`github\\.event\\.client_payload\\.${input}`), `${file} ${input}`);
+        }
+        assert.match(workflow, new RegExp(`repository_dispatch:\\n    types: \\[${eventTypes[file]}\\]`), file);
+        assert.doesNotMatch(workflow, /^\s+workflow_dispatch:/m, file);
+        assert.ok(
+            workflow.includes(
+                `startsWith(github.event.workflow_run.head_branch || github.event.client_payload.head_branch, '${prefix}')`,
+            ),
+            file,
+        );
+        assert.match(workflow, /run: node \.github\/bin\/automerge-dispatch\.mjs/, file);
+        assert.match(
+            workflow,
+            /if: github\.event_name != 'repository_dispatch' \|\| steps\.dispatched\.outputs\.current == 'true'/,
+            file,
+        );
+        assert.match(workflow, /statuses: read/, file);
+        const merge = workflow.split(/\n {6}- name: Approve and merge[^\n]*\n/)[1].split('\n')[0];
+        assert.equal(
+            merge,
+            "        if: github.event_name == 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'",
+            file,
+        );
+    }
+});
+
+test('manual approval reconciliation runs only from the default branch', () => {
+    const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
+    assert.match(workflow, /repository_dispatch:\n {4}types: \[ci-approve-reconcile\]/);
+    assert.doesNotMatch(workflow, /^\s+workflow_dispatch:/m);
 });

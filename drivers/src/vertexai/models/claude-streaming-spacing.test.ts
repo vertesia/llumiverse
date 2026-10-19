@@ -4,12 +4,16 @@ import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
 
-function createAsyncStream(events: unknown[]): AsyncIterable<unknown> {
-    return (async function* () {
-        for (const event of events) {
-            yield event;
-        }
-    })();
+/** A message stream that yields `events`, then completes; finalMessage resolves like the SDK's on success. */
+function createAsyncStream(events: unknown[]): AsyncIterable<unknown> & { finalMessage(): Promise<unknown> } {
+    return Object.assign(
+        (async function* () {
+            for (const event of events) {
+                yield event;
+            }
+        })(),
+        { finalMessage: async () => ({ content: [], usage: { input_tokens: 0, output_tokens: 0 } }) },
+    );
 }
 
 async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Promise<CompletionChunkObject[]> {

@@ -217,6 +217,7 @@ describe('BedrockMantleDriver model listing', () => {
             { id: 'google.gemma-4-31b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'google.gemma-5-70b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'zai.glm-5', object: 'model', created: 1783669008, owned_by: 'system' },
+            { id: 'deepseek.v3.2', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'amazon.titan-embed-text-v2:0', object: 'model', created: 1783669008, owned_by: 'system' },
         ] satisfies OpenAI.Models.Model[];
         const list = vi.fn<ModelsList>(async () => ({ data: modelFixtures }));
@@ -265,12 +266,17 @@ describe('BedrockMantleDriver model listing', () => {
                     input_modalities: ['text'],
                 }),
                 expect.objectContaining({
+                    id: 'deepseek.v3.2',
+                    name: 'DeepSeek V3.2',
+                    owner: 'DeepSeek',
+                }),
+                expect.objectContaining({
                     id: 'zai.glm-5',
                     owner: 'Z.AI',
                     provider: Providers.bedrock_mantle,
                     can_stream: true,
                     output_modalities: ['text'],
-                    tool_support: undefined,
+                    tool_support: true,
                 }),
             ]),
         );
@@ -437,7 +443,12 @@ describe('BedrockMantleDriver protocol execution', () => {
             },
         } satisfies Anthropic.Message;
         const finalMessage = vi.fn(async () => message);
-        const stream = vi.fn(() => ({ finalMessage }));
+        const stream = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'message_start' as const, message };
+            },
+            finalMessage,
+        }));
         const messagesClient = { messages: { stream } };
         Reflect.set(driver, 'anthropicService', messagesClient);
         const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });

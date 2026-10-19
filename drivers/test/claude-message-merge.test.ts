@@ -188,8 +188,9 @@ describe('mergeConsecutiveUserMessages', () => {
 
         const content = result[0].content as Array<{ type: string }>;
         expect(content).toHaveLength(2);
-        expect(content[0].type).toBe('text');
-        expect(content[1].type).toBe('tool_result');
+        // tool_result blocks must lead a user turn, so they move ahead of merged text.
+        expect(content[0].type).toBe('tool_result');
+        expect(content[1].type).toBe('text');
     });
 
     test('preserves single user message unchanged', () => {

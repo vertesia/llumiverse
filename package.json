@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/parent",
-    "version": "1.6.0-dev.20261004.083934Z",
+    "version": "1.6.0-dev.20261014.012028Z",
     "private": true,
     "type": "module",
     "scripts": {
@@ -8,7 +8,7 @@
         "check": "pnpm exec biome check .",
         "check:write": "pnpm exec biome check --write .",
         "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test:unit",
-        "ci:renovate": "npx --yes --package renovate@44.132.5 -- renovate-config-validator --strict",
+        "ci:renovate": "npx --yes --package renovate@44.151.0 -- renovate-config-validator --strict",
         "clean:outputs": "pnpm -r exec rimraf ./lib ./dist ./.next ./tsconfig.tsbuildinfo ./.tsbuildinfo",
         "format": "pnpm exec biome format --write .",
         "format:check": "pnpm exec biome format .",
@@ -27,5 +27,5 @@
         "typescript": "catalog:",
         "vitest": "catalog:"
     },
-    "packageManager": "pnpm@12.8.2"
+    "packageManager": "pnpm@12.12.1"
 }

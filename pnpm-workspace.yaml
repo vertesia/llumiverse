@@ -19,7 +19,8 @@ minimumReleaseAgeExclude:
   - openai@7.25.0
   - '@vertesia/*'
   - '@llumiverse/*'
-  - '@google/genai@2.21.0'
+  # Gemini 4 Argon long decode (automatic continuation) needs @google/genai >= 2.29.1.
+  - '@google/genai@2.30.0'
   # Sonnet 5.5 native thinking types and aligned platform wrappers.
   - '@anthropic-ai/sdk@0.129.0'
   - '@anthropic-ai/vertex-sdk@0.20.0'

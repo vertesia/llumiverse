@@ -67,7 +67,7 @@ describe('sanitizeConverseMessages', () => {
     });
 });
 
-describe('Bedrock empty assistant turns', () => {
+describe('legacy Converse: Bedrock empty assistant turns', () => {
     it('does not persist a content-filtered response that produced no blocks', async () => {
         const { driver, converseStream } = streamingDriver(
             [{ messageStart: { role: 'assistant' } }, { messageStop: { stopReason: 'content_filtered' } }, usage],

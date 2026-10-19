@@ -1,14 +1,14 @@
 name: (backport) automerge clean backport PRs
 run-name: >-
   ${{
-    github.event.workflow_run.pull_requests[0].number
+    (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
     && format(
       '(backport) automerge clean backport PR #{0}',
-      github.event.workflow_run.pull_requests[0].number
+      (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
     )
     || format(
       '(backport) automerge clean backport PR ({0})',
-      github.event.workflow_run.head_branch
+      github.event.workflow_run.head_branch || github.event.client_payload.head_branch
     )
   }}
 
@@ -17,41 +17,46 @@ on:
   # backport-branch CI, then re-checks the exact head SHA before merging.
   workflow_run:
     workflows:
+      - "(ci) PR validation"
       - "(test) Build and test"
       - "(lint) Lint codebase"
     types:
       - completed
     branches:
       - "backport-*"
+  # Unlike workflow_dispatch, repository_dispatch always loads workflow code from the default branch.
+  repository_dispatch:
+    types: [ci-approved-backport]
 
 # Serialize eligibility, notification, and its marker so CI completions cannot
 # both notify before either has recorded the one-time manual-review warning.
 concurrency:
-  group: backport-automerge-${{ github.event.workflow_run.head_branch }}
+  group: backport-automerge-${{ github.event.workflow_run.head_branch || github.event.client_payload.head_branch }}
   cancel-in-progress: false
 
 permissions:
   actions: read # required to inspect workflow run status for the exact backport head SHA
   contents: read # required for repository metadata access through gh
+  statuses: read # required to confirm the PR approval gate status on a dispatched head
   pull-requests: read # required to inspect PR metadata, labels, and commits
 
 jobs:
   approve-and-merge:
     name: >-
       ${{
-        github.event.workflow_run.pull_requests[0].number
+        (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
         && format(
           'Approve and merge clean backport PR #{0}',
-          github.event.workflow_run.pull_requests[0].number
+          (github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number)
         )
         || format(
           'Approve and merge clean backport PR for {0}',
-          github.event.workflow_run.head_branch
+          github.event.workflow_run.head_branch || github.event.client_payload.head_branch
         )
       }}
     if: |
-      github.event.workflow_run.event == 'pull_request' &&
-      startsWith(github.event.workflow_run.head_branch, 'backport-')
+      (github.event_name == 'repository_dispatch' || github.event.workflow_run.event == 'pull_request') &&
+      startsWith(github.event.workflow_run.head_branch || github.event.client_payload.head_branch, 'backport-')
     runs-on: ubuntu-slim
     environment: renovate-automerge
     timeout-minutes: 10
@@ -59,7 +64,7 @@ jobs:
       attention_reason: ${{ steps.eligibility.outputs.attention_reason }}
       manual_review_pr: ${{ steps.eligibility.outputs.manual_review_pr }}
     steps:
-      # workflow_run is privileged: execute policy only from the trusted workflow commit.
+      # Both triggers execute default-branch workflow code; pin policy checkout to that workflow commit.
       - name: Checkout trusted CI policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,13 +76,26 @@ jobs:
         with:
           node-version: 24.21.0
           package-manager-cache: false
-      - name: Check automerge eligibility
-        id: eligibility
+      - name: Verify the dispatched revision
+        id: dispatched
+        if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          HEAD_BRANCH: ${{ github.event.client_payload.head_branch }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          BASE_REF: ${{ github.event.client_payload.base_ref }}
+          BASE_SHA: ${{ github.event.client_payload.base_sha }}
+        run: node .github/bin/automerge-dispatch.mjs
+      - name: Check automerge eligibility
+        id: eligibility
+        if: github.event_name != 'repository_dispatch' || steps.dispatched.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.event.client_payload.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.client_payload.head_sha }}
         run: |
           set -euo pipefail
 
@@ -210,8 +228,11 @@ jobs:
             echo "pr_url=$pr_url"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Leave the merge to the approval gate hand-off
+        if: github.event_name != 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'
+        run: echo "Eligible. ci-approve.yaml starts the merge once the PR approval gate succeeds for this head."
       - name: Generate automerge token
-        if: steps.eligibility.outputs.should_merge == 'true'
+        if: github.event_name == 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'
         id: generate-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -222,11 +243,11 @@ jobs:
           permission-pull-requests: write
 
       - name: Approve and merge clean backport PR
-        if: steps.eligibility.outputs.should_merge == 'true'
+        if: github.event_name == 'repository_dispatch' && steps.eligibility.outputs.should_merge == 'true'
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.client_payload.head_sha }}
           PR_URL: ${{ steps.eligibility.outputs.pr_url }}
         run: |
           set -euo pipefail
@@ -306,8 +327,8 @@ jobs:
     secrets:
       APP_VERTESIA_SUBMODULE_SYNC_PEM: ${{ secrets.APP_VERTESIA_SUBMODULE_SYNC_PEM }} # zizmor: ignore[secrets-outside-env] Resolved by the called submodule-sync environment.
     with:
-      branch: ${{ github.event.workflow_run.head_branch }}
-      sha: ${{ github.event.workflow_run.head_sha }}
+      branch: ${{ github.event.workflow_run.head_branch || github.event.client_payload.head_branch }}
+      sha: ${{ github.event.workflow_run.head_sha || github.event.client_payload.head_sha }}
       reason: ${{ needs.approve-and-merge.outputs.attention_reason || 'Automatic merge or conflict repair failed. Review the workflow run and merge the PR manually once resolved.' }}
 
   record-manual-review-notification:
