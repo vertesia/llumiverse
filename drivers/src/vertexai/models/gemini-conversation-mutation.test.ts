@@ -352,6 +352,8 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
 
         expect(results).toContainEqual({ type: 'thoughts', value: 'plan ' });
         expect(results).toContainEqual({ type: 'thoughts', value: 'continued' });
+        // Each call keeps the id it was returned under, so its result can be paired with it.
+        const GENERATED_CALL_ID = expect.stringMatching(/^llumiverse_call_/);
         expect(conversation).toMatchObject({
             _arrayConversation: expect.arrayContaining([
                 {
@@ -359,12 +361,12 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                     parts: [
                         { text: 'plan ', thought: true },
                         {
-                            functionCall: { name: 'first', args: { value: 1 } },
+                            functionCall: { id: GENERATED_CALL_ID, name: 'first', args: { value: 1 } },
                             thoughtSignature: 'first-signature',
                         },
                         { text: 'continued', thought: true, thoughtSignature: 'thought-signature' },
                         {
-                            functionCall: { name: 'second', args: { value: 2 } },
+                            functionCall: { id: GENERATED_CALL_ID, name: 'second', args: { value: 2 } },
                             thoughtSignature: 'second-signature',
                         },
                         { text: 'answer', thoughtSignature: 'answer-signature' },
