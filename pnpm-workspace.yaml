@@ -37,7 +37,7 @@ catalog:
   vitest: "5.0.3"
   typescript: "7.0.2"
   "@types/node": "^24.19.1"
-  google-auth-library: "^11.1.0"
+  google-auth-library: "^11.3.0"
 overrides:
   # GHSA-68fv-2mgg-jv7q: validate indexed source-map section offsets.
   "source-map-js@<1.2.2": 1.2.2
