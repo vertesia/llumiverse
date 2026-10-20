@@ -18,6 +18,7 @@ import { APIConnectionError, APIError, APIUserAbortError } from 'groq-sdk/error'
 import type {
     ChatCompletion,
     ChatCompletionChunk,
+    ChatCompletionContentPartImage,
     ChatCompletionCreateParamsNonStreaming,
     ChatCompletionCreateParamsStreaming,
     ChatCompletionMessageParam,
@@ -239,7 +240,11 @@ function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]
                   ? unsupportedAudioPart()
                   : part.type === 'text'
                     ? { type: 'text' as const, text: part.text }
-                    : { type: 'image_url' as const, image_url: part.image_url },
+                    : {
+                          type: 'image_url' as const,
+                          // OpenAI may add detail values before Groq's SDK; let the provider validate supplied values.
+                          image_url: part.image_url as ChatCompletionContentPartImage.ImageURL,
+                      },
           )
         : undefined;
     switch (message.role) {

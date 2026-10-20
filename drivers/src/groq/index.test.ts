@@ -444,6 +444,35 @@ describe('GroqDriver shared Chat Completions transport', () => {
         });
     });
 
+    it.each([undefined, 'auto', 'low', 'high', 'original'] as const)(
+        'preserves user image detail %s at the Groq SDK boundary',
+        async (detail) => {
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async (_request: unknown) => ({
+                id: 'groq-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'llama',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+            }));
+            setGroqCreate(driver, create);
+            const content = [
+                { type: 'text' as const, text: 'Describe this image' },
+                {
+                    type: 'image_url' as const,
+                    image_url: { url: 'https://example.test/image.png', ...(detail === undefined ? {} : { detail }) },
+                },
+            ];
+
+            await driver.requestTextCompletion(
+                { _is_openai_chat_completions: true, messages: [{ role: 'user', content }] },
+                { model: 'llama' },
+            );
+
+            expect(create).toHaveBeenCalledWith(expect.objectContaining({ messages: [{ role: 'user', content }] }));
+        },
+    );
+
     it('preserves tool image attachments at the Groq SDK boundary', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown) => ({
@@ -475,7 +504,10 @@ describe('GroqDriver shared Chat Completions transport', () => {
                         tool_call_id: 'call_1',
                         content: [
                             { type: 'text', text: 'result' },
-                            { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                            {
+                                type: 'image_url',
+                                image_url: { url: 'https://example.test/image.png', detail: 'original' },
+                            },
                         ],
                     },
                 ],
@@ -494,7 +526,7 @@ describe('GroqDriver shared Chat Completions transport', () => {
                 role: 'user',
                 content: [
                     { type: 'text', text: 'Image 1 from tool result call_1:' },
-                    { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                    { type: 'image_url', image_url: { url: 'https://example.test/image.png', detail: 'original' } },
                 ],
             },
         ]);
