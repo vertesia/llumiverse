@@ -176,7 +176,7 @@ catalogs:
 
 overrides:
   source-map-js@<1.2.2: 1.2.2
-  google-auth-library: ^11.1.0
+  google-auth-library: ^11.3.0
   '@types/node': ^24.19.1
   vite: ^8.0.16
   brace-expansion@>=3.0.0 <5.0.12: 5.0.12
@@ -301,8 +301,8 @@ importers:
         specifier: ^4.13.3
         version: 4.13.3
       '@google-cloud/aiplatform':
-        specifier: ^7.4.1
-        version: 7.4.1
+        specifier: ^7.6.0
+        version: 7.6.0
       '@google/genai':
         specifier: ^2.30.0
         version: 2.30.0
@@ -328,8 +328,8 @@ importers:
         specifier: ^5.1.2
         version: 5.1.2
       google-auth-library:
-        specifier: ^11.1.0
-        version: 11.1.0
+        specifier: ^11.3.0
+        version: 11.3.1
       groq-sdk:
         specifier: ^1.6.0
         version: 1.6.0
@@ -695,8 +695,8 @@ packages:
   '@emnapi/wasi-threads@1.2.1':
     resolution: {integrity: sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==}
 
-  '@google-cloud/aiplatform@7.4.1':
-    resolution: {integrity: sha512-DbbEsq9h6wMhvxuYVPNmDQtpf8MEF43J8oL5sYhAOCtbkCO/AeASarhO5EM+DenGM0cByND18WvtPoazI3QVvQ==}
+  '@google-cloud/aiplatform@7.6.0':
+    resolution: {integrity: sha512-/5D7W8oqTic84djYrbfjmfiXX2HSvM5PB8jj0/oj4pCSSN0DZSM+GjN+0w7poAsmzQq9hm6bmAD+6qxHlet+xg==}
     engines: {node: '>=22'}
 
   '@google/genai@2.30.0':
@@ -1472,6 +1472,10 @@ packages:
     resolution: {integrity: sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==}
     engines: {node: '>=18'}
 
+  gaxios@8.3.1:
+    resolution: {integrity: sha512-h4/R7ay7JFXU5kmAkp/Y4Y4Vmm7m83tD579GUgfQQsRRGQ4TzSedyHla6XgTWohQuVffT3ldN4FF6uCqlRGaEA==}
+    engines: {node: '>=22'}
+
   gcp-metadata@9.0.3:
     resolution: {integrity: sha512-2YYnIlHaKBGT2IPg3G2M57hia9Galz15zsEOvw9T3oRf0lSn6KN6VcHQLqby7x8ksYKnjXvp3rp2KJyLCN6zfQ==}
     engines: {node: '>=22'}
@@ -1484,8 +1488,8 @@ packages:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
 
-  google-auth-library@11.1.0:
-    resolution: {integrity: sha512-YIBq5KNoHQrZ9PM4PeodDBqqBGlSTIxh1zibN8u3zNIO9UJg8gvKuCpdKV7fWXhsZ2zRkU6FhGrgKNgLJ2IRgw==}
+  google-auth-library@11.3.1:
+    resolution: {integrity: sha512-mQS0R2Ev/DKkzuWSYtDeq15uhDeaWuT2qzLYqJ41LmooxVKHmn5ut3pc6dlHY6wfHW/D7FBmOYjAtkjaD1A7qA==}
     engines: {node: '>=22'}
 
   google-gax@6.0.2:
@@ -2099,7 +2103,7 @@ snapshots:
   '@anthropic-ai/vertex-sdk@0.20.2(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.131.0(zod@4.6.5)
-      google-auth-library: 11.1.0
+      google-auth-library: 11.3.1
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -2643,7 +2647,7 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@google-cloud/aiplatform@7.4.1':
+  '@google-cloud/aiplatform@7.6.0':
     dependencies:
       google-gax: 6.0.2
     transitivePeerDependencies:
@@ -2651,7 +2655,7 @@ snapshots:
 
   '@google/genai@2.30.0':
     dependencies:
-      google-auth-library: 11.1.0
+      google-auth-library: 11.3.1
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
@@ -3348,6 +3352,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  gaxios@8.3.1:
+    dependencies:
+      extend: 3.0.2
+      https-proxy-agent: 7.0.6
+      node-fetch: 3.3.2
+    transitivePeerDependencies:
+      - supports-color
+
   gcp-metadata@9.0.3:
     dependencies:
       gaxios: 7.1.4
@@ -3364,11 +3376,11 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  google-auth-library@11.1.0:
+  google-auth-library@11.3.1:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
-      gaxios: 7.1.4
+      gaxios: 8.3.1
       gcp-metadata: 9.0.3
       google-logging-utils: 2.0.1
       jws: 4.0.1
@@ -3380,7 +3392,7 @@ snapshots:
       '@grpc/grpc-js': 1.14.5
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
-      google-auth-library: 11.1.0
+      google-auth-library: 11.3.1
       google-logging-utils: 2.0.1
       node-fetch: 3.3.2
       object-hash: 3.0.0
