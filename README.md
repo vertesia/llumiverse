@@ -307,3 +307,12 @@ automatic submodule-sync notification; ordinary source commits still notify cons
 
 Retries preserve immutable versions, verify npm `gitHead`, reuse the already-pushed
 version tree, and refuse competing branch changes or tags from another source commit.
+
+Release retries use immutable `vX.Y.Z` or `vX.Y.Z-dev.YYYYMMDD.HHMMSSZ`
+source tags. Before any Git or registry write, the publisher checks source membership
+on the selected branch and ownership of every existing package version. Package
+metadata records `releaseIdentity` (source commit, dependency pin, and lockfile hash).
+After publishing, the tagged version commit is merged into the current branch tip;
+ordinary commits that land during the build are preserved. A rejected push retries
+against the new tip. Genuine version conflicts stop with the durable tag available
+for recovery, without changing the artifact's source identity.

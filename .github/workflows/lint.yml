@@ -47,6 +47,7 @@ jobs:
       - name: Test release retries and channels
         run: |
           bash .github/bin/lib-release-cohort.test.sh
+          bash .github/bin/publish-all-packages.test.sh
           bash .github/bin/lib-package-channel.test.sh
       - name: Test automation notifications
         run: node --test .github/bin/automation-notification.test.mjs
