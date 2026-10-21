@@ -33,10 +33,10 @@ minimumReleaseAgeExclude:
 catalog:
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from
   # its own local workspace and lockfile, so an override in another repository cannot control it.
-  zod: "4.6.5"
-  vitest: "5.0.3"
+  zod: "4.6.7"
+  vitest: "5.0.4"
   typescript: "7.0.2"
-  "@types/node": "^24.19.1"
+  "@types/node": "^24.19.2"
   google-auth-library: "^11.3.0"
 overrides:
   # GHSA-68fv-2mgg-jv7q: validate indexed source-map section offsets.
