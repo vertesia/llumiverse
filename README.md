@@ -305,9 +305,6 @@ can consume that exact commit directly and include its gitlink in its version co
 Coordinated version commits carry `Coordinated-Release: true`, suppressing only their
 automatic submodule-sync notification; ordinary source commits still notify consumers.
 
-Retries preserve immutable versions, verify npm `gitHead`, reuse the already-pushed
-version tree, and refuse competing branch changes or tags from another source commit.
-
 Release retries use immutable `vX.Y.Z` or `vX.Y.Z-dev.YYYYMMDD.HHMMSSZ`
 source tags. Before any Git or registry write, the publisher checks source membership
 on the selected branch and ownership of every existing package version. Package
