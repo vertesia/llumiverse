@@ -291,3 +291,19 @@ Turborepo CLI OIDC policy for this repository on the Vercel team. The team comes
 from the `TURBO_TEAM` organization variable (`Vertesia`). No `TURBO_TOKEN`
 secret is needed. Unit-test hashes include the CI runner OS, architecture, and image
 version to separate them from local runs.
+
+### Coordinated publishing
+
+The native `publish-npm.yaml` workflow accepts optional `request_id`, `source_sha`,
+and exact `version` inputs. Snapshot versions use `X.Y.Z-dev.YYYYMMDD.HHMMSSZ` on
+`main`; stable versions use `release/X.Y`. The exact version must match the selected
+base and bump. Registry credentials remain in the existing build environment.
+
+Successful real runs upload `sdk-publish-source/sdk-publish-source.json` containing
+`version`, input `source_sha`, and the committed `release_sha`. A downstream publisher
+can consume that exact commit directly and include its gitlink in its version commit.
+Coordinated version commits carry `Coordinated-Release: true`, suppressing only their
+automatic submodule-sync notification; ordinary source commits still notify consumers.
+
+Retries preserve immutable versions, verify npm `gitHead`, reuse the already-pushed
+version tree, and refuse competing branch changes or tags from another source commit.

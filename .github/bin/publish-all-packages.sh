@@ -1,8 +1,9 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib-package-channel.sh"
+source "${SCRIPT_DIR}/lib-release-cohort.sh"
 
 # Script to publish all llumiverse packages to NPM
 # Usage: publish-all-packages.sh --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]
@@ -25,6 +26,9 @@ PACKAGES=(
 update_package_versions() {
   echo "=== Updating package versions ==="
 
+  if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+    new_version="$VERSION_OVERRIDE"
+  else
   # Get current version and strip any existing -dev* suffix to get base version
   current_version=$(npm pkg get version | tr -d '"')
   base_version=$(echo "$current_version" | sed 's/-dev.*//')
@@ -54,11 +58,17 @@ update_package_versions() {
     echo "Updating to release version ${new_version}"
   fi
 
+  fi
+
   # Update root package.json
-  npm version "${new_version}" --no-git-tag-version --workspaces=false
+  npm version "${new_version}" --no-git-tag-version --allow-same-version --workspaces=false
 
   # Update all workspace packages
-  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version
+  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version --allow-same-version
+  npm pkg set gitHead="$source_sha" --workspaces=false
+  for pkg in "${PACKAGES[@]}"; do
+    (cd "$pkg" && npm pkg set gitHead="$source_sha")
+  done
 }
 
 publish_packages() {
@@ -77,6 +87,21 @@ publish_packages() {
       fi
 
       echo "Publishing @llumiverse/${pkg}@${pkg_version} with tag ${npm_tag}"
+
+      if [[ "$DRY_RUN" == "false" ]]; then
+        local existing_json existing_head
+        if existing_json="$(npm view "@llumiverse/${pkg}@${pkg_version}" --json 2>/dev/null)"; then
+          existing_head="$(printf '%s' "$existing_json" | node -e '
+            let data="";process.stdin.on("data", c=>data+=c);
+            process.stdin.on("end",()=>console.log(JSON.parse(data).gitHead || ""));')"
+          if [[ "$existing_head" != "$source_sha" ]]; then
+            echo "Published version belongs to a different source commit" >&2
+            return 1
+          fi
+          cd ..
+          continue
+        fi
+      fi
 
       # Publish
       if [ -n "$DRY_RUN_FLAG" ]; then
@@ -189,14 +214,31 @@ commit_and_push() {
   git config user.email "github-actions[bot]@users.noreply.github.com"
   git config user.name "github-actions[bot]"
   git add .
-
-  if [ "$RELEASE_TYPE" = "release" ]; then
-    git commit -m "chore: release ${version}"
-  else
-    git commit -m "chore: snapshot ${version}"
+  local reuse_status=0
+  reuse_pushed_tree "$REF" || reuse_status=$?
+  if [[ "$reuse_status" == "0" ]]; then
+    echo "Reusing the version commit already pushed by this cohort"
+  elif [[ "$reuse_status" != "1" ]]; then
+    return "$reuse_status"
   fi
 
-  git push origin "$REF"
+  if [[ "$reuse_status" == "1" ]]; then
+    local message="chore: snapshot ${version}"
+    if [[ "$RELEASE_TYPE" == "release" ]]; then message="chore: release ${version}"; fi
+    if [[ "${COORDINATED_RELEASE:-false}" == "true" ]]; then
+      git commit -m "$message" -m "Coordinated-Release: true" || return 2
+    else
+      git commit -m "$message" || return 2
+    fi
+    git push origin "HEAD:refs/heads/$REF" || return 2
+  fi
+
+  if [[ "$RELEASE_TYPE" == "release" ]]; then
+    if ! git rev-parse --verify "refs/tags/v$version" >/dev/null 2>&1; then
+      git tag "v$version" || return 2
+    fi
+    git push origin "v$version" || return 2
+  fi
 
   echo "Version changes pushed to ${REF}"
 }
@@ -352,16 +394,32 @@ echo "Target tag: ${npm_tag}"
 # Main flow
 # =============================================================================
 
-update_package_versions
+resume_release=false
+if [[ "$RELEASE_TYPE" == "release" && -n "${VERSION_OVERRIDE:-}" ]]; then
+  resume_status=0
+  resume_release_tag "$VERSION_OVERRIDE" "$source_sha" || resume_status=$?
+  if [[ "$resume_status" == "0" ]]; then
+    resume_release=true
+  elif [[ "$resume_status" != "1" ]]; then
+    exit "$resume_status"
+  fi
+fi
+if [[ "$resume_release" == "false" ]]; then
+  update_package_versions
+fi
 
 echo "=== Building all packages ==="
 pnpm build
 
-if [ "$DRY_RUN" = "false" ]; then
+if [[ "$DRY_RUN" == "false" && "$RELEASE_TYPE" == "release" && "$resume_release" == "false" ]]; then
   commit_and_push
 fi
 
 publish_packages
+
+if [[ "$DRY_RUN" == "false" && "$RELEASE_TYPE" == "snapshot" ]]; then
+  commit_and_push
+fi
 
 if [ "$DRY_RUN" = "true" ]; then
   verify_published_packages

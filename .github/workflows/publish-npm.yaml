@@ -1,8 +1,21 @@
 name: (publish) NPM packages
+run-name: ${{ inputs.request_id || github.workflow }}
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: Optional caller correlation ID
+        type: string
+        default: ""
+      source_sha:
+        description: Optional immutable source commit
+        type: string
+        default: ""
+      version:
+        description: Optional exact cohort version (same base as the source)
+        type: string
+        default: ""
       release_type:
         description: Release Type
         required: true
@@ -41,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     # Scopes DEPLOY_KEY (used to push version bumps past branch protection)
     # to a dedicated environment.
+    timeout-minutes: 15
     environment: build
     permissions:
       id-token: write  # required for OIDC between GitHub and NPM
@@ -56,6 +70,41 @@ jobs:
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
           persist-credentials: true
+          fetch-depth: 0
+          ref: ${{ inputs.source_sha || github.sha }}
+
+      - name: Calculate package version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          BUMP_TYPE: ${{ inputs.bump_type }}
+          EXACT_VERSION: ${{ inputs.version }}
+        run: |
+          current_version="$(node -p "require('./package.json').version")"
+          base_version="${current_version%%-dev*}"
+          IFS='.' read -r major minor patch <<< "${base_version}"
+          case "${BUMP_TYPE}" in
+              minor) base_version="${major}.$((minor + 1)).0" ;;
+              patch) base_version="${major}.${minor}.$((patch + 1))" ;;
+          esac
+          if [ "${RELEASE_TYPE}" = "snapshot" ]; then
+              version="${base_version}-dev.$(date -u +'%Y%m%d.%H%M%SZ')"
+          else
+              version="${base_version}"
+          fi
+          if [[ -n "$EXACT_VERSION" ]]; then
+              expected_pattern="^${base_version//./[.]}$"
+              if [[ "$RELEASE_TYPE" == "snapshot" ]]; then
+                  expected_pattern="^${base_version//./[.]}-dev\.[0-9]{8}\.[0-9]{6}Z$"
+              fi
+              if [[ ! "$EXACT_VERSION" =~ $expected_pattern ]]; then
+                  echo "Exact version does not match the computed release base/channel" >&2
+                  exit 1
+              fi
+              version="$EXACT_VERSION"
+          fi
+          echo "VERSION_OVERRIDE=${version}" >> "${GITHUB_ENV}"
 
       - name: Install pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -74,16 +123,40 @@ jobs:
         run: pnpm install
 
       - name: Test package channel selection
-        run: bash ./.github/bin/lib-package-channel.test.sh
+        run: |
+          bash ./.github/bin/lib-package-channel.test.sh
+          bash ./.github/bin/lib-release-cohort.test.sh
 
       - name: Publish all packages
         env:
           RELEASE_TYPE: ${{ inputs.release_type }}
           BUMP_TYPE: ${{ inputs.bump_type }}
           DRY_RUN: ${{ inputs.dry_run }}
+          COORDINATED_RELEASE: ${{ inputs.request_id != '' }}
         run: |
           ./.github/bin/publish-all-packages.sh \
               --ref "${GITHUB_REF_NAME}" \
               --release-type "${RELEASE_TYPE}" \
               --bump-type "${BUMP_TYPE}" \
               --dry-run "${DRY_RUN}"
+
+      - name: Record published source
+        if: inputs.dry_run == false
+        env:
+          PACKAGE_VERSION: ${{ env.VERSION_OVERRIDE }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import {execFileSync} from "node:child_process";
+            const release_sha=execFileSync("git", ["rev-parse", "HEAD"], {encoding:"utf8"}).trim();
+            fs.writeFileSync("sdk-publish-source.json", JSON.stringify({version:process.env.PACKAGE_VERSION,
+              source_sha:process.env.SOURCE_SHA, release_sha}));'
+
+      - name: Upload published source
+        if: inputs.dry_run == false
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-publish-source
+          path: sdk-publish-source.json
+          if-no-files-found: error
