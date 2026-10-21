@@ -53,8 +53,9 @@ overrides:
   # ============================
   # Standard CVE overrides
   # ============================
-  # Dependabot alerts #77/#78: Vite dev-server Windows path disclosure issues.
-  vite: ^8.0.16
+  # Vite and launch-editor Windows disclosure and command execution advisories.
+  # Stay on the patched 8.1 release line.
+  vite: ~8.1.6
   "brace-expansion@>=3.0.0 <5.0.12": 5.0.12
   # GHSA-7p8r-x3mc-p8w7, GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc,
   # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, and GHSA-58mr-gqgx-xq4g.
