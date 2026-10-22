@@ -259,31 +259,31 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/bedrock-sdk':
-        specifier: ^0.34.4
-        version: 0.34.4(zod@4.6.5)
+        specifier: ^0.35.0
+        version: 0.35.0(zod@4.6.5)
       '@anthropic-ai/foundry-sdk':
-        specifier: 0.5.4
-        version: 0.5.4(zod@4.6.5)
+        specifier: 0.6.0
+        version: 0.6.0(zod@4.6.5)
       '@anthropic-ai/sdk':
-        specifier: ^0.133.0
-        version: 0.133.0(zod@4.6.5)
+        specifier: ^0.134.0
+        version: 0.134.0(zod@4.6.5)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.20.4
-        version: 0.20.4(zod@4.6.5)
+        specifier: ^0.21.0
+        version: 0.21.0(zod@4.6.5)
       '@aws-sdk/client-bedrock':
-        specifier: ^3.1150.0
+        specifier: ^3.1152.0
         version: 3.1152.0
       '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.1150.0
+        specifier: ^3.1152.0
         version: 3.1152.0
       '@aws-sdk/client-s3':
-        specifier: ^3.1150.0
+        specifier: ^3.1152.0
         version: 3.1152.0
       '@aws-sdk/credential-providers':
-        specifier: ^3.1150.0
+        specifier: ^3.1152.0
         version: 3.1152.0
       '@aws-sdk/lib-storage':
-        specifier: ^3.1150.0
+        specifier: ^3.1152.0
         version: 3.1152.0(@aws-sdk/client-s3@3.1152.0)
       '@aws-sdk/types':
         specifier: ^3.974.6
@@ -298,8 +298,8 @@ importers:
         specifier: ^1.11.0
         version: 1.11.0
       '@azure/identity':
-        specifier: ^4.13.3
-        version: 4.13.3
+        specifier: ^4.14.0
+        version: 4.14.0
       '@google-cloud/aiplatform':
         specifier: ^7.6.0
         version: 7.6.0
@@ -340,8 +340,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1
       openai:
-        specifier: 7.32.0
-        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(undici@7.30.0)(ws@8.21.0)(zod@4.6.5)
+        specifier: 7.34.0
+        version: 7.34.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(undici@7.30.0)(ws@8.21.0)(zod@4.6.5)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -386,11 +386,11 @@ importers:
 
 packages:
 
-  '@anthropic-ai/bedrock-sdk@0.34.4':
-    resolution: {integrity: sha512-fdARHA5IVVbUJIWWzj9pzBnZDzecHvXccDufiG3uFJ1xw6qV10/BCVyW7YWatgq/tcsWvHRSSMKZ1w0G+1cZSw==}
+  '@anthropic-ai/bedrock-sdk@0.35.0':
+    resolution: {integrity: sha512-FZi3OOZagQWUWYd2vzqJEw3nPFJn1VyTxoCy608jjUEWWATubOrT9OSf2mWrGauu/j1kLMZlk+MPuAxp74k+8w==}
 
-  '@anthropic-ai/foundry-sdk@0.5.4':
-    resolution: {integrity: sha512-IkueTDxGNSsRY+Y4JhwjtOKLiuzS0idSAhWbGRNZxxT3Eslxm4JHz+cO5BuSJpNXqA/qkzThvVcaQNsNQF/+xg==}
+  '@anthropic-ai/foundry-sdk@0.6.0':
+    resolution: {integrity: sha512-6f3kUuZT9aAaAkdJq4wZRKd2KgVaOcWkbY6KwK0Z86mfn3LWJI86ZVWZhh5CQZyg9VC3T+8jJk4vpXIth6bqUg==}
 
   '@anthropic-ai/sdk@0.133.0':
     resolution: {integrity: sha512-jlqUN8p8ESTJj+GJnA4KjzbEfF1waEoGzRT8jwytlYGFFgv+/DUQOxlYGvYw10UzhD1kwLqYzxvA3FrTB2YWuQ==}
@@ -401,8 +401,17 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.20.4':
-    resolution: {integrity: sha512-FYVOr6v/u1O7lIKdvoLPj7cKgMZEvZrZkjFjSFgozzHk5Ic/mB//R3Q/4dujPdLmXlb44Ph6CmkKZiUCa/1Z8Q==}
+  '@anthropic-ai/sdk@0.134.0':
+    resolution: {integrity: sha512-j0DNXXKUKkr3kKyVR/I3pPWVv93g7vgHjgGYgh9uCXv5IKoXZPWmTwXKiVq/SZSbhBaD3KmtKhIszzt8dBnzog==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@anthropic-ai/vertex-sdk@0.21.0':
+    resolution: {integrity: sha512-+l+I2QGfkROJMsK8fU3C8b+cwBYebDYBMLytpHkkWo4a9XhF2uRbWHpz9nm9UpSU0UB6lIrXyvcTTsD/MH2dPQ==}
 
   '@aws-crypto/crc32@3.0.0':
     resolution: {integrity: sha512-IzSgsrxUcsrejQbPVilIKy16kAT52EwB6zSaI+M3xxIhKh5+aldEyvI+z6erM7TCLB2BJsFrtHjp6/4/sr+3dA==}
@@ -601,8 +610,8 @@ packages:
     resolution: {integrity: sha512-gT4H8mTaSXRz7eGTuQyq1aIJnJqeXzpOe9Ay7Z3FrCouer14CbV3VzjnJrNrQfbBpGBLO9oy8BmrY75A0p53cA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/identity@4.13.3':
-    resolution: {integrity: sha512-zGQPtqvXPgSA8yfV2CkIQ1qirqk0p9AIVpC5uEkdXQYcKl07QHvyaGYRnZOk0AsQUmxNb4wfkcwY5di8Z5xa9A==}
+  '@azure/identity@4.14.0':
+    resolution: {integrity: sha512-8utCLdTZn14CiAe0HW4JbtzUMsc0mdDwnjUvStFMrR4IxQP8S2eL9zVAdplpfORVJGYmidZElpeXRYjJQ4UyUw==}
     engines: {node: '>=22.0.0'}
 
   '@azure/logger@1.1.4':
@@ -1359,8 +1368,8 @@ packages:
     resolution: {integrity: sha512-A6p/pu/6fyBcA1TRz/GqWYPViplrftcW2gZC9q79ngNCKAeR/X3gcEdXQHl4KNXV+3wgIJ1CPkJQ3IHM6lcsyA==}
     engines: {node: '>=18'}
 
-  default-browser@5.2.1:
-    resolution: {integrity: sha512-WY/3TUME0x3KPYdRRxEJJvXRHV4PyPoUsxtZa78lwItwRQRHhd2U9xOscaT/YTf8uCXIAjeJOFBVEh/7FtD8Xg==}
+  default-browser@5.5.1:
+    resolution: {integrity: sha512-m1pAzaJgZ/gssEqlOhJkPJp8Xly7QyW6xcrkUa2KKcDeDSEMP7X8xipU3snUcfisTQx0w1AGae+9UtJSfVnXGw==}
     engines: {node: '>=18'}
 
   define-lazy-prop@3.0.0:
@@ -1517,6 +1526,10 @@ packages:
   is-fullwidth-code-point@3.0.0:
     resolution: {integrity: sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg==}
     engines: {node: '>=8'}
+
+  is-in-ssh@1.0.0:
+    resolution: {integrity: sha512-jYa6Q9rH90kR1vKB6NM7qqd1mge3Fx4Dhw5TVlK1MUBqhEOuCagrEHMevNuCcbECmXZ0ThXkRm+Ymr51HwEPAw==}
+    engines: {node: '>=20'}
 
   is-inside-container@1.0.0:
     resolution: {integrity: sha512-KIYLCCJghfHZxqjYBE7rEy0OBuTd5xCHS7tHVgvCLkx7StIoaxwNW3hCALgEUjFfeRk+MG/Qxmp/vtETEF3tRA==}
@@ -1704,9 +1717,9 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
-  open@10.1.0:
-    resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
-    engines: {node: '>=18'}
+  open@11.0.4:
+    resolution: {integrity: sha512-++Zlftm0kVLPmzC06t6epuWmcRMDbI4z5P3NNX979WA/k23+NtSOynEGzsVfZwguKw2mi5umVgnBlJQMwRz4Pg==}
+    engines: {node: '>=20'}
 
   openai@6.49.0:
     resolution: {integrity: sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg==}
@@ -1728,8 +1741,8 @@ packages:
       zod:
         optional: true
 
-  openai@7.32.0:
-    resolution: {integrity: sha512-avqxu/jl1gsVBCBgFNPr9sTh+wZppQphuhhFy1zEvAJxEaJ4t0ery6hZdOT9kws/EcNTARoQcZs2IT3bliE1SA==}
+  openai@7.34.0:
+    resolution: {integrity: sha512-PMwuTQ/3cVyWZJOVpb6bzlrQj17uImlnUGQWqh5zHlN/snwK5ww4ZUHW8NYGtH6f9PQOEPxyD/f8WJVIHp1q2A==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
@@ -1777,6 +1790,10 @@ packages:
   postcss@8.5.30:
     resolution: {integrity: sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==}
     engines: {node: ^10 || ^12 || >=14}
+
+  powershell-utils@0.2.1:
+    resolution: {integrity: sha512-C+y9x90UElAddDZmV4qOx9W53B61PO7cIqWz2dQsWlwswuq4mr8NEwytdGKboYbQlGZ3awrkTeNvcZiZNHnQ8A==}
+    engines: {node: '>=20'}
 
   process@0.11.10:
     resolution: {integrity: sha512-cdGef/drWFoydD1JsMzuFf8100nZl+GT+yacc2bEced5f9Rjk4z+WtFUTBu9PhOi9j/jfmBPu0mMEY4wIdAF8A==}
@@ -2036,6 +2053,10 @@ packages:
       utf-8-validate:
         optional: true
 
+  wsl-utils@1.0.1:
+    resolution: {integrity: sha512-c16PKLIRxBYpR3jSWsdS7SFp0COm5SOQdiFjY818dYFHJbMGuLBszpF07LBWmOS1uzrHa9VGdynsEgoeKy0oOQ==}
+    engines: {node: '>=20'}
+
   xml-naming@0.1.0:
     resolution: {integrity: sha512-k8KO9hrMyNk6tUWqUfkTEZbezRRpONVOzUTnc97VnCvyj6Tf9lyUR9EDAIeiVLv56jsMcoXEwjW8Kv5yPY52lw==}
     engines: {node: '>=16.0.0'}
@@ -2065,12 +2086,13 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/bedrock-sdk@0.34.4(zod@4.6.5)':
+  '@anthropic-ai/bedrock-sdk@0.35.0(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.133.0(zod@4.6.5)
       '@aws-crypto/sha256-js': 4.0.0
       '@aws-sdk/client-bedrock-runtime': 3.1152.0
       '@aws-sdk/credential-providers': 3.1152.0
+      '@opentelemetry/api': 1.9.1
       '@smithy/eventstream-serde-node': 2.2.0
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/protocol-http': 3.3.0
@@ -2081,9 +2103,10 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@anthropic-ai/foundry-sdk@0.5.4(zod@4.6.5)':
+  '@anthropic-ai/foundry-sdk@0.6.0(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.133.0(zod@4.6.5)
+      '@opentelemetry/api': 1.9.1
     transitivePeerDependencies:
       - zod
 
@@ -2094,9 +2117,18 @@ snapshots:
     optionalDependencies:
       zod: 4.6.5
 
-  '@anthropic-ai/vertex-sdk@0.20.4(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.134.0(zod@4.6.5)':
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.0.0
+    optionalDependencies:
+      zod: 4.6.5
+
+  '@anthropic-ai/vertex-sdk@0.21.0(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.133.0(zod@4.6.5)
+      '@opentelemetry/api': 1.9.1
       google-auth-library: 11.3.1
     transitivePeerDependencies:
       - supports-color
@@ -2445,7 +2477,7 @@ snapshots:
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-sse': 2.4.0
       '@azure/core-util': 1.13.1
-      '@azure/identity': 4.13.3
+      '@azure/identity': 4.14.0
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
@@ -2547,7 +2579,7 @@ snapshots:
       fast-xml-parser: 5.8.0
       tslib: 2.8.1
 
-  '@azure/identity@4.13.3':
+  '@azure/identity@4.14.0':
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.11.0
@@ -2559,7 +2591,7 @@ snapshots:
       '@azure/logger': 1.1.4
       '@azure/msal-browser': 5.13.0
       '@azure/msal-node': 6.0.1
-      open: 10.1.0
+      open: 11.0.4
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -3236,7 +3268,7 @@ snapshots:
 
   default-browser-id@5.0.0: {}
 
-  default-browser@5.2.1:
+  default-browser@5.5.1:
     dependencies:
       bundle-name: 4.1.0
       default-browser-id: 5.0.0
@@ -3406,6 +3438,8 @@ snapshots:
 
   is-fullwidth-code-point@3.0.0: {}
 
+  is-in-ssh@1.0.0: {}
+
   is-inside-container@1.0.0:
     dependencies:
       is-docker: 3.0.0
@@ -3563,12 +3597,14 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  open@10.1.0:
+  open@11.0.4:
     dependencies:
-      default-browser: 5.2.1
+      default-browser: 5.5.1
       define-lazy-prop: 3.0.0
+      is-in-ssh: 1.0.0
       is-inside-container: 1.0.0
-      is-wsl: 3.1.0
+      powershell-utils: 0.2.1
+      wsl-utils: 1.0.1
 
   openai@6.49.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(ws@8.21.0)(zod@4.6.5):
     optionalDependencies:
@@ -3578,7 +3614,7 @@ snapshots:
       ws: 8.21.0
       zod: 4.6.5
 
-  openai@7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(undici@7.30.0)(ws@8.21.0)(zod@4.6.5):
+  openai@7.34.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(undici@7.30.0)(ws@8.21.0)(zod@4.6.5):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.86
       '@smithy/hash-node': 4.4.6
@@ -3610,6 +3646,8 @@ snapshots:
       nanoid: 3.3.20
       picocolors: 1.1.1
       source-map-js: 1.2.2
+
+  powershell-utils@0.2.1: {}
 
   process@0.11.10:
     optional: true
@@ -3844,6 +3882,11 @@ snapshots:
   wrappy@1.0.2: {}
 
   ws@8.21.0: {}
+
+  wsl-utils@1.0.1:
+    dependencies:
+      is-wsl: 3.1.0
+      powershell-utils: 0.2.1
 
   xml-naming@0.1.0: {}
 
