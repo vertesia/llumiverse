@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Exercise the real publisher with real Git and a local npm registry substitute.
 set -euo pipefail
+if [[ "${1:-}" != "--isolated-fixture" ]]; then
+  exec env -i PATH="$PATH" HOME="$HOME" bash "${BASH_SOURCE[0]}" --isolated-fixture "$@"
+fi
+shift
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -36,8 +40,16 @@ if(args[0]==='-r'){
   if(r.status)process.exit(r.status);
  }process.exit(0);
 }
+if(args[0]==='pack'){
+ const destination=args[args.indexOf('--pack-destination')+1],staging=path.join(destination,'staging');
+ fs.mkdirSync(path.join(staging,'package/lib'),{recursive:true});
+ fs.copyFileSync('package.json',path.join(staging,'package/package.json'));
+ fs.writeFileSync(path.join(staging,'package/lib/index.js'),'fixture');
+ cp.execFileSync('tar',['-czf',path.join(destination,'package.tgz'),'-C',staging,'package']);process.exit(0);
+}
 if(args[0]==='publish'){
- const p=JSON.parse(fs.readFileSync('package.json','utf8')),dir=process.env.REGISTRY_FIXTURE;
+ if(!args[1]?.endsWith('.tgz'))throw new Error('Expected verified archive');
+ const p=JSON.parse(cp.execFileSync('tar',['-xzOf',args[1],'package/package.json'],{encoding:'utf8'})),dir=process.env.REGISTRY_FIXTURE;
  if(p.name===process.env.FAIL_PACKAGE && !fs.existsSync(path.join(dir,'failed-once'))){
   fs.writeFileSync(path.join(dir,'failed-once'),'');process.exit(1);
  }
@@ -55,7 +67,7 @@ git config user.email test@example.test
 printf '{"name":"@llumiverse/parent","version":"1.6.0-dev"}\n' > package.json
 printf 'lockfileVersion: 9\n' > pnpm-lock.yaml
 for pkg in common core drivers; do
- mkdir "$pkg"; printf '{"name":"@llumiverse/%s","version":"1.6.0-dev"}\n' "$pkg" > "$pkg/package.json"
+ mkdir "$pkg"; printf '{"name":"@llumiverse/%s","version":"1.6.0-dev","main":"./lib/index.js"}\n' "$pkg" > "$pkg/package.json"
 done
 git add .
 git commit -qm source

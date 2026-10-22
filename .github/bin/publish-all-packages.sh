@@ -75,7 +75,10 @@ update_package_versions() {
 publish_packages() {
   echo "=== Publishing llumiverse packages ==="
 
+  package_index=0
   for pkg in "${PACKAGES[@]}"; do
+    tarball="${PACKAGE_TARBALLS[$package_index]}"
+    package_index=$((package_index + 1))
     if [ -d "$pkg" ] && [ -f "$pkg/package.json" ]; then
       cd "$pkg"
 
@@ -98,9 +101,9 @@ publish_packages() {
 
       # Publish
       if [ -n "$DRY_RUN_FLAG" ]; then
-        pnpm publish --access public --tag "${npm_tag}" --no-git-checks ${DRY_RUN_FLAG}
+        pnpm publish "$tarball" --access public --tag "${npm_tag}" --no-git-checks ${DRY_RUN_FLAG}
       else
-        pnpm publish --access public --tag "${npm_tag}" --no-git-checks
+        pnpm publish "$tarball" --access public --tag "${npm_tag}" --no-git-checks
       fi
 
       cd ..
@@ -108,94 +111,28 @@ publish_packages() {
   done
 }
 
-verify_published_packages() {
-  echo "=== Verifying package tarballs ==="
-
-  # Array to track failed packages
-  failed_packages=()
-
-  # Get the expected version from root package.json
-  expected_version=$(npm pkg get version | tr -d '"')
-
+prepare_verified_tarballs() {
+  echo "=== Packing and verifying all package tarballs before publication ==="
+  local expected_version pkg directory
+  local tarballs
+  PACKAGE_TARBALLS=()
+  expected_version=$(node -p "require('./package.json').version")
   for pkg in "${PACKAGES[@]}"; do
-    if [ -d "$pkg" ]; then
-      cd "$pkg"
-      pkg_name="@llumiverse/${pkg}"
-
-      echo "Packing ${pkg_name}..."
-      pnpm pack --pack-destination . > /dev/null 2>&1
-      tarball=$(ls -t *.tgz 2>/dev/null | head -1)
-
-      if [ -n "$tarball" ] && [ -f "$tarball" ]; then
-        echo "Checking ${pkg_name}:"
-        packed_json=$(tar -xzOf "$tarball" package/package.json)
-
-        # Check version
-        packed_version=$(echo "$packed_json" | grep '"version":' | head -1 | sed 's/.*: "\(.*\)".*/\1/')
-        has_issues=false
-
-        if [ "$packed_version" = "${expected_version}" ]; then
-          echo "  ✓ Version: ${packed_version}"
-        else
-          echo "  ✗ WARNING: Version mismatch (expected: ${expected_version}, got: ${packed_version})"
-          has_issues=true
-        fi
-
-        # Extract dependencies section
-        deps_section=$(echo "$packed_json" | sed -n '/"dependencies":/,/^  [}]/p')
-
-        # Check for @llumiverse dependencies
-        llumiverse_deps=$(echo "$deps_section" | grep '"@llumiverse/' || true)
-        if [ -n "$llumiverse_deps" ]; then
-          echo "$llumiverse_deps"
-          if echo "$llumiverse_deps" | grep -q "${expected_version}"; then
-            echo "  ✓ llumiverse dependencies: ${expected_version}"
-          else
-            echo "  ✗ WARNING: llumiverse dependencies version mismatch"
-            has_issues=true
-          fi
-        fi
-
-        # Verify build output (lib/esm and lib/cjs folders)
-        has_esm=$(tar -tzf "$tarball" | grep -c '^package/lib/esm/' || true)
-        has_cjs=$(tar -tzf "$tarball" | grep -c '^package/lib/cjs/' || true)
-        if [ "$has_esm" -gt 0 ]; then
-          echo "  ✓ lib/esm: ${has_esm} files"
-        else
-          echo "  ✗ WARNING: lib/esm folder missing from tarball"
-          has_issues=true
-        fi
-        if [ "$has_cjs" -gt 0 ]; then
-          echo "  ✓ lib/cjs: ${has_cjs} files"
-        else
-          echo "  ✗ WARNING: lib/cjs folder missing from tarball"
-          has_issues=true
-        fi
-
-        # Add to failed packages if there were issues
-        if [ "$has_issues" = true ]; then
-          failed_packages+=("${pkg_name}")
-        fi
-
-        # Clean up tarball
-        rm -f "$tarball"
-      fi
-
-      cd ..
+    if [[ ! -f "$pkg/package.json" ]]; then
+      echo "Missing package manifest: $pkg/package.json" >&2
+      return 1
     fi
+    directory="$verification_dir/$pkg"
+    mkdir -p "$directory"
+    (cd "$pkg" && pnpm pack --pack-destination "$directory")
+    tarballs=("$directory"/*.tgz)
+    if [[ ${#tarballs[@]} -ne 1 || ! -f "${tarballs[0]}" ]]; then
+      echo "Expected exactly one packed tarball for $pkg" >&2
+      return 1
+    fi
+    node "$SCRIPT_DIR/verify-package-tarball.mjs" "${tarballs[0]}" "$expected_version"
+    PACKAGE_TARBALLS+=("${tarballs[0]}")
   done
-
-  # Print summary
-  echo ""
-  echo "=== Verification Summary ==="
-  if [ ${#failed_packages[@]} -eq 0 ]; then
-    echo "✓ All packages passed verification"
-  else
-    echo "✗ ${#failed_packages[@]} package(s) failed verification:"
-    for pkg in "${failed_packages[@]}"; do
-      echo "  - ${pkg}"
-    done
-  fi
 }
 
 write_github_summary() {
@@ -370,6 +307,10 @@ fi
 echo "=== Building all packages ==="
 pnpm build
 
+verification_dir=$(mktemp -d)
+trap 'rm -rf "$verification_dir"' EXIT
+prepare_verified_tarballs
+
 if [[ "$DRY_RUN" == "false" ]]; then
   for pkg in "${PACKAGES[@]}"; do
     ownership=0
@@ -383,10 +324,6 @@ publish_packages
 
 if [[ "$DRY_RUN" == "false" ]]; then
   propagate_release "$REF" "$new_version"
-fi
-
-if [ "$DRY_RUN" = "true" ]; then
-  verify_published_packages
 fi
 
 write_github_summary

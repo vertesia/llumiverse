@@ -49,6 +49,10 @@ jobs:
           bash .github/bin/lib-release-cohort.test.sh
           bash .github/bin/publish-all-packages.test.sh
           bash .github/bin/lib-package-channel.test.sh
+      - name: Test package tarball verification
+        run: |
+          node --test .github/bin/verify-package-tarball.test.mjs
+          bash .github/bin/publish-package-verification.test.sh
       - name: Test automation notifications
         run: node --test .github/bin/automation-notification.test.mjs
       - name: Locate pnpm store
