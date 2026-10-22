@@ -82,6 +82,9 @@ persist_release_commit() {
 }
 
 propagate_release() {
+  # Tagged retries use a fresh checkout and do not create a new version commit.
+  git config user.email "github-actions[bot]@users.noreply.github.com" || return 2
+  git config user.name "github-actions[bot]" || return 2
   local ref="$1" version="$2" release_sha remote_sha attempt message
   release_sha="$(git rev-parse "refs/tags/v$version^{commit}")" || return 2
   for attempt in 1 2 3 4 5; do
