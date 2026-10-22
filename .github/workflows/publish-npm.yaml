@@ -135,6 +135,9 @@ jobs:
           RELEASE_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
           COORDINATED_RELEASE: ${{ inputs.request_id != '' }}
         run: |
+          # Also support retries whose pinned publisher predates identity setup during propagation.
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
           ./.github/bin/publish-all-packages.sh \
               --ref "${GITHUB_REF_NAME}" \
               --release-type "${RELEASE_TYPE}" \

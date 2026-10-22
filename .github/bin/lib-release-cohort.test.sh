@@ -48,7 +48,10 @@ git() {
   fi
   command git "$@"
 }
-propagate_release main "$version"
+# A restarted runner has no identity from persist_release_commit.
+git config --unset user.name
+git config --unset user.email
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null propagate_release main "$version"
 unset -f git
 [[ "$injected" == "true" ]]
 [[ "$(git --git-dir="$work/remote" show main:feature.txt)" == 'new feature' ]]
