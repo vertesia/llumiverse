@@ -49,6 +49,7 @@ import {
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { assertConversationArray } from '../shared/conversation-shape.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.js';
@@ -302,6 +303,11 @@ export class OpenAIResponsesProtocol {
         }
 
         // Include conversation history (same as non-streaming)
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'stream',
+        });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
@@ -443,6 +449,11 @@ export class OpenAIResponsesProtocol {
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
         assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
 
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'execute',
+        });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
@@ -732,6 +743,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         const textContent = completionResultsToText(completionResults);
 
+        assertConversationArray(options.conversation, {
+            provider: this.provider,
+            model: options.model,
+            operation: 'stream',
+        });
         // Start with the conversation from options or the prompt
         let conversation = updateConversation(options.conversation, prompt);
 

@@ -57,6 +57,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
+import { assertConversationArray } from '../../shared/conversation-shape.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { logModelOptionException } from '../../shared/model-option-exceptions.js';
 import { logModelRefusal } from '../../shared/refusal-log.js';
@@ -1112,6 +1113,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'execute',
+        });
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
@@ -1327,6 +1333,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'stream',
+        });
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
