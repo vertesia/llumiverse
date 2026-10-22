@@ -13,8 +13,13 @@ cat > "$work/bin/npm" <<'JS'
 #!/usr/bin/env node
 const fs=require('node:fs'),p=JSON.parse(fs.readFileSync('package.json'));
 const args=process.argv.slice(2);
+if(args[0]==='view'){console.log('{"error":{"code":"E404"}}');process.exit(1);}
 if(args[0]==='version'){p.version=args[1];fs.writeFileSync('package.json',JSON.stringify(p)+'\n');}
 else if(args[0]==='pkg'&&args[1]==='get')console.log(JSON.stringify(p[args[2]]));
+else if(args[0]==='pkg'&&args[1]==='set'){
+ const index=args[2].indexOf('='),key=args[2].slice(0,index),value=args[2].slice(index+1);
+ p[key]=args.includes('--json')?JSON.parse(value):value;fs.writeFileSync('package.json',JSON.stringify(p)+'\n');
+}
 else throw new Error('Unexpected npm call '+args.join(' '));
 JS
 cat > "$work/bin/pnpm" <<'JS'
@@ -61,6 +66,7 @@ for mode in true false; do
     git config user.name Test
     git config user.email test@example.test
     printf '{"name":"@llumiverse/parent","version":"1.6.0-dev"}\n' > package.json
+    printf 'lockfileVersion: 9\n' > pnpm-lock.yaml
     for pkg in common core drivers; do
       mkdir "$pkg"
       printf '{"name":"@llumiverse/%s","version":"1.6.0-dev","main":"./lib/index.js","types":"./lib/index.d.ts"}\n' "$pkg" > "$pkg/package.json"

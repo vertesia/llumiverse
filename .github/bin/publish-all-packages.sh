@@ -1,8 +1,9 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib-package-channel.sh"
+source "${SCRIPT_DIR}/lib-release-cohort.sh"
 
 # Script to publish all llumiverse packages to NPM
 # Usage: publish-all-packages.sh --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]
@@ -25,6 +26,9 @@ PACKAGES=(
 update_package_versions() {
   echo "=== Updating package versions ==="
 
+  if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+    new_version="$VERSION_OVERRIDE"
+  else
   # Get current version and strip any existing -dev* suffix to get base version
   current_version=$(npm pkg get version | tr -d '"')
   base_version=$(echo "$current_version" | sed 's/-dev.*//')
@@ -54,11 +58,18 @@ update_package_versions() {
     echo "Updating to release version ${new_version}"
   fi
 
+  fi
+
   # Update root package.json
-  npm version "${new_version}" --no-git-tag-version --workspaces=false
+  npm version "${new_version}" --no-git-tag-version --allow-same-version --workspaces=false
 
   # Update all workspace packages
-  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version
+  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version --allow-same-version
+  npm pkg set gitHead="$source_sha" --workspaces=false
+  npm pkg set "releaseIdentity=$RELEASE_IDENTITY" --json --workspaces=false
+  for pkg in "${PACKAGES[@]}"; do
+    (cd "$pkg" && npm pkg set gitHead="$source_sha" && npm pkg set "releaseIdentity=$RELEASE_IDENTITY" --json)
+  done
 }
 
 publish_packages() {
@@ -80,6 +91,13 @@ publish_packages() {
       fi
 
       echo "Publishing @llumiverse/${pkg}@${pkg_version} with tag ${npm_tag}"
+
+      if [[ "$DRY_RUN" == "false" ]]; then
+        local ownership=0
+        check_npm_identity "@llumiverse/${pkg}" "$pkg_version" || ownership=$?
+        if [[ "$ownership" == "0" ]]; then cd ..; continue; fi
+        [[ "$ownership" == "1" ]] || return 1
+      fi
 
       # Publish
       if [ -n "$DRY_RUN_FLAG" ]; then
@@ -115,27 +133,6 @@ prepare_verified_tarballs() {
     node "$SCRIPT_DIR/verify-package-tarball.mjs" "${tarballs[0]}" "$expected_version"
     PACKAGE_TARBALLS+=("${tarballs[0]}")
   done
-}
-
-commit_and_push() {
-  echo "=== Committing version changes ==="
-
-  # Get the version from root package.json
-  version=$(npm pkg get version | tr -d '"')
-
-  git config user.email "github-actions[bot]@users.noreply.github.com"
-  git config user.name "github-actions[bot]"
-  git add .
-
-  if [ "$RELEASE_TYPE" = "release" ]; then
-    git commit -m "chore: release ${version}"
-  else
-    git commit -m "chore: snapshot ${version}"
-  fi
-
-  git push origin "$REF"
-
-  echo "Version changes pushed to ${REF}"
 }
 
 write_github_summary() {
@@ -277,7 +274,8 @@ else
   DRY_RUN_FLAG=""
 fi
 
-source_sha=$(git rev-parse HEAD)
+source_sha="${RELEASE_SOURCE_SHA:-$(git rev-parse HEAD)}"
+validate_release_source "$REF" "$source_sha"
 npm_tag=$(resolve_package_channel "$REF" "$RELEASE_TYPE" "$source_sha")
 
 echo "=== Package channel ==="
@@ -289,7 +287,22 @@ echo "Target tag: ${npm_tag}"
 # Main flow
 # =============================================================================
 
-update_package_versions
+RELEASE_IDENTITY="$(release_identity "$source_sha" "")"
+export RELEASE_IDENTITY
+resume_release=false
+if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+  resume_status=0
+  resume_release_tag "$VERSION_OVERRIDE" "$source_sha" || resume_status=$?
+  if [[ "$resume_status" == "0" ]]; then
+    resume_release=true
+    new_version="$VERSION_OVERRIDE"
+  elif [[ "$resume_status" != "1" ]]; then
+    exit "$resume_status"
+  fi
+fi
+if [[ "$resume_release" == "false" ]]; then
+  update_package_versions
+fi
 
 echo "=== Building all packages ==="
 pnpm build
@@ -298,11 +311,20 @@ verification_dir=$(mktemp -d)
 trap 'rm -rf "$verification_dir"' EXIT
 prepare_verified_tarballs
 
-if [ "$DRY_RUN" = "false" ]; then
-  commit_and_push
+if [[ "$DRY_RUN" == "false" ]]; then
+  for pkg in "${PACKAGES[@]}"; do
+    ownership=0
+    check_npm_identity "@llumiverse/$pkg" "$new_version" || ownership=$?
+    [[ "$ownership" != "2" ]] || exit 1
+  done
+  if [[ "$resume_release" == "false" ]]; then persist_release_commit "$new_version"; fi
 fi
 
 publish_packages
+
+if [[ "$DRY_RUN" == "false" ]]; then
+  propagate_release "$REF" "$new_version"
+fi
 
 write_github_summary
 
