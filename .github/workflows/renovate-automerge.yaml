@@ -67,7 +67,7 @@ jobs:
       - name: Set up Node.js for CI policy
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
           package-manager-cache: false
       - name: Verify the dispatched revision
         id: dispatched
@@ -387,7 +387,7 @@ jobs:
           steps.merge.outputs.should_repair_lock == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
           cache: pnpm
 
       - name: Repair pnpm lock conflict

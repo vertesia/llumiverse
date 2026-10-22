@@ -40,7 +40,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
           package-manager-cache: false
       - name: Test automerge CI policy
         run: node --test .github/bin/automerge-ci.node-test.mjs .github/bin/automerge-dispatch.test.mjs .github/bin/ci-approve.test.mjs
