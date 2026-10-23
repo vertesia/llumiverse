@@ -4,6 +4,8 @@ import test from 'node:test';
 import { verifyWorkflow } from './automerge-ci.mjs';
 import {
     APP_LOGIN,
+    approvalBody,
+    approvedSha,
     CI_SETTLE_POLL_MS,
     CI_SETTLE_TIMEOUT_MS,
     CONTEXT,
@@ -42,7 +44,7 @@ const approval = {
     id: 1,
     state: 'APPROVED',
     commit_id: sha,
-    body: `${MARKER}\nApproved`,
+    body: approvalBody(sha),
     user: { login: APP_LOGIN, type: 'Bot' },
 };
 
@@ -748,6 +750,40 @@ test('a delayed push preserves an approval already granted for the current head'
     const api = fixture({ reviews: [approval] });
     await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
     assert.deepEqual(api.writes, []);
+});
+
+test('the tested commit comes from the review body, not the commit_id GitHub moves forward', () => {
+    assert.equal(approvedSha(approval), sha);
+    assert.equal(approvedSha({ ...approval, commit_id: newer }), sha);
+    assert.equal(approvedSha({ ...approval, body: `${MARKER}\nApproved` }), undefined);
+});
+
+test('an approval whose commit_id moved to the new head is withdrawn on push', async () => {
+    const moved = { ...approval, commit_id: newer };
+    const api = fixture({ pulls: [{ ...pr, head: { ...pr.head, sha: newer } }], reviews: [moved] });
+    await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
+    assert.deepEqual(api.writes, [['dismiss', 1]]);
+});
+
+test('a moved approval is replaced by one for the tested head once CI passes', async () => {
+    const moved = { ...approval, commit_id: newer };
+    const api = fixture({ pulls: [{ ...pr, head: { ...pr.head, sha: newer } }], reviews: [moved] });
+    assert.equal((await reconcile(api, 12, () => true)).approve, true);
+    assert.deepEqual(
+        api.writes.filter(([kind]) => kind !== 'status'),
+        [
+            ['dismiss', 1],
+            ['approve', 12, newer, approvalBody(newer)],
+        ],
+    );
+    assert.equal(api.writes.at(-1)[2], 'success');
+});
+
+test('an owned approval without a tested commit in its body is never treated as current', async () => {
+    const unnamed = { ...approval, body: `${MARKER}\nApproved` };
+    const api = fixture({ reviews: [unnamed] });
+    await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
+    assert.deepEqual(api.writes, [['dismiss', 1]]);
 });
 
 const ciPolicies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));

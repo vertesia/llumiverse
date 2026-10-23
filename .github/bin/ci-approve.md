@@ -17,6 +17,11 @@ Only an APPROVED review authored by `vertesia-automerge[bot]` with the exact
 gate. Human reviews and reviews from the existing deployment, Renovate, release,
 backport and submodule gates are never dismissed by this workflow.
 
+The tested commit is the one named in that review body, never the review's
+`commit_id`: GitHub moves an undismissed review's `commit_id` forward to the new head
+on push, so it can name a commit this gate never tested. An owned review whose body
+names no commit is treated as stale.
+
 On a new push, the gate removes its approvals for older commits without inspecting
 CI. Pull requests run lint and build/test under the single `(ci) PR validation`
 coordinator. When it finishes, the gate approves the current head only if all required
