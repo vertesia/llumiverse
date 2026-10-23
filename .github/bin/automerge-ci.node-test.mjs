@@ -218,3 +218,40 @@ test('every configured required step must actually run', () => {
         }
     }
 });
+
+test('every rejection reports which check withheld approval', () => {
+    const reasonFor = (runs, jobs, ctx = context) => {
+        let reason;
+        assert.equal(
+            verifyWorkflow(runs, () => jobs, policy, ctx, (why) => {
+                reason = why;
+            }),
+            false,
+        );
+        return reason;
+    };
+    assert.equal(reasonFor([], tested), 'no pull_request run for this head among 0 listed runs');
+    assert.equal(
+        reasonFor([run(3, { pull_requests: [] })], tested),
+        'runs for this head are not associated with PR #12 (3: [])',
+    );
+    assert.equal(
+        reasonFor([run(3, { pull_requests: [{ number: 12, base: { ref: 'main', sha: 'old' } }] })], tested, {
+            ...context,
+            baseBranch: 'main',
+            baseSha: 'new',
+        }),
+        'run 3 tested base main@old, not main@new',
+    );
+    assert.equal(reasonFor([run(3, { status: 'in_progress' })], tested), 'run 3 is in_progress');
+    assert.equal(reasonFor([run(3)], [job('Other')]), 'run 3 has no job matching ^Tests$');
+    assert.equal(
+        reasonFor([run(3)], [{ ...job('Tests', 'failure'), steps: [] }]),
+        'run 3 job "Tests" is completed/failure',
+    );
+    assert.equal(
+        reasonFor([run(3)], [{ ...job('Tests'), steps: [] }]),
+        'run 3 job "Tests" did not pass step "Run tests"',
+    );
+    assert.equal(reasonFor([run(3)], noop), 'every run for this head is a no-op');
+});

@@ -23,6 +23,17 @@ export function ownsReview(review) {
     );
 }
 
+export function approvalBody(sha) {
+    return `${MARKER}\nApproved after lint, build, and selected tests passed for ${sha}.`;
+}
+
+// GitHub moves an undismissed review's commit_id forward when the PR head changes, so commit_id can
+// name a commit this gate never tested. The body this gate wrote is the only record of the tested
+// commit; a review without one is never current.
+export function approvedSha(review) {
+    return /^Approved after lint, build, and selected tests passed for ([0-9a-f]{40})\.$/m.exec(review.body ?? '')?.[1];
+}
+
 export function requiresHuman(pr) {
     if (pr.labels.some(({ name }) => name === 'human-review-required')) return true;
     // Existing specialized gates retain ownership of deployment and automation PRs.
@@ -130,9 +141,9 @@ export async function reconcile(
     let standing = [];
     async function withdraw(reason, all = true) {
         for (const review of standing) {
-            if (all || review.commit_id !== pr.head.sha) await api.dismiss(number, review.id, reason);
+            if (all || approvedSha(review) !== pr.head.sha) await api.dismiss(number, review.id, reason);
         }
-        standing = all ? [] : standing.filter((review) => review.commit_id === pr.head.sha);
+        standing = all ? [] : standing.filter((review) => approvedSha(review) === pr.head.sha);
     }
     try {
         standing = (await api.reviews(number)).filter(ownsReview);
@@ -182,12 +193,7 @@ export async function reconcile(
             }
         }
         if (result.approve && standing.length === 0) {
-            const review = await submitApproval(
-                api,
-                number,
-                pr.head.sha,
-                `${MARKER}\nApproved after lint, build, and selected tests passed for ${pr.head.sha}.`,
-            );
+            const review = await submitApproval(api, number, pr.head.sha, approvalBody(pr.head.sha));
             if (!ownsReview(review)) throw new Error('Unexpected approval identity or response');
             standing.push(review);
             if (review.commit_id !== pr.head.sha) throw new Error('Approval commit does not match the tested head');
