@@ -26,7 +26,10 @@ permissions:
 
 jobs:
   build-and-test:
-    name: Build and test
+    # The suffix keeps the name the automerge CI policy requires (`Build and test (...)`, formerly a
+    # matrix suffix). ci-approve reads that policy from the default branch, so renaming the job breaks
+    # the approval gate for the PR that renames it.
+    name: Build and test (.node-version)
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Scopes provider API keys (OPENAI, MISTRAL, GROQ, TOGETHER, etc.) to a

@@ -255,12 +255,15 @@ test('every rejection reports which check withheld approval', () => {
     );
     assert.equal(reasonFor([run(3)], noop), 'every run for this head is a no-op');
 });
-test('accepts the build-and-test job with or without a matrix suffix', () => {
-    // main reads the Node version from .node-version and runs one job; release lines still name it with a matrix suffix.
+test('the build-and-test policy matches the job name the workflow declares', () => {
+    // ci-approve reads this policy from the default branch, so a job rename that the policy on the
+    // default branch does not match leaves the approval gate pending for the PR that renames it.
     const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
     const pattern = new RegExp(policies['build-and-test.yml'].jobs[0].name);
-    for (const name of ['Build and test', 'Build and test / Build and test', 'Build and test / Build and test (24.x)']) {
-        assert.match(name, pattern);
-    }
-    assert.doesNotMatch('Build and test / Build and test docs', pattern);
+    const workflow = readFileSync(new URL('../workflows/build-and-test.yml', import.meta.url), 'utf8');
+    const jobName = workflow.match(/^ {2}build-and-test:\n(?: {4}#.*\n)* {4}name: (.+)$/m)?.[1];
+    assert.ok(jobName, 'build-and-test job name not found');
+    assert.match(`Build and test / ${jobName}`, pattern);
+    // Release lines still name the job with a matrix suffix.
+    assert.match('Build and test / Build and test (24.x)', pattern);
 });
