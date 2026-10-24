@@ -27,7 +27,6 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/bedrock-sdk@0.34.0'
   # Security fixes published inside the 3-day cooldown.
   - brace-expansion@5.0.12
-  - fast-uri@3.1.8
   - '@grpc/grpc-js@1.14.5'
 
 catalog:
@@ -59,14 +58,20 @@ overrides:
   vite: ^8.3.4
   "brace-expansion@>=3.0.0 <5.0.12": 5.0.12
   # GHSA-7p8r-x3mc-p8w7, GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc,
-  # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, and GHSA-58mr-gqgx-xq4g.
-  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g,
+  # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp, and GHSA-xhq7-xmqj-769h.
+  "fast-uri@>=3.0.0 <3.1.9": 3.1.9
   "@grpc/grpc-js@>=1.14.0 <1.14.5": 1.14.5
   # GHSA-2v37-7h3g-55p8: zero-sized custom generators can loop indefinitely.
   "nanoid@<3.3.17": 3.3.18
   # GHSA path traversal in sourceMappingURL auto-loading. Reached via vitest > vite > postcss.
   "postcss@<8.5.18": ^8.5.18
   protobufjs@<=7.6.4: 7.6.5
+  # GHSA-xcx6-jx8p-x3h5: auth-code flow parameter disclosure. @azure/identity still declares ^6, but
+  # MSAL Node 7's only breaking change removes responseMode from acquireTokenInteractive, which it does not use.
+  "@azure/msal-node@<7.1.0": ^7.1.0
+  # GHSA-mrhx-c7xc-m3w5: SDK peers otherwise resolve an older zod 4 than the catalog.
+  "zod@>=4.0.0 <4.6.6": 4.6.7
 
 # Share package directories across local worktrees.
 virtualStoreType: global
