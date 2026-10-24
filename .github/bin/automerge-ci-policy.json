@@ -5,7 +5,7 @@
         "jobs": [
             {
                 "name": "^(Build and test / )?Build and test \\(.*\\)$",
-                "example": "Build and test / Build and test (24.x)",
+                "example": "Build and test / Build and test (.node-version)",
                 "steps": [
                     "Build workspace",
                     "Typecheck and functional tests",
