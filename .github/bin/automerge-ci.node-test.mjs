@@ -255,3 +255,12 @@ test('every rejection reports which check withheld approval', () => {
     );
     assert.equal(reasonFor([run(3)], noop), 'every run for this head is a no-op');
 });
+test('accepts the build-and-test job with or without a matrix suffix', () => {
+    // main reads the Node version from .node-version and runs one job; release lines still name it with a matrix suffix.
+    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    const pattern = new RegExp(policies['build-and-test.yml'].jobs[0].name);
+    for (const name of ['Build and test', 'Build and test / Build and test', 'Build and test / Build and test (24.x)']) {
+        assert.match(name, pattern);
+    }
+    assert.doesNotMatch('Build and test / Build and test docs', pattern);
+});

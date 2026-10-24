@@ -4,8 +4,8 @@
         "fallbackWorkflows": ["build-and-test.yml"],
         "jobs": [
             {
-                "name": "^(Build and test / )?Build and test \\(.*\\)$",
-                "example": "Build and test / Build and test (24.x)",
+                "name": "^(Build and test / )?Build and test( \\(.*\\))?$",
+                "example": "Build and test / Build and test",
                 "steps": [
                     "Build workspace",
                     "Typecheck and functional tests",

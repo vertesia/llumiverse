@@ -35,9 +35,6 @@ jobs:
     permissions:
       id-token: write # required for OIDC federation with Turbo, GCP and AWS
       contents: read
-    strategy:
-      matrix:
-        node-version: [24.x]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,7 +48,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version-file: .node-version
           package-manager-cache: false
       - name: Locate pnpm store
         id: pnpm-store
