@@ -24,21 +24,27 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/bedrock-sdk@0.34.0'
   # Security fixes published inside the 3-day cooldown.
   - brace-expansion@5.0.12
-  - fast-uri@3.1.8
   - '@grpc/grpc-js@1.14.5'
 
 catalog:
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from
   # its own local workspace and lockfile, so an override in another repository cannot control it.
-  zod: "4.6.5"
+  zod: "4.6.7"
   typescript: "7.0.2"
   "@types/node": "^24.13.3"
   google-auth-library: "^11.0.2"
 overrides:
   # GHSA-3wwx-pv8p-q78v: WebSocket decompression DoS; keep each consumer on its major line.
-  "undici@>=7.0.0 <7.29.1": 7.29.1
-  # GHSA-82fw-gwwq-j7x9: keep Vitest and its mocker on the patched release.
-  "vitest@>=2.1.0 <4.1.11": 4.1.11
+  # GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685, and GHSA-f72v-6w45-q472 (DoS and SRI bypass).
+  "undici@>=7.0.0 <7.30.1": 7.30.1
+  # GHSA-82fw-gwwq-j7x9, GHSA-qxg6-89mg-rqv8, and GHSA-xp26-3454-mjgp: keep Vitest and its mocker
+  # on the patched release.
+  "vitest@>=2.1.0 <4.1.12": 4.1.12
+  # GHSA-xcx6-jx8p-x3h5: auth-code flow parameter disclosure. @azure/identity still declares ^6, but
+  # MSAL Node 7's only breaking change removes responseMode from acquireTokenInteractive, which it does not use.
+  "@azure/msal-node@<7.1.0": ^7.1.0
+  # GHSA-mrhx-c7xc-m3w5: SDK peers otherwise resolve an older zod 4 than the catalog.
+  "zod@>=4.0.0 <4.6.6": 4.6.7
   # ============================
   # Special Overrides
   # ============================
@@ -58,8 +64,9 @@ overrides:
   vite: ~8.1.6
   "brace-expansion@>=3.0.0 <5.0.12": 5.0.12
   # GHSA-7p8r-x3mc-p8w7, GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc,
-  # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, and GHSA-58mr-gqgx-xq4g.
-  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g,
+  # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp, and GHSA-xhq7-xmqj-769h.
+  "fast-uri@>=3.0.0 <3.1.9": 3.1.9
   "@grpc/grpc-js@>=1.14.0 <1.14.5": 1.14.5
   # GHSA-2v37-7h3g-55p8: zero-sized custom generators can loop indefinitely.
   "nanoid@<3.3.17": 3.3.18
