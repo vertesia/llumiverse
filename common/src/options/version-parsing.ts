@@ -41,6 +41,91 @@ export function isModelFamilyVersionGTE(
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/** Qwen writes minor versions after a dot (`qwen3.5`); a dash starts the size (`qwen3-235b`), not a minor version. */
+export function isQwenVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.toLowerCase().match(/qwen(\d+)(?:\.(\d+))?/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
+/** Grok 4.20 is a separate line; do not order it after single-digit releases such as 4.7. */
+export function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.match(/grok-(\d+)(?:\.(\d))?(?:[-_.]|$)/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
+/** TwelveLabs Pegasus 1.5 changed its limits, response fields and structured-output request shape. */
+export function isPegasus15OrLater(model: string): boolean {
+    return isModelFamilyVersionGTE(model, 'pegasus-', 1, 5);
+}
+
+/** DeepSeek versions appear as `deepseek.v3.2` (Bedrock) and `deepseek-v3.2` elsewhere. */
+export function isDeepSeekVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    return (
+        isModelFamilyVersionGTE(model, 'deepseek.v', targetMajor, targetMinor) ||
+        isModelFamilyVersionGTE(model, 'deepseek-v', targetMajor, targetMinor)
+    );
+}
+
+/** Meta Muse models (`muse-spark-1.3`, `muse-wonder`, `muse-glimmer-30b`). */
+export function isMetaMuseModel(model: string): boolean {
+    return /(?:^|[-_.])muse-/.test(model);
+}
+
+/** Kimi versions use a dotted minor (`kimi-k2.5`); a dash introduces a date snapshot (`kimi-k2-0905`). */
+export function isKimiVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.match(/kimi-k(\d+)(?:\.(\d+))?/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
+/** Grok reasoning-effort values by generation; the Grok 4.20 multi-agent line is a separate exception. */
+export function getGrokReasoningEffortLevels(model: string): readonly string[] | undefined {
+    const grok420Index = model.indexOf('grok-4.20');
+    if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
+        return ['low', 'medium', 'high', 'xhigh'];
+    }
+    if (isSingleDigitGrokVersionGte(model, 4, 6)) return ['low', 'medium', 'high', 'xhigh'];
+    if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
+    if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
+    return undefined;
+}
+
+/**
+ * Gemini Flash 3.7+ and every Gemini 4+ chat tier (including named tiers such as Argon) reject candidate count and
+ * penalties and no longer use sampling controls.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+ */
+export function hasGeminiSamplingRestriction(model: string): boolean {
+    if (/(?:image|tts|transcribe|live)/.test(model)) return false;
+    return isGeminiModelVersionGte(model, '4.0') || (model.includes('flash') && isGeminiModelVersionGte(model, '3.7'));
+}
+
+/**
+ * Gemini 4+ chat models support long decodes on Vertex generateContent: output continues across requests up to the
+ * unified 1,048,576-token input-plus-output limit. Specialised image, speech, live, audio and robotics variants do not.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
+ */
+export function isGeminiLongDecodeModel(model: string): boolean {
+    if (/(?:image|tts|transcribe|live|native-audio|robotics|embedding|omni|nano-banana)/.test(model)) return false;
+    return isGeminiModelVersionGte(model, '4.0');
+}
+
+/** Nova Lite reasoning starts with 1.5; numbered Nova 2+ Lite models inherit it. */
+export function supportsNovaReasoning(model: string): boolean {
+    return (
+        isModelFamilyVersionGTE(model, 'amazon.nova-lite-', 1, 5) ||
+        (isModelFamilyVersionGTE(model, 'amazon.nova-', 2, 0) && /-lite(?:[-.:]|$)/.test(model))
+    );
+}
+
 // ============================================================================
 // Claude Version Parsing
 // ============================================================================
@@ -78,9 +163,9 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
         return { major: 5, minor: 0, variant: 'mythos' };
     }
 
-    // Match pattern: claude-[variant-]-{major}-[optional minor]
-    // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
+    // Match pattern: claude-[variant-]-{major}-[optional minor]; aggregators such as OpenRouter write the minor
+    // version after a dot (`claude-opus-4.6`). The minor version is limited to 1-2 digits to avoid matching dates.
+    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:[-.](\d{1,2}))?(?:-|\b)/i);
     if (match) {
         const variant = match[1].toLowerCase();
         if (!isClaudeVariant(variant)) return null;
@@ -90,7 +175,7 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     }
 
     // Fallback for older format: claude-3-7-sonnet-20250219
-    const fallbackMatch = modelString.match(/claude-(\d+)-(\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
+    const fallbackMatch = modelString.match(/claude-(\d+)[-.](\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
     if (fallbackMatch) {
         const major = parseInt(fallbackMatch[1], 10);
         const minor = parseInt(fallbackMatch[2], 10);
@@ -261,6 +346,54 @@ export function hasSamplingParameterRestriction(modelString: string): boolean {
 export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
+ * Check if a model accepts mid-conversation tool changes: `tool_addition` / `tool_removal` blocks in a
+ * `role: "system"` message (beta `mid-conversation-tool-changes-2026-07-01`).
+ *
+ * Supported on Claude Opus 4.8+, Fable 5+, Mythos 5+, and Sonnet and Haiku 5.5+. Not on Claude Sonnet 5,
+ * Mythos Preview or older models. Later generations of each family are included.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model accepts mid-conversation tool changes
+ */
+export function supportsMidConversationToolChanges(modelString: string): boolean {
+    if (/claude-mythos-preview\b/i.test(modelString)) return false;
+    switch (parseClaudeVersion(modelString)?.variant) {
+        case 'opus':
+            return isClaudeVersionGTE(modelString, 4, 8);
+        case 'fable':
+        case 'mythos':
+            return isClaudeVersionGTE(modelString, 5, 0);
+        case undefined:
+            return false;
+        default:
+            return isClaudeVersionGTE(modelString, 5, 5);
+    }
+}
+
+/**
+ * Check if a model accepts a forced `tool_choice` (`any` or a named tool).
+ *
+ * Claude Opus and Sonnet 5.5+ and Fable 5.1+ reject it ("tool_choice: type "tool" and "any" are not supported for
+ * this model"). Mythos 5.1+ is treated like Fable 5.1, since automatic tool choice is always accepted. Haiku 5.5,
+ * Claude 5 (including Fable 5) and older models accept it.
+ *
+ * @param modelString - The model identifier string
+ * @returns false if the model rejects a forced tool choice
+ */
+export function supportsClaudeForcedToolChoice(modelString: string): boolean {
+    switch (parseClaudeVersion(modelString)?.variant) {
+        case 'opus':
+        case 'sonnet':
+            return !isClaudeVersionGTE(modelString, 5, 5);
+        case 'fable':
+        case 'mythos':
+            return !isClaudeVersionGTE(modelString, 5, 1);
+        default:
+            return true;
+    }
+}
+
+/**
  * Check if a model supports the effort parameter.
  *
  * Effort is supported on:
@@ -287,6 +420,17 @@ export function supportsEffort(modelString: string): boolean {
         return true;
     }
     return false;
+}
+
+/**
+ * Check if a model can run in fast mode: Opus 4.8 and later. Opus 4.7 rejects `speed: "fast"` and Opus 4.6 ignores
+ * it. Fast mode is served by the Claude API only, not by cloud platforms.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model supports fast mode
+ */
+export function supportsClaudeFastMode(modelString: string): boolean {
+    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 8);
 }
 
 /**
@@ -349,8 +493,10 @@ export function getOpenAIReasoningEffortLevels(modelString: string): Record<stri
             'Extra High': 'xhigh',
             Max: 'max',
         };
-        // GPT-6 Astra rejects `none`; GPT-6 Sol and Luna accept it.
-        if (!isOpenAIGptAstraModel(modelString)) {
+        // Astra and GPT-6.1+ Sol reject `none`; GPT-6.0 Sol and Luna accept it.
+        const isReasoningSol =
+            isOpenAIGptVersionGTE(modelString, 6, 1) && /(?:^|[-_.])sol(?:[-_.]|$)/i.test(modelString);
+        if (!isOpenAIGptAstraModel(modelString) && !isReasoningSol) {
             return { None: 'none', ...levels };
         }
         return levels;
@@ -385,7 +531,9 @@ export function getAvailableEffortLevels(modelString: string): Record<string, Cl
         return null;
     }
     const version = parseClaudeVersion(modelString);
-    const mediumIsDefault = version?.variant === 'opus' && version.major === 5 && version.minor >= 5;
+    const mediumIsDefault =
+        (version?.variant === 'opus' && version.major === 5 && version.minor >= 5) ||
+        (version?.variant === 'haiku' && isClaudeVersionGTE(modelString, 5, 5));
     const levels: Record<string, ClaudeEffortLevel> = {
         Low: 'low',
         ...(mediumIsDefault ? { 'Medium (default)': 'medium' } : { Medium: 'medium' }),
@@ -471,4 +619,11 @@ export function isGeminiModelVersionGte(modelId: string, minVersion: string): bo
     }
 
     return current.minor >= target.minor;
+}
+
+/** Compare GPT Image family versions, including qualified IDs and snapshots. */
+export function isOpenAIImageVersionGTE(model: string, major: number, minor = 0): boolean {
+    const match = model.toLowerCase().match(/(?:^|[./:])(?:openai\.)?gpt-image-(\d+)(?:\.(\d+))?(?:-|$)/);
+    if (!match) return false;
+    return Number(match[1]) > major || (Number(match[1]) === major && Number(match[2] ?? 0) >= minor);
 }

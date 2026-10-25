@@ -4,13 +4,11 @@ on:
   push:
     branches:
       - main
-      - preview
       - "release/**"
       - "production/**"
       - "hotfix**"
       - "repo-dispatch**"
-  pull_request:
-    types: [opened, reopened, synchronize]
+  workflow_call:
   workflow_dispatch:
 
 env:
@@ -51,7 +49,7 @@ jobs:
         with:
           run_install: false
       - name: Install Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
@@ -82,6 +80,8 @@ jobs:
       - name: Build workspace
         run: pnpm build
 
+      # Functional tests run before cloud sign-in and without provider keys, so a test that calls a provider fails
+      # here instead of passing silently. Provider calls belong in *.live.test.ts files (see README "Testing").
       - name: Typecheck and functional tests
         run: pnpm typecheck:test && pnpm test:unit
 
@@ -101,21 +101,30 @@ jobs:
           aws-region: us-east-1
 
       - name: Curated live provider smoke tests
+        timeout-minutes: 10
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           BEDROCK_REGION: us-east-1
           BEDROCK_MANTLE_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
-        run: npx vitest --exclude '**/!(*.live).test.ts' --exclude '.github/**'
+        # Allow list: only these live files run in CI. Other *.live.test.ts files run on demand (see README "Testing").
+        run: >-
+          npx vitest
+          drivers/test/model-smoke.live.test.ts
+          drivers/test/conversation.live.test.ts
+          drivers/test/tools.live.test.ts
+          drivers/test/embeddings.live.test.ts
 
   notify-repo-composableai:
     name: Notify vertesia/composableai of new commit
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/repo-dispatch'))
+    if: >-
+      github.event_name == 'push' && !contains(github.event.head_commit.message, 'Coordinated-Release: true') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/repo-dispatch'))
     needs:
       - build-and-test
     # Scopes the submodule-sync App key to a dedicated environment.
@@ -123,7 +132,7 @@ jobs:
     steps:
       - name: Generate composableai dispatch token
         id: composableai-dispatch-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.APP_VERTESIA_SUBMODULE_SYNC_CLIENT_ID }}
           private-key: ${{ secrets.APP_VERTESIA_SUBMODULE_SYNC_PEM }}

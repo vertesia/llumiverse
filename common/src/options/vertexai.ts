@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { getVertexAIModelLimits } from '../capability/vertexai-limits.js';
 import { resolveModelProfile } from '../model-directory.js';
 import type {
     ImagenOptionsSchema,
@@ -24,9 +25,16 @@ import {
     buildClaudeEffortOptions,
     buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
+    buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './version-parsing.js';
+import {
+    hasGeminiSamplingRestriction,
+    hasSamplingParameterRestriction,
+    isGeminiLongDecodeModel,
+    isGeminiModelVersionGte,
+    isModelFamilyVersionGTE,
+} from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -151,7 +159,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getGeminiOptions(model, option);
     } else if (model.includes('claude')) {
         return getClaudeOptions(model, option);
-    } else if (isOpenMaaSChatModel(model)) {
+    } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
         return getOpenMaaSChatOptions(model);
     }
     return textOptionsFallback;
@@ -393,11 +401,21 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
     if (model.includes('gemini-3-pro-image')) {
         return { High: 'high' };
     }
-    if (model.includes('gemini-3.1-flash-image')) {
+    if (isModelFamilyVersionGTE(model, 'gemini-nano-banana-', 2, 1)) {
+        return { Minimal: 'minimal', Medium: 'medium', High: 'high' };
+    }
+    if (
+        model.includes('gemini-3.1-flash-image') ||
+        model.includes('gemini-3.1-flash-lite-image') ||
+        model.includes('gemini-nano-banana')
+    ) {
         return { Minimal: 'minimal', High: 'high' };
     }
-    if (model.includes('pro') && isGeminiModelVersionGte(model, '3.1')) {
+    if (hasGeminiSamplingRestriction(model) || (model.includes('pro') && isGeminiModelVersionGte(model, '3.1'))) {
         return { Low: 'low', Medium: 'medium', High: 'high' };
+    }
+    if (model.includes('pro') && isGeminiModelVersionGte(model, '3.0')) {
+        return { Low: 'low', High: 'high' };
     }
     return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
 }
@@ -447,9 +465,10 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
     }
 
     // Special handling for gemini image / nano banana models
-    if (model.includes('image')) {
-        const isGemini25OrLater = isGeminiModelVersionGte(model, '2.5');
-        const isGemini3OrLater = isGeminiModelVersionGte(model, '3.0');
+    if (model.includes('image') || model.includes('gemini-nano-banana')) {
+        const isNanoBanana = model.includes('gemini-nano-banana');
+        const isGemini25OrLater = isNanoBanana || isGeminiModelVersionGte(model, '2.5');
+        const isGemini3OrLater = isNanoBanana || isGeminiModelVersionGte(model, '3.0');
 
         const max_tokens_limit = getGeminiMaxTokensLimit(model);
         const excludeOptions = [
@@ -460,6 +479,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             'top_k',
             'include_thoughts',
         ];
+        if (isNanoBanana) excludeOptions.push('temperature', 'top_p');
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
         // Set max temperature to 2.0
@@ -579,6 +599,9 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
     }
     const max_tokens_limit = getGeminiMaxTokensLimit(model);
     const excludeOptions = ['max_tokens', 'include_thoughts'];
+    if (hasGeminiSamplingRestriction(model)) {
+        excludeOptions.push('temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty');
+    }
     const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
     const max_tokens: ModelOptionInfoItem[] = [
@@ -589,7 +612,11 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             max: max_tokens_limit,
             integer: true,
             step: 200,
-            description: 'The maximum number of tokens to generate',
+            description: isGeminiLongDecodeModel(model)
+                ? 'The maximum number of tokens to generate, including thinking. Above the per-request cap (65,536 ' +
+                  'streaming, 32,768 otherwise), generation continues across requests (long decode) up to the ' +
+                  'window shared with the input; each continuation re-reads the prompt and output so far.'
+                : 'The maximum number of tokens to generate',
         },
     ];
 
@@ -661,7 +688,9 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             {
                 name: 'include_thoughts',
                 type: OptionType.boolean,
-                default: true,
+                // Compatibility exception: retain the existing summary default in option metadata.
+                // Flash-Lite defaults to no thinking, so requesting summaries by default causes a provider error.
+                default: !model.includes('flash-lite'),
                 description: "Include the model's reasoning process in the response",
             },
             {
@@ -724,11 +753,25 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             ...commonOptions,
             ...buildClaudeEffortOptions(model),
             ...buildClaudeThinkingBudgetOption(model),
+            ...buildClaudeThinkingModeOption(model),
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),
         ],
     };
+}
+
+export function isVertexMistralChatModel(publisher: string | undefined, model: string): boolean {
+    const modelName = model.split('/').pop()?.split('@')[0] ?? '';
+    // These regional chat families share rawPredict; OCR and other special-purpose families are excluded.
+    return publisher === 'mistralai' && /^(?:mistral-(?:small|medium)|codestral)-\d/.test(modelName);
+}
+
+function isVertexMistralResource(model: string): boolean {
+    const segments = model.split('/');
+    const publisherIndex = segments.indexOf('publishers');
+    const publisher = publisherIndex === -1 ? segments[1] : segments[publisherIndex + 1];
+    return isVertexMistralChatModel(publisher, model);
 }
 
 function isOpenMaaSChatModel(model: string): boolean {
@@ -741,7 +784,8 @@ function isOpenMaaSChatModel(model: string): boolean {
 }
 
 function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
-    const compatible = getOpenAiCompatibleOptions(model, undefined, resolveModelProfile(model, Providers.vertexai));
+    const profile = resolveModelProfile(model, Providers.vertexai);
+    const compatible = getOpenAiCompatibleOptions(model, undefined, profile);
     const commonOptions = compatible.options
         // Vertex Open MaaS does not offer these OpenAI-native penalty fields consistently across source families.
         .filter(
@@ -749,6 +793,15 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
                 option.name !== SharedOptions.presence_penalty && option.name !== SharedOptions.frequency_penalty,
         )
         .map((commonOption) => {
+            if (
+                commonOption.name === SharedOptions.max_tokens &&
+                commonOption.type === OptionType.numeric &&
+                profile.max_output_tokens === undefined
+            ) {
+                // An OpenAI-compatible transport does not establish a provider-specific output limit.
+                const { max: _unverifiedMax, ...withoutMax } = commonOption;
+                return withoutMax;
+            }
             if (
                 model.includes('llama') &&
                 commonOption.name === SharedOptions.temperature &&
@@ -768,28 +821,27 @@ function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
     };
 }
 
-function getGeminiMaxTokensLimit(model: string): number {
-    if (model.includes('image')) {
-        return isGeminiModelVersionGte(model, '2.5') ? 32768 : 8192;
+function getGeminiMaxTokensLimit(model: string): number | undefined {
+    const vertexLimit = getVertexAIModelLimits(model).max_output_tokens;
+    if (vertexLimit !== undefined) return vertexLimit;
+    if (isGeminiModelVersionGte(model, '2.0') || /(?:nano-banana|omni|transcribe|live|robotics|tts)/.test(model)) {
+        return getMaxOutputTokens(model);
     }
-    if (model.includes('thinking') || isGeminiModelVersionGte(model, '2.5')) {
-        return 65535; // API upper bound is exclusive
-    }
-    if (model.includes('ultra') || model.includes('vision')) {
-        return 2048;
-    }
-    return 8192;
+    // Preserve the older option limits outside the current family audit.
+    if (model.includes('thinking')) return 65_535;
+    if (model.includes('ultra') || model.includes('vision')) return 2_048;
+    return 8_192;
 }
 
-export function getMaxTokensLimitVertexAi(model: string): number {
+export function getMaxTokensLimitVertexAi(model: string): number | undefined {
     if (model.includes('imagen-')) {
         return 0; // Imagen models do not have a max tokens limit in the same way as text models
     } else if (model.includes('claude')) {
         return getClaudeMaxTokensLimit(model);
     } else if (model.includes('gemini')) {
         return getGeminiMaxTokensLimit(model);
-    } else if (isOpenMaaSChatModel(model)) {
-        return getMaxOutputTokens(model);
+    } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
+        return resolveModelProfile(model, Providers.vertexai).max_output_tokens;
     }
     return 8192; // Default fallback limit
 }

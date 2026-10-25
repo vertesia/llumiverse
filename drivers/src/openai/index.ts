@@ -17,16 +17,22 @@ import {
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
+    isOpenAIImageVersionGTE,
     type JSONSchema,
     LlumiverseError,
+    type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
+    type OpenAiImageGenerationOptions,
+    type OpenAiTextOptions,
     type PromptOptions,
     type PromptSegment,
     Providers,
+    resolveModelProfile,
+    setConversationMeta,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -43,19 +49,26 @@ import {
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { assertConversationArray } from '../shared/conversation-shape.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
+import { imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
-import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
+import { openAIPromptUsage } from './usage.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type OpenAIResponseServiceTier = OpenAI.Responses.ResponseCreateParams['service_tier'];
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
+    seed?: OpenAiTextOptions['seed'];
+    image_generation?: OpenAiImageGenerationOptions;
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
@@ -137,12 +150,7 @@ function hasNumericStatus(error: unknown): boolean {
 
 function isOpenAIReasoningModel(model: string): boolean {
     const normalized = model.toLowerCase();
-    return (
-        normalized.includes('o1') ||
-        normalized.includes('o3') ||
-        normalized.includes('o4') ||
-        isOpenAIGptVersionGTE(model, 5, 0)
-    );
+    return /(?:^|[/:.])o(?:1|3|4)(?:-|$)/.test(normalized) || isOpenAIGptVersionGTE(model, 5, 0);
 }
 
 function openAIReasoning(
@@ -150,30 +158,13 @@ function openAIReasoning(
     isReasoningModel: boolean,
     context: OpenAIRequestOptions['reasoning_context'],
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
-    if (!effort && !isReasoningModel) return undefined;
+    if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
+        // Compatibility exception: retain reasoning summaries for the existing completion projection.
         summary: 'auto',
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
-}
-
-function supportsOpenAIReasoningContext(provider: Providers, model: string): boolean {
-    if (provider !== Providers.openai) return false;
-    const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return isOpenAIGptVersionGTE(modelId, 5, 6);
-}
-
-function openAIReasoningContext(
-    provider: Providers,
-    model: string,
-    requestedContext: OpenAIRequestOptions['reasoning_context'],
-): OpenAIRequestOptions['reasoning_context'] {
-    if (requestedContext === undefined) return undefined;
-    if (!supportsOpenAIReasoningContext(provider, model)) {
-        throw new Error(`reasoning_context is not supported for model ${model} through provider ${provider}`);
-    }
-    return requestedContext;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -235,22 +226,23 @@ function getPromptCacheRequestOptions(
     model: string,
     retention: OpenAIRequestOptions['prompt_cache_retention'],
     options: OpenAIPromptCacheConfig['options'],
+    logger?: Logger,
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
     if (isOpenAIGptVersionGTE(model, 5, 6)) {
-        if (retention === 'in_memory') {
-            throw new Error(
-                'GPT-5.6 and later do not support in_memory prompt cache retention; configure 24h or remove the override.',
+        // Compatibility exception: legacy 24h cache retention maps to the newer API's 30m TTL.
+        if (retention === '24h') {
+            logModelOptionException(
+                logger,
+                model,
+                { prompt_cache_retention: retention },
+                ['prompt_cache_retention'],
+                'openai_cache_retention',
             );
         }
         return {
             prompt_cache_retention: retention,
             prompt_cache_options: retention === '24h' ? { ...options, ttl: '30m' } : options,
         };
-    }
-    if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {
-        throw new Error(
-            'GPT-5.5 does not support in_memory prompt cache retention; configure 24h or remove the override.',
-        );
     }
     return { prompt_cache_retention: retention, prompt_cache_options: options };
 }
@@ -275,6 +267,25 @@ export class OpenAIResponsesProtocol {
         ) => { signal?: AbortSignal; timeout?: number } | undefined,
     ) {}
 
+    private getRequestOptions(
+        driver: OpenAIResponsesDriverBase,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): OpenAI.RequestOptions | undefined {
+        const base = this.resolveRequestOptions(options, signal);
+        const imageTool = (options.model_options as OpenAIRequestOptions | undefined)?.image_generation;
+        if (!imageTool || (driver.provider !== Providers.azure_foundry && driver.provider !== Providers.azure_openai)) {
+            return base;
+        }
+        return {
+            ...base,
+            headers: {
+                'x-ms-oai-image-generation-deployment': driver.getResponsesRequestModel(imageTool.model),
+                api_version: 'preview',
+            },
+        };
+    }
+
     async requestTextCompletionStream(
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
@@ -292,6 +303,11 @@ export class OpenAIResponsesProtocol {
         }
 
         // Include conversation history (same as non-streaming)
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'stream',
+        });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
@@ -322,13 +338,9 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
+        const requestedEffort = resolveOpenAIEffort(model_options, driver.logger, options.model);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoningContext = openAIReasoningContext(
-            driver.provider,
-            options.model,
-            model_options?.reasoning_context,
-        );
+        const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
@@ -344,6 +356,7 @@ export class OpenAIResponsesProtocol {
             options.model,
             promptCacheRetention,
             promptCache.options,
+            driver.logger,
         );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
@@ -357,9 +370,15 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
+                // Preserve supplied compatible options even when the Responses SDK does not declare them.
+                ...(model_options?.seed !== undefined && { seed: model_options.seed }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
+                tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
+                tool_choice: model_options?.image_generation?.force
+                    ? { type: 'image_generation' }
+                    : useTools
+                      ? toolChoice
+                      : undefined,
                 parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
@@ -369,14 +388,39 @@ export class OpenAIResponsesProtocol {
                 ),
             },
             model_options?.extra_body,
+            driver.logger,
+            options.model,
         );
-        const requestOptions = this.resolveRequestOptions(options, signal);
+        // Compatibility exception: retain historical omissions so saved Chat options do not break Responses callers.
+        // Revisit only after reviewing these warnings and agreeing a migration with callers.
+        logModelOptionException(
+            driver.logger,
+            options.model,
+            model_options,
+            ['stop_sequence', 'presence_penalty', 'frequency_penalty'],
+            'openai_responses_chat_options',
+        );
+        // Compatibility exception: existing Responses reasoning requests omit sampling controls.
+        if (isReasoningModel) {
+            logModelOptionException(
+                driver.logger,
+                options.model,
+                model_options,
+                ['temperature', 'top_p'],
+                'openai_reasoning_sampling',
+            );
+        }
+        const requestOptions = this.getRequestOptions(driver, options, signal);
         const stream = requestOptions
-            ? await driver.service.responses.create(request, requestOptions)
-            : await driver.service.responses.create(request);
+            ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+            : await driver.getResponsesService(options).responses.create(request);
 
-        return mapResponseStream(stream, includeThoughts, (response) =>
-            finalizeOpenAIResponsesConversation(conversation, response.output, options),
+        return mapResponseStream(
+            stream,
+            includeThoughts,
+            (response) => finalizeOpenAIResponsesConversation(conversation, response.output, options),
+            model_options?.image_generation?.output_format,
+            { logger: driver.logger, provider: driver.provider, model: options.model },
         );
     }
 
@@ -405,6 +449,11 @@ export class OpenAIResponsesProtocol {
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
         assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
 
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'execute',
+        });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
@@ -426,13 +475,9 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
+        const requestedEffort = resolveOpenAIEffort(model_options, driver.logger, options.model);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoningContext = openAIReasoningContext(
-            driver.provider,
-            options.model,
-            model_options?.reasoning_context,
-        );
+        const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
@@ -447,6 +492,7 @@ export class OpenAIResponsesProtocol {
             options.model,
             promptCacheRetention,
             promptCache.options,
+            driver.logger,
         );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
@@ -460,9 +506,15 @@ export class OpenAIResponsesProtocol {
                 temperature: isReasoningModel ? undefined : model_options?.temperature,
                 top_p: isReasoningModel ? undefined : model_options?.top_p,
                 max_output_tokens: model_options?.max_tokens,
+                // Preserve supplied compatible options even when the Responses SDK does not declare them.
+                ...(model_options?.seed !== undefined && { seed: model_options.seed }),
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
+                tools: responseTools(prompt, model_options?.image_generation, useTools ? (toolDefs ?? []) : []),
+                tool_choice: model_options?.image_generation?.force
+                    ? { type: 'image_generation' }
+                    : useTools
+                      ? toolChoice
+                      : undefined,
                 parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
@@ -472,11 +524,32 @@ export class OpenAIResponsesProtocol {
                 ),
             },
             model_options?.extra_body,
+            driver.logger,
+            options.model,
         );
-        const requestOptions = this.resolveRequestOptions(options, signal);
+        // Compatibility exception: retain historical omissions so saved Chat options do not break Responses callers.
+        // Revisit only after reviewing these warnings and agreeing a migration with callers.
+        logModelOptionException(
+            driver.logger,
+            options.model,
+            model_options,
+            ['stop_sequence', 'presence_penalty', 'frequency_penalty'],
+            'openai_responses_chat_options',
+        );
+        // Compatibility exception: existing Responses reasoning requests omit sampling controls.
+        if (isReasoningModel) {
+            logModelOptionException(
+                driver.logger,
+                options.model,
+                model_options,
+                ['temperature', 'top_p'],
+                'openai_reasoning_sampling',
+            );
+        }
+        const requestOptions = this.getRequestOptions(driver, options, signal);
         const res = requestOptions
-            ? await driver.service.responses.create(request, requestOptions)
-            : await driver.service.responses.create(request);
+            ? await driver.getResponsesService(options).responses.create(request, requestOptions)
+            : await driver.getResponsesService(options).responses.create(request);
 
         const completion = driver.extractDataFromResponse(options, res);
         if (options.include_original_response) {
@@ -559,9 +632,17 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        if (this.isImageModel(options.model)) {
+            return formatOpenAILikeMultimodalPrompt(segments, {
+                ...options,
+                imageGeneration: true,
+                result_schema: undefined,
+            });
+        }
         const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
-        const resultSchema =
-            supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
+        const nativeSchemaOnly =
+            supportsSchema(options.model, this.provider) && !supplementsSchemaInPrompt(options.model, this.provider);
+        const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
         return formatOpenAILikeMultimodalPrompt(segments, {
             ...options,
             result_schema: resultSchema,
@@ -579,10 +660,27 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
+        const finish_reason = responseFinishReason(result, tools);
+        const refusalDetails = responseRefusalDetails(result);
+        if (refusalDetails) {
+            logModelRefusal(this.logger, {
+                provider: this.provider,
+                model: _options.model,
+                streaming: false,
+                finish_reason,
+                provider_finish_reason: result.incomplete_details?.reason ?? result.status,
+                response_id: result.id,
+                details: refusalDetails,
+            });
+        }
         // Collect all parts in order (text and images)
         const includeThoughts =
             (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
-        const allResults = extractCompletionResults(result.output, includeThoughts);
+        const allResults = extractCompletionResults(
+            result.output,
+            includeThoughts,
+            (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
+        );
 
         if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
@@ -593,7 +691,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             result: allResults,
             token_usage: tokenInfo,
             service_tier: result.service_tier ?? undefined,
-            finish_reason: responseFinishReason(result, tools),
+            finish_reason,
             tool_use: tools,
         };
     }
@@ -603,6 +701,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (this.isImageModel(options.model)) return this.requestImageStream(prompt, options, signal);
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
@@ -611,13 +710,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (this.isImageModel(options.model)) return this.requestImageGeneration(prompt, options, signal);
         return this.responsesProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        // Image generation models don't support streaming
+        // GPT Image supports completed-image streaming; legacy image endpoints use the fallback.
         if (this.isImageModel(_options.model)) {
-            return Promise.resolve(false);
+            return Promise.resolve(this.getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'));
         }
 
         if (_options.model.includes('o1') && !(_options.model.includes('mini') || _options.model.includes('preview'))) {
@@ -643,6 +743,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         const textContent = completionResultsToText(completionResults);
 
+        assertConversationArray(options.conversation, {
+            provider: this.provider,
+            model: options.model,
+            operation: 'stream',
+        });
         // Start with the conversation from options or the prompt
         let conversation = updateConversation(options.conversation, prompt);
 
@@ -753,7 +858,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         result = result.filter((m) => {
             if (this.isFileAudioModel(m.id)) return true;
             return (
-                !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
+                !unsupportedEndpointPattern.test(m.id.toLowerCase()) &&
+                !m.id.toLowerCase().includes('dall-e') &&
+                (this.isImageModel(m.id) || !isDedicatedInferenceModel(m.id, this.provider))
             );
         });
 
@@ -768,7 +875,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
                 // Determine model type based on capabilities
                 let modelType = this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text;
-                if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
+                if (this.isImageModel(m.id)) {
                     modelType = ModelType.Image;
                 }
 
@@ -833,116 +940,99 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         }
     }
 
-    imageModels = ['dall-e', 'gpt-image', 'chatgpt-image'];
-
-    /**
-     * Determine if a model is specifically an image generation model (not conversational image model)
-     */
     isImageModel(model: string): boolean {
-        // DALL-E models are standalone image generation
-        // gpt-image models can generate images in conversations, not standalone
-        return this.imageModels.some((imageModel) => model.includes(imageModel));
+        return resolveModelProfile(this.getImageSourceModel(model), this.provider).family === 'image';
     }
 
     /**
      * Request image generation from standalone Images API
-     * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
+     * Reference images select the edit operation; text-only prompts select generation.
      */
     async requestImageGeneration(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
-
-        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
-
-        // Extract prompt text from ResponseInputItem[]
-        let promptText = '';
-        for (const item of prompt) {
-            if ('content' in item && typeof item.content === 'string') {
-                promptText += `${item.content}\\n`;
-            } else if ('content' in item && Array.isArray(item.content)) {
-                // Extract text from content array
-                for (const part of item.content) {
-                    if ('type' in part && part.type === 'input_text' && 'text' in part) {
-                        promptText += `${part.text}\\n`;
-                    }
-                }
-            }
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
+            this.getImageSourceModel(options.model),
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
+        );
+        const response = request.edit
+            ? await this.getImageService().images.edit(request.edit, requestOptions)
+            : await this.getImageService().images.generate(request.generate, requestOptions);
+        if (!response.data?.some((image) => image.b64_json || image.url)) {
+            throw new Error('Image response did not contain a completed image');
         }
-        promptText = promptText.trim();
+        const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        return {
+            result: (response.data ?? []).flatMap((image): CompletionResult[] =>
+                image.b64_json
+                    ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
+                    : image.url
+                      ? [{ type: 'image', value: image.url }]
+                      : [],
+            ),
+            token_usage: imageUsage(response.usage),
+            original_response: options.include_original_response ? response : undefined,
+        };
+    }
 
-        try {
-            const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
-                model: options.model,
-                prompt: promptText,
-                size: model_options?.size || '1024x1024',
-            };
+    getImageSourceModel(model: string): string {
+        return model;
+    }
 
-            // Add DALL-E specific options
-            if (options.model.includes('dall-e') || model_options?._option_id === 'openai-dalle') {
-                const dalleOptions = model_options as OpenAiDalleOptions | undefined;
-                generateParams.n = dalleOptions?.n || 1;
-                generateParams.response_format = dalleOptions?.response_format || 'b64_json';
+    getImageService(): OpenAI {
+        return this.service;
+    }
 
-                if (options.model.includes('dall-e-3')) {
-                    generateParams.quality = dalleOptions?.image_quality || 'standard';
-                    if (dalleOptions?.style) {
-                        generateParams.style = dalleOptions.style;
-                    }
+    getResponsesService(_options: ExecutionOptions): OpenAI {
+        return this.service;
+    }
+
+    async requestImageStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | undefined,
+            this.getImageSourceModel(options.model),
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
+        );
+        const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        const stream = request.edit
+            ? await this.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
+            : await this.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
+        return {
+            async *[Symbol.asyncIterator]() {
+                let completed = false;
+                for await (const event of stream) {
+                    if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
+                    completed = true;
+                    yield {
+                        result: [
+                            {
+                                type: 'image',
+                                value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
+                            },
+                        ],
+                        token_usage: imageUsage(event.usage),
+                    } satisfies CompletionChunkObject;
                 }
-            } else {
-                // Default for other models
-                generateParams.n = 1;
-            }
-
-            const response = signal
-                ? await this.service.images.generate(generateParams, { signal })
-                : await this.service.images.generate(generateParams);
-
-            // Convert response to CompletionResults
-            const results: CompletionResult[] = [];
-
-            if (response.data) {
-                for (const image of response.data) {
-                    let imageValue: string;
-
-                    if (image.b64_json) {
-                        // Base64 format
-                        imageValue = `data:image/png;base64,${image.b64_json}`;
-                    } else if (image.url) {
-                        // URL format
-                        imageValue = image.url;
-                    } else {
-                        continue;
-                    }
-
-                    results.push({
-                        type: 'image',
-                        value: imageValue,
-                    });
-                }
-            }
-
-            return {
-                result: results,
-            };
-        } catch (error: unknown) {
-            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
-            const generationError = error instanceof Error ? error : new Error(String(error));
-            const errorCode =
-                (error as { code?: unknown })?.code === 'content_policy_violation'
-                    ? 'content_policy_violation'
-                    : 'validation_error';
-            return {
-                result: [],
-                error: {
-                    message: generationError.message,
-                    code: errorCode,
-                },
-            };
-        }
+                if (!completed) throw new Error('Image stream ended without a completed image');
+            },
+        };
     }
 }
 
@@ -983,12 +1073,9 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
         usage.prompt_tokens_details?.cache_write_tokens ??
         usage.cache_write_tokens;
     return {
-        prompt: usage.input_tokens,
+        ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         result: usage.output_tokens,
         total: usage.total_tokens,
-        prompt_cached: cachedTokens ?? undefined,
-        prompt_cache_write: cacheWriteTokens ?? undefined,
-        prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }
 
@@ -1080,7 +1167,19 @@ export function mapResponseStream(
     stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
     includeThoughts = false,
     finalize?: (response: OpenAI.Responses.Response) => unknown | Promise<unknown>,
+    requestedFormat?: string,
+    refusalLog?: { logger: Logger; provider: string; model: string },
 ): DriverCompletionStream {
+    const logRefusal = (context: Omit<RefusalLogContext, 'provider' | 'model' | 'streaming'>) => {
+        if (refusalLog) {
+            logModelRefusal(refusalLog.logger, {
+                provider: refusalLog.provider,
+                model: refusalLog.model,
+                streaming: true,
+                ...context,
+            });
+        }
+    };
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
     let finalResponse: OpenAI.Responses.Response | undefined;
 
@@ -1088,7 +1187,12 @@ export function mapResponseStream(
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';
+            let responseId: string | undefined;
+            const emittedImages = new Set<string>();
             for await (const event of stream) {
+                if (event.type === 'response.created') {
+                    responseId = event.response.id;
+                }
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
                     const callId = event.item.call_id ?? event.item.id;
@@ -1123,6 +1227,12 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
+                } else if (event.type === 'response.output_item.done' && event.item.type === 'image_generation_call') {
+                    const results = extractCompletionResults([event.item], false, requestedFormat);
+                    if (results.length && !emittedImages.has(event.item.id)) {
+                        emittedImages.add(event.item.id);
+                        yield { result: results } satisfies CompletionChunkObject;
+                    }
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
                     yield {
@@ -1147,6 +1257,13 @@ export function mapResponseStream(
                 } else if (event.type === 'response.refusal.delta') {
                     refusalText += event.delta;
                 } else if (event.type === 'response.refusal.done') {
+                    logRefusal({
+                        response_id: responseId,
+                        details: {
+                            type: 'refusal',
+                            refusal: event.refusal || refusalText,
+                        } satisfies OpenAI.Responses.ResponseOutputRefusal,
+                    });
                     throw new Error(`[OpenAI] Model refused: ${event.refusal || refusalText}`);
                 } else if ((event as { type: string }).type === 'response.error') {
                     const errEvent = event as unknown as { message: string; code?: string | null };
@@ -1160,9 +1277,24 @@ export function mapResponseStream(
                 ) {
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
+                    const finish_reason = responseFinishReason(event.response, finalTools);
+                    const refusalDetails = responseRefusalDetails(event.response);
+                    if (refusalDetails) {
+                        logRefusal({
+                            finish_reason,
+                            provider_finish_reason: event.response.incomplete_details?.reason ?? event.response.status,
+                            response_id: event.response.id,
+                            details: refusalDetails,
+                        });
+                    }
                     yield {
-                        result: [],
-                        finish_reason: responseFinishReason(event.response, finalTools),
+                        result: event.response.output.flatMap((item): CompletionResult[] => {
+                            if (item.type !== 'image_generation_call' || emittedImages.has(item.id)) return [];
+                            const results = extractCompletionResults([item], false, requestedFormat);
+                            if (results.length) emittedImages.add(item.id);
+                            return results;
+                        }),
+                        finish_reason,
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
@@ -1220,6 +1352,16 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
         }
     }
     return items;
+}
+
+/**
+ * Prompt-schema supplement alongside native structured output. OpenRouter routes `minimax/` models across many
+ * hosts, and most do not enforce a JSON schema: some downgrade it to JSON mode and return `{}`, others ignore it.
+ * The prompt schema gives every host the shape, while hosts that enforce the schema still receive it natively.
+ * A family rule: it applies to any OpenAI-compatible endpoint serving a `minimax/` model ID, not only OpenRouter.
+ */
+function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
+    return provider === Providers.openai_compatible && /^minimax\//i.test(model);
 }
 
 //Structured output support is typically aligned with tool use support
@@ -1320,6 +1462,7 @@ function finalizeOpenAIResponsesConversation(
     const currentTurn = getConversationMeta(completed).turnNumber;
     const preserveSubtree = (value: unknown): boolean => {
         if (!value || typeof value !== 'object') return false;
+        if ('type' in value && value.type === 'image_generation_call') return true;
         const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
         return typeof encryptedContent === 'string' && encryptedContent.length > 0;
     };
@@ -1329,8 +1472,24 @@ function finalizeOpenAIResponsesConversation(
         textMaxTokens: options.stripTextMaxTokens,
         preserveSubtree,
     };
+    if (currentTurn >= (options.stripImagesAfterTurns ?? Infinity)) {
+        const items = unwrapConversationArray<ResponseInputItem>(completed) ?? completed;
+        completed = setConversationMeta(
+            items.map((item) =>
+                'type' in item && item.type === 'image_generation_call' && item.id
+                    ? { type: 'item_reference', id: item.id }
+                    : item,
+            ),
+            getConversationMeta(completed),
+        ) as ResponseInputItem[];
+    }
     let processed = stripBase64ImagesFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
+    processed = truncateLargeTextInConversation(processed, {
+        ...stripOptions,
+        preserveSubtree: (value) =>
+            preserveSubtree(value) ||
+            (!!value && typeof value === 'object' && 'type' in value && value.type === 'input_image'),
+    });
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
@@ -1368,6 +1527,7 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
 function extractCompletionResults(
     output?: OpenAI.Responses.ResponseOutputItem[],
     includeThoughts = true,
+    requestedFormat?: string,
 ): CompletionResult[] {
     if (!output) {
         return [];
@@ -1391,11 +1551,11 @@ function extractCompletionResults(
                     });
                 }
             }
-        } else if (item.type === 'image_generation_call' && 'result' in item && item.result) {
+        } else if (item.type === 'image_generation_call' && item.status === 'completed' && item.result) {
             // GPT-image models return base64 encoded images in result field
             const base64Data = item.result;
             // Format as data URL for consistency with other image outputs
-            const imageUrl = base64Data.startsWith('data:') ? base64Data : `data:image/png;base64,${base64Data}`;
+            const imageUrl = imageDataUrl(base64Data, item.output_format, requestedFormat);
             results.push({
                 type: 'image',
                 value: imageUrl,
@@ -1403,6 +1563,26 @@ function extractCompletionResults(
         }
     }
     return results;
+}
+
+/** Refusal parts and content-filter details from a Responses API response. */
+type ResponseRefusalDetails = {
+    refusals?: OpenAI.Responses.ResponseOutputRefusal[];
+    incomplete_details?: OpenAI.Responses.Response['incomplete_details'];
+};
+
+function responseRefusalDetails(response: OpenAI.Responses.Response): ResponseRefusalDetails | undefined {
+    const refusals = response.output.flatMap((item) =>
+        item.type === 'message'
+            ? item.content.filter((part): part is OpenAI.Responses.ResponseOutputRefusal => part.type === 'refusal')
+            : [],
+    );
+    const contentFiltered = response.incomplete_details?.reason === 'content_filter';
+    if (!refusals.length && !contentFiltered) return undefined;
+    return {
+        ...(refusals.length ? { refusals } : {}),
+        ...(contentFiltered ? { incomplete_details: response.incomplete_details } : {}),
+    };
 }
 
 function responseFinishReason(
@@ -1570,4 +1750,50 @@ function safeJsonParse(value: unknown): unknown {
     } catch {
         return value;
     }
+}
+
+function imageUsage(usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+}): ExecutionTokenUsage | undefined {
+    return usage
+        ? {
+              prompt: usage.input_tokens,
+              prompt_new: usage.input_tokens,
+              result: usage.output_tokens,
+              result_image: usage.output_tokens,
+              total: usage.total_tokens,
+          }
+        : undefined;
+}
+
+function responseTools(
+    prompt: ResponseInputItem[],
+    config: OpenAiImageGenerationOptions | undefined,
+    functions: OpenAI.Responses.Tool[],
+): OpenAI.Responses.Tool[] | undefined {
+    if (!config) return functions.length ? functions : undefined;
+    if (!config.model) throw new Error('Image generation tool requires an image model');
+    const { force: _force, ...settings } = config;
+    const masks = getImageMasks(prompt);
+    if (masks.length > 1 || (masks.length && settings.input_image_mask))
+        throw new Error('Only one image mask is supported');
+    const mask = masks[0];
+    const model = settings.model.split('::').pop() ?? settings.model;
+    return [
+        ...functions,
+        {
+            ...settings,
+            model,
+            type: 'image_generation',
+            input_fidelity:
+                isOpenAIImageVersionGTE(model, 2) && !isOpenAIImageVersionGTE(model, 2, 5)
+                    ? undefined
+                    : settings.input_fidelity,
+            input_image_mask: mask
+                ? { image_url: mask.image_url ?? undefined, file_id: mask.file_id ?? undefined }
+                : settings.input_image_mask,
+        },
+    ];
 }

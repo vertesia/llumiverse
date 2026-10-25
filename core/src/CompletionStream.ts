@@ -256,8 +256,15 @@ export function finalizeStreamingToolUse(
             delete tool._actual_id;
         }
         if (typeof tool.tool_input === 'string') {
+            // Claude streams a call with no arguments as a single empty `partial_json`, so the
+            // accumulated buffer is empty rather than "{}". That is a complete, valid call, unless
+            // a length stop cut the call off before its first argument fragment arrived.
             if (tool.tool_input.trim() === '') {
-                tool.tool_input = {};
+                if (finishReason === 'length') {
+                    malformedToolIds.add(tool.id);
+                } else {
+                    tool.tool_input = {};
+                }
                 continue;
             }
             try {
@@ -391,6 +398,24 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let promptCachedTokens: number | undefined;
         let promptCacheWriteTokens: number | undefined;
         let promptNewTokens: number | undefined;
+        let promptCacheWrite1hTokens: number | undefined;
+        let providerCostUsd: number | undefined;
+        let resultImageTokens: number | undefined;
+        // Undefined until the provider reports token data. resultTokens === 0 is valid (e.g. empty output with stop).
+        const accumulatedUsage = (): ExecutionTokenUsage | undefined =>
+            resultTokens === undefined
+                ? undefined
+                : {
+                      prompt: promptTokens,
+                      result: resultTokens,
+                      total: resultTokens + promptTokens,
+                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                      ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
+                      ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
+                      ...(resultImageTokens != null && { result_image: resultImageTokens }),
+                  };
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
         let stream: DriverCompletionStream | undefined;
@@ -436,6 +461,13 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                             if (chunk.token_usage.prompt_cache_write != null)
                                 promptCacheWriteTokens = chunk.token_usage.prompt_cache_write;
                             if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
+                            if (chunk.token_usage.prompt_cache_write_1h != null)
+                                promptCacheWrite1hTokens = chunk.token_usage.prompt_cache_write_1h;
+                            if (chunk.token_usage.result_image != null)
+                                resultImageTokens = chunk.token_usage.result_image;
+                            // The provider reports the call's cost once, with the final usage.
+                            if (chunk.token_usage.provider_cost_usd != null)
+                                providerCostUsd = chunk.token_usage.provider_cost_usd;
                         }
                         // Accumulate tool_use from chunks
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
@@ -551,14 +583,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                     result: accumulatedResults,
                     prompt: this.driver.formatDebugPrompt(this.prompt),
                     execution_time: Date.now() - start,
-                    token_usage: {
-                        prompt: promptTokens,
-                        result: resultTokens,
-                        total: resultTokens + promptTokens,
-                        ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-                        ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-                        ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-                    },
+                    token_usage: accumulatedUsage(),
                     service_tier: serviceTier,
                     finish_reason,
                     chunks: this.chunks,
@@ -585,19 +610,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             await httpScope.close();
         }
 
-        // Return undefined only if we never received any token data from the provider.
-        // Use !== undefined (not truthiness) because resultTokens === 0 is valid (e.g. empty output with stop).
-        const tokens: ExecutionTokenUsage | undefined =
-            resultTokens !== undefined
-                ? {
-                      prompt: promptTokens,
-                      result: resultTokens,
-                      total: resultTokens + promptTokens,
-                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-                  }
-                : undefined;
+        const tokens = accumulatedUsage();
 
         const toolUseArray = finalizeStreamingToolUse(
             accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined,
@@ -618,9 +631,19 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         });
 
         // Build conversation context for multi-turn support
-        const conversation = stream?.finalizeConversation
-            ? await stream.finalizeConversation()
-            : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
+        let conversation: unknown;
+        try {
+            conversation = stream?.finalizeConversation
+                ? await stream.finalizeConversation()
+                : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
+        } catch (error: unknown) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            throw this.driver.formatLlumiverseError(error, {
+                provider: this.driver.provider,
+                model: this.options.model,
+                operation: 'stream',
+            });
+        }
         if (conversation !== undefined) {
             this.completion.conversation = stripAudioPayloads(conversation);
         }

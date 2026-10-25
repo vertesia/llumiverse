@@ -28,7 +28,7 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 // ─── Bedrock ──────────────────────────────────────────────────────────────────
 
-describe('Bedrock - convertToolBlocksToText', () => {
+describe('legacy Converse: Bedrock - convertToolBlocksToText', () => {
     test('detects tool blocks in messages', () => {
         const withTools: Message[] = [
             { role: 'user', content: [{ text: 'hi' }] },

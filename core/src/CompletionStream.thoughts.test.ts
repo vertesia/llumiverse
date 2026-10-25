@@ -8,6 +8,7 @@ import type {
     ExecutionOptions,
     ModelSearchPayload,
 } from '@llumiverse/common';
+import { LlumiverseError } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
@@ -39,9 +40,26 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
                 async *[Symbol.asyncIterator]() {
                     yield {
                         result: [],
-                        token_usage: { prompt: 10, prompt_cached: 4, prompt_new: 6, result: 2, total: 12 },
+                        token_usage: {
+                            prompt: 10,
+                            prompt_cached: 4,
+                            prompt_new: 6,
+                            result: 2,
+                            result_image: 2,
+                            total: 12,
+                        },
                     };
                     throw new Error('provider failed after usage');
+                },
+            };
+        }
+        if (prompt === 'finalize-fails') {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { result: [{ type: 'text', value: 'answer' }], finish_reason: 'stop' };
+                },
+                finalizeConversation: () => {
+                    throw new Error('stream failed after the last event');
                 },
             };
         }
@@ -97,8 +115,23 @@ describe('DefaultCompletionStream thoughts', () => {
             prompt_cached: 4,
             prompt_new: 6,
             result: 2,
+            result_image: 2,
             total: 12,
         });
+    });
+
+    it('formats an error raised while finalizing the streamed conversation', async () => {
+        const driver = new ThoughtsStreamDriver({});
+        const stream = new DefaultCompletionStream(driver, 'finalize-fails', { model: 'test' });
+
+        const error = await (async () => {
+            for await (const _chunk of stream) {
+                // drain
+            }
+        })().catch((caught: unknown) => caught);
+        expect(LlumiverseError.isLlumiverseError(error)).toBe(true);
+        expect(error).toMatchObject({ context: { provider: 'test', model: 'test', operation: 'stream' } });
+        expect((error as Error).message).toContain('stream failed after the last event');
     });
 
     it('streams visible thoughts before the answer while preserving typed results', async () => {

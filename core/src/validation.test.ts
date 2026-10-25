@@ -1,5 +1,5 @@
 import type { CompletionResult } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { validateResult } from './validation.js';
 
 describe('validateResult', () => {
@@ -15,6 +15,28 @@ describe('validateResult', () => {
             { type: 'json', value: { answer: 'ok' } },
             { type: 'thoughts', value: 'second thought' },
         ]);
+    });
+
+    // Caller result schemas often carry formats nobody registered; they must validate without console noise.
+    it('validates a schema with an unregistered format without logging', () => {
+        const warn = vi.spyOn(console, 'warn');
+        const log = vi.spyOn(console, 'log');
+        const error = vi.spyOn(console, 'error');
+        try {
+            const schema = {
+                type: 'object',
+                properties: { answer: { type: 'string', format: 'not-a-registered-format' } },
+                required: ['answer'],
+            };
+            const result: CompletionResult[] = [{ type: 'text', value: '{"answer":"ok"}' }];
+
+            expect(validateResult(result, schema)).toEqual([{ type: 'json', value: { answer: 'ok' } }]);
+            expect(warn).not.toHaveBeenCalled();
+            expect(log).not.toHaveBeenCalled();
+            expect(error).not.toHaveBeenCalled();
+        } finally {
+            vi.restoreAllMocks();
+        }
     });
 
     // A stored result schema is deserialized into a new object on every execution, so an `$id` that

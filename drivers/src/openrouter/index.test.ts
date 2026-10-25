@@ -12,18 +12,49 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(() => new OpenRouterDriver({ apiKey: '' })).toThrow('apiKey is required');
     });
 
-    it('supplements native structured output only for GLM 5.3', async () => {
+    it('supplements native structured output only for GLM 5.3 and MiniMax', async () => {
         const driver = new OpenRouterDriver({ apiKey: 'test-key' });
         const resultSchema = { type: 'object' as const, properties: { answer: { type: 'string' as const } } };
         const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+        const hasPromptSchema = async (model: string) => {
+            const prompt = await driver.createPrompt(segments, { model, result_schema: resultSchema });
+            return prompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'));
+        };
 
-        const glmPrompt = await driver.createPrompt(segments, { model: 'z-ai/glm-5.3', result_schema: resultSchema });
-        const grokPrompt = await driver.createPrompt(segments, { model: 'x-ai/grok-4.6', result_schema: resultSchema });
+        for (const model of ['z-ai/glm-5.3', 'minimax/minimax-m3', 'minimax/minimax-m2.5', 'minimax/minimax-m4']) {
+            expect(await hasPromptSchema(model), model).toBe(true);
+        }
+        for (const model of ['x-ai/grok-4.6', 'z-ai/glm-5.4', 'openai/gpt-5.5-mini']) {
+            expect(await hasPromptSchema(model), model).toBe(false);
+        }
+    });
 
-        expect(glmPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(true);
-        expect(grokPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(
-            false,
-        );
+    it('keeps native response_format for MiniMax alongside the prompt schema', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const resultSchema = { type: 'object' as const, properties: { answer: { type: 'string' as const } } };
+        const options = { model: 'minimax/minimax-m3', result_schema: resultSchema };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Answer.' }], options);
+        const send = vi.fn(async (_request: unknown, _options?: unknown) => ({
+            id: 'generation-1',
+            object: 'chat.completion' as const,
+            created: 1,
+            model: 'minimax/minimax-m3',
+            systemFingerprint: null,
+            choices: [
+                {
+                    index: 0,
+                    finishReason: 'stop',
+                    logprobs: null,
+                    message: { role: 'assistant' as const, content: '{"answer":"blue"}' },
+                },
+            ],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        setService(driver, { chat: { send } });
+
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(send.mock.calls[0]?.[0]).toMatchObject({ chatRequest: { responseFormat: { type: 'json_schema' } } });
     });
 
     it('maps chat, structured output, tools, timeout, and the native response', async () => {
@@ -54,7 +85,14 @@ describe('OpenRouterDriver native SDK transport', () => {
                     },
                 },
             ],
-            usage: { promptTokens: 4, completionTokens: 3, totalTokens: 7 },
+            usage: {
+                promptTokens: 4,
+                completionTokens: 3,
+                totalTokens: 7,
+                promptTokensDetails: { cachedTokens: 1, cacheWriteTokens: 2 },
+                cost: 0.0012,
+                isByok: false,
+            },
         };
         const send = vi.fn(async (_request: unknown, _options?: unknown) => response);
         setService(driver, { chat: { send } });
@@ -139,7 +177,15 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(requestOptions).toEqual({ timeoutMs: 1_800_000 });
         expect(completion).toMatchObject({
             finish_reason: 'tool_use',
-            token_usage: { prompt: 4, result: 3, total: 7 },
+            token_usage: {
+                prompt: 4,
+                prompt_new: 1,
+                prompt_cached: 1,
+                prompt_cache_write: 2,
+                provider_cost_usd: 0.0012,
+                result: 3,
+                total: 7,
+            },
             tool_use: [{ id: 'call_1', tool_name: 'lookup', tool_input: { city: 'Paris' } }],
             original_response: response,
         });
@@ -187,7 +233,7 @@ describe('OpenRouterDriver native SDK transport', () => {
                         },
                     },
                 ],
-                usage: { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+                usage: { promptTokens: 2, completionTokens: 1, totalTokens: 3, cost: 0.0004, isByok: true },
             },
         ];
         const nativeStream = {
@@ -229,6 +275,57 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(stream.completion?.tool_use).toEqual([
             { id: 'call_actual', tool_name: 'lookup', tool_input: { city: 'Paris' } },
         ]);
+    });
+
+    it('keeps the billed cost reported with the final streamed usage', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const chunks = [
+            {
+                id: 'chunk-1',
+                object: 'chat.completion.chunk' as const,
+                created: 1,
+                model: 'openai/gpt-5.6-sol',
+                choices: [{ index: 0, finishReason: null, delta: { role: 'assistant' as const, content: 'Blue' } }],
+            },
+            {
+                id: 'chunk-2',
+                object: 'chat.completion.chunk' as const,
+                created: 1,
+                model: 'openai/gpt-5.6-sol',
+                choices: [{ index: 0, finishReason: 'stop', delta: {} }],
+                usage: {
+                    promptTokens: 10,
+                    completionTokens: 1,
+                    totalTokens: 11,
+                    promptTokensDetails: { cachedTokens: 4 },
+                    cost: 0.0004,
+                    isByok: false,
+                },
+            },
+        ];
+        const nativeStream = {
+            cancel: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+                yield* chunks;
+            },
+        };
+        setService(driver, { chat: { send: vi.fn(async () => nativeStream) } });
+
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Sky color?' }], {
+            model: 'openai/gpt-5.6-sol',
+        });
+        for await (const _chunk of stream) {
+            // Consume the stream so the final completion is assembled.
+        }
+
+        expect(stream.completion?.token_usage).toEqual({
+            prompt: 10,
+            prompt_cached: 4,
+            prompt_new: 6,
+            result: 1,
+            total: 11,
+            provider_cost_usd: 0.0004,
+        });
     });
 
     it('maps the native model catalog and excludes dedicated inference models', async () => {

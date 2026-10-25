@@ -1,4 +1,5 @@
 import type { Logger } from '@llumiverse/core';
+import { logModelRefusal, type RefusalLogContext } from './refusal-log.js';
 
 export function claudeFinishReason(reason: string | undefined): string | undefined {
     if (!reason) return undefined;
@@ -31,4 +32,14 @@ export function logClaudeTruncation(
     } else if (reason === 'model_context_window_exceeded') {
         logger.warn(details, '[Claude] Completion exceeded the model context window');
     }
+}
+
+/** Log a Claude `refusal` stop with the provider's `stop_details`. */
+export function logClaudeRefusal(
+    logger: Logger | undefined,
+    reason: string | null | undefined,
+    context: Pick<RefusalLogContext, 'provider' | 'model' | 'streaming' | 'response_id' | 'details'>,
+): void {
+    if (reason !== 'refusal') return;
+    logModelRefusal(logger, { ...context, finish_reason: claudeFinishReason(reason), provider_finish_reason: reason });
 }

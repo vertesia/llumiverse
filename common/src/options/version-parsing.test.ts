@@ -4,12 +4,16 @@ import {
     getGeminiModelVersion,
     getOpenAIReasoningEffortLevels,
     isClaudeVersionGTE,
+    isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
     isOpenAIGptVersionGTE,
+    isQwenVersionGte,
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
+    supportsClaudeForcedToolChoice,
     supportsEffort,
+    supportsMidConversationToolChanges,
 } from './version-parsing.js';
 
 describe('Claude model version parsing', () => {
@@ -35,7 +39,7 @@ describe('Claude model version parsing', () => {
         expect(parseClaudeVersion('claude-unknown-5')).toBeNull();
     });
 
-    it.each(['claude-fable-5', 'claude-mythos-5', 'claude-sonnet-5', 'claude-opus-4-8'])(
+    it.each(['claude-fable-5', 'claude-mythos-5', 'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-4-8'])(
         'advertises adaptive thinking and current effort levels for %s',
         (model) => {
             expect(supportsAdaptiveThinking(model)).toBe(true);
@@ -50,14 +54,43 @@ describe('Claude model version parsing', () => {
         },
     );
 
-    it('marks medium as the default effort for Opus 5.5', () => {
-        expect(getAvailableEffortLevels('claude-opus-5-5')).toEqual({
-            Low: 'low',
-            'Medium (default)': 'medium',
-            High: 'high',
-            'Extra High': 'xhigh',
-            Max: 'max',
-        });
+    it.each(['claude-haiku-5', 'claude-haiku-5-4', 'claude-opus-5', 'claude-opus-5-4', 'claude-opus-6'])(
+        'preserves high default effort below the Haiku boundary and for other generations: %s',
+        (model) => {
+            expect(getAvailableEffortLevels(model)).toHaveProperty('High (default)', 'high');
+            expect(getAvailableEffortLevels(model)).not.toHaveProperty('Medium (default)');
+        },
+    );
+
+    it.each(['claude-opus-5-5', 'claude-haiku-5-5', 'us.anthropic.claude-haiku-5-5', 'claude-haiku-6'])(
+        'marks medium as the default effort for %s',
+        (model) => {
+            expect(getAvailableEffortLevels(model)).toEqual({
+                Low: 'low',
+                'Medium (default)': 'medium',
+                High: 'high',
+                'Extra High': 'xhigh',
+                Max: 'max',
+            });
+        },
+    );
+});
+
+describe('Claude dotted versions from aggregators', () => {
+    it.each([
+        ['anthropic/claude-opus-4.6', { major: 4, minor: 6, variant: 'opus' }],
+        ['anthropic/claude-sonnet-4.6:batch', { major: 4, minor: 6, variant: 'sonnet' }],
+        ['anthropic/claude-3.7-sonnet', { major: 3, minor: 7, variant: 'sonnet' }],
+        ['claude-sonnet-4-20250514', { major: 4, minor: 0, variant: 'sonnet' }],
+    ])('parses %s', (model, expected) => {
+        expect(parseClaudeVersion(model)).toEqual(expected);
+    });
+
+    it('treats a dotted Claude 4.6+ model like its dashed form', () => {
+        expect(supportsEffort('anthropic/claude-opus-4.6')).toBe(supportsEffort('claude-opus-4-6'));
+        expect(getAvailableEffortLevels('anthropic/claude-opus-4.8')).toEqual(
+            getAvailableEffortLevels('claude-opus-4-8'),
+        );
     });
 });
 
@@ -139,5 +172,127 @@ describe('Gemini model version parsing', () => {
         expect(isGeminiModelVersionGte('gemini-3.10-flash', '3.5')).toBe(true);
         expect(isGeminiModelVersionGte('gemini-3.1-pro', '3.5')).toBe(false);
         expect(isGeminiModelVersionGte('gemini-4-pro', '3.5')).toBe(true);
+    });
+});
+
+describe('supportsMidConversationToolChanges', () => {
+    it.each([
+        'claude-opus-4-8',
+        'claude-opus-5',
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'claude-haiku-5-5',
+        'claude-fable-5',
+        'claude-fable-5-1',
+        'claude-mythos-5-1',
+        'us.anthropic.claude-sonnet-5-5',
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
+        'publishers/anthropic/models/claude-sonnet-5-5@20260901',
+        'claude-sonnet-6',
+        'claude-haiku-6',
+        'claude-opus-6',
+        'anthropic.claude-opus-4-8-v1:0',
+        'claude-opus-4-8@20260901',
+        'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
+        'claude-opus-4-10',
+        'claude-sonnet-5-6',
+        'claude-mythos-5',
+        'claude-fable-6',
+    ])('accepts %s', (model) => {
+        expect(supportsMidConversationToolChanges(model)).toBe(true);
+    });
+
+    it.each([
+        'claude-sonnet-5',
+        'claude-haiku-5',
+        'claude-opus-4-7',
+        'claude-sonnet-4-6',
+        'claude-haiku-4-5',
+        'claude-3-7-sonnet-20250219',
+        'claude-mythos-preview',
+        'gpt-5',
+        'claude-sonnet-5@20260901',
+        'claude-sonnet-5-20260901',
+        'claude-sonnet-5-v1:0',
+        'claude-opus-4',
+        'claude-opus-4-1',
+        'us.anthropic.claude-mythos-preview-v1:0',
+        'claude-mythos-preview-1',
+    ])('rejects %s', (model) => {
+        expect(supportsMidConversationToolChanges(model)).toBe(false);
+    });
+});
+
+describe('supportsClaudeForcedToolChoice', () => {
+    it.each([
+        'claude-opus-5-5',
+        'claude-sonnet-5-5',
+        'claude-sonnet-5-6',
+        'claude-opus-6',
+        'claude-sonnet-6',
+        'us.anthropic.claude-opus-5-5-v1:0',
+        'global.anthropic.claude-sonnet-5-5',
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5',
+        'publishers/anthropic/models/claude-sonnet-5-5@20260901',
+        'claude-opus-5-5@20260901',
+        'claude-fable-5-1',
+        'global.anthropic.claude-fable-5-1',
+        'claude-fable-6',
+        'claude-mythos-5-1',
+    ])('rejects a forced tool choice on %s', (model) => {
+        expect(supportsClaudeForcedToolChoice(model)).toBe(false);
+    });
+
+    it.each([
+        'claude-haiku-5-5',
+        'claude-haiku-6',
+        'claude-opus-5',
+        'claude-sonnet-5',
+        'claude-sonnet-5-20260901',
+        'claude-opus-4-8',
+        'claude-sonnet-4-6',
+        'claude-fable-5',
+        'global.anthropic.claude-fable-5',
+        'claude-mythos-5',
+        'eu.anthropic.claude-haiku-5-5-20261001-v1:0',
+        'anthropic.claude-opus-4-8-v1:0',
+        'claude-3-7-sonnet-20250219',
+        'gpt-5',
+    ])('accepts a forced tool choice on %s', (model) => {
+        expect(supportsClaudeForcedToolChoice(model)).toBe(true);
+    });
+});
+
+describe('Gemini long decode', () => {
+    it.each([
+        ['gemini-4-argon', true],
+        ['gemini-4-argon-cyber-permissive', true],
+        ['gemini-4-flash', true],
+        ['locations/global/publishers/google/models/gemini-5-pro', true],
+        ['gemini-3.8-flash', false],
+        ['gemini-4-flash-image', false],
+        ['gemini-4-flash-tts', false],
+        ['gemini-4-flash-live', false],
+        ['gemini-4-flash-native-audio', false],
+        ['gemini-4-flash-transcribe', false],
+        ['gemini-4-robotics', false],
+        ['gemini-embedding-4', false],
+    ])('classifies %s', (model, expected) => {
+        expect(isGeminiLongDecodeModel(model)).toBe(expected);
+    });
+});
+
+describe('Qwen model version parsing', () => {
+    it.each([
+        ['Qwen/Qwen3.5-9B', 3, 5, true],
+        ['qwen3.8-flash', 3, 8, true],
+        ['Qwen/Qwen4-Plus', 3, 8, true],
+        ['Qwen/Qwen3.7-Max', 3, 8, false],
+        // A dash starts the model size, not a minor version.
+        ['Qwen/Qwen3-235B-A22B-Instruct-2507-tput', 3, 5, false],
+        ['qwen/qwen3-32b', 3, 8, false],
+        ['llama-3.3-70b', 3, 0, false],
+    ] as const)('%s >= %d.%d is %s', (model, major, minor, expected) => {
+        expect(isQwenVersionGte(model, major, minor)).toBe(expected);
     });
 });

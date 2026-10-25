@@ -57,6 +57,7 @@ function createResponse(): OpenAI.Responses.Response {
     return {
         id: 'resp-test',
         object: 'response',
+        access_programs: null,
         created_at: 1,
         output_text: 'ok',
         error: null,
@@ -216,6 +217,7 @@ describe('BedrockMantleDriver model listing', () => {
             { id: 'google.gemma-4-31b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'google.gemma-5-70b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'zai.glm-5', object: 'model', created: 1783669008, owned_by: 'system' },
+            { id: 'deepseek.v3.2', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'amazon.titan-embed-text-v2:0', object: 'model', created: 1783669008, owned_by: 'system' },
         ] satisfies OpenAI.Models.Model[];
         const list = vi.fn<ModelsList>(async () => ({ data: modelFixtures }));
@@ -264,12 +266,17 @@ describe('BedrockMantleDriver model listing', () => {
                     input_modalities: ['text'],
                 }),
                 expect.objectContaining({
+                    id: 'deepseek.v3.2',
+                    name: 'DeepSeek V3.2',
+                    owner: 'DeepSeek',
+                }),
+                expect.objectContaining({
                     id: 'zai.glm-5',
                     owner: 'Z.AI',
                     provider: Providers.bedrock_mantle,
                     can_stream: true,
                     output_modalities: ['text'],
-                    tool_support: undefined,
+                    tool_support: true,
                 }),
             ]),
         );
@@ -384,6 +391,32 @@ describe('BedrockMantleDriver protocol execution', () => {
         );
     });
 
+    it.each([false, true])('logs Claude sampling exceptions before transport (stream=%s)', async (streaming) => {
+        const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+        const driver = new BedrockMantleDriver({ region: 'us-west-2', logger });
+        const transportError = new Error('test transport stopped');
+        const stream = vi.fn(() => {
+            throw transportError;
+        });
+        Reflect.set(driver, 'anthropicService', { messages: { stream } });
+        const model = 'anthropic.claude-haiku-5-5';
+        const options = {
+            model,
+            model_options: { _option_id: 'bedrock-mantle-claude' as const, temperature: 0.5, top_p: 0.8 },
+        };
+        const prompt = await driver.createPrompt(promptSegments, options);
+        await expect(
+            streaming
+                ? driver.requestTextCompletionStream(prompt, options)
+                : driver.requestTextCompletion(prompt, options),
+        ).rejects.toThrow(transportError);
+        expect(stream).toHaveBeenCalledOnce();
+        expect(logger.warn).toHaveBeenCalledWith(
+            { model, option_names: ['temperature', 'top_p'], reason: 'claude_sampling_restriction' },
+            'Model option compatibility exception changed caller input',
+        );
+    });
+
     it('executes Claude through the shared Messages helpers', async () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const message = {
@@ -393,6 +426,7 @@ describe('BedrockMantleDriver protocol execution', () => {
             model: 'anthropic.claude-haiku-4-5',
             content: [{ type: 'text', text: 'ok', citations: null }],
             container: null,
+            diagnostics: null,
             stop_details: null,
             stop_reason: 'end_turn',
             stop_sequence: null,
@@ -409,7 +443,12 @@ describe('BedrockMantleDriver protocol execution', () => {
             },
         } satisfies Anthropic.Message;
         const finalMessage = vi.fn(async () => message);
-        const stream = vi.fn(() => ({ finalMessage }));
+        const stream = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'message_start' as const, message };
+            },
+            finalMessage,
+        }));
         const messagesClient = { messages: { stream } };
         Reflect.set(driver, 'anthropicService', messagesClient);
         const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });
@@ -431,6 +470,54 @@ describe('BedrockMantleDriver protocol execution', () => {
         );
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
     });
+
+    it('labels Claude refusal logs with the Bedrock Mantle provider', async () => {
+        const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const driver = new BedrockMantleDriver({ region: 'us-west-2', logger });
+        const stopDetails = { type: 'refusal', category: 'cyber', explanation: 'Declined.' } as const;
+        const message = {
+            id: 'msg-refusal',
+            type: 'message',
+            role: 'assistant',
+            model: 'anthropic.claude-haiku-4-5',
+            content: [],
+            stop_details: stopDetails,
+            stop_reason: 'refusal',
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 0 },
+        } as unknown as Anthropic.Message;
+        const events = [
+            { type: 'message_start', message: { ...message, stop_reason: null, stop_details: null } },
+            {
+                type: 'message_delta',
+                delta: { stop_reason: 'refusal', stop_sequence: null, stop_details: stopDetails },
+                usage: { output_tokens: 0 },
+            },
+        ];
+        const stream = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                for (const event of events) yield event;
+            },
+            finalMessage: async () => message,
+        }));
+        Reflect.set(driver, 'anthropicService', { messages: { stream } });
+        const options = { model: 'anthropic.claude-haiku-4-5' };
+
+        await driver.requestTextCompletion(await driver.createPrompt(promptSegments, options), options);
+        for await (const _chunk of await driver.requestTextCompletionStream(
+            await driver.createPrompt(promptSegments, options),
+            options,
+        )) {
+            // drain
+        }
+
+        for (const streaming of [false, true]) {
+            expect(logger.info).toHaveBeenCalledWith(
+                expect.objectContaining({ provider: Providers.bedrock_mantle, streaming, details: stopDetails }),
+                '[Llumiverse] Model response refused or content-filtered',
+            );
+        }
+    });
 });
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {
@@ -444,47 +531,50 @@ class TestResponsesDriver extends OpenAIResponsesDriverBase {
 }
 
 describe('Bedrock Mantle Responses options', () => {
-    it('forwards verbosity alongside structured output format', async () => {
-        const create = vi.fn<ResponsesCreate>(async () => createResponse());
-        const driver = new TestResponsesDriver(create);
-        const prompt = [
-            { type: 'message', role: 'user', content: 'hello' },
-        ] satisfies OpenAI.Responses.ResponseInputItem[];
-        const result_schema = {
-            type: 'object' as const,
-            properties: { answer: { type: 'string' as const } },
-            required: ['answer'],
-        };
+    it.each(['openai.gpt-5.5', 'openai.gpt-5.6-sol', 'openai.gpt-6-astra', 'openai.gpt-6-luna', 'openai.gpt-6.1-sol'])(
+        'forwards effort and verbosity alongside structured output for %s',
+        async (model) => {
+            const create = vi.fn<ResponsesCreate>(async () => createResponse());
+            const driver = new TestResponsesDriver(create);
+            const prompt = [
+                { type: 'message', role: 'user', content: 'hello' },
+            ] satisfies OpenAI.Responses.ResponseInputItem[];
+            const result_schema = {
+                type: 'object' as const,
+                properties: { answer: { type: 'string' as const } },
+                required: ['answer'],
+            };
 
-        await driver.requestTextCompletion(prompt, {
-            model: 'openai.gpt-5.5',
-            model_options: {
-                _option_id: 'bedrock-mantle-responses',
-                max_tokens: 100,
-                effort: 'low',
-                verbosity: 'low',
-            },
-            result_schema,
-        });
-
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({
-                model: 'openai.gpt-5.5',
-                max_output_tokens: 100,
-                reasoning: { effort: 'low', summary: 'auto' },
-                include: ['reasoning.encrypted_content'],
-                text: expect.objectContaining({
+            await driver.requestTextCompletion(prompt, {
+                model,
+                model_options: {
+                    _option_id: 'bedrock-mantle-responses',
+                    max_tokens: 100,
+                    effort: 'low',
                     verbosity: 'low',
-                    format: {
-                        type: 'json_schema',
-                        name: 'format_output',
-                        strict: false,
-                        schema: result_schema,
-                    },
+                },
+                result_schema,
+            });
+
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    model,
+                    max_output_tokens: 100,
+                    reasoning: { effort: 'low', summary: 'auto' },
+                    include: ['reasoning.encrypted_content'],
+                    text: expect.objectContaining({
+                        verbosity: 'low',
+                        format: {
+                            type: 'json_schema',
+                            name: 'format_output',
+                            strict: false,
+                            schema: result_schema,
+                        },
+                    }),
                 }),
-            }),
-        );
-    });
+            );
+        },
+    );
 
     it('forwards Grok reasoning effort through the Responses API', async () => {
         const create = vi.fn<ResponsesCreate>(async () => createResponse());

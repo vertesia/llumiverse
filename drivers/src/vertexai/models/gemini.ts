@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import type { ApiError } from '@google/genai';
 import {
+    type Candidate,
     type Content,
     FinishReason,
     FunctionCallingConfigMode,
@@ -7,9 +9,12 @@ import {
     type FunctionResponsePart,
     type GenerateContentConfig,
     type GenerateContentParameters,
+    type GenerateContentResponse,
+    type GenerateContentResponsePromptFeedback,
     type GenerateContentResponseUsageMetadata,
     HarmBlockThreshold,
     HarmCategory,
+    MediaModality,
     Modality,
     type Part,
     ProminentPeople,
@@ -28,10 +33,13 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    type HttpTimeoutOptions,
+    hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
+    type Logger,
     ModelType,
     type PromptOptions,
     PromptRole,
@@ -49,7 +57,10 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
+import { assertConversationArray } from '../../shared/conversation-shape.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
+import { logModelOptionException } from '../../shared/model-option-exceptions.js';
+import { logModelRefusal } from '../../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -229,10 +240,43 @@ function getProminentPeopleOption(
     }
 }
 
+/** Vertex returns at most this many tokens per streamed request; a larger maxOutputTokens continues across requests. */
+const GEMINI_STREAM_REQUEST_MAX_OUTPUT_TOKENS = 65_536;
+/** Vertex bounds each streamed long-decode request at 20 minutes; leave a minute for transport overhead. */
+const GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS = 21 * 60_000;
+
+function hasResponseTimeout(httpTimeout: HttpTimeoutOptions | undefined): boolean {
+    return httpTimeout?.headersTimeout !== undefined || httpTimeout?.bodyTimeout !== undefined;
+}
+
+/**
+ * Exception for streamed long decodes: the SDK applies its timeout to each continuation request, and Vertex allows a
+ * streamed one up to 20 minutes, longer than the built-in driver deadline. Unary continuation requests are bounded at
+ * 10 minutes and need no change. A response timeout supplied in the driver options or for this call is caller input
+ * and stays as given.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
+ */
+export function applyGeminiLongDecodeStreamTimeout(
+    driver: Pick<VertexAIDriver, 'options' | 'getRequestTimeoutMs'>,
+    options: Pick<ExecutionOptions, 'httpTimeout'>,
+    payload: GenerateContentParameters,
+): void {
+    const maxOutputTokens = payload.config?.maxOutputTokens;
+    if (!maxOutputTokens || maxOutputTokens <= GEMINI_STREAM_REQUEST_MAX_OUTPUT_TOKENS) return;
+    if (hasResponseTimeout(driver.options.httpTimeout) || hasResponseTimeout(options.httpTimeout)) return;
+    // The built-in default is shorter today; never lower it if that changes.
+    if (driver.getRequestTimeoutMs() >= GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS) return;
+    payload.config = {
+        ...payload.config,
+        httpOptions: { ...payload.config?.httpOptions, timeout: GEMINI_LONG_DECODE_STREAM_TIMEOUT_MS },
+    };
+}
+
 export function getGeminiPayload(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
     operation: LlumiverseErrorContext['operation'] = 'execute',
+    logger?: Logger,
 ): GenerateContentParameters {
     const model_options = options.model_options as
         | (VertexAIGeminiOptions & {
@@ -265,22 +309,40 @@ export function getGeminiPayload(
     // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
     // which would otherwise trip Gemini's functionCall/functionResponse pairing.
     if (payloadContents) {
-        payloadContents = fixOrphanedToolResults(payloadContents);
+        payloadContents = stripGeneratedFunctionCallIds(fixOrphanedToolResults(payloadContents));
     }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
+    const isNanoBanana = options.model.toLowerCase().includes('gemini-nano-banana');
+    const isImageModel = options.model.toLowerCase().includes('image') || isNanoBanana;
+    // Compatibility exception: existing image requests omit these generation controls.
+    if (isImageModel) {
+        logModelOptionException(
+            logger,
+            options.model,
+            model_options,
+            ['top_k', 'seed', 'presence_penalty', 'frequency_penalty'],
+            'gemini_image_generation_options',
+        );
+    }
+    // Compatibility exception: existing Nano Banana requests omit sampling controls.
+    if (isNanoBanana) {
+        logModelOptionException(logger, options.model, model_options, ['temperature', 'top_p'], 'nano_banana_sampling');
+    }
+    const thinkingConfig = geminiThinkingConfig(options, logger);
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
         responseModalities: [Modality.TEXT, Modality.IMAGE], // This is an error if only Text, and Only Image just gets blank responses.
         candidateCount: 1,
         //Model options
-        temperature: model_options?.temperature,
-        topP: model_options?.top_p,
+        // Nano Banana 2.1 does not accept sampling parameters.
+        temperature: isNanoBanana ? undefined : model_options?.temperature,
+        topP: isNanoBanana ? undefined : model_options?.top_p,
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
-        thinkingConfig: geminiThinkingConfig(options),
+        thinkingConfig,
         labels: options.labels,
         imageConfig: {
             imageSize: model_options?.image_size,
@@ -292,6 +354,8 @@ export function getGeminiPayload(
         },
     };
 
+    // Restrict only our generated candidate count; explicit sampling options pass through for provider validation.
+    const restrictSampling = hasGeminiSamplingRestriction(options.model);
     const config: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -311,7 +375,8 @@ export function getGeminiPayload(
                   },
               }
             : undefined,
-        candidateCount: 1,
+        // Compatibility exception: retain the single-candidate contract on models that accept it.
+        candidateCount: restrictSampling ? undefined : 1,
         //JSON/Structured output
         responseMimeType: useStructuredOutput ? 'application/json' : undefined,
         responseJsonSchema: useStructuredOutput ? options.result_schema : undefined,
@@ -324,14 +389,14 @@ export function getGeminiPayload(
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
-        thinkingConfig: geminiThinkingConfig(options),
+        thinkingConfig,
         labels: options.labels,
     };
 
     return {
         model: options.model,
         contents: payloadContents,
-        config: options.model.toLowerCase().includes('image') ? configNanoBanana : config,
+        config: isImageModel ? configNanoBanana : config,
     };
 }
 
@@ -374,11 +439,12 @@ function finalizeGeminiConversation(
 ): GenerateContentPrompt['contents'] {
     const completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
     const previousMeta = getConversationMeta(options.conversation);
-    const metadata = {
+    const metadata: ReturnType<typeof getConversationMeta> = {
         ...previousMeta,
         turnNumber: previousMeta.turnNumber + (assistantContent ? 1 : 0),
-        geminiToolIds: 'turn-index-v1' as const,
     };
+    // New turns store call IDs directly. Keep the old scheme only while recovering an older turn.
+    if (assistantContent) delete metadata.geminiToolIds;
     const marked = setConversationMeta(completed, metadata);
     const currentTurn = metadata.turnNumber;
     const preserveSubtree = (value: unknown): boolean => {
@@ -399,7 +465,6 @@ function finalizeGeminiConversation(
         currentTurn,
         preserveSubtree,
     });
-    // The workflow reconstructs position-based IDs from metadata, leaving signed Parts untouched.
     return storeSystemInConversation(processed, system) as Content[];
 }
 
@@ -421,27 +486,51 @@ function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
     }
 }
 
-/** Gemini identifies function responses by name, but parallel calls need distinct workflow IDs. */
-function geminiToolUseId(name: string, turn: number, index: number, nativeId?: string): string {
-    return `gemini-tool-call:${turn}:${index}:${encodeURIComponent(nativeId ?? '')}:${name}`;
+/**
+ * Prefix of the function-call ids llumiverse generates when Vertex returns a call without one.
+ * Vertex never sees these: {@link stripGeneratedFunctionCallIds} removes them from each request.
+ */
+export const GEMINI_GENERATED_CALL_ID_PREFIX = 'llumiverse_call_';
+
+/** Function-call ids already present in a Gemini conversation. */
+function collectFunctionCallIds(contents: Content[]): Set<string> {
+    const ids = new Set<string>();
+    for (const content of contents) {
+        for (const part of content.parts ?? []) {
+            if (part.functionCall?.id) ids.add(part.functionCall.id);
+        }
+    }
+    return ids;
 }
 
-function geminiToolName(id: string): string {
-    return /^gemini-tool-call:\d+:\d+:[^:]*:(.+)$/.exec(id)?.[1] ?? id;
+/**
+ * Give every functionCall part an id that is unique within the conversation, in place.
+ *
+ * The id is what the driver returns as `ToolUse.id`, and it stays on the stored functionCall part,
+ * so a tool result can be paired with its call later (see {@link resolveFunctionResponseTarget}).
+ * Vertex's own call id is kept when it has not been used before. A call without one, or with one
+ * that repeats an earlier call's id, gets a generated id instead. Name-based ids would collide when
+ * the model calls one tool more than once in a turn.
+ */
+function assignFunctionCallIds(parts: Part[] | undefined, usedIds: Set<string>): void {
+    for (const part of parts ?? []) {
+        const call = part.functionCall;
+        if (!call) continue;
+        if (!call.id || usedIds.has(call.id)) {
+            call.id = `${GEMINI_GENERATED_CALL_ID_PREFIX}${randomUUID()}`;
+        }
+        usedIds.add(call.id);
+    }
 }
 
-function geminiResponseId(id: string): string | undefined {
-    const nativeId = /^gemini-tool-call:\d+:\d+:([^:]*):.+$/.exec(id)?.[1];
-    return nativeId ? decodeURIComponent(nativeId) : undefined;
-}
-
-function collectToolUseParts(content: Content, turn: number, firstIndex = 0): ToolUse[] | undefined {
+/** Build the ToolUse list for a model turn whose functionCall parts already carry their ids. */
+function collectToolUseParts(content: Content): ToolUse[] | undefined {
     const out: ToolUse[] = [];
     const parts = content.parts ?? [];
     for (const part of parts) {
         if (part.functionCall) {
             const toolUse: ToolUse = {
-                id: geminiToolUseId(part.functionCall.name ?? '', turn, firstIndex + out.length, part.functionCall.id),
+                id: part.functionCall.id ?? part.functionCall.name ?? '',
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
             };
@@ -454,6 +543,71 @@ function collectToolUseParts(content: Content, turn: number, firstIndex = 0): To
         }
     }
     return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Find the call a tool result answers: the function name it must be sent under, and the call id
+ * to echo when the call has one.
+ *
+ * Conversations stored before tool-use ids were unique used the function name as the id and carry
+ * no matching call id, so an unmatched `tool_use_id` is still sent as the name.
+ */
+function resolveFunctionResponseTarget(
+    toolUseId: string,
+    callsById: ReadonlyMap<string, string>,
+): { id?: string; name: string } {
+    const name = callsById.get(toolUseId);
+    if (name !== undefined) return { id: toolUseId, name };
+    // Accept results saved by the former turn/position ID scheme without sending that ID to Vertex.
+    const legacy = /^gemini-tool-call:\d+:\d+:([^:]*):(.+)$/.exec(toolUseId);
+    if (legacy) return { name: legacy[2], ...(legacy[1] ? { id: decodeURIComponent(legacy[1]) } : {}) };
+    return { name: toolUseId };
+}
+
+/** Map every functionCall id in the conversation to its function name. */
+function functionCallNamesById(contents: Content[]): Map<string, string> {
+    const names = new Map<string, string>();
+    for (const content of contents) {
+        for (const part of content.parts ?? []) {
+            const call = part.functionCall;
+            if (call?.id && call.name) names.set(call.id, call.name);
+        }
+    }
+    return names;
+}
+
+function isGeneratedFunctionCallId(id: string | undefined): boolean {
+    return !!id && id.startsWith(GEMINI_GENERATED_CALL_ID_PREFIX);
+}
+
+/**
+ * Remove generated call ids from the contents sent to Vertex, without touching the stored ones.
+ * Vertex only ever receives call ids it issued; parts that had none pair by name and position as
+ * they always have.
+ */
+export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
+    return contents.map((content) => {
+        const hasGeneratedId = content.parts?.some(
+            (part) =>
+                isGeneratedFunctionCallId(part.functionCall?.id) ||
+                isGeneratedFunctionCallId(part.functionResponse?.id),
+        );
+        if (!hasGeneratedId) return content;
+        return {
+            ...content,
+            parts: content.parts?.map((part) => {
+                if (isGeneratedFunctionCallId(part.functionCall?.id)) {
+                    const { id: _generated, ...functionCall } = part.functionCall ?? {};
+                    return { ...part, functionCall };
+                }
+                if (isGeneratedFunctionCallId(part.functionResponse?.id)) {
+                    const { id: _generated, ...functionResponse } = part.functionResponse ?? {};
+                    return { ...part, functionResponse };
+                }
+                return part;
+            }),
+        };
+    });
 }
 
 /** True when `content` is a user turn holding nothing but functionResponse parts. */
@@ -489,12 +643,12 @@ export function mergeFunctionResponseContents(contents: Content[]): Content[] {
 }
 
 /**
- * Drop functionResponse parts whose name has no matching functionCall in the
- * immediately-preceding `model` content. Gemini pairs a functionResponse to its
- * functionCall by name; a response left dangling after its call was dropped
- * (e.g. by conversation compaction/trimming, or an unmergeable parallel batch)
- * causes the API to reject the request. Mirrors the same guard added to the
- * Claude, Bedrock, and OpenAI drivers.
+ * Drop functionResponse parts that have no matching functionCall in the immediately-preceding
+ * `model` content. A response that carries a call id must match a call with that id; one without
+ * an id (conversations stored before tool-use ids were unique) matches by function name. A response
+ * left dangling after its call was dropped (e.g. by conversation compaction/trimming, or an
+ * unmergeable parallel batch) causes the API to reject the request. Mirrors the same guard added to
+ * the Claude, Bedrock, and OpenAI drivers.
  *
  * The matching model call set remains active across a run of user function-response contents, so
  * split parallel tool results are not mistaken for orphans even when this runs on contents that
@@ -504,28 +658,34 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
     if (contents.length === 0) return contents;
     const result: Content[] = [];
     let allowedNames = new Set<string>();
+    let allowedIds = new Set<string>();
+    const isAnswerToPrecedingCall = (part: Part): boolean => {
+        const response = part.functionResponse;
+        if (!response) return true;
+        return response.id ? allowedIds.has(response.id) : allowedNames.has(response.name ?? '');
+    };
     for (const content of contents) {
         if (content.role === 'model') {
-            allowedNames = new Set(
-                (content.parts ?? []).flatMap((part) => (part.functionCall?.name ? [part.functionCall.name] : [])),
-            );
+            const calls = (content.parts ?? []).flatMap((part) => (part.functionCall ? [part.functionCall] : []));
+            allowedNames = new Set(calls.flatMap((call) => (call.name ? [call.name] : [])));
+            allowedIds = new Set(calls.flatMap((call) => (call.id ? [call.id] : [])));
             result.push(content);
             continue;
         }
         if (content.role !== 'user' || !content.parts) {
             allowedNames = new Set();
+            allowedIds = new Set();
             result.push(content);
             continue;
         }
         const hasFunctionResponse = content.parts.some((part) => part.functionResponse);
         if (!hasFunctionResponse) {
             allowedNames = new Set();
+            allowedIds = new Set();
             result.push(content);
             continue;
         }
-        const filtered = content.parts.filter((part) =>
-            part.functionResponse ? allowedNames.has(part.functionResponse.name ?? '') : true,
-        );
+        const filtered = content.parts.filter(isAnswerToPrecedingCall);
         // Drop the content if every part was an orphaned functionResponse.
         if (filtered.length === 0) continue;
         result.push(filtered.length === content.parts.length ? content : { ...content, parts: filtered });
@@ -535,6 +695,8 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
 
 const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
+    // The SDK continues long decodes itself; a CONTINUATION left on the final response means it could not resume.
+    FinishReason.CONTINUATION,
     FinishReason.STOP,
     FinishReason.FINISH_REASON_UNSPECIFIED,
 ];
@@ -600,15 +762,17 @@ function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGemini
     return 8192;
 }
 
-export function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
+export function geminiThinkingConfig(option: StatelessExecutionOptions, logger?: Logger): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
 
-    // If thinking options are explicitly set in model options, use them directly
+    // Compatibility exception: preserve summary output by default when thinking is explicitly configured.
     const include_thoughts = model_options?.include_thoughts !== false;
+    // Compatibility exception: native thinking controls take precedence over generic effort.
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
-        if (model_options.thinking_budget_tokens === 0 && !model_options.thinking_level) return undefined;
+        logModelOptionException(logger, option.model, model_options, ['effort'], 'gemini_native_thinking_precedence');
         return {
-            includeThoughts: true,
+            // Default summaries off for a zero budget; preserve explicit caller choices for provider validation.
+            includeThoughts: model_options.include_thoughts ?? model_options.thinking_budget_tokens !== 0,
             ...(model_options.thinking_budget_tokens !== undefined && {
                 thinkingBudget: model_options.thinking_budget_tokens,
             }),
@@ -616,7 +780,7 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions): Thinkin
         };
     }
     if (model_options?.effort) {
-        if (isGeminiModelVersionGte(option.model, '3.0')) {
+        if (option.model.includes('gemini-nano-banana') || isGeminiModelVersionGte(option.model, '3.0')) {
             return {
                 includeThoughts: include_thoughts,
                 thinkingLevel: geminiThinkingLevelForEffort(model_options.effort),
@@ -638,15 +802,110 @@ function isFileAudioModel(model: string): boolean {
     return /(?:tts|transcribe)/.test(model) && !/(?:live|native-audio)/.test(model);
 }
 
+/** Finish reasons where Gemini refused or filtered the response on policy grounds. */
+const geminiRefusalFinishReasons = new Set<FinishReason>([
+    FinishReason.SAFETY,
+    FinishReason.RECITATION,
+    FinishReason.BLOCKLIST,
+    FinishReason.PROHIBITED_CONTENT,
+    FinishReason.SPII,
+    FinishReason.IMAGE_SAFETY,
+    FinishReason.IMAGE_PROHIBITED_CONTENT,
+    FinishReason.IMAGE_RECITATION,
+]);
+
+type GeminiRefusalLogContext = { logger: Logger; provider: string; model: string; streaming: boolean };
+
+function logGeminiCandidateRefusal(
+    context: GeminiRefusalLogContext,
+    candidate: Candidate,
+    responseId: string | undefined,
+): void {
+    if (!candidate.finishReason || !geminiRefusalFinishReasons.has(candidate.finishReason)) return;
+    // Keep the provider's safety metadata, but not generated output or request-derived grounding data.
+    const {
+        content: _content,
+        groundingMetadata: _grounding,
+        logprobsResult: _logprobs,
+        urlContextMetadata: _urlContext,
+        ...details
+    } = candidate;
+    const { logger, ...logContext } = context;
+    logModelRefusal(logger, {
+        ...logContext,
+        finish_reason: normalizeGeminiFinishReason(candidate.finishReason),
+        provider_finish_reason: candidate.finishReason,
+        response_id: responseId,
+        details,
+    });
+}
+
+function logGeminiPromptBlocked(
+    context: GeminiRefusalLogContext,
+    promptFeedback: GenerateContentResponsePromptFeedback | undefined,
+    responseId: string | undefined,
+): void {
+    if (!promptFeedback?.blockReason) return;
+    const { logger, ...logContext } = context;
+    logModelRefusal(logger, {
+        ...logContext,
+        // The stream returns blockReason as its finish reason; execute returns none.
+        finish_reason: logContext.streaming ? promptFeedback.blockReason : undefined,
+        provider_finish_reason: promptFeedback.blockReason,
+        response_id: responseId,
+        details: promptFeedback,
+    });
+}
+
+/** Log refusals for every candidate, or the prompt block when the response has no candidates. */
+function logGeminiResponseRefusals(
+    context: GeminiRefusalLogContext,
+    response: Pick<GenerateContentResponse, 'candidates' | 'promptFeedback' | 'responseId'>,
+): void {
+    if (!response.candidates?.length) {
+        logGeminiPromptBlocked(context, response.promptFeedback, response.responseId);
+        return;
+    }
+    for (const candidate of response.candidates) {
+        logGeminiCandidateRefusal(context, candidate, response.responseId);
+    }
+}
+
 function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): string | undefined {
     switch (finishReason) {
         case FinishReason.MAX_TOKENS:
+        case FinishReason.CONTINUATION:
             return 'length';
         case FinishReason.STOP:
             return 'stop';
         default:
             return finishReason;
     }
+}
+
+// Gemini 2.5 Flash Image left this rule when it moved from preview to GA with regional endpoints.
+function isGlobalOnlyGeminiImageModel(model: string): boolean {
+    return model.includes('gemini-nano-banana');
+}
+
+/**
+ * Gemini models without single-region endpoints: Nano Banana is served only from `global`, and Gemini 4+
+ * chat models from `global` and the `us`/`eu` multi-regions. Dedicated speech, transcription, live and image variants
+ * keep their own endpoints. Listing and request routing both use this rule.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+ */
+export function isGeminiWithoutRegionalEndpoints(model: string): boolean {
+    return (
+        isGlobalOnlyGeminiImageModel(model) ||
+        (isGeminiModelVersionGte(model, '4.0') && !/(?:tts|transcribe|live|native-audio|image)/.test(model))
+    );
+}
+
+/** A request without a location goes to `global`; a caller-named Gemini 4 multi-region location is kept. */
+export function resolveGeminiRegion(model: string, explicitRegion: string | undefined): string | undefined {
+    if (isGlobalOnlyGeminiImageModel(model)) return 'global';
+    if (explicitRegion === undefined && isGeminiWithoutRegionalEndpoints(model)) return 'global';
+    return explicitRegion;
 }
 
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
@@ -700,6 +959,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let system: Content | undefined = { role: 'user', parts: [] }; // Single content block for system messages
 
         const safety: Content[] = [];
+        // Media an earlier turn inlined is still in the history sent with this request.
+        const inlineBudget: InlineMediaBudget = { bytes: conversationInlineBytes(options.conversation) };
+        const callNamesById = functionCallNamesById(unwrapConversationArray<Content>(options.conversation) ?? []);
 
         for (const msg of segments) {
             // Role specific handling
@@ -726,14 +988,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // what it just asked for.
                 const responseParts: FunctionResponsePart[] = [];
                 for (const f of msg.files ?? []) {
-                    responseParts.push(await fileToMediaPart(f));
+                    responseParts.push(await fileToMediaPart(f, inlineBudget));
                 }
-                const responseId = geminiResponseId(msg.tool_use_id);
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
                     functionResponse: {
-                        name: geminiToolName(msg.tool_use_id),
-                        ...(responseId && { id: responseId }),
+                        ...resolveFunctionResponseTarget(msg.tool_use_id, callNamesById),
                         response: formatFunctionResponse(msg.content || ''),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
@@ -757,7 +1017,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        parts.push(await fileToMediaPart(f));
+                        parts.push(await fileToMediaPart(f, inlineBudget));
                     }
                 }
 
@@ -847,6 +1107,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             tokenUsage.result = undefined; // If no result, mark as undefined
         }
 
+        // Generated images are part of the candidate tokens, priced at their own rate.
+        const imageTokens = usageMetadata.candidatesTokensDetails?.find(
+            (detail) => detail.modality === MediaModality.IMAGE,
+        )?.tokenCount;
+        if (imageTokens) {
+            tokenUsage.result_image = imageTokens;
+        }
+
         return tokenUsage;
     }
 
@@ -856,6 +1124,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'execute',
+        });
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
@@ -905,6 +1178,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     : prompt.contents,
                 config,
             });
+            logGeminiResponseRefusals(
+                { logger: driver.logger, provider: driver.provider, model: options.model, streaming: false },
+                response,
+            );
             const parts = response.candidates?.[0]?.content?.parts ?? [];
             const hasText = parts.some((part) => part.text);
             const results: CompletionResult[] = [];
@@ -976,10 +1253,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes('gemini-2.5-flash-image')) {
-            region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
-        }
+        region = resolveGeminiRegion(options.model, region);
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
@@ -989,7 +1263,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'execute');
+        const payload = getGeminiPayload(options, prompt, 'execute', driver.logger);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
@@ -1010,6 +1284,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let finalContent: Content | undefined;
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
         const candidate = response.candidates?.[0];
+        const refusalLogContext = {
+            logger: driver.logger,
+            provider: driver.provider,
+            model: options.model,
+            streaming: false,
+        };
+        logGeminiResponseRefusals(refusalLogContext, response);
         if (candidate) {
             finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
             const content = candidate.content;
@@ -1019,7 +1300,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
 
             if (content) {
-                tool_use = collectToolUseParts(content, getConversationMeta(options.conversation).turnNumber + 1);
+                assignFunctionCallIds(content.parts, collectFunctionCallIds(conversation));
+                tool_use = collectToolUseParts(content);
 
                 // For recoverable tool call issues, log warning but continue processing
                 // The workflow will handle the invalid tool call gracefully.
@@ -1062,6 +1344,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        assertConversationArray(options.conversation, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'stream',
+        });
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
@@ -1083,9 +1370,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        if (options.model.includes('gemini-2.5-flash-image')) {
-            region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
-        }
+        region = resolveGeminiRegion(options.model, region);
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
@@ -1095,8 +1380,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'stream');
+        const payload = getGeminiPayload(options, prompt, 'stream', driver.logger);
         payload.config = { ...payload.config, abortSignal: signal };
+        applyGeminiLongDecodeStreamTimeout(driver, options, payload);
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,
@@ -1109,8 +1395,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const response = cacheExecution.value;
 
         const nativeParts: Part[] = [];
+        // A functionCall part always arrives complete in one chunk, so each gets its id on arrival.
+        const usedCallIds = collectFunctionCallIds(conversation);
+        const refusalLogContext = {
+            logger: driver.logger,
+            provider: driver.provider,
+            model: options.model,
+            streaming: true,
+        };
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
+            logGeminiResponseRefusals(refusalLogContext, item);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
                     let tool_use: ToolUse[] | undefined;
@@ -1118,15 +1413,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
                     const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
                     if (candidate.content?.role === 'model') {
-                        const firstToolIndex = nativeParts.filter((part) => part.functionCall).length;
+                        assignFunctionCallIds(candidate.content.parts, usedCallIds);
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
                         // Collect all parts in order (text and images)
                         const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
-                        tool_use = collectToolUseParts(
-                            candidate.content,
-                            getConversationMeta(options.conversation).turnNumber + 1,
-                            firstToolIndex,
-                        );
+                        tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = 'tool_use';
                             // Log warning for recoverable tool call issues — see the
@@ -1470,14 +1761,90 @@ type GeminiMediaPart =
     | { fileData: { fileUri: string; mimeType?: string } }
     | { inlineData: { data: string; mimeType?: string } };
 
-async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
+/**
+ * Largest source read for inline media, matching Gemini's 100 MB inline file limit; anything bigger
+ * must be passed as a gs:// URI. An uncapped source is buffered whole and then base64-encoded in the
+ * caller's heap: a few-hundred-MB video from a non-GCS bucket exhausted the host process before the
+ * request was ever sent.
+ */
+export const GEMINI_INLINE_MEDIA_MAX_BYTES = 100_000_000;
+
+/**
+ * Largest total of inline media read for one request. The per-file cap alone does not bound the heap:
+ * every inlined file is held as base64 (4/3 of its size) until the request is sent, and serializing the
+ * request copies it again. A handful of files under the per-file cap can pass V8's maximum string length
+ * or exhaust the host process, so past this total the remaining files must be gs:// URIs. The total counts
+ * the inline media still in the conversation history, which is sent with the request too.
+ */
+export const GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES = 150_000_000;
+
+/** Decoded size of the base64 inline media earlier turns left in a conversation's history. */
+export function conversationInlineBytes(value: unknown, seen: Set<object> = new Set()): number {
+    // Binary buffers hold no base64 parts, and walking one would visit every byte.
+    if (!value || typeof value !== 'object' || ArrayBuffer.isView(value) || seen.has(value)) {
+        return 0;
+    }
+    seen.add(value);
+    const data = (value as { inlineData?: { data?: unknown } }).inlineData?.data;
+    if (typeof data === 'string') {
+        return Math.floor((data.length * 3) / 4);
+    }
+    let bytes = 0;
+    for (const child of Array.isArray(value) ? value : Object.values(value)) {
+        bytes += conversationInlineBytes(child, seen);
+    }
+    return bytes;
+}
+
+/** Inline bytes read so far for one request. */
+interface InlineMediaBudget {
+    bytes: number;
+}
+
+/** Stop reading, and cancel the source, as soon as it passes the per-file or per-request inline budget. */
+function boundedInlineStream(
+    source: ReadableStream<Uint8Array | string>,
+    name: string,
+    budget: InlineMediaBudget,
+): ReadableStream<Uint8Array | string> {
+    let bytes = 0;
+    return source.pipeThrough(
+        new TransformStream<Uint8Array | string, Uint8Array | string>({
+            transform(chunk, controller) {
+                const size = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+                bytes += size;
+                budget.bytes += size;
+                if (bytes > GEMINI_INLINE_MEDIA_MAX_BYTES) {
+                    throw new Error(
+                        `Media file ${name} exceeds the ${GEMINI_INLINE_MEDIA_MAX_BYTES} byte limit for inline ` +
+                            'Gemini input; provide it as a gs:// URI instead',
+                    );
+                }
+                if (budget.bytes > GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES) {
+                    throw new Error(
+                        `Inline media for this request exceeds the ${GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES} byte ` +
+                            `limit at ${name}; provide the larger files as gs:// URIs instead`,
+                    );
+                }
+                controller.enqueue(chunk);
+            },
+        }),
+    );
+}
+
+async function fileToMediaPart(file: DataSource, budget: InlineMediaBudget): Promise<GeminiMediaPart> {
     const fileUri = await file.getURI();
     if (fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/')) {
         return { fileData: { fileUri, mimeType: file.mime_type } };
     }
     const source = await file.getStream();
+    // Audio keeps its tighter per-file cap and still counts toward the request total.
     const data = await readStreamAsBase64(
-        file.mime_type.startsWith('audio/') ? boundedAudioStream(source, 25_000_000) : source,
+        boundedInlineStream(
+            file.mime_type.startsWith('audio/') ? boundedAudioStream(source, 25_000_000) : source,
+            file.name,
+            budget,
+        ),
     );
     return { inlineData: { data, mimeType: file.mime_type } };
 }

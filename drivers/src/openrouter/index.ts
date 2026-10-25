@@ -24,9 +24,9 @@ import type {
     ProviderPreferences,
 } from '@openrouter/sdk/models';
 import type { Input as OpenRouterEmbeddingInput } from '@openrouter/sdk/models/operations';
+import type { OpenRouterDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsRequestMessage,
     type OpenAIChatCompletionsResponse,
@@ -36,13 +36,7 @@ import {
 } from '../openai/openai_chat_completions.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
-export interface OpenRouterDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint?: string;
-    httpReferer?: string;
-    appTitle?: string;
-    appCategories?: string;
-}
+export type { OpenRouterDriverOptions } from '../driver-options.js';
 
 /** OpenRouter transport backed by the provider's native TypeScript SDK. */
 export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouterDriverOptions> {
@@ -54,7 +48,7 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
         super({
             ...options,
             resultSchemaMode: 'response_format',
-            includeResultSchemaInPromptForModel: (model) => /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model),
+            includeResultSchemaInPromptForModel: supplementsResultSchemaInPrompt,
             toolSchemaMode: 'compatible',
         });
         if (!options.apiKey) {
@@ -390,6 +384,7 @@ function normalizeOpenRouterResponse(response: ChatResult): OpenAIChatCompletion
             message: {
                 role: choice.message.role,
                 content: fromOpenRouterContent(choice.message.content),
+                refusal: choice.message.refusal,
                 reasoning: choice.message.reasoning,
                 tool_calls: choice.message.toolCalls?.map((toolCall) => ({
                     id: toolCall.id,
@@ -423,6 +418,7 @@ async function* normalizeOpenRouterStream(
                 delta: {
                     role: choice.delta.role,
                     content: choice.delta.content,
+                    refusal: choice.delta.refusal,
                     reasoning: choice.delta.reasoning,
                     tool_calls: choice.delta.toolCalls?.map((toolCall) => ({
                         index: toolCall.index,
@@ -437,14 +433,24 @@ async function* normalizeOpenRouterStream(
     }
 }
 
-function normalizeOpenRouterChatUsage(usage: ChatUsage | undefined): OpenAIChatCompletionsResponse['usage'] {
-    return usage
-        ? {
-              prompt_tokens: usage.promptTokens,
-              completion_tokens: usage.completionTokens,
-              total_tokens: usage.totalTokens,
-          }
-        : undefined;
+function normalizeOpenRouterChatUsage(usage: ChatUsage | undefined | null): OpenAIChatCompletionsResponse['usage'] {
+    if (!usage) return undefined;
+    const details = usage.promptTokensDetails;
+    return {
+        prompt_tokens: usage.promptTokens,
+        completion_tokens: usage.completionTokens,
+        total_tokens: usage.totalTokens,
+        ...(details
+            ? {
+                  prompt_tokens_details: {
+                      cached_tokens: details.cachedTokens,
+                      cache_write_tokens: details.cacheWriteTokens,
+                  },
+              }
+            : {}),
+        ...(typeof usage.cost === 'number' ? { cost: usage.cost } : {}),
+        ...(usage.isByok !== undefined ? { is_byok: usage.isByok } : {}),
+    };
 }
 
 function fromOpenRouterContent(
@@ -481,6 +487,17 @@ function asOpenRouterChatResult(response: ChatResult | OpenRouterChatStream): Ch
 function asOpenRouterChatStream(response: ChatResult | OpenRouterChatStream): OpenRouterChatStream {
     if (Symbol.asyncIterator in response) return response;
     throw new TypeError('OpenRouter returned a non-streaming result for a streaming chat request');
+}
+
+/**
+ * Prompt-schema supplement for families whose native structured output is unreliable on OpenRouter.
+ * - GLM 5.3 returns unconstrained prose despite `response_format`.
+ * - MiniMax: OpenRouter routes MiniMax models across many hosts, and most do not support `json_schema`
+ *   (some downgrade it to JSON mode, which yields `{}`; others ignore `response_format`). The prompt schema
+ *   gives every host the shape while hosts that do enforce the schema still receive it natively.
+ */
+function supplementsResultSchemaInPrompt(model: string): boolean {
+    return /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model) || /^minimax\//i.test(model);
 }
 
 function isOpenRouterChatModel(model: OpenRouterModel, provider: Providers): boolean {

@@ -28,6 +28,14 @@ export const ReasoningEffortSchema = z
     .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
     .meta({ id: 'ReasoningEffort' });
 
+const ClaudeThinkingModeSchema = z
+    .enum(['adaptive', 'between_tools'])
+    .describe(
+        'Thinking mode override. Sonnet 5.5 supports between_tools at low, medium, or high effort. ' +
+            'It omits display and budget fields; keep effort fixed during the conversation. ' +
+            'When unset, existing model-specific thinking behavior is preserved.',
+    );
+
 const ServiceTierSchema = z
     .string()
     .min(1)
@@ -65,10 +73,12 @@ export const AnthropicClaudeOptionsSchema = z
         top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        speed: z.enum(['standard', 'fast']).optional(),
     })
     .meta({ id: 'AnthropicClaudeOptions' });
 
@@ -115,7 +125,8 @@ export const MistralTextOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-        effort: z.enum(['none', 'high']).optional(),
+        // Mistral's own models take none/high; hosted models such as GLM 5.3 take low/high/max.
+        effort: ReasoningEffortSchema.optional(),
         random_seed: z.number().int().optional(),
         safe_prompt: z.boolean().optional(),
         parallel_tool_calls: z.boolean().optional(),
@@ -134,6 +145,9 @@ export const BedrockConverseOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        effort: ReasoningEffortSchema.optional(),
+        reasoning_effort: ReasoningEffortSchema.optional(),
+        verbosity: z.enum(['low', 'medium', 'high']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
     })
@@ -142,6 +156,7 @@ export const BedrockConverseOptionsSchema = z
 export const BedrockNovaOptionsSchema = z
     .strictObject({
         _option_id: z.literal('bedrock-nova').optional(),
+        effort: ReasoningEffortSchema.optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -202,6 +217,7 @@ export const BedrockClaudeOptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         top_k: z.number().optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
@@ -313,6 +329,7 @@ export const BedrockMantleClaudeOptionsSchema = z
         top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
@@ -322,9 +339,34 @@ export const BedrockMantleClaudeOptionsSchema = z
 
 // ===== openai =====
 
+export const OpenAiImageGenerationMaskSchema = z
+    .strictObject({
+        file_id: z.string().optional(),
+        image_url: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiImageGenerationMask' });
+
+export const OpenAiImageGenerationOptionsSchema = z
+    .strictObject({
+        model: z.string(),
+        force: z.boolean().optional(),
+        action: z.enum(['auto', 'generate', 'edit']).optional(),
+        size: z.string().optional(),
+        quality: z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        background: z.enum(['auto', 'opaque', 'transparent']).optional(),
+        output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+        output_compression: z.number().int().min(0).max(100).optional(),
+        moderation: z.enum(['auto', 'low']).optional(),
+        input_fidelity: z.enum(['low', 'high']).optional(),
+        partial_images: z.number().optional(),
+        input_image_mask: OpenAiImageGenerationMaskSchema.optional(),
+    })
+    .meta({ id: 'OpenAiImageGenerationOptions' });
+
 export const OpenAiThinkingOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-thinking').optional(),
+        image_generation: OpenAiImageGenerationOptionsSchema.optional(),
         max_tokens: z.number().optional(),
         tool_choice: z.enum(['auto', 'none', 'any', 'required']).optional(),
         stop_sequence: z.array(z.string()).optional(),
@@ -341,6 +383,8 @@ export const OpenAiThinkingOptionsSchema = z
 export const OpenAiTextOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-text').optional(),
+        image_generation: OpenAiImageGenerationOptionsSchema.optional(),
+        seed: z.number().optional(),
         max_tokens: z.number().optional(),
         tool_choice: z.enum(['auto', 'none', 'any', 'required']).optional(),
         effort: ReasoningEffortSchema.optional(),
@@ -357,7 +401,11 @@ export const OpenAiTextOptionsSchema = z
     })
     .meta({ id: 'OpenAiTextOptions' });
 
-export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({ _option_id: true, extra_body: true })
+export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({
+    _option_id: true,
+    extra_body: true,
+    image_generation: true,
+})
     .extend({
         _option_id: z.literal('openrouter-text').optional(),
         provider_sort: z.enum(['price', 'throughput', 'latency', 'exacto']).optional(),
@@ -403,10 +451,17 @@ export const OpenAiDalleOptionsSchema = z
 export const OpenAiGptImageOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-gpt-image').optional(),
-        size: z.enum(['1024x1024', '1024x1536', '1536x1024', 'auto']).optional(),
-        image_quality: z.enum(['low', 'medium', 'high', 'auto']).optional(),
+        size: z.string().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        image_quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'auto']).optional(),
         background: z.enum(['transparent', 'opaque', 'auto']).optional(),
         output_format: z.enum(['png', 'webp', 'jpeg']).optional(),
+        n: z.number().optional(),
+        output_compression: z.number().int().min(0).max(100).optional(),
+        moderation: z.enum(['auto', 'low']).optional(),
+        input_fidelity: z.enum(['low', 'high']).optional(),
+        partial_images: z.number().optional(),
     })
     .meta({ id: 'OpenAiGptImageOptions' });
 
@@ -480,6 +535,7 @@ export const VertexAIClaudeOptionsSchema = z
         top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),

@@ -1,28 +1,13 @@
 /**
  * Shared utilities for Anthropic SDK-based drivers.
  *
- * Used by the native Anthropic driver, Vertex AI Claude, and Bedrock Mantle
+ * Used by the native Anthropic driver, Vertex AI Claude, Foundry, and Bedrock Mantle
  * Claude pathways. All use the same Anthropic Messages API surface; only the
  * client and authentication wiring differ.
  */
 
-import type { AnthropicBedrockMantle } from '@anthropic-ai/bedrock-sdk';
-import type Anthropic from '@anthropic-ai/sdk';
-import {
-    AnthropicError,
-    APIConnectionError,
-    APIConnectionTimeoutError,
-    APIError,
-    APIUserAbortError,
-    AuthenticationError,
-    BadRequestError,
-    ConflictError,
-    InternalServerError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
-} from '@anthropic-ai/sdk/error';
+import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
+import type { AnthropicBeta, BetaMessage, BetaRawMessageDeltaEvent } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -34,8 +19,7 @@ import type {
     ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources/index.js';
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
-import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
-import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
+import type { MessageCreateParamsBase, RawMessageStreamEvent, Tool } from '@anthropic-ai/sdk/resources/messages.js';
 import {
     AGENT_PROMPT_CACHE_KEY_PREFIX,
     getClaudeMaxTokensLimit,
@@ -63,13 +47,27 @@ import {
     type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
+    supportsClaudeForcedToolChoice,
     type ToolUse,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
-import { resolveClaudeThinking } from './claude-thinking.js';
+import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
+import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
+import {
+    applyClaudeToolChanges,
+    type ClaudeConversationMeta,
+    canUseClaudeToolChanges,
+    claudeContinueTurn,
+    clearClaudeToolState,
+    getClaudeToolState,
+    isClaudeToolChangeBlock,
+    MID_CONVERSATION_TOOL_CHANGES_BETA,
+    renderClaudeTools,
+    stripClaudeToolChanges,
+} from './claude-tool-changes.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
+import { logModelOptionException } from './model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
 // ============================================================================
@@ -84,6 +82,7 @@ const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
 const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
 const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
+const CLAUDE_FAST_MODE_BETA = 'fast-mode-2026-02-01';
 const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
     JSON_SCHEMA_INSTRUCTION_PREFIX,
@@ -122,7 +121,8 @@ function addAgentMessageCacheBreakpoints(
     let breakpointCount = 0;
 
     for (const message of messages) {
-        if (!Array.isArray(message.content)) continue;
+        // Breakpoints go on conversation turns, not on tool-change system messages.
+        if (message.role === 'system' || !Array.isArray(message.content)) continue;
 
         for (const block of message.content) {
             if (block.type === 'thinking' || block.type === 'redacted_thinking') continue;
@@ -146,6 +146,8 @@ interface WarnLogger {
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
+    /** Conversation metadata; `claude_tools` keeps the declared tools for append-only tool changes. */
+    _llumiverse_meta?: ClaudeConversationMeta;
 }
 
 function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBlockParam {
@@ -187,6 +189,10 @@ export interface AnthropicUsageLike {
     output_tokens: number;
     cache_read_input_tokens?: number | null;
     cache_creation_input_tokens?: number | null;
+    cache_creation?: { ephemeral_1h_input_tokens?: number | null } | null;
+    service_tier?: string | null;
+    /** `fast` when the request ran in fast mode. */
+    speed?: string | null;
 }
 
 /**
@@ -202,9 +208,12 @@ export interface ClaudeBaseOptions {
     stop_sequence?: string[];
     effort?: string;
     thinking_budget_tokens?: number;
+    thinking_mode?: ClaudeThinkingInput['thinking_mode'];
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
+    /** `fast` runs the request in fast mode (Claude API only). */
+    speed?: 'standard' | 'fast';
     tool_choice?: 'auto' | 'none' | 'any' | 'required';
     /** Internal execution hint supplied after public model-option validation. */
     required_tool_name?: string;
@@ -212,39 +221,93 @@ export interface ClaudeBaseOptions {
     parallel_tool_calls?: boolean;
 }
 
+type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+
 interface RequestOptions {
     headers?: Record<string, string>;
     signal?: AbortSignal;
     timeout?: number;
 }
 
-type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
 type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     abort(): void;
     finalMessage(): Promise<Message>;
 };
-type ClaudeMessagesStreamClient = {
+// Platform SDKs can depend on different Anthropic SDK versions. Only require the
+// request options and stream results used here, not version-specific SDK internals.
+type ClaudeMessagesClient = {
     messages: {
-        stream(body: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
+        stream(payload: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
     };
 };
 
-type ClaudeMessagesClient = Anthropic | AnthropicVertex | AnthropicBedrockMantle;
+/** Combine payload request options with the driver's transport options, keeping headers from both. */
+function mergeRequestOptions(
+    requestOptions: RequestOptions | undefined,
+    transportOptions: RequestOptions | undefined,
+): RequestOptions | undefined {
+    if (!transportOptions) return requestOptions;
+    const headers =
+        requestOptions?.headers || transportOptions.headers
+            ? { ...requestOptions?.headers, ...transportOptions.headers }
+            : undefined;
+    return { ...requestOptions, ...transportOptions, ...(headers && { headers }) };
+}
+
+/**
+ * A client-side failure while reading a response stream that had started (e.g. a dropped connection or an event
+ * the SDK could not decode). The request reached the provider, so it can be retried.
+ */
+export class ClaudeStreamError extends AnthropicError {
+    constructor(cause: AnthropicError) {
+        super(cause.message, { cause });
+        this.name = 'ClaudeStreamError';
+    }
+}
+
+/**
+ * A message stream's events, then its outcome. The SDK's iterator drops an error that arrives while no read is
+ * pending (the consumer is busy with the previous chunk) and only `finalMessage()` rejects with it, so await it
+ * here for the error to surface during iteration, where the driver formats it.
+ *
+ * A client-side SDK error after the first event is a stream fault (API errors carry their own status and type);
+ * before it, the same error type means a configuration problem such as a missing credential.
+ */
+async function* eventsThenOutcome(stream: ClaudeMessageStream): AsyncGenerator<RawMessageStreamEvent> {
+    let started = false;
+    try {
+        for await (const event of stream) {
+            started = true;
+            yield event;
+        }
+        await stream.finalMessage();
+    } catch (error) {
+        throw started && isAnthropicSdkError(error) && !isAnthropicApiError(error)
+            ? new ClaudeStreamError(error)
+            : error;
+    }
+}
 
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
     payload: MessageStreamParams,
     requestOptions: RequestOptions | undefined,
 ): Promise<ClaudeMessageStream> {
-    // AnthropicVertex intentionally wraps the Anthropic Messages API, but it depends on its
-    // own @anthropic-ai/sdk copy. Cast at the boundary so the implementation can call the
-    // shared runtime-compatible stream API without TS trying to call a union of SDK versions.
-    return Promise.resolve((client as unknown as ClaudeMessagesStreamClient).messages.stream(payload, requestOptions));
+    return Promise.resolve(client.messages.stream(payload, requestOptions));
 }
 
 // ============================================================================
 // Token usage
 // ============================================================================
+
+/**
+ * The processing tier a response reports: `fast` for fast mode, else its service tier. Fast mode is priced on
+ * its own and cannot run under a Priority Tier commitment, so one value describes both.
+ */
+export function claudeServiceTier(usage: Pick<AnthropicUsageLike, 'service_tier' | 'speed'>): string | undefined {
+    if (usage.speed === 'fast') return 'fast';
+    return usage.service_tier ?? undefined;
+}
 
 export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): ExecutionTokenUsage {
     const cacheRead = usage.cache_read_input_tokens ?? 0;
@@ -256,6 +319,7 @@ export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): Execution
         total: usage.input_tokens + usage.output_tokens + cacheRead + cacheWrite,
         prompt_cached: usage.cache_read_input_tokens ?? undefined,
         prompt_cache_write: usage.cache_creation_input_tokens ?? undefined,
+        prompt_cache_write_1h: usage.cache_creation?.ephemeral_1h_input_tokens || undefined,
     };
 }
 
@@ -310,6 +374,22 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 // File / multimodal block helpers
 // ============================================================================
 
+const TEXT_APPLICATION_TYPES = new Set([
+    'application/json',
+    'application/xml',
+    'application/yaml',
+    'application/x-yaml',
+]);
+
+/** Text formats sent as plain-text documents: text/*, JSON, XML and YAML (including +json / +xml types). */
+function isTextMimeType(mimeType: string | undefined): boolean {
+    if (!mimeType) return false;
+    const type = mimeType.split(';')[0].trim().toLowerCase();
+    return (
+        type.startsWith('text/') || TEXT_APPLICATION_TYPES.has(type) || type.endsWith('+json') || type.endsWith('+xml')
+    );
+}
+
 async function collectFileBlocks(
     segment: PromptSegment,
     logger?: WarnLogger,
@@ -319,10 +399,12 @@ async function collectFileBlocks(
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith('image/')) {
             const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-            if (!allowedTypes.includes(file.mime_type)) {
+            // image/jpg is a common non-standard alias.
+            const normalizedType = file.mime_type === 'image/jpg' ? 'image/jpeg' : file.mime_type;
+            if (!allowedTypes.includes(normalizedType)) {
                 throw new Error(`Unsupported image type: ${file.mime_type}`);
             }
-            const mimeType = String(file.mime_type) as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+            const mimeType = normalizedType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
             contentBlocks.push({
                 type: 'image',
                 source: {
@@ -351,7 +433,7 @@ async function collectFileBlocks(
                     media_type: 'application/pdf',
                 },
             } satisfies DocumentBlockParam);
-        } else if (file.mime_type?.startsWith('text/')) {
+        } else if (isTextMimeType(file.mime_type)) {
             contentBlocks.push({
                 title: file.name,
                 type: 'document',
@@ -361,6 +443,14 @@ async function collectFileBlocks(
                     media_type: 'text/plain',
                 },
             } satisfies DocumentBlockParam);
+        } else {
+            logger?.warn(
+                {
+                    file_name: file.name,
+                    mime_type: file.mime_type,
+                },
+                '[Claude] Skipping unsupported attachment',
+            );
         }
     }
 
@@ -478,7 +568,9 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
     if (messages.length === 0) return [];
 
     const needsMerging = messages.some(
-        (msg, i) => i < messages.length - 1 && msg.role === 'user' && messages[i + 1].role === 'user',
+        (msg, i) =>
+            msg.role === 'user' &&
+            ((i < messages.length - 1 && messages[i + 1].role === 'user') || hasToolResultAfterOtherContent(msg)),
     );
     if (!needsMerging) return messages;
 
@@ -497,13 +589,31 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
                 }
                 i++;
             }
-            result.push({ role: 'user', content: mergedContent });
+            // tool_result blocks must lead a user turn; keep them ahead of text merged in from another message.
+            const toolResults = mergedContent.filter((block) => block.type === 'tool_result');
+            result.push({
+                role: 'user',
+                content:
+                    toolResults.length > 0
+                        ? [...toolResults, ...mergedContent.filter((block) => block.type !== 'tool_result')]
+                        : mergedContent,
+            });
         } else {
             result.push(current);
             i++;
         }
     }
     return result;
+}
+
+function hasToolResultAfterOtherContent(message: MessageParam): boolean {
+    if (!Array.isArray(message.content)) return false;
+    let seenOther = false;
+    for (const block of message.content) {
+        if (block.type !== 'tool_result') seenOther = true;
+        else if (seenOther) return true;
+    }
+    return false;
 }
 
 export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
@@ -524,8 +634,10 @@ export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
     return result;
 }
 
-export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
-    if (messages.length < 2) return messages;
+export function fixOrphanedToolUse(input: MessageParam[]): MessageParam[] {
+    if (input.length < 2) return input;
+    // Synthetic results are written into a copy, never into the caller's (stored) conversation.
+    const messages = [...input];
     const result: MessageParam[] = [];
     for (let i = 0; i < messages.length; i++) {
         const current = messages[i];
@@ -538,7 +650,8 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
             );
 
             if (toolUseBlocks.length > 0) {
-                const nextMessage = messages[i + 1];
+                const nextIndex = i + 1;
+                const nextMessage = messages[nextIndex];
 
                 if (nextMessage && nextMessage.role === 'user' && Array.isArray(nextMessage.content)) {
                     const toolResultIds = new Set(
@@ -553,7 +666,10 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                             tool_use_id: block.id,
                             content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`,
                         }));
-                        messages[i + 1] = { ...nextMessage, content: [...syntheticResults, ...nextMessage.content] };
+                        messages[nextIndex] = {
+                            ...nextMessage,
+                            content: [...syntheticResults, ...nextMessage.content],
+                        };
                     }
                 } else if (nextMessage && nextMessage.role === 'user') {
                     const syntheticResults: ToolResultBlockParam[] = toolUseBlocks.map((block) => ({
@@ -565,7 +681,7 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                         typeof nextMessage.content === 'string'
                             ? { type: 'text', text: nextMessage.content }
                             : { type: 'text', text: '' };
-                    messages[i + 1] = { role: 'user', content: [...syntheticResults, textContent] };
+                    messages[nextIndex] = { role: 'user', content: [...syntheticResults, textContent] };
                 }
             }
         }
@@ -634,9 +750,12 @@ export function updateClaudeConversation(
     const system = mergeClaudeSystemBlocks(baseSystemMessages, prompt.system || []);
     const combined = sanitizeMessages(baseMessages.concat(prompt.messages || []));
     const mergedMessages = mergeConsecutiveUserMessages(combined);
+    const toolState = getClaudeToolState(conversation);
     return {
         messages: mergedMessages,
         system: system.length > 0 ? system : undefined,
+        // Only the declared tools are carried forward; the turn number restarts as it always has here.
+        ...(toolState && { _llumiverse_meta: { turnNumber: 0, claude_tools: toolState } }),
     };
 }
 
@@ -708,12 +827,11 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
 // Cache control stripping
 // ============================================================================
 
+/** Always a copy: cache breakpoints are written onto the returned blocks, never onto the caller's conversation. */
 function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T): T {
-    if (typeof block === 'object' && block !== null && 'cache_control' in block) {
-        const { cache_control: _cc, ...rest } = block as T & { cache_control: unknown };
-        return rest as T;
-    }
-    return block;
+    if (typeof block !== 'object' || block === null) return block;
+    const { cache_control: _cc, ...rest } = block as T & { cache_control?: unknown };
+    return rest as T;
 }
 
 function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageParam[] {
@@ -733,11 +851,8 @@ function stripClaudeCacheControlFromTools(
 ): MessageCreateParamsBase['tools'] | undefined {
     if (!tools) return undefined;
     return tools.map((tool) => {
-        if ('cache_control' in tool) {
-            const { cache_control: _cc, ...rest } = tool as ClaudeTool & { cache_control: unknown };
-            return rest as ClaudeTool;
-        }
-        return tool;
+        const { cache_control: _cc, ...rest } = tool as ClaudeTool & { cache_control?: unknown };
+        return rest as ClaudeTool;
     });
 }
 
@@ -750,23 +865,32 @@ export function getClaudePayload(
     prompt: ClaudePrompt,
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
+    logger?: Logger,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    let requestOptions: RequestOptions | undefined;
+    const betas: AnthropicBeta[] = [];
     if (
         modelName.includes('claude-3-7-sonnet') &&
         ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)
     ) {
-        requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
+        betas.push('output-128k-2025-02-19');
     }
+    const fastMode = model_options?.speed === 'fast';
+    if (fastMode) betas.push(CLAUDE_FAST_MODE_BETA);
+
+    // Append-only tool changes (see claude-tool-changes.ts). Where they are not supported, send this request's
+    // tools the old way and leave out any tool-change blocks recorded while the conversation ran elsewhere.
+    const toolState = canUseClaudeToolChanges(modelName, provider) ? getClaudeToolState(prompt) : undefined;
+    const promptMessages = toolState ? prompt.messages : stripClaudeToolChanges(prompt.messages);
 
     // Merge first so parallel tool results split across user messages are recombined
     // into the single user turn after their assistant tool_use message; then fix both
     // orphan directions (tool_use without result, and result without tool_use) so the
     // request can never trip Anthropic/Vertex's tool_use/tool_result pairing validation.
-    const mergedMessages = mergeConsecutiveUserMessages(prompt.messages);
+    // Tool-change messages are placed first, so user turns they separated are merged before orphan repair.
+    const mergedMessages = mergeConsecutiveUserMessages(placeSystemMessagesAfterUserTurns(promptMessages));
     const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 
@@ -780,7 +904,17 @@ export function getClaudePayload(
         }
     }
 
-    const hasTools = options.tools && options.tools.length > 0;
+    const hasRequestedTools = !!options.tools && options.tools.length > 0;
+    // Compatibility exception: a conversation with declared tools keeps sending them, even on a request with
+    // no tools (a final answer turn, a summary), so earlier thinking and the prompt cache stay valid. The model
+    // cannot call them: tool_choice is set to none below.
+    const hasTools = hasRequestedTools || toolState !== undefined;
+    if (toolState && !hasRequestedTools && model_options?.tool_choice !== 'none') {
+        logModelOptionException(logger, modelName, model_options, ['tool_choice'], 'claude_declared_tools');
+    }
+    if (toolState && (toolState.declared.some((tool) => tool.deferred) || containsToolChanges(sanitizedMessages))) {
+        betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
+    }
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
     }
@@ -796,18 +930,19 @@ export function getClaudePayload(
     if (isClaudeVersionGTE(modelName, 4, 6)) {
         const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
         if (lastMessage?.role === 'assistant') {
-            sanitizedMessages = [
-                ...sanitizedMessages,
-                { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
-            ];
+            // Repair again: a trailing tool_use now has a user turn to carry its interrupted result.
+            sanitizedMessages = fixOrphanedToolUse([...sanitizedMessages, claudeContinueTurn()]);
         }
     }
+    sanitizedMessages = mergeConsecutiveUserMessages(placeSystemMessagesAfterUserTurns(sanitizedMessages));
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
-    const sanitizedTools = hasTools
-        ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
-        : undefined;
+    const sanitizedTools = toolState
+        ? renderClaudeTools(toolState)
+        : hasTools
+          ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
+          : undefined;
 
     const cacheEnabled = isClaudePromptCacheEnabled(options);
     if (cacheEnabled) {
@@ -830,12 +965,15 @@ export function getClaudePayload(
             };
             lastBlock.cache_control = cacheControl;
         }
-        if (!hasAgentMessageBreakpoints && sanitizedTools && sanitizedTools.length > 0) {
-            const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
-            lastTool.cache_control = cacheControl;
+        // Deferred tools cannot carry cache_control, so mark the last tool loaded up front.
+        const lastLoadedTool = sanitizedTools?.findLast((tool) => !(tool as { defer_loading?: boolean }).defer_loading);
+        if (!hasAgentMessageBreakpoints && lastLoadedTool) {
+            (lastLoadedTool as ClaudeTool & { cache_control?: unknown }).cache_control = cacheControl;
         }
+        // Breakpoints below go on conversation turns, not on a trailing tool-change system message.
+        const turns = sanitizedMessages.filter((message) => message.role !== 'system');
         if (!hasAgentMessageBreakpoints && options.prompt_cache_key !== undefined) {
-            const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
+            const lastMessage = turns[turns.length - 1];
             if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length >= 2) {
                 const stablePrefixBlock = lastMessage.content[lastMessage.content.length - 2];
                 if (
@@ -848,8 +986,8 @@ export function getClaudePayload(
                     stablePrefixBlock.cache_control = cacheControl;
                 }
             }
-        } else if (!hasAgentMessageBreakpoints && sanitizedMessages.length >= 4) {
-            const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
+        } else if (!hasAgentMessageBreakpoints && turns.length >= 4) {
+            const pivotMsg = turns[turns.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
                 if (
@@ -865,16 +1003,19 @@ export function getClaudePayload(
         }
     }
 
-    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(
-        modelName,
-        model_options as Parameters<typeof resolveClaudeThinking>[1],
-    );
+    const {
+        thinking,
+        betas: thinkingBetas,
+        outputConfig,
+        hasSamplingRestriction,
+    } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1], logger);
+    betas.push(...thinkingBetas);
     const forcedToolChoice = model_options?.required_tool_name
         ? ({ type: 'tool', name: model_options.required_tool_name } as const)
         : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
           ? ({ type: 'any' } as const)
           : undefined;
-    if (forcedToolChoice && !hasTools) {
+    if (forcedToolChoice && !hasRequestedTools) {
         throw createToolChoiceConfigurationError('A forced Claude tool turn requires at least one tool definition.', {
             provider,
             model: modelName,
@@ -887,17 +1028,45 @@ export function getClaudePayload(
             { provider, model: modelName, operation },
         );
     }
-    const disableManualThinkingForForcedTool = forcedToolChoice !== undefined && thinking?.type === 'enabled';
+    // Compatibility exception: models that reject a forced tool choice get automatic tool choice instead; the
+    // caller's required-tool check stays authoritative.
+    const supportedForcedToolChoice =
+        forcedToolChoice && supportsClaudeForcedToolChoice(modelName) ? forcedToolChoice : undefined;
+    if (forcedToolChoice && !supportedForcedToolChoice) {
+        logModelOptionException(
+            logger,
+            modelName,
+            model_options,
+            ['tool_choice', 'required_tool_name'],
+            'claude_forced_tool_choice',
+        );
+    }
+    const disableManualThinkingForForcedTool = supportedForcedToolChoice !== undefined && thinking?.type === 'enabled';
     const toolChoice = !hasTools
         ? undefined
         : forcedToolChoice
-          ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
-          : model_options?.tool_choice === 'none'
+          ? {
+                ...(supportedForcedToolChoice ?? ({ type: 'auto' } as const)),
+                disable_parallel_tool_use: model_options?.parallel_tool_calls === false,
+            }
+          : model_options?.tool_choice === 'none' || !hasRequestedTools
             ? ({ type: 'none' } as const)
             : model_options?.tool_choice === 'auto'
               ? ({ type: 'auto' } as const)
               : undefined;
 
+    // Compatibility exception: preserve existing Claude sampling omissions and temperature-over-top_p precedence.
+    logModelOptionException(
+        logger,
+        modelName,
+        model_options,
+        hasSamplingRestriction
+            ? ['temperature', 'top_p', 'top_k']
+            : model_options?.temperature != null
+              ? ['top_p']
+              : [],
+        hasSamplingRestriction ? 'claude_sampling_restriction' : 'claude_sampling_precedence',
+    );
     const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
@@ -913,12 +1082,73 @@ export function getClaudePayload(
               : model_options?.top_p,
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: disableManualThinkingForForcedTool ? { type: 'disabled' } : thinking,
+        // The beta config adds block_binding (sent with its beta header); the wire field is the same.
+        thinking: disableManualThinkingForForcedTool
+            ? { type: 'disabled' }
+            : (thinking as MessageCreateParamsBase['thinking']),
         stream: true,
         ...(!disableManualThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
+        // `speed` is a beta request field the base type doesn't declare yet.
+        ...(fastMode && ({ speed: 'fast' } as Partial<MessageCreateParamsBase>)),
     };
 
+    // One comma-separated header: Google Cloud reads only the first anthropic-beta header.
+    const requestOptions: RequestOptions | undefined =
+        betas.length > 0 ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined;
+
     return { payload, requestOptions };
+}
+
+/**
+ * Keep each tool-change system message between a user turn and the next assistant turn, as the API requires.
+ * Orphan repair can drop the user turn a stored change followed, and an empty reply can leave a change before the
+ * next user turn. Well-formed histories pass through unchanged.
+ */
+function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessageParam[] {
+    if (!messages.some((message) => message.role === 'system')) return messages;
+    const result: MessageParam[] = [];
+    let pending: MessageParam[] = [];
+    const flush = () => {
+        const merged = pending.length === 1 ? pending[0] : mergeToolChangeMessages(pending);
+        pending = [];
+        // Changes that cancel out leave nothing to announce.
+        if (!merged || (Array.isArray(merged.content) && merged.content.length === 0)) return;
+        if (result[result.length - 1]?.role !== 'user') result.push(claudeContinueTurn());
+        result.push(merged);
+    };
+    for (const message of messages) {
+        if (message.role === 'system') {
+            pending.push(message);
+        } else if (message.role === 'user') {
+            result.push(message);
+        } else {
+            flush();
+            result.push(message);
+        }
+    }
+    flush();
+    return result;
+}
+
+/**
+ * One system message for several pending ones. Each stored change was a real change when it was made, so the
+ * changes to one tool alternate between addition and removal: an even number cancels out, an odd number leaves
+ * the last one.
+ */
+function mergeToolChangeMessages(messages: MessageParam[]): MessageParam {
+    const blocks = messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []));
+    const changes = new Map<string, { count: number; last: unknown }>();
+    for (const block of blocks) {
+        const name = isClaudeToolChangeBlock(block) ? (block as { tool?: { name?: string } }).tool?.name : undefined;
+        if (name) changes.set(name, { count: (changes.get(name)?.count ?? 0) + 1, last: block });
+    }
+    const kept = new Set([...changes.values()].filter((change) => change.count % 2 === 1).map((change) => change.last));
+    const content = blocks.filter((block) => !isClaudeToolChangeBlock(block) || kept.has(block));
+    return { role: 'system', content } as MessageParam;
+}
+
+function containsToolChanges(messages: MessageParam[]): boolean {
+    return messages.some((message) => Array.isArray(message.content) && message.content.some(isClaudeToolChangeBlock));
 }
 
 // ============================================================================
@@ -930,6 +1160,7 @@ export function buildClaudeStreamingConversation(
     result: unknown[],
     toolUse: unknown[] | undefined,
     options: ExecutionOptions,
+    provider: string,
 ): ClaudePrompt {
     const completionResults = result as CompletionResult[];
     const text = completionResults
@@ -937,7 +1168,7 @@ export function buildClaudeStreamingConversation(
         .map((r) => r.value as string)
         .join('');
 
-    let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    let conversation = prepareClaudeConversation(options, prompt, provider);
 
     if (text) {
         const assistantMsg: MessageParam = { role: 'assistant', content: text };
@@ -1080,9 +1311,44 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
 
+/** Append this turn's prompt and record its tool set (append-only tool changes, where supported). */
+function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudePrompt, provider: string): ClaudePrompt {
+    let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    // Store the continuation turn getClaudePayload would add for a resumed run that ends with an assistant turn,
+    // so the next request replays what this one sent and the reply's thinking stays valid.
+    const lastTurn = conversation.messages.findLast((message) => message.role !== 'system');
+    if (isClaudeVersionGTE(options.model, 4, 6) && lastTurn?.role === 'assistant') {
+        conversation = { ...conversation, messages: [...conversation.messages, claudeContinueTurn()] };
+    }
+    return canUseClaudeToolChanges(options.model, provider)
+        ? applyClaudeToolChanges(conversation, options.tools as Tool[] | undefined)
+        : clearClaudeToolState(conversation);
+}
+
+type InputTransformations = BetaMessage['input_transformations'];
+
+/**
+ * Track the final `input_transformations` (only typed on beta events; present when the binding beta was sent).
+ * `message_start` carries it, and the final `message_delta` replaces it after a server-side model fallback,
+ * which the stable SDK accumulator drops, so both paths read it from the raw events.
+ */
+function trackInputTransformations(current: InputTransformations, event: RawMessageStreamEvent): InputTransformations {
+    switch (event.type) {
+        case 'message_start':
+            return (event.message as Partial<Pick<BetaMessage, 'input_transformations'>>).input_transformations;
+        case 'message_delta':
+            return (
+                (event as Partial<Pick<BetaRawMessageDeltaEvent, 'input_transformations'>>).input_transformations ??
+                current
+            );
+        default:
+            return current;
+    }
+}
+
 /**
  * Execute a non-streaming Claude completion.
- * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
+ * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
  */
 export async function executeClaudeCompletion(
     client: ClaudeMessagesClient,
@@ -1090,21 +1356,34 @@ export async function executeClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
-    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout' | 'headers'>,
+    requestModel?: string,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const conversation = prepareClaudeConversation(options, prompt, provider);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', logger);
 
     const responseStream = await streamClaudeMessages(
         client,
-        payload as MessageStreamParams,
-        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+        { ...payload, model: requestModel ?? payload.model } as MessageStreamParams,
+        mergeRequestOptions(requestOptions, transportOptions),
     );
+    let transformations: InputTransformations;
+    for await (const event of eventsThenOutcome(responseStream)) {
+        transformations = trackInputTransformations(transformations, event);
+    }
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
+    logClaudeRefusal(logger, result.stop_reason, {
+        provider,
+        model: options.model,
+        streaming: false,
+        response_id: result.id,
+        details: result.stop_details,
+    });
+    logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
@@ -1116,14 +1395,16 @@ export async function executeClaudeCompletion(
         result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
         tool_use,
         token_usage: anthropicUsageToTokenUsage(result.usage),
+        service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
         finish_reason: tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
         conversation: processedConversation,
+        ...(options.include_original_response ? { original_response: result } : {}),
     };
 }
 
 /**
  * Execute a streaming Claude completion.
- * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
+ * Works with the Anthropic, Vertex AI, Foundry, and Bedrock Mantle SDK clients.
  */
 export async function streamClaudeCompletion(
     client: ClaudeMessagesClient,
@@ -1131,32 +1412,46 @@ export async function streamClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
-    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout' | 'headers'>,
+    requestModel?: string,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const conversation = prepareClaudeConversation(options, prompt, provider);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
-    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', logger);
+    const streamingPayload: MessageStreamParams = { ...payload, model: requestModel ?? payload.model, stream: true };
 
     const response_stream = await streamClaudeMessages(
         client,
         streamingPayload,
-        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+        mergeRequestOptions(requestOptions, transportOptions),
     );
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
+    let responseId: string | undefined;
+    let transformations: InputTransformations;
 
-    const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+    const stream = asyncMap(eventsThenOutcome(response_stream), async (streamEvent: RawMessageStreamEvent) => {
+        transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
+                responseId = streamEvent.message.id;
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
+                    service_tier: claudeServiceTier(streamEvent.message.usage as AnthropicUsageLike),
                 } satisfies CompletionChunkObject;
             case 'message_delta':
                 logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });
+                logClaudeRefusal(logger, streamEvent.delta.stop_reason, {
+                    provider,
+                    model: options.model,
+                    streaming: true,
+                    response_id: responseId,
+                    details: streamEvent.delta.stop_details,
+                });
+                logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },
@@ -1243,8 +1538,45 @@ export async function streamClaudeCompletion(
 // Error handling
 // ============================================================================
 
+/**
+ * Class names along an error's prototype chain. The platform SDKs (Bedrock, Vertex AI, Foundry) can resolve their
+ * own copy of the Anthropic SDK, so its error classes are matched by name: `instanceof` fails across copies.
+ */
+function errorClassNames(error: unknown): Set<string> {
+    const names = new Set<string>();
+    let prototype = error && typeof error === 'object' ? Object.getPrototypeOf(error) : null;
+    while (prototype && prototype !== Object.prototype) {
+        const name = (prototype.constructor as { name?: unknown } | undefined)?.name;
+        if (typeof name === 'string') names.add(name);
+        prototype = Object.getPrototypeOf(prototype);
+    }
+    return names;
+}
+
+/** Whether an error comes from any copy of the Anthropic SDK. */
+export function isAnthropicSdkError(error: unknown): error is AnthropicError {
+    return error instanceof AnthropicError || errorClassNames(error).has('AnthropicError');
+}
+
+/** Whether an error is an Anthropic SDK API error (HTTP, connection, abort), from any copy of the SDK. */
+export function isAnthropicApiError(error: unknown): error is APIError {
+    if (error instanceof APIError) return true;
+    const classes = errorClassNames(error);
+    return classes.has('APIError') && classes.has('AnthropicError');
+}
+
 export function formatAnthropicLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-    if (error instanceof AnthropicError && !(error instanceof APIError)) {
+    if (error instanceof ClaudeStreamError) {
+        return new LlumiverseError(
+            `[${context.provider}] ${error.message}`,
+            true,
+            context,
+            error,
+            undefined,
+            error.name,
+        );
+    }
+    if (isAnthropicSdkError(error) && !isAnthropicApiError(error)) {
         // Client-side SDK error (e.g. "Streaming is required for operations that may take longer than 10 minutes").
         // These are structural/configuration errors — retrying will never succeed.
         const errorName = error.constructor?.name || 'AnthropicError';
@@ -1257,7 +1589,7 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
             errorName,
         );
     }
-    if (!(error instanceof APIError)) {
+    if (!isAnthropicApiError(error)) {
         // Not an Anthropic error — rethrow for default handling
         throw error;
     }
@@ -1307,22 +1639,28 @@ export function isClaudeErrorRetryable(
     if (shouldRetryHeader === 'true') return true;
     if (shouldRetryHeader === 'false') return false;
 
-    if (error instanceof APIUserAbortError) return false;
-    if (error instanceof RateLimitError) return true;
-    if (error instanceof InternalServerError) return true;
-    if (error instanceof APIConnectionTimeoutError) return true;
-    if (error instanceof BadRequestError) return false;
-    if (error instanceof AuthenticationError) return false;
-    if (error instanceof PermissionDeniedError) return false;
-    if (error instanceof NotFoundError) return false;
-    if (error instanceof ConflictError) return true; // SDK retries 409 (lock timeouts)
-    if (error instanceof UnprocessableEntityError) return false;
+    // Class names only count for Anthropic SDK errors; other SDKs reuse names such as APIError.
+    const names = errorClassNames(error);
+    const classes = names.has('AnthropicError') ? names : new Set<string>();
+
+    if (classes.has('APIUserAbortError')) return false;
+    if (classes.has('RateLimitError')) return true;
+    if (classes.has('InternalServerError')) return true;
+    if (classes.has('APIConnectionTimeoutError')) return true;
+    if (classes.has('BadRequestError')) return false;
+    if (classes.has('AuthenticationError')) return false;
+    if (classes.has('PermissionDeniedError')) return false;
+    if (classes.has('NotFoundError')) return false;
+    if (classes.has('ConflictError')) return true; // SDK retries 409 (lock timeouts)
+    if (classes.has('UnprocessableEntityError')) return false;
     if (errorType === 'invalid_request_error') return false;
+    // A mid-stream error event has a type but no HTTP status.
+    if (httpStatusCode === undefined && (errorType === 'overloaded_error' || errorType === 'api_error')) return true;
     if (httpStatusCode !== undefined) {
         if (httpStatusCode === 429 || httpStatusCode === 408 || httpStatusCode === 529) return true;
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true;
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
     }
-    if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) return true;
+    if (classes.has('APIConnectionError') && !classes.has('APIConnectionTimeoutError')) return true;
     return undefined;
 }

@@ -36,13 +36,13 @@ still inspect them.
 
 ### Verification Scope
 
-Prefer sparse, change-scoped verification in llumiverse unless the user explicitly asks for a full provider sweep. Many driver tests make live network calls and can produce heavy output or fail on unrelated local credentials.
+Prefer sparse, change-scoped verification in llumiverse unless the user explicitly asks for a full provider sweep. Live tests call provider APIs and can produce heavy output or fail on unrelated local credentials.
 
 - For common package changes, run `cd common && pnpm lint`, `pnpm typecheck:test`, and the specific functional Vitest files that cover the edit.
 - For driver changes, run `cd drivers && pnpm lint`, `pnpm typecheck:test`, and targeted functional tests for the touched driver or behavior.
 - Run `pnpm build` from the Llumiverse root for the normal workspace build; it uses Turbo to order package dependencies.
 - Use `pnpm clean:outputs && pnpm build` only when diagnosing stale generated artifacts or a failed build after branch changes.
-- Files named `*.live.test.ts` call provider APIs and may consume quota or tokens; run only the affected provider/model suite, while running functional tests freely.
+- Files named `*.live.test.ts` call provider APIs and may consume quota or tokens; run only the affected provider/model suite, while running functional tests freely. Only live files in the allow list in `.github/workflows/build-and-test.yml` run in CI; see "Testing" in `README.md` for the three tiers.
 - Use `LLUMIVERSE_LIVE_PROVIDERS` and `LLUMIVERSE_LIVE_MODELS` with `drivers/test/model-smoke.live.test.ts` to select exact live smoke targets instead of relying on a Vitest name filter.
 - Run the full `pnpm test` / `pnpm -r test` only when the change affects broad cross-provider behavior or when requested. If skipped, report the scoped commands that were run.
 
@@ -67,18 +67,49 @@ Prefer sparse, change-scoped verification in llumiverse unless the user explicit
 - Error handling: use proper error types and propagation, especially with async code
 - Formatting: follows `biome.json` in this repository
 
+## External Input and Provider Defaults
+
+External input means anything supplied to llumiverse by its caller, including values supplied by an application or UI.
+
+- Preserve supplied values. Do not silently drop, clamp, replace, or otherwise repair an option merely because
+  llumiverse's metadata says it is unsupported or outside a known limit. When llumiverse can construct and transport
+  the request, let the provider validate it and return a clear error.
+- Preserve omission. Leave omitted options undefined and omit them from the provider request wherever possible,
+  so provider defaults apply. Do not fill them from option metadata, model limits, recommended values, or copied
+  provider defaults. This lets provider defaults evolve without requiring a llumiverse release.
+- Option and capability metadata describe known support; they are not runtime allowlists. An option's metadata
+  default must not become an implicitly supplied value during execution. Use defaults in metadata only when they
+  accurately describe an intentional llumiverse default, not to prescribe a caller's choice.
+- Translating llumiverse options into provider field names and formats is expected; preserve their meaning and the
+  distinction between an omitted value and an explicit value such as `0` or `false`.
+- New exceptions must be narrow and necessary, such as a required provider field or a model workaround.
+  Label each exception in a nearby code comment, explain why it is needed and when it applies, and test its scope.
+  A default added for omission must not overwrite a supplied value unless that overwrite is itself an explicit exception.
+- Preserve existing exceptions unless changing or removing them has been discussed with the user. These rules alone
+  are not authorization to remove established compatibility behavior.
+- When an exception removes or changes supplied input, log which options were affected and why through the existing
+  logger. Keep logs free of prompts, credentials, and other sensitive content. Do not make input changes opaque.
+
 ## Model Compatibility and Forward Compatibility
 
 Provider model catalogs evolve independently of llumiverse releases. Model support must therefore be expressed through
-stable routing rules rather than duplicated catalog snapshots.
+stable routing rules rather than duplicated catalog snapshots. A model should not require an explicit catalog entry
+or a llumiverse release to have a reasonable chance of working on its first day of provider availability.
 
 - Classify models by provider, publisher, model family, and generation markers. Do not use an exhaustive list of model
   IDs as a production allowlist when a family-level rule can describe the behavior.
 - A newly discovered model in a known family should inherit the protocol, options, capabilities, and execution behavior
-  of the newest understood generation in that family. For version-dependent behavior, use parsed versions and
+  of the newest understood generation in that family **on that provider**, while preserving provider defaults and
+  external input as described above. For version-dependent behavior, use parsed versions and
   greater-than-or-equal comparisons so later generations receive the latest behavior by default.
+- The same model can have different options, limits, capabilities, and transports on different providers. Resolve
+  support in the target provider's context; do not assume direct-provider support or limits apply to a hosted version.
 - Keep exact-ID exceptions only for documented model-specific behavior that cannot be represented by a family or
   version rule. Explain the exception next to the code.
+- For regional model listings, show one regional variant per model: prefer the parent driver's configured region
+  when available; otherwise use an available US region. Always retain a global listing when available, alongside
+  the selected regional variant. Do not list every regional duplicate. This listing policy does not rewrite explicit
+  caller-supplied model locations during execution.
 - Treat the provider's model-discovery API as the source of regional and account availability. Llumiverse should filter
   or enrich those results by category; it should not maintain a second exhaustive provider catalog.
 - Tests should cover category invariants, version boundaries, representative current IDs, and plausible future IDs.
@@ -101,8 +132,8 @@ Llumiverse supports multi-turn conversations via the `conversation` property in 
 ### Image Handling in Conversations
 
 Images in conversations can cause issues:
-- **Bedrock**: Stores images as `Uint8Array` which corrupts during `JSON.stringify()` (becomes `{ "0": 137, "1": 80, ... }`)
-- **OpenAI/Gemini**: Stores images as base64 strings which can bloat storage
+- **Bedrock (Converse)**: Stores images as `Uint8Array` which corrupts during `JSON.stringify()` (becomes `{ "0": 137, "1": 80, ... }`). This covers non-Claude models and Claude conversations started on Converse; Claude on Bedrock now uses the Anthropic Messages API and stores base64 like the other Claude providers.
+- **OpenAI/Gemini/Claude**: Stores images as base64 strings which can bloat storage
 
 To address this, drivers automatically strip/serialize images based on `stripImagesAfterTurns`:
 
@@ -127,10 +158,18 @@ driver.execute(prompt, {
 ```
 
 When `stripImagesAfterTurns > 0`:
-- Bedrock: `Uint8Array` is converted to `{ _base64: '...' }` for safe JSON serialization, then deserialized back before API calls
-- OpenAI/Gemini: Base64 strings are preserved as-is (already JSON-safe)
+- Bedrock (Converse): `Uint8Array` is converted to `{ _base64: '...' }` for safe JSON serialization, then deserialized back before API calls
+- OpenAI/Gemini/Claude: Base64 strings are preserved as-is (already JSON-safe)
 
 Turn counting is automatic via `_llumiverse_meta.turnNumber` in the conversation object.
+
+### Claude Tool Changes
+
+Claude conversations keep `tools` append-only: tools offered after the first request are sent with
+`defer_loading: true`, and additions and removals are announced by `tool_addition` / `tool_removal` blocks in
+`role: "system"` messages (beta `mid-conversation-tool-changes-2026-07-01`). The declared tools are stored in
+`_llumiverse_meta.claude_tools`, so keep `_llumiverse_meta` with the conversation when storing or editing it.
+Unsupported models and providers (Microsoft Foundry) receive `tools` as before, without the tool-change blocks.
 
 ### Utility Functions
 
@@ -144,25 +183,28 @@ The following functions are exported from `@llumiverse/core` for advanced use ca
 
 ## Testing
 
-Tests require API keys for the various LLM providers stored as environment variables:
-- OPENAI_API_KEY
-- BEDROCK_REGION
-- GOOGLE_PROJECT_ID and GOOGLE_REGION
-- AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_DEPLOYMENT
-- MISTRAL_API_KEY
-- TOGETHER_API_KEY
-- GROQ_API_KEY
-- WATSONX_API_KEY
-- XAI_API_KEY
-- OPENROUTER_API_KEY
+Tests are functional (`*.test.ts`, no provider calls), live (`*.live.test.ts`, run on demand), or live and in CI
+(live files in the allow list in `.github/workflows/build-and-test.yml`). `README.md` ("Testing") documents the tiers
+and the credentials each provider needs. A test that calls a provider must be in a `*.live.test.ts` file.
 
-Tests can be found in:
-- `drivers/test/model-smoke.live.test.ts` - Curated live smoke coverage for a small set of models across providers
-- `drivers/test/tools.test.ts` - Tests for LLM tool functionality
-- `drivers/test/embeddings.test.ts` - Tests for embedding functionality
-- `drivers/test/image-gen.test.ts` - Tests for image generation
-- `drivers/test/conversation.test.ts` - Tests for multi-turn conversations with images
-- `core/test/conversation-strip.test.ts` - Unit tests for conversation stripping utilities
+Live tests in CI, under `drivers/test/`:
+- `model-smoke.live.test.ts` - Curated smoke coverage for a small set of models across providers
+- `conversation.live.test.ts` - Multi-turn conversations, images in conversations, Claude prompt caching
+- `tools.live.test.ts` - Tool call, tool result, then a summary with tools turned off
+- `embeddings.live.test.ts` - Embeddings per provider
+
+Live tests run on demand:
+- `max-tokens-limit.live.test.ts` - Each smoke model at its documented output limit (`live-smoke-drivers.ts` holds the shared model list)
+- `vertexai-embedding-models.live.test.ts` - Older Vertex embedding models, one per request path
+- `api-key-list-models.live.test.ts` - Gemini model listing with an API key
+
+Live tests use small, current models so a retirement does not break CI, and build options with
+`getLowEffortTestOptions()` from `drivers/test/utils.ts`: low effort where supported, no `temperature`, and only the
+controls the model advertises.
+
+Functional tests run without credentials: colocated `*.test.ts` files under `common/src`, `core/src` and
+`drivers/src`, plus `core/test/` and `drivers/test/` (for example `core/test/conversation-strip.test.ts` for the
+conversation stripping utilities and `drivers/test/image-gen.test.ts` for the Nova Canvas payload).
 
 ## Adding a New Driver
 
@@ -196,3 +238,14 @@ Examples demonstrating how to use Llumiverse can be found in the `examples/src` 
 - `examples/src/bedrock.ts` - Example for using AWS Bedrock
 - `examples/src/vertexai.ts` - Example for using Google Vertex AI
 - And more for other providers
+
+<!-- BEGIN:turborepo-agent-rules -->
+
+# This is NOT the Turborepo you know
+
+Turborepo configuration, task behavior, and CLI commands can vary between installed versions and may differ from your training data. Resolve the `turbo` package from this file's directory or relevant workspace; in monorepos, it may not be visible from the repository root. For example, run `node -p "require.resolve('turbo/package.json')"` from a workspace that depends on `turbo`.
+
+Read `docs/README.md` inside that installed package first, then read the relevant pages from its `docs/` directory before changing Turborepo configuration or commands. Heed deprecation notices. These bundled docs match the installed package version and are available without network access.
+
+This block is written and re-added by `turbo` before repository-scoped commands when an AI agent is detected. In the Turborepo source repository, its template is defined in `crates/turborepo-cli/src/cli/agent_guidance.rs`. Removing the managed block while updates are enabled means a later qualifying invocation will add it again. Set `"agentGuidance": false` in the root `turbo.json` or `turbo.jsonc` to opt out; this does not remove an existing block. Keep the block committed with your work to avoid an uncommitted change on the next agent invocation.
+<!-- END:turborepo-agent-rules -->

@@ -1,0 +1,26 @@
+name: (ci) PR validation
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yml # zizmor: ignore[self-repository] actionlint does not yet support $/ workflow references.
+    permissions:
+      contents: read
+
+  build-and-test:
+    name: Build and test
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/build-and-test.yml # zizmor: ignore[self-repository] actionlint does not yet support $/ workflow references.
+    permissions:
+      contents: read
+      id-token: write # Authenticate Turbo, GCP and AWS through short-lived OIDC credentials.

@@ -21,6 +21,39 @@ describe('central model directory', () => {
         expect(options.options.map((option) => option.name)).not.toContain('extra_body');
     });
 
+    it.each([
+        'grok-4.3',
+        'grok-4.6',
+        'grok-4.7',
+        'grok-4.20-reasoning',
+        'grok-4.20-non-reasoning',
+        'grok-4.1-fast-reasoning',
+        'grok-4.1-fast-non-reasoning',
+        'grok-4.8',
+        'grok-5',
+    ])('preserves unknown Vertex output limits for %s in profiles and option metadata', (model) => {
+        const id = `locations/global/publishers/xai/models/${model}`;
+        expect(resolveModelProfile(id, Providers.vertexai).max_output_tokens).toBeUndefined();
+        const maxTokens = getOptions(id, Providers.vertexai).options.find((item) => item.name === 'max_tokens');
+        expect(maxTokens).toBeDefined();
+        expect(maxTokens).not.toHaveProperty('max');
+    });
+
+    it('keeps documented Vertex MaaS limits distinct from direct provider limits', () => {
+        const model = 'locations/global/publishers/zai-org/models/glm-5.2-maas';
+        expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+            context_window: 1_000_000,
+            max_output_tokens: 64_000,
+        });
+        expect(
+            getOptions(model, Providers.vertexai).options.find((option) => option.name === 'max_tokens'),
+        ).toMatchObject({
+            max: 64_000,
+        });
+        expect(resolveModelProfile('grok-4.7', Providers.vertexai).context_window).toBe(524_288);
+        expect(resolveModelProfile('grok-4.7', Providers.xai).context_window).toBe(500_000);
+    });
+
     it('resolves provider-qualified Gemini models through OpenAI-compatible transport', () => {
         const profile = resolveModelProfile('google/gemini-3.5-flash', Providers.openai_compatible);
         const capabilities = getModelCapabilities('google/gemini-3.5-flash', Providers.openai_compatible);
@@ -36,7 +69,7 @@ describe('central model directory', () => {
         expect(options.options.find((option) => option.name === 'extra_body')).toMatchObject({
             type: 'json_object',
         });
-        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_535 });
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_536 });
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
             enum: { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high' },
         });
@@ -58,8 +91,24 @@ describe('central model directory', () => {
         const mantle = resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle);
 
         expect(direct.context_window).toBe(1_050_000);
-        expect(mantle.context_window).toBe(272_000);
+        expect(mantle.context_window).toBe(1_050_000);
         expect(mantle.max_output_tokens).toBe(128_000);
+    });
+
+    it.each([
+        ['gemma-5-27b-it-maas', 'gemma-4-26b-a4b-it-maas'],
+        ['mistral-small-2703', 'mistral-small-2503'],
+        ['mistral-medium-4', 'mistral-medium-3'],
+        ['codestral-3', 'codestral-2'],
+    ])('inherits Vertex capabilities for %s from %s', (model, latestKnown) => {
+        expect(resolveModelProfile(model, Providers.vertexai).capabilities).toEqual(
+            resolveModelProfile(latestKnown, Providers.vertexai).capabilities,
+        );
+    });
+
+    it('keeps future hosted Grok limits separate from direct xAI limits', () => {
+        expect(resolveModelProfile('grok-4.8', Providers.vertexai).context_window).toBe(524_288);
+        expect(resolveModelProfile('grok-4.8', Providers.xai).context_window).toBe(500_000);
     });
 
     it('carries version rules into future model releases', () => {
@@ -72,6 +121,9 @@ describe('central model directory', () => {
             'max',
         ]);
         expect(resolveModelProfile('gemini-4.0-flash', Providers.openai_compatible).family).toBe('gemini');
+        expect(
+            resolveModelProfile('google/gemini-4-argon', Providers.openai_compatible).reasoning_effort_levels,
+        ).toEqual(['low', 'medium', 'high']);
         expect(resolveModelProfile('anthropic/claude-opus-6', Providers.openai_compatible).family).toBe('claude');
     });
 
@@ -144,7 +196,7 @@ describe('central model directory', () => {
 
     it('keeps source identity separate from transport-specific limits', () => {
         expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.openai_compatible).context_window).toBe(1_050_000);
-        expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.bedrock_mantle).context_window).toBe(1_000_000);
     });
 
     it('uses conservative capabilities and options for genuinely unknown models', () => {
@@ -242,6 +294,179 @@ describe('central model directory', () => {
         expect(compatibleOptions.options.map((option) => option.name)).not.toContain('safe_prompt');
     });
 
+    it.each(['mistral-large-4', 'mistral-large-4-0', 'mistral-large-5'])(
+        'describes Mistral Large 4+ reasoning and context for %s',
+        (model) => {
+            const profile = resolveModelProfile(model, Providers.mistralai);
+            expect(profile).toMatchObject({
+                family: 'mistral',
+                context_window: 1_000_000,
+                capabilities: { input: { text: true, image: true }, tool_support: true },
+                reasoning_effort_levels: ['none', 'high'],
+            });
+            expect(profile.max_output_tokens).toBeUndefined();
+        },
+    );
+
+    it('keeps earlier Mistral Large releases on their documented limits', () => {
+        expect(resolveModelProfile('mistral-large-2411', Providers.mistralai)).toMatchObject({
+            context_window: 256_000,
+        });
+        expect(resolveModelProfile('mistral-large-2411', Providers.mistralai).reasoning_effort_levels).toBeUndefined();
+    });
+
+    it.each([
+        ['z-ai/glm-5.3', Providers.openai_compatible],
+        ['zai-org/GLM-5.3', Providers.togetherai],
+        ['zai-glm-5-3', Providers.mistralai],
+    ])('describes GLM 5.3 limits and effort for %s', (model, provider) => {
+        expect(resolveModelProfile(model, provider)).toMatchObject({
+            family: 'glm',
+            context_window: 1_000_000,
+            max_output_tokens: 131_072,
+            reasoning_effort_levels: ['low', 'high', 'max'],
+        });
+    });
+
+    it.each([
+        // Hybrid generations: thinking can only be switched off.
+        ['Qwen/Qwen3.5-9B', ['none']],
+        ['Qwen/Qwen3.6-Plus', ['none']],
+        ['Qwen/Qwen3.7-Max', ['none']],
+        // Effort generations, including a plausible future release.
+        ['Qwen/Qwen3.8-Flash', ['low', 'medium', 'xhigh']],
+        ['Qwen/Qwen3.8-2.4T-A95B', ['low', 'medium', 'xhigh']],
+        ['Qwen/Qwen4-Plus', ['low', 'medium', 'xhigh']],
+        // Earlier generations and coder models have no documented Together reasoning control.
+        ['Qwen/Qwen3-235B-A22B-Instruct-2507-tput', undefined],
+        ['Qwen/Qwen3-Coder-Next', undefined],
+    ])('describes Together reasoning control for %s', (model, levels) => {
+        expect(resolveModelProfile(model, Providers.togetherai).reasoning_effort_levels).toEqual(levels);
+    });
+
+    it('advertises the Together Qwen effort levels as the effort option', () => {
+        const effortOf = (model: string) =>
+            getOptions(model, Providers.togetherai).options.find((option) => option.name === 'effort');
+        expect(effortOf('Qwen/Qwen3.5-9B')).toMatchObject({ enum: { none: 'none' } });
+        expect(effortOf('Qwen/Qwen3.8-Flash')).toMatchObject({
+            enum: { low: 'low', medium: 'medium', xhigh: 'xhigh' },
+        });
+        // The rule is Together-specific: other providers keep their own Qwen behaviour.
+        expect(
+            resolveModelProfile('qwen/qwen3.5-9b', Providers.openai_compatible).reasoning_effort_levels,
+        ).toBeUndefined();
+    });
+
+    it.each([
+        ['qwen/qwen3.8-27b', ['none', 'low', 'medium', 'high']],
+        ['qwen/qwen3.6-27b', ['none']],
+        // Qwen 3 32B, not 3.32: the dash starts the size, so it keeps the Groq Qwen 3 on/off control.
+        ['qwen/qwen3-32b', ['none']],
+    ])('describes Groq reasoning control for %s', (model, levels) => {
+        expect(resolveModelProfile(model, Providers.groq).reasoning_effort_levels).toEqual(levels);
+    });
+
+    it('keeps the Groq Qwen 3.8 27B output limit off Qwen 3 models', () => {
+        expect(resolveModelProfile('qwen/qwen3.8-27b', Providers.groq).max_output_tokens).toBe(16_384);
+        expect(resolveModelProfile('qwen/qwen3-27b', Providers.groq).max_output_tokens).not.toBe(16_384);
+    });
+
+    it('keeps Mistral prompt mode off hosted third-party models', () => {
+        const names = getOptions('zai-glm-5-3', Providers.mistralai).options.map((option) => option.name);
+        expect(names).toContain('effort');
+        expect(names).not.toContain('prompt_mode');
+        expect(getOptions('mistral-large-4', Providers.mistralai).options.map((option) => option.name)).toContain(
+            'prompt_mode',
+        );
+    });
+
+    it.each([
+        ['meta/muse-spark-1.3', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+        ['meta/muse-wonder', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+        ['meta/muse-spark-1.1', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh']],
+        ['meta/muse-glimmer-30b', 'muse', 131_072, undefined, ['low', 'medium', 'high', 'xhigh']],
+        ['stepfun/step-5-preview', 'step', 1_048_576, 64_000, ['low', 'medium', 'high']],
+        ['xiaomi/mimo-v2.6-pro', 'mimo', 1_050_000, 131_072, undefined],
+        ['minimax/minimax-m3', 'minimax', 1_048_576, 512_000, undefined],
+    ])('describes OpenRouter-hosted %s', (model, family, context_window, max_output_tokens, effort) => {
+        const profile = resolveModelProfile(model, Providers.openai_compatible);
+        expect(profile).toMatchObject({ family, context_window, capabilities: { tool_support: true } });
+        expect(profile.max_output_tokens).toBe(max_output_tokens);
+        expect(profile.capabilities.input.image).toBe(true);
+        expect(profile.reasoning_effort_levels).toEqual(effort);
+        const maxTokens = getOptions(model, Providers.openai_compatible).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+        if (maxTokens?.type !== 'numeric') throw new Error('Missing max_tokens option');
+        expect(maxTokens.max).toBe(max_output_tokens);
+    });
+
+    it.each([
+        ['anthropic/claude-opus-4.6', 1_000_000, 128_000],
+        ['anthropic/claude-opus-4.8:batch', 1_000_000, 128_000],
+        ['anthropic/claude-3.7-sonnet', 200_000, 64_000],
+        ['moonshotai/kimi-k3', 1_048_576, undefined],
+        ['moonshotai/kimi-k2.6', 262_144, undefined],
+        ['moonshotai/kimi-k2-0905', 262_144, undefined],
+        ['moonshotai/kimi-k2', 131_072, undefined],
+        ['nvidia/nemotron-3-super-120b-a12b', 256_000, undefined],
+        ['nvidia/nemotron-3.5-lightning', 256_000, undefined],
+        ['openai/gpt-5.2-chat', 128_000, 16_384],
+        ['google/gemma-3-27b-it', 131_072, undefined],
+        ['mistralai/codestral-2508', 256_000, undefined],
+        ['mistralai/mistral-small-2603:batch', 256_000, undefined],
+    ])('resolves aggregator id %s limits', (model, context_window, max_output_tokens) => {
+        const profile = resolveModelProfile(model, Providers.openai_compatible);
+        expect(profile.context_window).toBe(context_window);
+        if (max_output_tokens !== undefined) expect(profile.max_output_tokens).toBe(max_output_tokens);
+    });
+
+    it.each([
+        ['moonshotai/kimi-k2.5', true],
+        ['moonshotai/kimi-k3', true],
+        ['moonshotai/kimi-k2-0905', false],
+        ['openai/o3-mini', false],
+        ['openai/o4-mini', true],
+        ['mistralai/mistral-small-2603:batch', true],
+    ])('resolves aggregator id %s image input as %s', (model, image) => {
+        expect(!!resolveModelProfile(model, Providers.openai_compatible).capabilities.input.image).toBe(image);
+    });
+
+    it('applies Claude 4.6+ reasoning controls to dotted aggregator ids', () => {
+        const dotted = getOptions('anthropic/claude-opus-4.8', Providers.openai_compatible).options;
+        const dashed = getOptions('anthropic/claude-opus-4-8', Providers.openai_compatible).options;
+        expect(dotted.map((option) => option.name)).toEqual(dashed.map((option) => option.name));
+    });
+
+    it.each([
+        ['meta/muse-wonder', true],
+        ['meta/muse-spark-1.3', false],
+        ['xiaomi/mimo-v2.6-pro', true],
+        ['stepfun/step-5-preview', false],
+    ])('describes %s audio input as %s', (model, audio) => {
+        expect(!!resolveModelProfile(model, Providers.openai_compatible).capabilities.input.audio).toBe(audio);
+    });
+
+    it('describes DeepSeek V4 limits and V4.1 Flash image input', () => {
+        expect(resolveModelProfile('deepseek-v4-pro', Providers.openai_compatible)).toMatchObject({
+            context_window: 1_048_576,
+            max_output_tokens: 393_216,
+            capabilities: { input: { image: false } },
+        });
+        expect(
+            resolveModelProfile('deepseek/deepseek-v4.1-flash', Providers.openai_compatible).capabilities.input.image,
+        ).toBe(true);
+        const vertex = resolveModelProfile(
+            'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
+            Providers.vertexai,
+        );
+        expect(vertex).toMatchObject({
+            context_window: 1_048_576,
+            max_output_tokens: 393_216,
+            capabilities: { input: { text: true, image: true }, tool_support: true },
+        });
+    });
+
     it('reapplies exact source semantics after provider overlays', () => {
         for (const provider of [Providers.openai, Providers.azure_foundry, Providers.bedrock]) {
             expect(resolveModelProfile('gpt-image-1', provider).capabilities).toMatchObject({
@@ -294,9 +519,36 @@ describe('central model directory', () => {
         expect(getModelCapabilities('gemini-3.1-flash-tts-preview', Providers.vertexai)).toMatchObject({
             input: { text: true, audio: false, image: false, video: false },
             output: { audio: true, text: false },
+        });
+    });
+
+    it.each([
+        ['gemini-3-pro-image', false],
+        ['gemini-3-pro-image-preview', false],
+        ['gemini-4-pro-image', false],
+        ['gemini-3.1-flash-lite-image', true],
+        ['gemini-3.1-flash-lite-image-preview', true],
+        ['gemini-4-flash-lite-image', true],
+    ])('uses image-generation capabilities for Vertex %s', (model, video) => {
+        const id = `locations/global/publishers/google/models/${model}`;
+        expect(getModelCapabilities(id, Providers.vertexai)).toMatchObject({
+            input: { text: true, image: true, video, audio: false },
+            output: { text: true, image: true, video: false, audio: false },
             tool_support: false,
         });
     });
+
+    it.each(['gemini-3.5-transcribe', 'gemini-3.5-transcribe-preview', 'gemini-4-transcribe'])(
+        'uses audio-only input and no tools for Vertex %s',
+        (model) => {
+            const id = `locations/global/publishers/google/models/${model}`;
+            expect(getModelCapabilities(id, Providers.vertexai)).toMatchObject({
+                input: { text: false, image: false, video: false, audio: true },
+                output: { text: true, image: false, video: false, audio: false },
+                tool_support: false,
+            });
+        },
+    );
 
     it('uses image-generation metadata for Gemini 3.1 Flash Image', () => {
         expect(resolveModelProfile('gemini-3.1-flash-image-preview', Providers.vertexai)).toMatchObject({
@@ -309,6 +561,26 @@ describe('central model directory', () => {
             },
         });
     });
+
+    it.each(['gemini-nano-banana-2.1', 'locations/global/publishers/google/models/gemini-nano-banana-3.0'])(
+        'uses image metadata and options for %s',
+        (model) => {
+            expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+                context_window: 131_072,
+                max_output_tokens: 32_768,
+                capabilities: {
+                    input: { text: true, image: true, video: true, audio: false },
+                    output: { text: true, image: true },
+                    tool_support: false,
+                },
+            });
+            const options = getOptions(model, Providers.vertexai).options;
+            const names = options.map((option) => option.name);
+            expect(names).toEqual(expect.arrayContaining(['image_size', 'image_aspect_ratio', 'effort']));
+            for (const name of ['temperature', 'top_p', 'top_k', 'seed']) expect(names).not.toContain(name);
+            expect(options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 32_768 });
+        },
+    );
 
     it('retains Nemotron family identity and newest family limits', () => {
         expect(resolveModelProfile('nvidia.nemotron-nano-12b-v2-vl-bf16', Providers.bedrock)).toMatchObject({
@@ -365,4 +637,19 @@ describe('central model directory', () => {
             'xhigh',
         ]);
     });
+});
+
+describe('Foundry Claude source capabilities', () => {
+    it.each(['claude-opus-5-5', 'claude-sonnet-5-5-20260901', 'claude-opus-6'])(
+        'matches Anthropic controls and capabilities for %s',
+        (model) => {
+            const foundry = resolveModelProfile(`opaque::${model}`, Providers.azure_foundry);
+            expect(foundry.capabilities).toEqual(resolveModelProfile(model, Providers.anthropic).capabilities);
+            expect(foundry.capabilities.input.image).toBe(true);
+            expect(foundry.capabilities.tool_support).toBe(true);
+            expect(getOptions(`opaque::${model}`, Providers.azure_foundry)).toEqual(
+                getOptions(model, Providers.anthropic),
+            );
+        },
+    );
 });

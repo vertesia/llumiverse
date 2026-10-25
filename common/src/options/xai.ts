@@ -11,13 +11,43 @@ export function isXAIGrokImageModel(model: string): boolean {
     return modelId.includes('grok') && modelId.includes('image');
 }
 
+const XAI_TIERED_OPTION_IDS = new Set(['openai-text', 'openai-thinking']);
+
+const XAI_SERVICE_TIER_OPTION: ModelOptionInfoItem = {
+    name: 'service_tier',
+    type: OptionType.enum,
+    enum: { Default: 'default', Priority: 'priority' },
+    default: 'default',
+    description: 'Select the xAI processing tier for this request. Priority is billed at a premium rate.',
+};
+
 export function getXAIOptions(
     model: string,
     options?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.xai),
 ): ModelOptionsInfo {
     if (!isXAIGrokImageModel(model)) {
-        return getOpenAiCompatibleOptions(model, options, profile);
+        const compatible = getOpenAiCompatibleOptions(model, options, profile);
+        if (XAI_TIERED_OPTION_IDS.has(compatible._option_id)) {
+            compatible.options = [...compatible.options, XAI_SERVICE_TIER_OPTION];
+        }
+        return {
+            ...compatible,
+            options: compatible.options
+                // The xAI driver uses Responses, which does not support these Chat controls.
+                .filter((item) => !['stop_sequence', 'presence_penalty', 'frequency_penalty'].includes(item.name))
+                .map((item) => {
+                    if (
+                        item.name === 'max_tokens' &&
+                        item.type === OptionType.numeric &&
+                        profile.max_output_tokens === undefined
+                    ) {
+                        const { max: _max, ...uncapped } = item;
+                        return uncapped;
+                    }
+                    return item;
+                }),
+        };
     }
 
     const imageOptions: ModelOptionInfoItem[] = [

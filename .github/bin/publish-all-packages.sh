@@ -1,8 +1,9 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib-package-channel.sh"
+source "${SCRIPT_DIR}/lib-release-cohort.sh"
 
 # Script to publish all llumiverse packages to NPM
 # Usage: publish-all-packages.sh --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]
@@ -25,6 +26,9 @@ PACKAGES=(
 update_package_versions() {
   echo "=== Updating package versions ==="
 
+  if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+    new_version="$VERSION_OVERRIDE"
+  else
   # Get current version and strip any existing -dev* suffix to get base version
   current_version=$(npm pkg get version | tr -d '"')
   base_version=$(echo "$current_version" | sed 's/-dev.*//')
@@ -54,17 +58,27 @@ update_package_versions() {
     echo "Updating to release version ${new_version}"
   fi
 
+  fi
+
   # Update root package.json
-  npm version "${new_version}" --no-git-tag-version --workspaces=false
+  npm version "${new_version}" --no-git-tag-version --allow-same-version --workspaces=false
 
   # Update all workspace packages
-  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version
+  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version --allow-same-version
+  npm pkg set gitHead="$source_sha" --workspaces=false
+  npm pkg set "releaseIdentity=$RELEASE_IDENTITY" --json --workspaces=false
+  for pkg in "${PACKAGES[@]}"; do
+    (cd "$pkg" && npm pkg set gitHead="$source_sha" && npm pkg set "releaseIdentity=$RELEASE_IDENTITY" --json)
+  done
 }
 
 publish_packages() {
   echo "=== Publishing llumiverse packages ==="
 
+  package_index=0
   for pkg in "${PACKAGES[@]}"; do
+    tarball="${PACKAGE_TARBALLS[$package_index]}"
+    package_index=$((package_index + 1))
     if [ -d "$pkg" ] && [ -f "$pkg/package.json" ]; then
       cd "$pkg"
 
@@ -78,11 +92,18 @@ publish_packages() {
 
       echo "Publishing @llumiverse/${pkg}@${pkg_version} with tag ${npm_tag}"
 
+      if [[ "$DRY_RUN" == "false" ]]; then
+        local ownership=0
+        check_npm_identity "@llumiverse/${pkg}" "$pkg_version" || ownership=$?
+        if [[ "$ownership" == "0" ]]; then cd ..; continue; fi
+        [[ "$ownership" == "1" ]] || return 1
+      fi
+
       # Publish
       if [ -n "$DRY_RUN_FLAG" ]; then
-        pnpm publish --access public --tag "${npm_tag}" --no-git-checks ${DRY_RUN_FLAG}
+        pnpm publish "$tarball" --access public --tag "${npm_tag}" --no-git-checks ${DRY_RUN_FLAG}
       else
-        pnpm publish --access public --tag "${npm_tag}" --no-git-checks
+        pnpm publish "$tarball" --access public --tag "${npm_tag}" --no-git-checks
       fi
 
       cd ..
@@ -90,115 +111,28 @@ publish_packages() {
   done
 }
 
-verify_published_packages() {
-  echo "=== Verifying package tarballs ==="
-
-  # Array to track failed packages
-  failed_packages=()
-
-  # Get the expected version from root package.json
-  expected_version=$(npm pkg get version | tr -d '"')
-
+prepare_verified_tarballs() {
+  echo "=== Packing and verifying all package tarballs before publication ==="
+  local expected_version pkg directory
+  local tarballs
+  PACKAGE_TARBALLS=()
+  expected_version=$(node -p "require('./package.json').version")
   for pkg in "${PACKAGES[@]}"; do
-    if [ -d "$pkg" ]; then
-      cd "$pkg"
-      pkg_name="@llumiverse/${pkg}"
-
-      echo "Packing ${pkg_name}..."
-      pnpm pack --pack-destination . > /dev/null 2>&1
-      tarball=$(ls -t *.tgz 2>/dev/null | head -1)
-
-      if [ -n "$tarball" ] && [ -f "$tarball" ]; then
-        echo "Checking ${pkg_name}:"
-        packed_json=$(tar -xzOf "$tarball" package/package.json)
-
-        # Check version
-        packed_version=$(echo "$packed_json" | grep '"version":' | head -1 | sed 's/.*: "\(.*\)".*/\1/')
-        has_issues=false
-
-        if [ "$packed_version" = "${expected_version}" ]; then
-          echo "  ✓ Version: ${packed_version}"
-        else
-          echo "  ✗ WARNING: Version mismatch (expected: ${expected_version}, got: ${packed_version})"
-          has_issues=true
-        fi
-
-        # Extract dependencies section
-        deps_section=$(echo "$packed_json" | sed -n '/"dependencies":/,/^  [}]/p')
-
-        # Check for @llumiverse dependencies
-        llumiverse_deps=$(echo "$deps_section" | grep '"@llumiverse/' || true)
-        if [ -n "$llumiverse_deps" ]; then
-          echo "$llumiverse_deps"
-          if echo "$llumiverse_deps" | grep -q "${expected_version}"; then
-            echo "  ✓ llumiverse dependencies: ${expected_version}"
-          else
-            echo "  ✗ WARNING: llumiverse dependencies version mismatch"
-            has_issues=true
-          fi
-        fi
-
-        # Verify build output (lib/esm and lib/cjs folders)
-        has_esm=$(tar -tzf "$tarball" | grep -c '^package/lib/esm/' || true)
-        has_cjs=$(tar -tzf "$tarball" | grep -c '^package/lib/cjs/' || true)
-        if [ "$has_esm" -gt 0 ]; then
-          echo "  ✓ lib/esm: ${has_esm} files"
-        else
-          echo "  ✗ WARNING: lib/esm folder missing from tarball"
-          has_issues=true
-        fi
-        if [ "$has_cjs" -gt 0 ]; then
-          echo "  ✓ lib/cjs: ${has_cjs} files"
-        else
-          echo "  ✗ WARNING: lib/cjs folder missing from tarball"
-          has_issues=true
-        fi
-
-        # Add to failed packages if there were issues
-        if [ "$has_issues" = true ]; then
-          failed_packages+=("${pkg_name}")
-        fi
-
-        # Clean up tarball
-        rm -f "$tarball"
-      fi
-
-      cd ..
+    if [[ ! -f "$pkg/package.json" ]]; then
+      echo "Missing package manifest: $pkg/package.json" >&2
+      return 1
     fi
+    directory="$verification_dir/$pkg"
+    mkdir -p "$directory"
+    (cd "$pkg" && pnpm pack --pack-destination "$directory")
+    tarballs=("$directory"/*.tgz)
+    if [[ ${#tarballs[@]} -ne 1 || ! -f "${tarballs[0]}" ]]; then
+      echo "Expected exactly one packed tarball for $pkg" >&2
+      return 1
+    fi
+    node "$SCRIPT_DIR/verify-package-tarball.mjs" "${tarballs[0]}" "$expected_version"
+    PACKAGE_TARBALLS+=("${tarballs[0]}")
   done
-
-  # Print summary
-  echo ""
-  echo "=== Verification Summary ==="
-  if [ ${#failed_packages[@]} -eq 0 ]; then
-    echo "✓ All packages passed verification"
-  else
-    echo "✗ ${#failed_packages[@]} package(s) failed verification:"
-    for pkg in "${failed_packages[@]}"; do
-      echo "  - ${pkg}"
-    done
-  fi
-}
-
-commit_and_push() {
-  echo "=== Committing version changes ==="
-
-  # Get the version from root package.json
-  version=$(npm pkg get version | tr -d '"')
-
-  git config user.email "github-actions[bot]@users.noreply.github.com"
-  git config user.name "github-actions[bot]"
-  git add .
-
-  if [ "$RELEASE_TYPE" = "release" ]; then
-    git commit -m "chore: release ${version}"
-  else
-    git commit -m "chore: snapshot ${version}"
-  fi
-
-  git push origin "$REF"
-
-  echo "Version changes pushed to ${REF}"
 }
 
 write_github_summary() {
@@ -340,7 +274,8 @@ else
   DRY_RUN_FLAG=""
 fi
 
-source_sha=$(git rev-parse HEAD)
+source_sha="${RELEASE_SOURCE_SHA:-$(git rev-parse HEAD)}"
+validate_release_source "$REF" "$source_sha"
 npm_tag=$(resolve_package_channel "$REF" "$RELEASE_TYPE" "$source_sha")
 
 echo "=== Package channel ==="
@@ -352,19 +287,43 @@ echo "Target tag: ${npm_tag}"
 # Main flow
 # =============================================================================
 
-update_package_versions
+RELEASE_IDENTITY="$(release_identity "$source_sha" "")"
+export RELEASE_IDENTITY
+resume_release=false
+if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+  resume_status=0
+  resume_release_tag "$VERSION_OVERRIDE" "$source_sha" || resume_status=$?
+  if [[ "$resume_status" == "0" ]]; then
+    resume_release=true
+    new_version="$VERSION_OVERRIDE"
+  elif [[ "$resume_status" != "1" ]]; then
+    exit "$resume_status"
+  fi
+fi
+if [[ "$resume_release" == "false" ]]; then
+  update_package_versions
+fi
 
 echo "=== Building all packages ==="
 pnpm build
 
-if [ "$DRY_RUN" = "false" ]; then
-  commit_and_push
+verification_dir=$(mktemp -d)
+trap 'rm -rf "$verification_dir"' EXIT
+prepare_verified_tarballs
+
+if [[ "$DRY_RUN" == "false" ]]; then
+  for pkg in "${PACKAGES[@]}"; do
+    ownership=0
+    check_npm_identity "@llumiverse/$pkg" "$new_version" || ownership=$?
+    [[ "$ownership" != "2" ]] || exit 1
+  done
+  if [[ "$resume_release" == "false" ]]; then persist_release_commit "$new_version"; fi
 fi
 
 publish_packages
 
-if [ "$DRY_RUN" = "true" ]; then
-  verify_published_packages
+if [[ "$DRY_RUN" == "false" ]]; then
+  propagate_release "$REF" "$new_version"
 fi
 
 write_github_summary

@@ -1,8 +1,49 @@
 import { getOptions, Providers } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
-import { resolveClaudeThinking } from './claude-thinking.js';
+import { resolveClaudeThinking, THINKING_BINDING_BETA } from './claude-thinking.js';
 
 describe('resolveClaudeThinking', () => {
+    it.each(['low', 'medium', 'high'] as const)('builds between-tools thinking at %s effort', (effort) => {
+        const resolved = resolveClaudeThinking('claude-sonnet-5-5', {
+            thinking_mode: 'between_tools',
+            effort,
+            include_thoughts: true,
+            thinking_budget_tokens: 8000,
+        });
+        expect(resolved.thinking).toEqual({ type: 'between_tools' });
+        expect(resolved.outputConfig).toEqual({ effort });
+        expect(resolved.hasSamplingRestriction).toBe(true);
+    });
+
+    it('leaves omitted effort at the provider default', () => {
+        expect(resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode: 'between_tools' })).toMatchObject({
+            thinking: { type: 'between_tools' },
+            outputConfig: undefined,
+        });
+    });
+
+    it('keeps the default adaptive and allows explicitly switching back to it', () => {
+        for (const thinking_mode of [undefined, 'adaptive'] as const) {
+            expect(resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode, include_thoughts: true })).toMatchObject(
+                { thinking: { type: 'adaptive', display: 'summarized' } },
+            );
+        }
+        expect(resolveClaudeThinking('claude-sonnet-5-5').thinking).toEqual({
+            type: 'adaptive',
+            display: 'omitted',
+            block_binding: { prefix_mismatch_behavior: 'drop_block' },
+        });
+    });
+
+    it('passes explicit modes and effort through for provider-side validation', () => {
+        expect(
+            resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode: 'between_tools', effort: 'max' }),
+        ).toMatchObject({ thinking: { type: 'between_tools' }, outputConfig: { effort: 'max' } });
+        expect(resolveClaudeThinking('claude-sonnet-5', { thinking_mode: 'between_tools' }).thinking).toEqual({
+            type: 'between_tools',
+        });
+    });
+
     it('selects adaptive thinking with medium effort for Sonnet 4.6', () => {
         expect(resolveClaudeThinking('claude-sonnet-4-6', { effort: 'medium' })).toMatchObject({
             thinking: { type: 'adaptive', display: 'omitted' },
@@ -81,11 +122,95 @@ describe('resolveClaudeThinking', () => {
         },
     );
 
+    it.each(['claude-haiku-5-5', 'anthropic.claude-haiku-5-5', 'claude-haiku-6'])(
+        'uses default adaptive thinking and ignores stale budgets for %s',
+        (model) => {
+            expect(resolveClaudeThinking(model)).toMatchObject({
+                thinking: { type: 'adaptive', display: 'omitted' },
+                outputConfig: undefined,
+                hasSamplingRestriction: true,
+            });
+            expect(
+                resolveClaudeThinking(model, { include_thoughts: true, thinking_budget_tokens: 8000 }),
+            ).toMatchObject({
+                thinking: { type: 'adaptive', display: 'summarized' },
+                outputConfig: undefined,
+            });
+        },
+    );
+
+    it('preserves budget-driven thinking for Haiku 4.5', () => {
+        expect(resolveClaudeThinking('claude-haiku-4-5').thinking).toEqual({ type: 'disabled' });
+        expect(resolveClaudeThinking('claude-haiku-4-5', { thinking_budget_tokens: 8000 }).thinking).toEqual({
+            type: 'enabled',
+            budget_tokens: 8000,
+        });
+    });
+
+    it.each(['claude-haiku-5', 'claude-haiku-5-4'])(
+        'leaves the provider thinking default unchanged before Haiku 5.5: %s',
+        (model) => {
+            expect(resolveClaudeThinking(model, { include_thoughts: true }).thinking).toBeUndefined();
+        },
+    );
+
     it('drops legacy budget settings on models that only support adaptive thinking', () => {
         expect(
             resolveClaudeThinking('claude-opus-4-7', {
                 thinking_budget_tokens: 12_000,
             }).thinking,
         ).toBeUndefined();
+    });
+
+    describe('thinking block binding', () => {
+        const dropBlock = { prefix_mismatch_behavior: 'drop_block' };
+
+        it.each([
+            'claude-sonnet-5-5',
+            'claude-opus-5-5',
+            'claude-haiku-5-5',
+            'claude-fable-5-1',
+            'claude-sonnet-5-6',
+            'claude-opus-6',
+            'anthropic.claude-sonnet-5-5',
+            'us.anthropic.claude-opus-5-5',
+        ])('drops mismatched blocks with adaptive thinking on %s', (model) => {
+            const resolved = resolveClaudeThinking(model, { effort: 'medium' });
+            expect(resolved.thinking).toMatchObject({ type: 'adaptive', block_binding: dropBlock });
+            expect(resolved.betas).toEqual([THINKING_BINDING_BETA]);
+        });
+
+        it.each(['claude-opus-6', 'claude-sonnet-6-1', 'claude-fable-6'])(
+            'defaults to bound adaptive thinking without an effort on %s',
+            (model) => {
+                const resolved = resolveClaudeThinking(model);
+                expect(resolved.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: dropBlock });
+                expect(resolved.betas).toEqual([THINKING_BINDING_BETA]);
+            },
+        );
+
+        it('leaves between-tools thinking unbound, which rejects block_binding', () => {
+            const resolved = resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode: 'between_tools' });
+            expect(resolved.thinking).toEqual({ type: 'between_tools' });
+            expect(resolved.betas).toEqual([]);
+        });
+
+        it.each([
+            'claude-sonnet-5',
+            'claude-opus-5',
+            'claude-fable-5',
+            'claude-sonnet-4-6',
+            'claude-opus-4-6',
+            'claude-opus-4-7',
+        ])('leaves adaptive thinking unbound on %s, which does not enforce binding', (model) => {
+            const resolved = resolveClaudeThinking(model, { effort: 'medium' });
+            expect(resolved.thinking).not.toHaveProperty('block_binding');
+            expect(resolved.betas).toEqual([]);
+        });
+
+        it('leaves budgeted and disabled thinking unbound', () => {
+            expect(resolveClaudeThinking('claude-3-7-sonnet', { thinking_budget_tokens: 2048 }).betas).toEqual([]);
+            expect(resolveClaudeThinking('claude-sonnet-4-5').betas).toEqual([]);
+        });
     });
 });

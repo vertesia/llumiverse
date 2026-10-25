@@ -30,8 +30,11 @@ const DISCOVERY_CASES = [
     { id: 'zai.glm-6', discoverable: true },
     // Titan Image uses a different request schema; the current image execution path is Nova Canvas only.
     { id: 'amazon.titan-image-generator-v3', discoverable: false },
-    // Nova Sonic uses Bedrock's bidirectional streaming API rather than Converse.
+    // Every Sonic generation is a bidirectional speech stream rather than Converse.
+    { id: 'amazon.nova-sonic-v1:0', discoverable: false },
     { id: 'amazon.nova-2-sonic-v1:0', discoverable: false },
+    { id: 'amazon.nova-2-5-sonic', discoverable: false },
+    { id: 'xai.grok-4.7', discoverable: true },
     { id: 'amazon.nova-canvas-v2:0', discoverable: true },
     { id: 'unverified.model-1', discoverable: false },
 ] as const;
@@ -70,6 +73,7 @@ function mockModelListingMethods(
     service: Bedrock,
     foundationModels: ListFoundationModelsCommandOutput,
     customModels: ListCustomModelsCommandOutput = emptyCustomModels,
+    inferenceProfiles: ListInferenceProfilesCommandOutput = emptyInferenceProfiles,
 ): void {
     const listFoundationModels = vi.fn(
         async (_input: ListFoundationModelsCommandInput): Promise<ListFoundationModelsCommandOutput> =>
@@ -80,7 +84,7 @@ function mockModelListingMethods(
     );
     const listInferenceProfiles = vi.fn(
         async (_input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
-            emptyInferenceProfiles,
+            inferenceProfiles,
     );
     Reflect.set(service, 'listFoundationModels', listFoundationModels);
     Reflect.set(service, 'listCustomModels', listCustomModels);
@@ -206,5 +210,63 @@ describe('Bedrock Converse model discovery', () => {
                 output_modalities: ['text'],
             }),
         ]);
+    });
+
+    it('groups inference profiles under the publisher name AWS reports for foundation models', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = createMockService();
+        const foundationModels = {
+            $metadata: {},
+            modelSummaries: [
+                { ...foundationModel('zai.glm-5', 'GLM 5'), providerName: 'Z.ai' },
+                { ...foundationModel('moonshotai.kimi-k2.5', 'Kimi K2.5'), providerName: 'Moonshot AI' },
+            ],
+        } satisfies ListFoundationModelsCommandOutput;
+        const inferenceProfiles = {
+            $metadata: {},
+            inferenceProfileSummaries: [
+                {
+                    inferenceProfileArn: 'arn:aws:bedrock:us-east-2::inference-profile/global.zai.glm-5.3',
+                    inferenceProfileId: 'global.zai.glm-5.3',
+                    inferenceProfileName: 'Z.AI GLM 5.3',
+                },
+                {
+                    inferenceProfileArn: 'arn:aws:bedrock:us-east-2::inference-profile/global.moonshotai.kimi-k3',
+                    inferenceProfileId: 'global.moonshotai.kimi-k3',
+                    inferenceProfileName: 'Moonshot AI Kimi K3',
+                },
+            ],
+        } as ListInferenceProfilesCommandOutput;
+        mockModelListingMethods(service, foundationModels, emptyCustomModels, inferenceProfiles);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        const owners = Object.fromEntries((await driver.listModels()).map((model) => [model.name, model.owner]));
+
+        expect(owners).toEqual({
+            'GLM 5': 'Z.ai',
+            'Z.AI GLM 5.3': 'Z.ai',
+            'Kimi K2.5': 'Moonshot AI',
+            'Moonshot AI Kimi K3': 'Moonshot AI',
+        });
+    });
+
+    it('rethrows a foundation listing failure with the provider status instead of a generic error', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = createMockService();
+        mockModelListingMethods(service, { $metadata: {}, modelSummaries: [] });
+        const rejection = Object.assign(new Error('The web identity token provided could not be validated.'), {
+            name: 'InvalidIdentityTokenException',
+            $metadata: { httpStatusCode: 400 },
+            $fault: 'client',
+        });
+        Reflect.set(service, 'listFoundationModels', vi.fn().mockRejectedValue(rejection));
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        await expect(driver.listModels()).rejects.toMatchObject({
+            code: 400,
+            name: 'InvalidIdentityTokenException',
+            retryable: false,
+            message: expect.stringContaining('InvalidIdentityTokenException'),
+        });
     });
 });

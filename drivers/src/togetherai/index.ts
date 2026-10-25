@@ -5,11 +5,13 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     getModelCapabilities,
+    type Logger,
     ModelType,
     modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     Providers,
+    resolveModelProfile,
 } from '@llumiverse/core';
 import Together from 'together-ai';
 import { APIConnectionError, APIError, APIUserAbortError } from 'together-ai/error';
@@ -22,9 +24,10 @@ import type {
     CompletionCreateParamsStreaming,
 } from 'together-ai/resources/chat/completions';
 import type { Embedding, EmbeddingCreateParams } from 'together-ai/resources/embeddings';
+import type { TogetherAIDriverOptions } from '../driver-options.js';
+import { mergeOpenAIExtraBody } from '../openai/extra_body.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsResponse,
     type OpenAIChatCompletionsStreamResponse,
@@ -33,10 +36,7 @@ import {
 } from '../openai/openai_chat_completions.js';
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 
-export interface TogetherAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint?: string;
-}
+export type { TogetherAIDriverOptions } from '../driver-options.js';
 
 export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAIDriverOptions> {
     static readonly PROVIDER = Providers.togetherai;
@@ -63,7 +63,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toTogetherRequest(payload, false);
+        const request = toTogetherRequest(payload, false, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const response = requestOptions
             ? await this.service.chat.completions.create(request, requestOptions)
@@ -76,7 +76,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toTogetherRequest(payload, true);
+        const request = toTogetherRequest(payload, true, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const stream = requestOptions
             ? await this.service.chat.completions.create(request, requestOptions)
@@ -177,11 +177,20 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
     }
 }
 
-function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: false): CompletionCreateParamsNonStreaming;
-function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: true): CompletionCreateParamsStreaming;
+function toTogetherRequest(
+    payload: OpenAIChatCompletionsPayload,
+    stream: false,
+    logger?: Logger,
+): CompletionCreateParamsNonStreaming;
+function toTogetherRequest(
+    payload: OpenAIChatCompletionsPayload,
+    stream: true,
+    logger?: Logger,
+): CompletionCreateParamsStreaming;
 function toTogetherRequest(
     payload: OpenAIChatCompletionsPayload,
     stream: boolean,
+    logger?: Logger,
 ): CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming {
     const request = {
         model: payload.model,
@@ -189,24 +198,34 @@ function toTogetherRequest(
         max_tokens: payload.max_tokens ?? undefined,
         temperature: payload.temperature ?? undefined,
         top_p: payload.top_p ?? undefined,
+        ...(payload.seed !== undefined && { seed: payload.seed as CompletionCreateParamsNonStreaming['seed'] }),
         presence_penalty: payload.presence_penalty ?? undefined,
         frequency_penalty: payload.frequency_penalty ?? undefined,
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toTogetherTool),
-        reasoning_effort:
-            payload.reasoning_effort === 'low' ||
-            payload.reasoning_effort === 'medium' ||
-            payload.reasoning_effort === 'high'
-                ? payload.reasoning_effort
-                : undefined,
-        extra_body: payload.extra_body,
+        ...(payload.reasoning_effort === 'none' && hasReasoningToggleOnly(payload.model)
+            ? // Hybrid models switch reasoning off with `reasoning.enabled`; Together has no `none` effort for them.
+              { reasoning: { enabled: false } }
+            : {
+                  // SDK enums lag provider releases; preserve explicit effort for provider validation.
+                  reasoning_effort: payload.reasoning_effort as CompletionCreateParamsNonStreaming['reasoning_effort'],
+              }),
+        service_tier: payload.service_tier ?? undefined,
         stream,
+        // Together reports streamed usage only when asked; its SDK has no `stream_options` type yet.
+        ...(stream && { stream_options: { include_usage: true } }),
     } satisfies (CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming) & {
-        extra_body?: Record<string, unknown>;
-        reasoning_effort?: 'low' | 'medium' | 'high';
+        service_tier?: string;
+        stream_options?: { include_usage: boolean };
     };
-    return request;
+    return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
+}
+
+/** Hybrid reasoning models, whose only reasoning control the catalog lists is turning it off. */
+function hasReasoningToggleOnly(model: string): boolean {
+    const levels = resolveModelProfile(model, Providers.togetherai).reasoning_effort_levels;
+    return levels?.length === 1 && levels[0] === 'none';
 }
 
 function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
@@ -336,9 +355,19 @@ async function* normalizeTogetherStream(
                 finish_reason: normalizeTogetherFinishReason(choice.finish_reason),
                 logprobs: choice.logprobs ?? null,
             })),
-            usage: chunk.usage ?? undefined,
+            usage: chunk.usage ?? choiceUsage(chunk) ?? undefined,
         };
     }
+}
+
+/** Some Together models (e.g. Kimi K3) report streamed usage inside a choice instead of at the chunk's top level. */
+function choiceUsage(chunk: ChatCompletionChunk): ChatCompletionChunk['usage'] {
+    for (const choice of chunk.choices as Array<
+        ChatCompletionChunk.Choice & { usage?: ChatCompletionChunk['usage'] }
+    >) {
+        if (choice.usage) return choice.usage;
+    }
+    return undefined;
 }
 
 function normalizeTogetherFinishReason(reason: string | null | undefined): string | null {

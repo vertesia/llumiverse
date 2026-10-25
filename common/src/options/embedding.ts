@@ -31,8 +31,11 @@ export const OPENAI_LARGE_EMBEDDING_MODEL = 'text-embedding-3-large';
 export const MISTRAL_DEFAULT_EMBEDDING_MODEL = 'mistral-embed';
 
 // ── IBM Watsonx ────────────────────────────────────────────────────────────
-/** Default Watsonx embedding model (text only). */
-export const WATSONX_DEFAULT_EMBEDDING_MODEL = 'ibm/slate-125m-english-rtrvr';
+/**
+ * Default Watsonx embedding model (text only, 768 dimensions). Replaces ibm/slate-125m-english-rtrvr, which
+ * watsonx.ai has withdrawn; vectors from the two models are not comparable.
+ */
+export const WATSONX_DEFAULT_EMBEDDING_MODEL = 'ibm/granite-embedding-278m-multilingual';
 
 // ── Azure Foundry ──────────────────────────────────────────────────────────
 /**

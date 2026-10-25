@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Mints a token for the release bot App, whose credentials are provisioned in
-    # this repo's `backport` environment (contents:write + pull-requests:write).
+    # this repo's `backport` environment (contents:write + pull-requests:write + workflows:write).
     environment: backport
     permissions:
       contents: read # only checkout uses the default token; all writes go via the App token
@@ -56,12 +56,13 @@ jobs:
 
       - name: Generate backport token
         id: token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.APP_VERTESIA_RELEASE_CLIENT_ID }}
           private-key: ${{ secrets.APP_VERTESIA_RELEASE_PEM }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - name: Backport
         env:

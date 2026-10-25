@@ -10,6 +10,9 @@ const ajv = new Ajv({
     strict: false,
     useDefaults: true,
     removeAdditional: 'failing',
+    // Result schemas come from callers and often carry formats nobody registered (`format: "string"`).
+    // `strict: false` already ignores them; without this, AJV still reports each one on the console.
+    logger: false,
 });
 
 // biome-ignore lint/suspicious/noTsIgnore: ajv-formats' runtime module.exports is the callable plugin, but its shipped .d.ts declares an ESM default that resolves to a non-callable namespace under module:nodenext; no cast-free import form works

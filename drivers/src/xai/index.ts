@@ -2,7 +2,6 @@ import {
     type AIModel,
     type Completion,
     type CompletionResult,
-    type DriverOptions,
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
@@ -16,16 +15,13 @@ import {
 } from '@llumiverse/core';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
+import type { xAiDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
 
+export type { xAiDriverOptions } from '../driver-options.js';
+
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-
-export interface xAiDriverOptions extends DriverOptions {
-    apiKey: string;
-
-    endpoint?: string;
-}
 
 export class xAIDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
@@ -107,17 +103,27 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
             const results: CompletionResult[] = [];
 
             for (const image of response.data ?? []) {
-                if (image.b64_json) {
+                if (!image) continue;
+                if (typeof image.b64_json === 'string' && image.b64_json.trim()) {
                     results.push({
                         type: 'image',
                         value: `data:${image.mime_type ?? 'image/jpeg'};base64,${image.b64_json}`,
                     });
-                } else if (image.url) {
+                } else if (typeof image.url === 'string' && image.url.trim()) {
                     results.push({ type: 'image', value: image.url });
                 }
             }
 
-            return { result: results };
+            const costTicks = response.usage?.cost_in_usd_ticks;
+            return {
+                result: results,
+                ...(results.length === 0 && {
+                    error: { code: 'validation_error', message: 'Image generation returned no usable images' },
+                }),
+                ...(typeof costTicks === 'number' && {
+                    token_usage: { provider_cost_usd: costTicks / XAI_USD_TICKS },
+                }),
+            };
         } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
             const generationError = error instanceof Error ? error : new Error(String(error));
@@ -265,10 +271,15 @@ interface XAIImageRequest {
     response_format?: XAIGrokImageOptions['response_format'];
 }
 
+/** xAI reports what a request cost in ticks of 10^-10 USD. */
+const XAI_USD_TICKS = 1e10;
+
 interface XAIImageResponse {
     data?: Array<{
         b64_json?: string;
         mime_type?: string;
         url?: string;
     }>;
+    /** Images are billed per image, so xAI reports the cost rather than token counts. */
+    usage?: { cost_in_usd_ticks?: number };
 }

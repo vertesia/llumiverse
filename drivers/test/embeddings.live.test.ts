@@ -1,10 +1,12 @@
-import { Base64DataSource, type Driver } from '@llumiverse/core';
+import { Base64DataSource, type Driver, WATSONX_DEFAULT_EMBEDDING_MODEL } from '@llumiverse/core';
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from '../src/index.js';
+import { withRateLimitBackoff } from './utils.js';
 
-const TIMEOUT = 15000;
+// Leaves room for withRateLimitBackoff's 21s of waiting on a rate-limited provider.
+const TIMEOUT = 60000;
 const TEXT = 'Hello';
 
 const IMAGE_SRC = `${import.meta.dirname}/hello_world.jpg`;
@@ -60,7 +62,7 @@ if (process.env.WATSONX_API_KEY) {
 
 function firstValues(d: Driver) {
     return async (...inputs: Parameters<Driver['generateEmbeddings']>[0]['inputs']) => {
-        const r = await d.generateEmbeddings({ inputs });
+        const r = await withRateLimitBackoff(() => d.generateEmbeddings({ inputs }));
         return r;
     };
 }
@@ -68,17 +70,6 @@ function firstValues(d: Driver) {
 if (vertex) {
     const vertexDriver = vertex;
     describe('VertexAI: embeddings generation', () => {
-        test(
-            'embeddings for text',
-            async () => {
-                const r = await firstValues(vertexDriver)({ type: 'text', text: TEXT });
-                expect(r.results).toHaveLength(1);
-                expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
-                expect(r.model).toBe('gemini-embedding-2');
-            },
-            TIMEOUT,
-        );
-
         test(
             'embeddings for image (multimodal)',
             async () => {
@@ -92,15 +83,18 @@ if (vertex) {
         test(
             'embeddings for batched text inputs',
             async () => {
-                const r = await vertexDriver.generateEmbeddings({
-                    inputs: [
-                        { type: 'text', text: 'first' },
-                        { type: 'text', text: 'second' },
-                    ],
-                });
+                const r = await withRateLimitBackoff(() =>
+                    vertexDriver.generateEmbeddings({
+                        inputs: [
+                            { type: 'text', text: 'first' },
+                            { type: 'text', text: 'second' },
+                        ],
+                    }),
+                );
                 expect(r.results).toHaveLength(2);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.results[1].outputs[0].values.length).toBeGreaterThan(0);
+                expect(r.model).toBe('gemini-embedding-2');
             },
             TIMEOUT,
         );
@@ -134,27 +128,20 @@ if (openai) {
     const openaiDriver = openai;
     describe('OpenAI: embeddings generation', () => {
         test(
-            'embeddings for text',
+            'embeddings for batched text inputs',
             async () => {
-                const r = await firstValues(openaiDriver)({ type: 'text', text: TEXT });
-                expect(r.results).toHaveLength(1);
+                const r = await withRateLimitBackoff(() =>
+                    openaiDriver.generateEmbeddings({
+                        inputs: [
+                            { type: 'text', text: 'alpha' },
+                            { type: 'text', text: 'beta' },
+                        ],
+                    }),
+                );
+                expect(r.results).toHaveLength(2);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.model).toBe('text-embedding-3-small');
                 expect(r.usage?.input_tokens).toBeGreaterThan(0);
-            },
-            TIMEOUT,
-        );
-
-        test(
-            'embeddings for batched text inputs',
-            async () => {
-                const r = await openaiDriver.generateEmbeddings({
-                    inputs: [
-                        { type: 'text', text: 'alpha' },
-                        { type: 'text', text: 'beta' },
-                    ],
-                });
-                expect(r.results).toHaveLength(2);
             },
             TIMEOUT,
         );
@@ -184,7 +171,7 @@ if (watsonx) {
             async () => {
                 const r = await firstValues(watsonxDriver)({ type: 'text', text: TEXT });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
-                expect(r.model).toBe('ibm/slate-125m-english-rtrvr');
+                expect(r.model).toBe(WATSONX_DEFAULT_EMBEDDING_MODEL);
             },
             TIMEOUT,
         );

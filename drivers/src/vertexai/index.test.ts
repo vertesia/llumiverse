@@ -31,6 +31,11 @@ class TestVertexAIDriver extends VertexAIDriver {
                             { name: 'publishers/google/models/gemini-live-future' },
                             { name: 'publishers/google/models/gemini-robotics-er-2-preview-info' },
                             { name: 'publishers/google/models/gemini-3.5-live-translate-preview' },
+                            { name: 'publishers/google/models/gemini-3.8-live' },
+                            { name: 'publishers/google/models/gemini-4-live-preview' },
+                            { name: 'publishers/google/models/gemini-robotics-er-1.5-preview' },
+                            { name: 'publishers/google/models/gemini-4-robotics-preview' },
+                            { name: 'publishers/google/models/gemini-nano-banana-2.1' },
                             { name: 'publishers/google/models/gemini-4-tts' },
                         ],
                     ];
@@ -74,6 +79,64 @@ describe('VertexAIDriver listModels', () => {
         ]);
     });
 
+    it('lists Gemini 4+ only with its global location id', async () => {
+        const modelIds = (await new TestVertexAIDriver().listModels()).map((model) => model.id);
+
+        expect(modelIds).toContain('locations/global/publishers/google/models/gemini-4-future');
+        expect(modelIds).not.toContain('publishers/google/models/gemini-4-future');
+    });
+
+    it('lists Nano Banana globally and excludes versioned Live models from both catalogs', async () => {
+        const models = await new TestVertexAIDriver([
+            { name: 'models/gemini-3.8-live', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-4-live-preview' },
+            { name: 'models/gemini-nano-banana-2.1', supportedActions: ['generateContent'] },
+        ]).listModels();
+        expect(models.some((model) => model.id.includes('-live'))).toBe(false);
+        expect(models.filter((model) => model.id.includes('gemini-nano-banana'))).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ id: 'locations/global/publishers/google/models/gemini-nano-banana-2.1' }),
+                expect.objectContaining({ id: 'locations/global/models/gemini-nano-banana-2.1' }),
+            ]),
+        );
+        expect(models.some((model) => model.id === 'publishers/google/models/gemini-nano-banana-2.1')).toBe(false);
+    });
+
+    it.each([
+        'gemini-robotics-er-1.5-preview',
+        'gemini-4-robotics-preview',
+        'gemini-live-future',
+        'gemini-4-live-preview',
+    ])('excludes special-purpose %s from regional and global listings', async (name) => {
+        const models = await new TestVertexAIDriver([
+            { name: `models/${name}`, supportedActions: ['generateContent'] },
+            { name: 'models/gemini-4-future', supportedActions: ['generateContent'] },
+        ]).listModels();
+        expect(models.some((model) => model.id.split('/').pop() === name)).toBe(false);
+        expect(models.some((model) => model.id === 'locations/global/models/gemini-4-future')).toBe(true);
+    });
+
+    it('lists image generation and transcription with their own modalities and no tools', async () => {
+        const models = await new TestVertexAIDriver([
+            { name: 'models/gemini-3-pro-image', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-3.1-flash-lite-image', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-3.5-transcribe-preview', supportedActions: ['generateContent'] },
+        ]).listModels();
+        for (const model of ['gemini-3-pro-image', 'gemini-3.1-flash-lite-image']) {
+            expect(models.find((entry) => entry.id === `locations/global/models/${model}`)).toMatchObject({
+                output_modalities: ['text', 'image'],
+                tool_support: false,
+            });
+        }
+        expect(
+            models.find((entry) => entry.id === 'locations/global/models/gemini-3.5-transcribe-preview'),
+        ).toMatchObject({
+            input_modalities: ['audio'],
+            output_modalities: ['text'],
+            tool_support: false,
+        });
+    });
+
     it('uses supported actions to keep only models executable by the implemented Google paths', async () => {
         const driver = new TestVertexAIDriver([
             { name: 'models/gemini-4-future', supportedActions: ['generateContent'] },
@@ -98,5 +161,32 @@ describe('VertexAIDriver listModels', () => {
         expect(modelIds).not.toContain('publishers/google/models/gemini-robotics-er-2-preview-info');
         expect(modelIds).not.toContain('publishers/google/models/gemini-3.5-live-translate-preview');
         expect(modelIds).toContain('publishers/google/models/gemini-4-tts');
+    });
+});
+
+describe('VertexAIDriver storage permission errors', () => {
+    it.each(['gemini-2.5-flash', 'gemini-omni-flash-preview'])(
+        'keeps %s storage denials non-retryable and explains who can repair access',
+        (model) => {
+            const cause = Object.assign(new Error('Permission denied: storage.objects.get on gs://test-bucket/input'), {
+                status: 403,
+            });
+            const error = new VertexAIDriver({ project: 'test-project', region: 'us-central1' }).formatLlumiverseError(
+                cause,
+                { provider: 'vertexai', model, operation: 'execute' },
+            );
+            expect(error.code).toBe(403);
+            expect(error.retryable).toBe(false);
+            expect(error.message).toContain('Ask your project administrator');
+            expect(error.message).toContain('configured storage principal');
+        },
+    );
+
+    it('does not suggest changing bucket IAM for unrelated Vertex authorization failures', () => {
+        const error = new VertexAIDriver({ project: 'test-project', region: 'us-central1' }).formatLlumiverseError(
+            { status: 403, message: 'Permission denied: aiplatform.endpoints.predict' },
+            { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
+        );
+        expect(error.message).not.toContain('bucket permissions');
     });
 });

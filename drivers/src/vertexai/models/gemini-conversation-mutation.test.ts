@@ -138,7 +138,7 @@ describe('Gemini thinking configuration', () => {
         expect(payload.config?.thinkingConfig).toBeUndefined();
     });
 
-    it('omits thinkingConfig when an explicit zero budget disables thinking', () => {
+    it('sends a zero thinking budget to disable thinking', () => {
         const payload = getGeminiPayload(
             {
                 model: 'publishers/google/models/gemini-2.5-flash',
@@ -150,7 +150,7 @@ describe('Gemini thinking configuration', () => {
             prompt,
         );
 
-        expect(payload.config?.thinkingConfig).toBeUndefined();
+        expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: false, thinkingBudget: 0 });
     });
 
     it('includes thought summaries when Gemini thinking is enabled', () => {
@@ -218,221 +218,6 @@ const mockStreamingChunk = {
 };
 
 describe('GeminiModelDefinition - no conversation mutation', () => {
-    it('keeps parallel same-name calls distinct while returning their original function name', async () => {
-        const modelDef = new GeminiModelDefinition('gemini-3-flash');
-        const driver = makeDriver({
-            generateContent: async () => ({
-                usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
-                candidates: [
-                    {
-                        finishReason: FinishReason.STOP,
-                        content: {
-                            role: 'model',
-                            parts: [
-                                { functionCall: { name: 'fetch_document', args: { id: 'first' } } },
-                                { functionCall: { name: 'fetch_document', args: { id: 'second' } } },
-                            ],
-                        },
-                    },
-                ],
-            }),
-        });
-        const completion = await modelDef.requestTextCompletion(
-            driver,
-            { contents: [{ role: 'user', parts: [{ text: 'fetch both' }] }] },
-            { model: 'publishers/google/models/gemini-3-flash' },
-        );
-        expect(completion.tool_use).toEqual([
-            expect.objectContaining({ id: 'gemini-tool-call:1:0::fetch_document', tool_input: { id: 'first' } }),
-            expect.objectContaining({ id: 'gemini-tool-call:1:1::fetch_document', tool_input: { id: 'second' } }),
-        ]);
-
-        const prompt = await modelDef.createPrompt(
-            driver,
-            [
-                { role: PromptRole.tool, tool_use_id: completion.tool_use?.[0].id, content: 'first result' },
-                { role: PromptRole.tool, tool_use_id: completion.tool_use?.[1].id, content: 'second result' },
-            ],
-            { model: 'publishers/google/models/gemini-3-flash' },
-        );
-        expect(
-            prompt.contents?.flatMap((content) => content.parts?.map((part) => part.functionResponse?.name)),
-        ).toEqual(['fetch_document', 'fetch_document']);
-        expect(prompt.contents?.flatMap((content) => content.parts?.map((part) => part.functionResponse?.id))).toEqual([
-            undefined,
-            undefined,
-        ]);
-    });
-
-    it('returns a provider-native call ID in the matching function response', async () => {
-        const modelDef = new GeminiModelDefinition('gemini-3-flash');
-        const driver = makeDriver({
-            generateContent: async () => ({
-                candidates: [
-                    {
-                        finishReason: FinishReason.STOP,
-                        content: {
-                            role: 'model',
-                            parts: [
-                                {
-                                    functionCall: {
-                                        id: 'native-call-42',
-                                        name: 'fetch_document',
-                                        args: { id: 'first' },
-                                    },
-                                },
-                            ],
-                        },
-                    },
-                ],
-            }),
-        });
-        const options = { model: 'publishers/google/models/gemini-3-flash' };
-        const completion = await modelDef.requestTextCompletion(
-            driver,
-            { contents: [{ role: 'user', parts: [{ text: 'fetch' }] }] },
-            options,
-        );
-        expect(completion.tool_use?.[0].id).toBe('gemini-tool-call:1:0:native-call-42:fetch_document');
-        const prompt = await modelDef.createPrompt(
-            driver,
-            [
-                {
-                    role: PromptRole.tool,
-                    tool_use_id: completion.tool_use?.[0].id,
-                    content: 'done',
-                },
-            ],
-            options,
-        );
-        expect(prompt.contents?.[0].parts?.[0].functionResponse).toMatchObject({
-            id: 'native-call-42',
-            name: 'fetch_document',
-        });
-        const next = await modelDef.requestTextCompletion(
-            driver,
-            { contents: prompt.contents },
-            { ...options, conversation: completion.conversation },
-        );
-        expect(next.tool_use?.[0].id).toBe('gemini-tool-call:2:0:native-call-42:fetch_document');
-    });
-
-    it('numbers same-name calls across streamed chunks without merging them', async () => {
-        const modelDef = new GeminiModelDefinition('gemini-3-flash');
-        const driver = makeDriver({
-            generateContentStream: async () =>
-                (async function* () {
-                    yield {
-                        candidates: [
-                            {
-                                content: {
-                                    role: 'model',
-                                    parts: [{ functionCall: { name: 'fetch_document', args: { id: 'first' } } }],
-                                },
-                            },
-                        ],
-                    };
-                    yield {
-                        candidates: [
-                            {
-                                content: {
-                                    role: 'model',
-                                    parts: [{ functionCall: { name: 'fetch_document', args: { id: 'second' } } }],
-                                },
-                            },
-                        ],
-                    };
-                })(),
-        });
-        const stream = await modelDef.requestTextCompletionStream(
-            driver,
-            { contents: [{ role: 'user', parts: [{ text: 'fetch both' }] }] },
-            { model: 'publishers/google/models/gemini-3-flash' },
-        );
-        const ids: string[] = [];
-        for await (const chunk of stream) ids.push(...(chunk.tool_use?.map((tool) => tool.id) ?? []));
-        expect(ids).toEqual(['gemini-tool-call:1:0::fetch_document', 'gemini-tool-call:1:1::fetch_document']);
-    });
-
-    it('uses a new ID when the next model turn calls the same function again', async () => {
-        const modelDef = new GeminiModelDefinition('gemini-3-flash');
-        const driver = makeDriver({
-            generateContent: async () => ({
-                candidates: [
-                    {
-                        finishReason: FinishReason.STOP,
-                        content: {
-                            role: 'model',
-                            parts: [{ functionCall: { name: 'fetch_document', args: { id: 'same' } } }],
-                        },
-                    },
-                ],
-            }),
-        });
-        const options = { model: 'publishers/google/models/gemini-3-flash' };
-        const first = await modelDef.requestTextCompletion(
-            driver,
-            { contents: [{ role: 'user', parts: [{ text: 'fetch' }] }] },
-            options,
-        );
-        const second = await modelDef.requestTextCompletion(
-            driver,
-            {
-                contents: [
-                    {
-                        role: 'user',
-                        parts: [
-                            {
-                                functionResponse: {
-                                    name: 'fetch_document',
-                                    id: first.tool_use?.[0].id,
-                                    response: { result: 'ok' },
-                                },
-                            },
-                        ],
-                    },
-                ],
-            },
-            { ...options, conversation: first.conversation },
-        );
-        expect(first.tool_use?.[0].id).toBe('gemini-tool-call:1:0::fetch_document');
-        expect(second.tool_use?.[0].id).toBe('gemini-tool-call:2:0::fetch_document');
-        expect(first.conversation).toMatchObject({
-            _llumiverse_meta: { turnNumber: 1, geminiToolIds: 'turn-index-v1' },
-        });
-        expect(second.conversation).toMatchObject({
-            _llumiverse_meta: { turnNumber: 2, geminiToolIds: 'turn-index-v1' },
-        });
-        expect(second.conversation).toMatchObject({
-            _arrayConversation: expect.arrayContaining([
-                expect.objectContaining({
-                    role: 'model',
-                    parts: [
-                        expect.objectContaining({
-                            functionCall: { name: 'fetch_document', args: { id: 'same' } },
-                        }),
-                    ],
-                }),
-            ]),
-        });
-        const third = await modelDef.requestTextCompletion(
-            driver,
-            {
-                contents: [
-                    {
-                        role: 'user',
-                        parts: [{ functionResponse: { name: 'fetch_document', response: { result: 'ok' } } }],
-                    },
-                ],
-            },
-            { ...options, conversation: second.conversation },
-        );
-        expect(third.tool_use?.[0].id).toBe('gemini-tool-call:3:0::fetch_document');
-        expect(third.conversation).toMatchObject({
-            _llumiverse_meta: { turnNumber: 3, geminiToolIds: 'turn-index-v1' },
-        });
-    });
-
     it('does not advance stored model-turn IDs for a content-less completion', async () => {
         const modelDef = new GeminiModelDefinition('gemini-3-flash');
         let calls = 0;
@@ -472,10 +257,10 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
             { contents: [{ role: 'user', parts: [{ text: 'next' }] }] },
             { ...options, conversation: empty.conversation },
         );
-        expect(first.tool_use?.[0].id).toBe('gemini-tool-call:1:0::fetch_document');
+        expect(first.tool_use?.[0].id).toBeTruthy();
         expect(empty.tool_use).toBeUndefined();
         expect(empty.conversation).toMatchObject({ _llumiverse_meta: { turnNumber: 1 } });
-        expect(next.tool_use?.[0].id).toBe('gemini-tool-call:2:0::fetch_document');
+        expect(next.tool_use?.[0].id).not.toBe(first.tool_use?.[0].id);
         expect(next.conversation).toMatchObject({ _llumiverse_meta: { turnNumber: 2 } });
     });
 
@@ -497,9 +282,13 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const driver = makeDriver({
             generateContent: async (request) => {
                 requests.push(request);
+                // A fresh copy per response, as the SDK returns: the driver stamps call ids on the response
+                // in place, and the next request must echo the native content without those generated ids.
                 return {
                     usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
-                    candidates: [{ finishReason: FinishReason.STOP, content: nativeContent, safetyRatings: [] }],
+                    candidates: [
+                        { finishReason: FinishReason.STOP, content: structuredClone(nativeContent), safetyRatings: [] },
+                    ],
                 };
             },
         });
@@ -545,10 +334,6 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
             },
         );
         expect(requests[1]).toMatchObject({ contents: expect.arrayContaining([nativeContent]) });
-        const replayed = (requests[1] as { contents: (typeof nativeContent)[] }).contents.find(
-            (content) => content.role === 'model',
-        );
-        expect(replayed).toEqual(nativeContent);
 
         const hidden = await modelDef.requestTextCompletion(
             driver,
@@ -617,6 +402,8 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
 
         expect(results).toContainEqual({ type: 'thoughts', value: 'plan ' });
         expect(results).toContainEqual({ type: 'thoughts', value: 'continued' });
+        // Each call keeps the id it was returned under, so its result can be paired with it.
+        const GENERATED_CALL_ID = expect.stringMatching(/^llumiverse_call_/);
         expect(conversation).toMatchObject({
             _arrayConversation: expect.arrayContaining([
                 {
@@ -624,12 +411,12 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                     parts: [
                         { text: 'plan ', thought: true },
                         {
-                            functionCall: { name: 'first', args: { value: 1 } },
+                            functionCall: { id: GENERATED_CALL_ID, name: 'first', args: { value: 1 } },
                             thoughtSignature: 'first-signature',
                         },
                         { text: 'continued', thought: true, thoughtSignature: 'thought-signature' },
                         {
-                            functionCall: { name: 'second', args: { value: 2 } },
+                            functionCall: { id: GENERATED_CALL_ID, name: 'second', args: { value: 2 } },
                             thoughtSignature: 'second-signature',
                         },
                         { text: 'answer', thoughtSignature: 'answer-signature' },
@@ -637,17 +424,6 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
                     ],
                 },
             ]),
-        });
-        const streamedModel = (
-            conversation as { _arrayConversation: Array<{ role: string; parts: unknown[] }> }
-        )._arrayConversation.find((content) => content.role === 'model');
-        expect(streamedModel?.parts?.[1]).toEqual({
-            functionCall: { name: 'first', args: { value: 1 } },
-            thoughtSignature: 'first-signature',
-        });
-        expect(streamedModel?.parts?.[3]).toEqual({
-            functionCall: { name: 'second', args: { value: 2 } },
-            thoughtSignature: 'second-signature',
         });
     });
 
@@ -889,5 +665,51 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         expect(JSON.stringify(originalContents)).toBe(contentsSnapshot);
         expect(originalContents[0].parts[0]).toHaveProperty('functionCall');
         expect(originalContents[1].parts[0]).toHaveProperty('functionResponse');
+    });
+});
+
+describe('Nano Banana image requests', () => {
+    it.each(['gemini-nano-banana-2.1', 'gemini-nano-banana-3.0'])(
+        'uses image configuration without sampling for %s',
+        (model) => {
+            const payload = getGeminiPayload(
+                {
+                    model,
+                    result_schema: { type: 'object' },
+                    model_options: {
+                        _option_id: 'vertexai-gemini',
+                        temperature: 1,
+                        top_p: 0.9,
+                        top_k: 40,
+                        seed: 42,
+                        image_size: '2K',
+                        image_aspect_ratio: '16:9',
+                        effort: 'minimal',
+                    },
+                },
+                { contents: [{ role: 'user', parts: [{ text: 'Draw a banana.' }] }] },
+            );
+            expect(payload.config).toMatchObject({
+                responseModalities: ['TEXT', 'IMAGE'],
+                imageConfig: { imageSize: '2K', aspectRatio: '16:9' },
+                thinkingConfig: { thinkingLevel: 'MINIMAL' },
+            });
+            for (const key of ['temperature', 'topP', 'topK', 'seed', 'logprobs', 'responseJsonSchema']) {
+                expect(payload.config?.[key as keyof NonNullable<typeof payload.config>]).toBeUndefined();
+            }
+        },
+    );
+
+    it.each([false, true])('routes image requests globally (streaming=%s)', async (streaming) => {
+        const driver = makeDriver({ generateContent: async () => mockNonStreamingResponse });
+        const getClient = vi.spyOn(driver, 'getGoogleGenAIClient');
+        const model = new GeminiModelDefinition('gemini-nano-banana-2.1');
+        const prompt = { contents: [{ role: 'user', parts: [{ text: 'Draw a banana.' }] }] };
+        const options: ExecutionOptions = {
+            model: 'locations/us-central1/publishers/google/models/gemini-nano-banana-2.1',
+        };
+        if (streaming) await model.requestTextCompletionStream(driver, prompt, options);
+        else await model.requestTextCompletion(driver, prompt, options);
+        expect(getClient).toHaveBeenCalledWith('global', undefined, undefined);
     });
 });

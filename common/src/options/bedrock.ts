@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { isMistralLargeGte } from '../capability/mistral.js';
 import type {
     BedrockAI21OptionsSchema,
     BedrockClaudeOptionsSchema,
@@ -13,15 +14,23 @@ import type {
     TwelvelabsPegasusOptionsSchema,
 } from '../schemas/model-options.js';
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
+import { getBedrockMantleOptions } from './bedrock_mantle.js';
 import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
     buildClaudeEffortOptions,
     buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
+    buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
-import { hasSamplingParameterRestriction } from './version-parsing.js';
+import {
+    getGrokReasoningEffortLevels,
+    hasSamplingParameterRestriction,
+    isOpenAIGptVersionGTE,
+    isPegasus15OrLater,
+    supportsNovaReasoning,
+} from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -94,6 +103,8 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     }
     // Mistral models
     else if (model.includes('mistral')) {
+        // Mistral Large 4+ publishes no output limit, so do not cap it with the legacy family default.
+        if (isMistralLargeGte(model, 4)) return undefined;
         if (model.includes('8x7b')) {
             return 4096;
         }
@@ -152,6 +163,14 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
 }
 
 export function getBedrockOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    if (isOpenAIGptVersionGTE(model, 5, 0)) {
+        // Closed-weight GPT models use the same reasoning controls across Bedrock transports.
+        const options = getBedrockMantleOptions(model);
+        return {
+            _option_id: 'bedrock-converse',
+            options: options.options.filter((item) => item.name !== 'image_detail'),
+        };
+    }
     if (model.includes('canvas')) {
         const taskTypeList: ModelOptionInfoItem = {
             name: 'taskType',
@@ -341,6 +360,25 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             description: 'The generation will halt if one of the stop sequences is output',
         });
 
+        const grokEffortLevels = model.includes('xai.grok-') ? getGrokReasoningEffortLevels(model) : undefined;
+        if (grokEffortLevels) {
+            // Grok reasoning models reject stop sequences, and take effort through the Converse reasoning field.
+            // https://docs.x.ai/docs/guides/reasoning
+            return {
+                _option_id: 'bedrock-converse',
+                options: [
+                    ...baseConverseOptions.filter((option) => option.name !== 'stop_sequence'),
+                    {
+                        name: 'effort',
+                        type: OptionType.enum,
+                        enum: Object.fromEntries(grokEffortLevels.map((value) => [value, value])),
+                        description:
+                            'The reasoning effort of the model, which affects the quality and speed of the response',
+                    },
+                ],
+            };
+        }
+
         if (model.includes('claude')) {
             // Opus 4.7+ models don't support top_k
             const claudeConverseOptions: ModelOptionInfoItem[] = hasSamplingRestriction
@@ -362,6 +400,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     ...claudeConverseOptions,
                     ...buildClaudeEffortOptions(model),
                     ...buildClaudeThinkingBudgetOption(model),
+                    ...buildClaudeThinkingModeOption(model),
                     ...buildClaudeIncludeThoughtsOption(model),
                     ...buildClaudeCacheOptions(),
                     ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),
@@ -380,6 +419,14 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         description: 'Limits token sampling to the top k tokens',
                     },
                 ];
+                if (supportsNovaReasoning(model)) {
+                    novaConverseOptions.push({
+                        name: 'effort',
+                        type: OptionType.enum,
+                        enum: { None: 'none', Low: 'low', Medium: 'medium', High: 'high' },
+                        description: 'Enable extended thinking at the selected effort, or disable it with none.',
+                    });
+                }
                 return {
                     _option_id: 'bedrock-nova',
                     options: [...baseConverseOptions, ...novaConverseOptions],
@@ -539,14 +586,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             };
         } else if (model.includes('twelvelabs')) {
             if (model.includes('pegasus')) {
+                // Pegasus offers only the Standard tier, so no service tier choice is listed.
                 const pegasusOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: 'service_tier',
-                        type: OptionType.enum,
-                        enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
-                        default: 'default',
-                        description: 'Select the Amazon Bedrock processing tier for this request.',
-                    },
                     {
                         name: 'temperature',
                         type: OptionType.numeric,
@@ -559,8 +600,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     {
                         name: 'max_tokens',
                         type: OptionType.numeric,
-                        min: 1,
-                        max: 4096,
+                        // Pegasus 1.5 requires at least 512 output tokens.
+                        min: isPegasus15OrLater(model) ? 512 : 1,
+                        max: getMaxTokensLimitBedrock(model),
                         integer: true,
                         step: 100,
                         description: 'The maximum number of tokens to generate',

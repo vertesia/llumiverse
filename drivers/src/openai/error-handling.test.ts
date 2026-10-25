@@ -39,6 +39,34 @@ class TestOpenAIResponsesDriver extends OpenAIResponsesDriverBase {
     }
 }
 
+describe('OpenAIResponsesDriverBase image generation usage', () => {
+    it('reports the output of a GPT Image call as image tokens', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        vi.spyOn(driver.service.images, 'generate').mockResolvedValue({
+            created: 0,
+            data: [{ b64_json: 'aW1hZ2U=' }],
+            usage: {
+                input_tokens: 50,
+                input_tokens_details: { image_tokens: 0, text_tokens: 50 },
+                output_tokens: 1056,
+                total_tokens: 1106,
+            },
+        } as OpenAI.Images.ImagesResponse);
+
+        const completion = await driver.requestImageGeneration([{ role: 'user', content: 'A lighthouse' }], {
+            model: 'gpt-image-1',
+        });
+
+        expect(completion.token_usage).toEqual({
+            prompt: 50,
+            prompt_new: 50,
+            result: 1056,
+            result_image: 1056,
+            total: 1106,
+        });
+    });
+});
+
 describe('OpenAIResponsesDriverBase usage mapping', () => {
     it('maps cache read and write usage', () => {
         const driver = new TestOpenAIResponsesDriver();
@@ -71,7 +99,8 @@ describe('OpenAIResponsesDriverBase usage mapping', () => {
             total: 120,
             prompt_cached: 45,
             prompt_cache_write: 30,
-            prompt_new: 55,
+            // Cache reads and writes are both counted in input_tokens.
+            prompt_new: 25,
         });
     });
 });

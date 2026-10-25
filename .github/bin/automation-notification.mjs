@@ -74,8 +74,7 @@ export async function notification({ repo, eventName, event, inputs = {}, runUrl
         const current = latest.workflow_runs[0];
         if (!current || current.id !== run.id || current.run_attempt !== run.run_attempt) return null;
         if (run.event === 'push') {
-            const watched = branch === 'main' || /^release\/.+$/.test(branch)
-                || (repo !== 'vertesia/studio' && branch === 'preview');
+            const watched = branch === 'main' || /^release\/.+$/.test(branch);
             if (!watched) return null;
             // A newer push can cancel old CI. Suppress those cancellations, but a real
             // failure still belongs to its author even if another commit has landed.
@@ -102,7 +101,7 @@ export async function notification({ repo, eventName, event, inputs = {}, runUrl
     if (prs.length !== 1) return null;
     const pr = prs[0];
     if (pr.head.repo?.full_name !== repo || pr.head.sha !== sha || normalizeBotLogin(pr.user.login) !== kind.bot) return null;
-    if (!/^(main|preview|release\/\d+\.\d+)$/.test(pr.base.ref)) return null;
+    if (!/^(main|release\/\d+\.\d+)$/.test(pr.base.ref)) return null;
     // Creation precedes label/assignee updates; resolve provenance from GitHub instead.
     if (!called && eventName === 'pull_request_target' && !pr.draft) return null;
     const login = await prOwner(api, repo, pr, kind);

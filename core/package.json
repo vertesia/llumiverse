@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/core",
-    "version": "1.6.0-dev.20260923.085100Z",
+    "version": "1.6.0-dev.20261022.120426Z",
     "type": "module",
     "description": "Provide an universal API to LLMs. Support for existing LLMs can be added by writing a driver.",
     "files": [
@@ -67,7 +67,7 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "devDependencies": {
-        "@vertesia/api-fetch-client": "^1.5.0",
+        "@vertesia/api-fetch-client": "^1.5.1",
         "rimraf": "^6.1.3",
         "typescript": "catalog:",
         "vitest": "catalog:"
@@ -78,6 +78,12 @@
         "ajv": "^8.20.0",
         "ajv-formats": "^3.0.1",
         "jsonrepair": "^3.15.0",
-        "undici": "^7.29.1"
+        "undici": "^7.30.0"
+    },
+    "gitHead": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
+    "releaseIdentity": {
+        "source_sha": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
+        "dependency_sha": "",
+        "lock_sha256": "d7263c7c8fc749f233a5362f162186fd66d341776955bede0f5dd63ce31c623f"
     }
 }

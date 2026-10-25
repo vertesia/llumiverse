@@ -6,7 +6,6 @@ import {
     type Completion,
     type CompletionResult,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -26,7 +25,7 @@ import {
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
-import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import { type AuthClient, GoogleAuth } from 'google-auth-library';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
@@ -37,13 +36,10 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 
 export * from './embeddings/batch.js';
 
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
-import { formatGeminiDebugPrompt } from './models/gemini.js';
-import {
-    type GeminiContextCacheCoordinationKey,
-    type GeminiContextCacheCoordinator,
-    GeminiContextCacheManager,
-} from './models/gemini-context-cache.js';
+import { getListedVertexMistralModels } from './mistral-models.js';
+import { NON_GLOBAL_ANTHROPIC_MODELS, resolveAnthropicVertexRegion } from './models/claude.js';
+import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './models/gemini.js';
+import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
@@ -55,27 +51,9 @@ export type {
     GeminiContextCacheEntry,
 } from './models/gemini-context-cache.js';
 
-export interface VertexAIDriverOptions extends DriverOptions {
-    project: string;
-    region: string;
-    googleAuthOptions?: GoogleAuthOptions;
-    /**
-     * Kill switch for explicit Gemini context caching (Vertex `cachedContents`). Caching is normally
-     * decided per execution — see `ExecutionOptions.prompt_cache_mode`, which defaults to caching the
-     * static prefix whenever `prompt_cache_key` is set. Setting this to `false` disables the whole
-     * path for every execution this driver runs, whatever the execution options say.
-     */
-    geminiContextCache?: boolean;
-    /**
-     * Default lifetime, in seconds, of the `cachedContents` resources this driver creates.
-     * Defaults to 1800 (30 minutes). `ExecutionOptions.prompt_cache_ttl_seconds` overrides it per call.
-     */
-    geminiContextCacheTtlSeconds?: number;
-    /** Host-supplied fleet coordinator. Llumiverse itself has no Redis dependency. */
-    geminiContextCacheCoordinator?: GeminiContextCacheCoordinator;
-    /** Host isolation scope, normally the Studio environment ID. */
-    geminiContextCacheScope?: string;
-}
+import type { VertexAIDriverOptions } from '../driver-options.js';
+
+export type { VertexAIDriverOptions } from '../driver-options.js';
 
 export interface GenerateContentPrompt {
     contents: Content[];
@@ -115,7 +93,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
-    anthropicClient: AnthropicVertex | undefined;
+    /** One client per Vertex location, since Claude generations are served from different endpoint types. */
+    private anthropicClients: Map<string, AnthropicVertex> = new Map();
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
@@ -133,7 +112,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         super(options);
 
         this.aiplatform = undefined;
-        this.anthropicClient = undefined;
         this.fetchClient = undefined;
         this.googleGenAI = undefined;
         this.googleGenAIRegion = undefined;
@@ -210,7 +188,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     protected override runInHttpContext<T>(operation: () => T): T {
-        // GoogleGenAI uses global fetch rather than accepting the driver's fetch hook.
+        // GoogleGenAI now receives the driver fetch, but other Google clients the driver uses (such as auth token
+        // requests) still go through global fetch, so keep the scoped global dispatcher for them.
         return runWithDriverHttpAgent(this.getHttpAgent(), operation);
     }
 
@@ -224,6 +203,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
         return {
             timeout: this.getDriverRequestTimeoutMs(httpTimeout),
+            // Since @google/genai 2.29, the SDK replaces the undici dispatcher with one that disables header and body
+            // timeouts unless a fetch is supplied. Passing the driver fetch keeps the driver's per-call timeouts.
+            fetch: this.getDriverFetch(),
             ...(serviceTier && serviceTier !== 'default'
                 ? {
                       headers: {
@@ -322,30 +304,25 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public async getAnthropicClient(
-        region: string = this.options.region,
+        region?: string,
         httpTimeout?: HttpTimeoutOptions,
+        model?: string,
     ): Promise<AnthropicVertex> {
-        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const getRegionPrefix = (r: string) => r.split('-')[0];
-        const regionPrefix = getRegionPrefix(region);
-        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
-
-        const defaultRegionPrefix = getRegionPrefix(this.options.region);
-        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
+        const mappedRegion = resolveAnthropicVertexRegion(region, this.options.region, model);
 
         // Get auth client to avoid version mismatch with GoogleAuth generic types
         const authClient = await this.getAuthClient();
 
-        // If mapped region is different from default mapped region, create one-off client
-        if (httpTimeout || mappedRegion !== defaultMappedRegion) {
+        if (httpTimeout) {
             return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
         }
 
-        //Lazy initialization for default region
-        if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+        let client = this.anthropicClients.get(mappedRegion);
+        if (!client) {
+            client = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+            this.anthropicClients.set(mappedRegion, client);
         }
-        return this.anthropicClient;
+        return client;
     }
 
     public async getAIPlatformClient(): Promise<v1beta1.ModelServiceClient> {
@@ -530,6 +507,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             for (const tool of toolUse as ToolUse<unknown>[]) {
                 const functionCallPart: Record<string, unknown> = {
                     functionCall: {
+                        // The tool-use id is the call id, so a later tool result can find this call.
+                        id: tool.id,
                         name: tool.tool_name,
                         args: tool.tool_input,
                     },
@@ -737,9 +716,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'imagen-product-recontext-preview',
                     'embedding',
                     'embed',
-                    'gemini-live',
+                    // Special-purpose Gemini APIs are excluded even when they advertise generateContent.
+                    '-live',
                     'live-',
                     'transcribe-live',
+                    '-robotics',
                     'native-audio',
                     'robotics',
                     'computer-use-preview',
@@ -784,7 +765,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             ...publisherPromises,
         ]);
 
-        models = models.concat(getListedVertexOpenMaaSModels(this.options.region));
+        // OCR offerings (DeepSeek OCR and Mistral OCR) are intentionally skipped as special-purpose models.
+        models = models.concat(
+            getListedVertexOpenMaaSModels(this.options.region),
+            getListedVertexMistralModels(this.options.region),
+        );
 
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
@@ -977,11 +962,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Get the model definition for this request
         const modelDef = getModelDefinition(context.model);
+        let formatted: LlumiverseError | undefined;
 
         // If the model definition provides custom error handling, use it
         if (modelDef.formatLlumiverseError) {
             try {
-                return modelDef.formatLlumiverseError(this, error, context);
+                formatted = modelDef.formatLlumiverseError(this, error, context);
             } catch {
                 // If model-specific handler throws, fall through to default handling
                 // This allows model handlers to explicitly opt out for certain errors
@@ -989,13 +975,22 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         // Fall back to default AbstractDriver error handling
-        return super.formatLlumiverseError(error, context);
+        formatted ??= super.formatLlumiverseError(error, context);
+        if (formatted.code === 403 && /storage\.(objects|buckets)\.|cloud storage|gs:\/\//i.test(formatted.message)) {
+            formatted.message +=
+                ' Ask your project administrator to verify bucket permissions for the Vertex AI service agent' +
+                ' or configured storage principal.';
+        }
+        return formatted;
     }
 }
 
 function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {
     const modelName = modelId.split('/').pop() ?? modelId;
-    return publisher === 'xai' || (publisher === 'google' && isGeminiOmniVideoModel(modelName));
+    return (
+        publisher === 'xai' ||
+        (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || isGeminiWithoutRegionalEndpoints(modelName)))
+    );
 }
 
 function isExecutableGoogleModel(model: Model): boolean {
@@ -1033,10 +1028,16 @@ export function createFetchClient({
     fetchImpl?: FETCH_FN;
 }): FetchClient {
     // For the "global" region, use aiplatform.googleapis.com without any prefix.
+    // The US multi-region uses the dedicated aiplatform.us.rep.googleapis.com hostname.
     // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
     const hostRegion = endpointRegion ?? region;
     const vertexBaseEndpoint =
-        apiEndpoint ?? (hostRegion === 'global' ? API_BASE_PATH : `${hostRegion}-${API_BASE_PATH}`);
+        apiEndpoint ??
+        (hostRegion === 'global'
+            ? API_BASE_PATH
+            : hostRegion === 'us'
+              ? 'aiplatform.us.rep.googleapis.com'
+              : `${hostRegion}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,

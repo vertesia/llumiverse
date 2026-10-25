@@ -1,3 +1,4 @@
+import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import { PromptRole } from '@llumiverse/core';
 import { APIConnectionTimeoutError } from 'groq-sdk/error';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,6 +9,104 @@ function setGroqCreate(driver: GroqDriver, create: ReturnType<typeof vi.fn>): vo
 }
 
 describe('GroqDriver shared Chat Completions transport', () => {
+    it.each([
+        [false, false],
+        [false, true],
+        [true, false],
+        [true, true],
+    ])('preserves extensions with streaming=%s and supplied options=%s', async (streaming, supplied) => {
+        const extraBody = {
+            reasoning_effort: 'low',
+            service_tier: 'flex',
+            temperature: 0.5,
+            reasoning_format: 'hidden',
+        };
+        const modelOptions = ModelOptionsSchema.parse({
+            _option_id: 'openai-text',
+            seed: 0,
+            ...(supplied ? { effort: 'high', service_tier: 'priority', temperature: 0 } : {}),
+            extra_body: extraBody,
+        });
+        const driver = new GroqDriver({ apiKey: 'test-key' });
+        async function* chunks() {
+            yield {
+                id: 'chunk-1',
+                object: 'chat.completion.chunk',
+                created: 1,
+                model: 'test-model',
+                choices: [{ index: 0, finish_reason: 'stop', delta: { content: 'ok' } }],
+            };
+        }
+        const create = vi.fn(async () =>
+            streaming
+                ? chunks()
+                : {
+                      id: 'completion-1',
+                      object: 'chat.completion',
+                      created: 1,
+                      model: 'test-model',
+                      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+                  },
+        );
+        setGroqCreate(driver, create);
+        const options = { model: 'openai/gpt-oss-120b', model_options: modelOptions };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], options);
+        if (streaming) {
+            const result = await driver.requestTextCompletionStream(prompt, options);
+            for await (const _chunk of result) {
+                /* Consume the mocked provider stream. */
+            }
+        } else await driver.requestTextCompletion(prompt, options);
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                reasoning_effort: supplied ? 'high' : 'low',
+                service_tier: supplied ? 'priority' : 'flex',
+                temperature: supplied ? 0 : 0.5,
+                seed: 0,
+                stream: streaming,
+                reasoning_format: 'hidden',
+            }),
+        );
+        expect(extraBody).toEqual({
+            reasoning_effort: 'low',
+            service_tier: 'flex',
+            temperature: 0.5,
+            reasoning_format: 'hidden',
+        });
+    });
+
+    it.each(['high', 'none', 'max'] as const)(
+        'forwards explicit effort %s and seed without local filtering',
+        async (effort) => {
+            const seed = effort === 'high' ? 42 : effort === 'none' ? 0 : undefined;
+            const modelOptions = {
+                _option_id: 'openai-text' as const,
+                effort,
+                seed,
+                extra_body: { include_reasoning: false, seed: 27 },
+            };
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async (_request: unknown) => ({
+                id: 'groq-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test-model',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+            }));
+            setGroqCreate(driver, create);
+            await driver.requestTextCompletion(
+                { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'hello' }] },
+                {
+                    model: 'openai/gpt-oss-120b',
+                    model_options: modelOptions,
+                },
+            );
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({ reasoning_effort: effort, seed: seed ?? 27, include_reasoning: false }),
+            );
+        },
+    );
+
     it('forwards a longer per-execution timeout to the SDK request', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown, _options?: unknown) => ({
@@ -126,6 +225,113 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(completion.original_response).toBe(response);
     });
 
+    describe('structured outputs', () => {
+        const resultSchema = {
+            type: 'object' as const,
+            properties: { color: { type: 'string' as const } },
+            required: ['color'],
+            additionalProperties: false,
+        };
+
+        async function requestFor(model: string, withTools = false) {
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async () => ({
+                id: 'groq-so',
+                object: 'chat.completion',
+                created: 1,
+                model,
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop',
+                        logprobs: null,
+                        message: { role: 'assistant', content: '{"color":"blue"}' },
+                    },
+                ],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }));
+            setGroqCreate(driver, create);
+            const options = {
+                model,
+                result_schema: resultSchema,
+                ...(withTools && {
+                    tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' as const } }],
+                }),
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Sky?' }], options);
+            await driver.requestTextCompletion(prompt, options);
+            return (create.mock.calls as unknown[][])[0][0] as { response_format?: unknown; messages: unknown[] };
+        }
+
+        it.each(['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'qwen/qwen3.9-32b'])(
+            'sends a strict json_schema response_format for %s',
+            async (model) => {
+                const request = await requestFor(model);
+                expect(request.response_format).toEqual({
+                    type: 'json_schema',
+                    json_schema: { name: 'output', strict: true, schema: expect.objectContaining({ type: 'object' }) },
+                });
+            },
+        );
+
+        it('keeps gpt-oss-safeguard in best-effort mode', async () => {
+            const request = await requestFor('openai/gpt-oss-safeguard-20b');
+            expect(request.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: false } });
+        });
+
+        // qwen3-32b is Qwen 3, not 3.32: the dash starts the size.
+        it.each(['qwen/qwen3.6-27b', 'qwen/qwen3-32b', 'meta-llama/llama-4-scout-17b-16e-instruct'])(
+            'leaves %s on prompt instructions',
+            async (model) => {
+                const request = await requestFor(model);
+                expect(request.response_format).toBeUndefined();
+            },
+        );
+
+        it('omits response_format when tools are offered, which Groq rejects', async () => {
+            const request = await requestFor('openai/gpt-oss-20b', true);
+            expect(request.response_format).toBeUndefined();
+        });
+
+        it('keeps the schema instruction in the prompt alongside response_format', async () => {
+            const request = await requestFor('openai/gpt-oss-20b');
+            expect(JSON.stringify(request.messages)).toContain('<response_schema>');
+        });
+    });
+
+    it('reports the prompt tokens served from the Groq prompt cache', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key', endpoint_url: 'https://groq.example.test' });
+        const create = vi.fn(async () => ({
+            id: 'groq-2',
+            object: 'chat.completion',
+            created: 1,
+            model: 'moonshotai/kimi-k2-instruct',
+            choices: [
+                { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'ok' } },
+            ],
+            usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 5,
+                total_tokens: 1005,
+                prompt_tokens_details: { cached_tokens: 800 },
+            },
+        }));
+        setGroqCreate(driver, create);
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hi' }], {
+            model: 'moonshotai/kimi-k2-instruct',
+        });
+
+        const completion = await driver.requestTextCompletion(prompt, { model: 'moonshotai/kimi-k2-instruct' });
+
+        expect(completion.token_usage).toEqual({
+            prompt: 1000,
+            prompt_cached: 800,
+            prompt_new: 200,
+            result: 5,
+            total: 1005,
+        });
+    });
+
     it('emits fragmented tool calls with the provider ID and x_groq usage', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         async function* chunks() {
@@ -238,6 +444,35 @@ describe('GroqDriver shared Chat Completions transport', () => {
         });
     });
 
+    it.each([undefined, 'auto', 'low', 'high', 'original'] as const)(
+        'preserves user image detail %s at the Groq SDK boundary',
+        async (detail) => {
+            const driver = new GroqDriver({ apiKey: 'test-key' });
+            const create = vi.fn(async (_request: unknown) => ({
+                id: 'groq-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'llama',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+            }));
+            setGroqCreate(driver, create);
+            const content = [
+                { type: 'text' as const, text: 'Describe this image' },
+                {
+                    type: 'image_url' as const,
+                    image_url: { url: 'https://example.test/image.png', ...(detail === undefined ? {} : { detail }) },
+                },
+            ];
+
+            await driver.requestTextCompletion(
+                { _is_openai_chat_completions: true, messages: [{ role: 'user', content }] },
+                { model: 'llama' },
+            );
+
+            expect(create).toHaveBeenCalledWith(expect.objectContaining({ messages: [{ role: 'user', content }] }));
+        },
+    );
+
     it('preserves tool image attachments at the Groq SDK boundary', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown) => ({
@@ -269,7 +504,10 @@ describe('GroqDriver shared Chat Completions transport', () => {
                         tool_call_id: 'call_1',
                         content: [
                             { type: 'text', text: 'result' },
-                            { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                            {
+                                type: 'image_url',
+                                image_url: { url: 'https://example.test/image.png', detail: 'original' },
+                            },
                         ],
                     },
                 ],
@@ -288,7 +526,7 @@ describe('GroqDriver shared Chat Completions transport', () => {
                 role: 'user',
                 content: [
                     { type: 'text', text: 'Image 1 from tool result call_1:' },
-                    { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                    { type: 'image_url', image_url: { url: 'https://example.test/image.png', detail: 'original' } },
                 ],
             },
         ]);

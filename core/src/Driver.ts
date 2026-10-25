@@ -34,7 +34,7 @@ import {
     FallbackCompletionStream,
     leaseCompletionStream,
 } from './CompletionStream.js';
-import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
+import { stripAudioFromCompletion } from './conversation-utils.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
     createAgentBackedFetch,
@@ -69,7 +69,7 @@ export interface Driver<PromptT = unknown> {
      */
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string>;
 
-    createPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<PromptT>;
+    createPrompt(segments: PromptSegment[], opts: ExecutionOptions, signal?: AbortSignal): Promise<PromptT>;
 
     execute(
         segments: PromptSegment[],
@@ -315,7 +315,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 const rawCode = getObjectProperty(error, 'code');
                 const code = rawCode === 'json_error' || rawCode === 'validation_error' ? rawCode : undefined;
                 const errorMessage = `[${this.provider}] [${options.model}] ${code ? `[${code}] ` : ''}Result validation error: ${validationError.message}`;
-                this.logger.error({ err: error, data: result.result }, errorMessage);
+                // The model's output did not match the caller's schema. That is an outcome of the run,
+                // returned on `result.error`, not a fault of this library or its host.
+                this.logger.info({ err: error }, errorMessage);
+                this.logger.debug({ data: result.result }, `${errorMessage} (invalid result)`);
                 result.error = {
                     code: code || 'validation_error',
                     message: validationError.message,
@@ -330,7 +333,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ExecutionResponse<PromptT>> {
-        const prompt = await this.createPrompt(segments, options);
+        const prompt = await this.createPrompt(segments, options, signal);
         return await this._execute(prompt, options, signal).catch((error: unknown) => {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
@@ -375,19 +378,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     if (LlumiverseError.isLlumiverseError(error)) {
                         throw error;
                     }
-                    // Log the original error for debugging
-                    this.logger.error(
-                        {
-                            err: error,
-                            data: {
-                                provider: this.provider,
-                                model: options.model,
-                                operation: 'execute',
-                                prompt: stripAudioPayloads(prompt),
-                            },
-                        },
-                        `Error during execution in provider ${this.provider}:`,
-                    );
+                    // Normalize here; the request/run boundary logs the resulting error once with
+                    // the final severity and correlation context. In particular, never log prompts.
                     throw this.formatLlumiverseError(error, {
                         provider: this.provider,
                         model: options.model,
@@ -420,7 +412,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             options,
             `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
         );
-        const prompt = await this.createPrompt(segments, options);
+        const prompt = await this.createPrompt(segments, options, signal);
         signal?.throwIfAborted();
         if (await this.canStream(options, signal)) {
             signal?.throwIfAborted();
@@ -436,14 +428,21 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @param options
      * @returns
      */
-    protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
+    protected async formatPrompt(
+        segments: PromptSegment[],
+        opts: PromptOptions,
+        _signal?: AbortSignal,
+    ): Promise<PromptT> {
         return formatTextPrompt(segments, opts.result_schema) as PromptT;
     }
 
-    public async createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
-        return await (opts.format
+    public async createPrompt(segments: PromptSegment[], opts: PromptOptions, signal?: AbortSignal): Promise<PromptT> {
+        signal?.throwIfAborted();
+        const prompt = await (opts.format
             ? (opts.format(segments, opts.result_schema) as PromptT)
-            : this.formatPrompt(segments, opts));
+            : this.formatPrompt(segments, opts, signal));
+        signal?.throwIfAborted();
+        return prompt;
     }
 
     /**

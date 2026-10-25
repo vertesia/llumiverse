@@ -55,7 +55,22 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 ## Requirements
 
 * Node.js 24.x
+* The OpenAI driver uses OpenAI SDK 7.25.0, whose minimum supported Node.js version is 22.
 * Bun 1.0+ (experimental support)
+
+## Azure Foundry SDKs
+
+Foundry uses `@azure/ai-projects` for project/deployment discovery, OpenAI SDK 7 for OpenAI-compatible
+inference, and `@anthropic-ai/foundry-sdk` for Anthropic deployments. Claude Messages requests use the
+resource `/anthropic/v1/messages` endpoint and the existing Entra credential. Claude source model IDs
+select the shared Anthropic options and behavior; the deployment name is sent in the API request.
+Chat Completions, Responses, embeddings, and image requests use the OpenAI v1 endpoint resolved by
+Projects. Projects retains its own declared OpenAI dependency; no dependency override is required.
+The retired Azure AI Inference beta transport is no longer used. Deployments must support OpenAI v1
+and the requested modality; image embedding availability remains deployment-specific.
+Azure Responses image tools use v1 requests and a blocking streaming fallback. Microsoft currently
+[documents image streaming and multi-turn image editing as unsupported](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses).
+These callable paths do not establish Azure parity with OpenAI iterative image editing.
 
 ## Installation
 
@@ -213,6 +228,36 @@ const data = response.result[0].value;
 console.log(data.sentiment); // "positive"
 ```
 
+## Testing
+
+Tests fall into three tiers, chosen by file name and by the allow list in
+[`.github/workflows/build-and-test.yml`](.github/workflows/build-and-test.yml):
+
+| Tier | Files | Calls providers | Runs in CI |
+| --- | --- | --- | --- |
+| Functional | `*.test.ts` | No: provider calls are mocked | Yes, all of them |
+| Live | `*.live.test.ts` | Yes, using your credentials | No; run on demand |
+| Live in CI | `*.live.test.ts` listed in the CI allow list | Yes | Yes, on every push and pull request |
+
+A test that calls a provider must live in a `*.live.test.ts` file. Live files in CI are the curated smoke set:
+`model-smoke`, `conversation`, `tools` and `embeddings` (all under `drivers/test/`). Other live files cover
+debugging or slower checks, such as `max-tokens-limit.live.test.ts`, which sends each smoke model a request at its
+documented output limit. To add a live file to CI, add its path to the allow list.
+
+```bash
+# Functional tests: no credentials needed
+pnpm exec vitest run --exclude '**/*.live.test.ts'
+
+# One live file, narrowed to a provider or model
+LLUMIVERSE_LIVE_PROVIDERS=google-vertex pnpm exec vitest run drivers/test/model-smoke.live.test.ts
+```
+
+Live tests run only for providers whose credentials are set, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
+`WATSONX_API_KEY` (with `WATSONX_PROJECT_ID` and `WATSONX_ENDPOINT_URL`), `AZURE_OPENAI_KEY` (with
+`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`), `BEDROCK_REGION`, `BEDROCK_MANTLE_REGION`, and
+`GOOGLE_PROJECT_ID` with `GOOGLE_REGION`. Tests for other providers are skipped.
+
 ## Contributing
 
 We welcome contributions! Whether it's a new driver, a bug fix, or a docs improvement.
@@ -246,3 +291,25 @@ Turborepo CLI OIDC policy for this repository on the Vercel team. The team comes
 from the `TURBO_TEAM` organization variable (`Vertesia`). No `TURBO_TOKEN`
 secret is needed. Unit-test hashes include the CI runner OS, architecture, and image
 version to separate them from local runs.
+
+### Coordinated publishing
+
+The native `publish-npm.yaml` workflow accepts optional `request_id`, `source_sha`,
+and exact `version` inputs. Snapshot versions use `X.Y.Z-dev.YYYYMMDD.HHMMSSZ` on
+`main`; stable versions use `release/X.Y`. The exact version must match the selected
+base and bump. Registry credentials remain in the existing build environment.
+
+Successful real runs upload `sdk-publish-source/sdk-publish-source.json` containing
+`version`, input `source_sha`, and the committed `release_sha`. A downstream publisher
+can consume that exact commit directly and include its gitlink in its version commit.
+Coordinated version commits carry `Coordinated-Release: true`, suppressing only their
+automatic submodule-sync notification; ordinary source commits still notify consumers.
+
+Release retries use immutable `vX.Y.Z` or `vX.Y.Z-dev.YYYYMMDD.HHMMSSZ`
+source tags. Before any Git or registry write, the publisher checks source membership
+on the selected branch and ownership of every existing package version. Package
+metadata records `releaseIdentity` (source commit, dependency pin, and lockfile hash).
+After publishing, the tagged version commit is merged into the current branch tip;
+ordinary commits that land during the build are preserved. A rejected push retries
+against the new tip. Genuine version conflicts stop with the durable tag available
+for recovery, without changing the artifact's source identity.

@@ -35,3 +35,9 @@ create 422s); `Exempt` silently skips evaluation. Add:
 
 The release-cut **never** bypasses `main`: version bumps to `main` arrive as PRs that
 the approve+merge automation lands.
+
+## CI approval gate
+
+`ci-approval.json` is an additive required-status ruleset for `main` and `release/**`.
+Install and validate the workflow before importing it. It preserves existing human
+review settings. See [activation and verification](../bin/ci-approve.md#activation).

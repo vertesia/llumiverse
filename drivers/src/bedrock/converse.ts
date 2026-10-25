@@ -362,6 +362,31 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
     return result;
 }
 
+/**
+ * Remove what the Converse API rejects outright: blank text blocks and messages left with no content.
+ * A response the model ends without output (e.g. a `content_filtered` stop) would otherwise be stored
+ * as an empty assistant turn and fail every later request with a ValidationException. Dropping a
+ * message can leave two same-role messages adjacent, so they are merged afterwards.
+ */
+export function sanitizeConverseMessages(messages: Message[]): Message[] {
+    const kept: Message[] = [];
+    let changed = false;
+    for (const message of messages) {
+        const content = message.content?.filter((block) => block.text === undefined || block.text.trim().length > 0);
+        if (!content?.length) {
+            changed = true;
+            continue;
+        }
+        if (content.length === message.content?.length) {
+            kept.push(message);
+        } else {
+            changed = true;
+            kept.push({ ...message, content });
+        }
+    }
+    return converseConcatMessages(changed ? kept : messages);
+}
+
 /** Keep tool images visible on models that only accept them as ordinary user content. */
 export function relocateConverseToolImages(messages: Message[], model: string): Message[] {
     // AWS only documents nested tool-result images for Nova and Claude.
@@ -551,4 +576,31 @@ export async function formatConversePrompt(
         messages: messages,
         system: system,
     };
+}
+
+/**
+ * Whether a stored conversation is in Anthropic Messages format (Claude on the Messages API). Switching such a
+ * conversation to a Converse model is not supported.
+ */
+export function isMessagesApiConversation(conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    return Array.isArray(messages) && messages.length > 0 && !isConverseConversation(conversation);
+}
+
+/**
+ * Whether a stored conversation was built for the Converse API: its content blocks are single-key objects
+ * (`{ text }`, `{ toolUse }`, `{ reasoningContent }`, ...) rather than Anthropic Messages blocks with a `type`.
+ * Claude conversations started before Bedrock moved Claude to the Messages API keep using Converse.
+ */
+export function isConverseConversation(conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    if (!Array.isArray(messages)) return false;
+    const isConverseBlock = (block: unknown) => !!block && typeof block === 'object' && !('type' in block);
+    // Every Converse message has array content, so the first non-empty one decides.
+    for (const message of messages) {
+        const content = (message as { content?: unknown } | null)?.content;
+        if (Array.isArray(content) && content.length > 0) return content.some(isConverseBlock);
+    }
+    const system = (conversation as { system?: unknown }).system;
+    return Array.isArray(system) && system.some(isConverseBlock);
 }

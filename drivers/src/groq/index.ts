@@ -6,6 +6,9 @@ import {
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
+    isQwenVersionGte,
+    type JSONSchema,
+    type Logger,
     ModelType,
     modelModalitiesToArray,
     Providers,
@@ -15,14 +18,17 @@ import { APIConnectionError, APIError, APIUserAbortError } from 'groq-sdk/error'
 import type {
     ChatCompletion,
     ChatCompletionChunk,
+    ChatCompletionContentPartImage,
     ChatCompletionCreateParamsNonStreaming,
     ChatCompletionCreateParamsStreaming,
     ChatCompletionMessageParam,
     ChatCompletionTool,
 } from 'groq-sdk/resources/chat/completions';
+import type { CompletionUsage } from 'groq-sdk/resources/completions';
+import type { GroqDriverOptions } from '../driver-options.js';
+import { mergeOpenAIExtraBody } from '../openai/extra_body.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     type OpenAIChatCompletionsResponse,
@@ -31,12 +37,10 @@ import {
     preserveOpenAIChatCompletionsOriginalResponse,
 } from '../openai/openai_chat_completions.js';
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
+import { formatOpenAISchema } from '../openai/schema.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
-export interface GroqDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint_url?: string;
-}
+export type { GroqDriverOptions } from '../driver-options.js';
 
 export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOptions> {
     static readonly PROVIDER = Providers.groq;
@@ -84,7 +88,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toGroqRequest(payload, options, false);
+        const request = toGroqRequest(payload, options, false, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const response = requestOptions
             ? await this.client.chat.completions.create(request, requestOptions)
@@ -97,7 +101,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const request = toGroqRequest(payload, options, true);
+        const request = toGroqRequest(payload, options, true, this.logger);
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const stream = requestOptions
             ? await this.client.chat.completions.create(request, requestOptions)
@@ -165,16 +169,19 @@ function toGroqRequest(
     payload: OpenAIChatCompletionsPayload,
     options: ExecutionOptions,
     stream: false,
+    logger?: Logger,
 ): ChatCompletionCreateParamsNonStreaming;
 function toGroqRequest(
     payload: OpenAIChatCompletionsPayload,
     options: ExecutionOptions,
     stream: true,
+    logger?: Logger,
 ): ChatCompletionCreateParamsStreaming;
 function toGroqRequest(
     payload: OpenAIChatCompletionsPayload,
     options: ExecutionOptions,
     stream: boolean,
+    logger?: Logger,
 ): ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming {
     const modelOptions = options.model_options;
     const reasoningFormat =
@@ -187,18 +194,42 @@ function toGroqRequest(
         max_completion_tokens: payload.max_tokens ?? undefined,
         temperature: payload.temperature ?? undefined,
         top_p: payload.top_p ?? undefined,
+        ...(payload.seed !== undefined && { seed: payload.seed }),
         presence_penalty: payload.presence_penalty ?? undefined,
         frequency_penalty: payload.frequency_penalty ?? undefined,
         stop: payload.stop ?? undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toGroqTool),
+        response_format: toGroqResponseFormat(payload, options),
         reasoning_format: reasoningFormat,
-        extra_body: payload.extra_body,
+        reasoning_effort: payload.reasoning_effort as ChatCompletionCreateParamsNonStreaming['reasoning_effort'],
+        service_tier: payload.service_tier as ChatCompletionCreateParamsNonStreaming['service_tier'],
         stream,
-    } satisfies (ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming) & {
-        extra_body?: Record<string, unknown>;
+    } satisfies ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming;
+    return mergeOpenAIExtraBody(request, payload.extra_body, logger, payload.model);
+}
+
+/**
+ * Groq Structured Outputs: `json_schema` on gpt-oss and Qwen 3.8+, strict (constrained decoding) except on
+ * gpt-oss-safeguard. Groq rejects `response_format` together with tools, so a request with tools keeps the
+ * prompt instruction alone, which this driver always sends.
+ */
+function toGroqResponseFormat(
+    payload: OpenAIChatCompletionsPayload,
+    options: ExecutionOptions,
+): ChatCompletionCreateParamsNonStreaming['response_format'] {
+    if (!options.result_schema || (payload.tools?.length ?? 0) > 0) return undefined;
+    const model = payload.model.toLowerCase().split('/').pop() ?? '';
+    if (!model.startsWith('gpt-oss-') && !isQwenVersionGte(model, 3, 8)) return undefined;
+    const formatted = formatOpenAISchema(options.result_schema as JSONSchema);
+    return {
+        type: 'json_schema',
+        json_schema: {
+            name: 'output',
+            strict: formatted.strict && !model.includes('safeguard'),
+            schema: formatted.schema as Record<string, unknown>,
+        },
     };
-    return request;
 }
 
 function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
@@ -209,7 +240,11 @@ function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]
                   ? unsupportedAudioPart()
                   : part.type === 'text'
                     ? { type: 'text' as const, text: part.text }
-                    : { type: 'image_url' as const, image_url: part.image_url },
+                    : {
+                          type: 'image_url' as const,
+                          // OpenAI may add detail values before Groq's SDK; let the provider validate supplied values.
+                          image_url: part.image_url as ChatCompletionContentPartImage.ImageURL,
+                      },
           )
         : undefined;
     switch (message.role) {
@@ -259,6 +294,18 @@ function toGroqTool(tool: NonNullable<OpenAIChatCompletionsPayload['tools']>[num
     ];
 }
 
+/** Groq's usage, keeping the prompt tokens served from its prompt cache, which are billed at a discount. */
+function normalizeGroqUsage(usage: CompletionUsage | null | undefined): OpenAIChatCompletionsResponse['usage'] {
+    if (!usage) return undefined;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+    return {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        ...(cachedTokens ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
+    };
+}
+
 function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsResponse {
     const usage = response.usage;
     return {
@@ -284,13 +331,7 @@ function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsR
                 })),
             },
         })),
-        usage: usage
-            ? {
-                  prompt_tokens: usage.prompt_tokens,
-                  completion_tokens: usage.completion_tokens,
-                  total_tokens: usage.total_tokens,
-              }
-            : undefined,
+        usage: normalizeGroqUsage(usage),
     };
 }
 
@@ -320,13 +361,7 @@ async function* normalizeGroqStream(
                     })),
                 },
             })),
-            usage: usage
-                ? {
-                      prompt_tokens: usage.prompt_tokens,
-                      completion_tokens: usage.completion_tokens,
-                      total_tokens: usage.total_tokens,
-                  }
-                : undefined,
+            usage: normalizeGroqUsage(usage),
         };
     }
 }

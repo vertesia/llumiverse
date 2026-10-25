@@ -1,4 +1,4 @@
-import type { GenerateContentResponseUsageMetadata } from '@google/genai';
+import { type GenerateContentResponseUsageMetadata, MediaModality } from '@google/genai';
 import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
@@ -42,5 +42,27 @@ describe('Gemini implicit prompt caching', () => {
             total: 135,
         });
         expect(driver.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('reports the image tokens of a generated image apart from the text', () => {
+        const model = new GeminiModelDefinition('gemini-2.5-flash-image');
+        const driver = { logger: { warn: vi.fn() } } as unknown as VertexAIDriver;
+        const usage = {
+            promptTokenCount: 12,
+            candidatesTokenCount: 1300,
+            candidatesTokensDetails: [
+                { modality: MediaModality.TEXT, tokenCount: 10 },
+                { modality: MediaModality.IMAGE, tokenCount: 1290 },
+            ],
+            totalTokenCount: 1312,
+        } satisfies GenerateContentResponseUsageMetadata;
+
+        expect(model.usageMetadataToTokenUsage(driver, usage)).toEqual({
+            prompt: 12,
+            prompt_new: 12,
+            result: 1300,
+            result_image: 1290,
+            total: 1312,
+        });
     });
 });

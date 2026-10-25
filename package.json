@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/parent",
-    "version": "1.6.0-dev.20260923.085100Z",
+    "version": "1.6.0-dev.20261022.120426Z",
     "private": true,
     "type": "module",
     "scripts": {
@@ -8,7 +8,7 @@
         "check": "pnpm exec biome check .",
         "check:write": "pnpm exec biome check --write .",
         "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test:unit",
-        "ci:renovate": "npx --yes --package renovate -- renovate-config-validator --strict",
+        "ci:renovate": "npx --yes --package renovate@44.151.5 -- renovate-config-validator --strict",
         "clean:outputs": "pnpm -r exec rimraf ./lib ./dist ./.next ./tsconfig.tsbuildinfo ./.tsbuildinfo",
         "format": "pnpm exec biome format --write .",
         "format:check": "pnpm exec biome format .",
@@ -22,10 +22,16 @@
         "test:unit": "pnpm exec turbo run test:unit ${TURBO_CACHE_OPTS:---cache=local:rw,remote:r}"
     },
     "devDependencies": {
-        "@biomejs/biome": "2.5.13",
-        "turbo": "^2.10.13",
+        "@biomejs/biome": "2.5.15",
+        "turbo": "^2.11.8",
         "typescript": "catalog:",
         "vitest": "catalog:"
     },
-    "packageManager": "pnpm@12.4.2"
+    "packageManager": "pnpm@12.13.0",
+    "gitHead": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
+    "releaseIdentity": {
+        "source_sha": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
+        "dependency_sha": "",
+        "lock_sha256": "d7263c7c8fc749f233a5362f162186fd66d341776955bede0f5dd63ce31c623f"
+    }
 }

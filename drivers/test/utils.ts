@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { CompletionResult } from '@llumiverse/common';
+import { setTimeout as sleep } from 'node:timers/promises';
+import {
+    type CompletionResult,
+    type ExecutionOptions,
+    getOptions,
+    LlumiverseError,
+    type Providers,
+} from '@llumiverse/common';
+import type { TestOptions } from 'vitest';
 
 const dataDir = join(dirname(new URL(import.meta.url).pathname), 'data');
 const dataFile = (file: string) => join(dataDir, file);
@@ -66,4 +74,81 @@ export function parseCompletionResults(result: CompletionResult[], separator: st
     } catch {
         return result.map(completionResultToString).join(separator);
     }
+}
+
+const RATE_LIMIT_BACKOFF_MS = [3_000, 6_000, 12_000];
+const RATE_LIMIT_EXHAUSTED = 'Provider still rate limited after';
+
+/**
+ * Run a live provider call, waiting and trying again each time the provider answers 429.
+ * Vitest's `retry` re-runs a test immediately, and a throttled upstream answers that with another 429.
+ */
+export async function withRateLimitBackoff<T>(call: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await call();
+        } catch (error: unknown) {
+            if (!LlumiverseError.isLlumiverseError(error) || error.code !== 429) {
+                throw error;
+            }
+            const delayMs = RATE_LIMIT_BACKOFF_MS[attempt];
+            if (delayMs === undefined) {
+                throw new Error(`${RATE_LIMIT_EXHAUSTED} ${attempt + 1} attempts: ${error.message}`, { cause: error });
+            }
+            console.warn(`${error.message}; retrying in ${delayMs}ms`);
+            await sleep(delayMs);
+        }
+    }
+}
+
+/**
+ * Vitest retry settings for a test that calls a provider through `withRateLimitBackoff`. A test that failed because
+ * the provider stayed rate limited has already waited out every backoff step, so it is not retried.
+ * The condition is a RegExp on the message because Vitest drops a function condition before the test runs.
+ */
+export function retryUnlessRateLimited(count: number): TestOptions['retry'] {
+    return { count, condition: new RegExp(`^(?!${RATE_LIMIT_EXHAUSTED})`) };
+}
+
+/** Success smokes use advertised controls; unsupported caller input is covered by protocol regressions. */
+export function getAdvertisedTestOptions(options: ExecutionOptions, provider: string): ExecutionOptions {
+    const advertised = new Set(getOptions(options.model, provider as Providers).options.map((option) => option.name));
+    return {
+        ...options,
+        model_options: Object.fromEntries(
+            Object.entries(options.model_options ?? {}).filter(
+                ([name]) => name === '_option_id' || advertised.has(name),
+            ),
+        ),
+    };
+}
+
+/** `low` when advertised, otherwise the lowest advertised level that still reasons (Mistral offers none/high). */
+function getLowestReasoningEffort(model: string, provider: string): string | undefined {
+    const effort = getOptions(model, provider as Providers).options.find((option) => option.name === 'effort');
+    if (effort?.type !== 'enum') return undefined;
+    const values = Object.values(effort.enum as Record<string, string>);
+    return values.includes('low') ? 'low' : values.find((value) => value !== 'none');
+}
+
+/**
+ * Success-smoke options: low effort where the model supports it, no sampling controls unless a test passes them,
+ * and only the controls the model advertises.
+ */
+export function getLowEffortTestOptions(
+    model: string,
+    provider: string,
+    modelOptions: Record<string, unknown> = {},
+): ExecutionOptions {
+    return getAdvertisedTestOptions(
+        {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                effort: getLowestReasoningEffort(model, provider),
+                ...modelOptions,
+            } as ExecutionOptions['model_options'],
+        },
+        provider,
+    );
 }

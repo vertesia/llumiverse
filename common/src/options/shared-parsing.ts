@@ -8,7 +8,13 @@
 
 import { type ModelOptionInfoItem, OptionType } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getAvailableEffortLevels, isClaudeVersionGTE, requiresAdaptiveThinkingOnly } from './version-parsing.js';
+import {
+    getAvailableEffortLevels,
+    isClaudeVersionGTE,
+    parseClaudeVersion,
+    requiresAdaptiveThinkingOnly,
+    supportsClaudeFastMode,
+} from './version-parsing.js';
 
 // ============================================================================
 // Max tokens
@@ -22,9 +28,11 @@ import { getAvailableEffortLevels, isClaudeVersionGTE, requiresAdaptiveThinkingO
  * - All others:   delegated to {@link getMaxOutputTokens}
  */
 export function getClaudeMaxTokensLimit(model: string): number {
-    if (model.includes('-3-7')) return 128000;
+    const claude = parseClaudeVersion(model);
+    if (claude?.major === 3 && claude.minor === 7) return 128000;
     if (isClaudeVersionGTE(model, 4, 7)) return 128000;
-    return getMaxOutputTokens(model);
+    // Every Claude generation has a numeric canonical limit; unknown dedicated Gemini APIs do not.
+    return getMaxOutputTokens(model) as number;
 }
 
 // ============================================================================
@@ -61,6 +69,20 @@ export function buildClaudeCacheTtlOptions(cacheEnabled?: boolean): ModelOptionI
     ];
 }
 
+/** Fast mode selector, for the Claude API models that support it. */
+export function buildClaudeSpeedOption(model: string): ModelOptionInfoItem[] {
+    if (!supportsClaudeFastMode(model)) return [];
+    return [
+        {
+            name: 'speed',
+            type: OptionType.enum,
+            enum: { Standard: 'standard', Fast: 'fast' },
+            default: 'standard',
+            description: 'Fast mode generates output faster at premium pricing. It requires fast mode access.',
+        },
+    ];
+}
+
 // ============================================================================
 // Effort option
 // ============================================================================
@@ -79,6 +101,21 @@ export function buildClaudeEffortOptions(model: string): ModelOptionInfoItem[] {
             enum: effortLevels,
             description:
                 'Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.',
+        },
+    ];
+}
+
+/** Thinking mode selector for Sonnet 5.5 and later Sonnet generations. */
+export function buildClaudeThinkingModeOption(model: string): ModelOptionInfoItem[] {
+    if (parseClaudeVersion(model)?.variant !== 'sonnet' || !isClaudeVersionGTE(model, 5, 5)) return [];
+    return [
+        {
+            name: 'thinking_mode',
+            type: OptionType.enum,
+            enum: { 'Adaptive (default)': 'adaptive', 'Between tools': 'between_tools' },
+            description:
+                'Between tools skips up-front thinking and requires low, medium, or high effort. ' +
+                'Keep effort fixed during the conversation. Include thoughts controls visibility only.',
         },
     ];
 }

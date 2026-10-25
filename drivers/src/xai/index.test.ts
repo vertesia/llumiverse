@@ -130,6 +130,22 @@ describe('xAI image generation', () => {
         });
     });
 
+    it('reports the cost xAI charged for the images', async () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        const post = vi.fn(async () => ({
+            data: [{ url: 'https://example.com/image.jpeg' }],
+            usage: { cost_in_usd_ticks: 400_000_000 },
+        }));
+        driver.xai_service = { post } as unknown as FetchClient;
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'A lighthouse' }], {
+            model: 'grok-imagine-image',
+        });
+
+        const completion = await driver.requestImageGeneration(prompt, { model: 'grok-imagine-image' });
+
+        expect(completion.token_usage).toEqual({ provider_cost_usd: 0.04 });
+    });
+
     it('falls back from streaming to the image generation endpoint for Image 2.0', async () => {
         const driver = new xAIDriver({ apiKey: 'test-key' });
         const post = vi.fn(async () => ({ data: [{ url: 'https://example.com/image.jpeg' }] }));
@@ -191,6 +207,29 @@ describe('xAI image generation', () => {
                     url: 'data:image/png;base64,aW1hZ2U=',
                 },
             },
+        });
+    });
+});
+
+describe('xAI empty image responses', () => {
+    it.each([{}, { data: [] }, { data: [{}] }, { data: [{ b64_json: '', url: ' ' }] }])(
+        'rejects a response with no usable images: %j',
+        async (response) => {
+            const driver = new xAIDriver({ apiKey: 'test-key' });
+            driver.xai_service = { post: vi.fn().mockResolvedValue(response) } as unknown as FetchClient;
+            await expect(driver.requestImageGeneration([], { model: 'grok-imagine-image' })).resolves.toMatchObject({
+                result: [],
+                error: { code: 'validation_error', message: expect.stringContaining('no usable images') },
+            });
+        },
+    );
+    it('retains usable images from a partial batch', async () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        driver.xai_service = {
+            post: vi.fn().mockResolvedValue({ data: [null, {}, { url: 'https://example.com/image.jpeg' }] }),
+        } as unknown as FetchClient;
+        await expect(driver.requestImageGeneration([], { model: 'grok-imagine-image' })).resolves.toEqual({
+            result: [{ type: 'image', value: 'https://example.com/image.jpeg' }],
         });
     });
 });

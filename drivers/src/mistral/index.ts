@@ -38,6 +38,7 @@ import type {
     ChatCompletionRequestTool,
     ChatCompletionResponse,
     ContentChunk,
+    ReasoningEffort,
     ToolCall,
 } from '@mistralai/mistralai/models/components';
 import {
@@ -46,18 +47,13 @@ import {
     MistralError,
     RequestAbortedError,
 } from '@mistralai/mistralai/models/errors';
-import type {
-    OpenAIChatCompletionsDriverOptions,
-    OpenAIChatCompletionsPrompt,
-} from '../openai/openai_chat_completions.js';
+import type { MistralAIDriverOptions } from '../driver-options.js';
+import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import { type CompatibleAPIError, OpenAICompatibleDriverBase } from '../openai/openai_compatible.js';
 
-const ENDPOINT = 'https://api.mistral.ai';
+export type { MistralAIDriverOptions } from '../driver-options.js';
 
-export interface MistralAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint_url?: string;
-}
+const ENDPOINT = 'https://api.mistral.ai';
 
 export interface MistralPrompt {
     messages: ChatCompletionRequestMessage[];
@@ -414,10 +410,11 @@ function buildMistralRequest(
         promptCacheKey: options.prompt_cache_key,
         n: 1,
         tools: options.tools?.map(toMistralTool),
+        // Mistral serves models with different effort sets (e.g. GLM's low/high/max); the provider validates them.
         reasoningEffort:
-            modelOptions?.effort === 'none' || modelOptions?.effort === 'high' ? modelOptions.effort : undefined,
+            typeof modelOptions?.effort === 'string' ? (modelOptions.effort as ReasoningEffort) : undefined,
         stream,
-    } satisfies ChatCompletionRequest & { reasoningEffort?: 'none' | 'high' };
+    } satisfies ChatCompletionRequest;
 }
 
 function toMistralTool(tool: ToolDefinition): ChatCompletionRequestTool {

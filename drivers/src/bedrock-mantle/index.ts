@@ -1,11 +1,9 @@
 import { AnthropicBedrockMantle, type BedrockMantleClientOptions } from '@anthropic-ai/bedrock-sdk';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
-import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
     type Completion,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -21,6 +19,7 @@ import {
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import { BedrockOpenAI } from 'openai';
+import type { BedrockMantleDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
@@ -39,13 +38,10 @@ import {
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
+export type { BedrockMantleDriverOptions } from '../driver-options.js';
+
 type BedrockMantleResponsesPrompt = OpenAI.Responses.ResponseInputItem[];
 export type BedrockMantlePrompt = BedrockMantleResponsesPrompt | OpenAIChatCompletionsPrompt | ClaudePrompt;
-
-export interface BedrockMantleDriverOptions extends DriverOptions {
-    region: string;
-    credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
-}
 
 class BedrockMantleResponsesDelegate extends OpenAIResponsesDriverBase {
     readonly provider = Providers.bedrock_mantle;
@@ -57,10 +53,12 @@ class BedrockMantleResponsesDelegate extends OpenAIResponsesDriverBase {
     }
 }
 
-function modelDisplayName(model: string): string {
+function modelDisplayName(model: string, owner: string): string {
     const modelName = model.slice(model.indexOf('.') + 1);
     if (model.startsWith('openai.')) return modelName.replace(/^gpt-/i, 'GPT-');
     if (model.startsWith('xai.')) return modelName.replace(/^grok-/i, 'Grok ');
+    // IDs such as `deepseek.v3.1` hold only a version after the publisher; keep the publisher so the name is usable.
+    if (/^[a-z]?\d/i.test(modelName)) return `${owner} ${modelName.charAt(0).toUpperCase()}${modelName.slice(1)}`;
     return modelName;
 }
 
@@ -208,8 +206,8 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     this.anthropicService,
                     requireClaudePrompt(prompt),
                     options,
-                    undefined,
-                    'anthropic',
+                    this.logger,
+                    this.provider,
                     this.getDriverRequestOptions(options, signal),
                 );
             default:
@@ -241,8 +239,8 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     this.anthropicService,
                     requireClaudePrompt(prompt),
                     options,
-                    undefined,
-                    'bedrock-mantle',
+                    this.logger,
+                    this.provider,
                     this.getDriverRequestOptions(options, signal),
                 );
             default:
@@ -272,7 +270,13 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                 );
             case 'messages':
-                return buildClaudeStreamingConversation(requireClaudePrompt(prompt), result, toolUse, options);
+                return buildClaudeStreamingConversation(
+                    requireClaudePrompt(prompt),
+                    result,
+                    toolUse,
+                    options,
+                    this.provider,
+                );
             default:
                 return undefined;
         }
@@ -300,7 +304,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                 return [
                     {
                         id: model.id,
-                        name: modelDisplayName(model.id),
+                        name: modelDisplayName(model.id, info.owner),
                         provider: this.provider,
                         owner: info.owner,
                         type: ModelType.Text,

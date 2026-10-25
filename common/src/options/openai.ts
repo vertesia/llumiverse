@@ -4,6 +4,8 @@ import type {
     OpenAiAudioOptionsSchema,
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
+    OpenAiImageGenerationMaskSchema,
+    OpenAiImageGenerationOptionsSchema,
     OpenAiSpeechOptionsSchema,
     OpenAiTextOptionsSchema,
     OpenAiThinkingOptionsSchema,
@@ -18,7 +20,7 @@ import {
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE } from './version-parsing.js';
+import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE, isOpenAIImageVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -31,6 +33,8 @@ import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE } from './version
 export type OpenAiThinkingOptions = z.infer<typeof OpenAiThinkingOptionsSchema>;
 export type OpenAiTextOptions = z.infer<typeof OpenAiTextOptionsSchema>;
 export type OpenAiDalleOptions = z.infer<typeof OpenAiDalleOptionsSchema>;
+export type OpenAiImageGenerationOptions = z.infer<typeof OpenAiImageGenerationOptionsSchema>;
+export type OpenAiImageGenerationMask = z.infer<typeof OpenAiImageGenerationMaskSchema>;
 export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
 export type OpenAiTranscriptionOptions = z.infer<typeof OpenAiTranscriptionOptionsSchema>;
@@ -57,7 +61,7 @@ export function isFlexSupportedOpenAIModel(model: string): boolean {
     if (unsupportedVariant) return false;
 
     return (
-        /^gpt-5(?:[.-]|$)/.test(modelName) ||
+        isOpenAIGptVersionGTE(modelName, 5, 0) ||
         /^o3(?:-\d{4}|$)/.test(modelName) ||
         /^o4-mini(?:-\d{4}|$)/.test(modelName)
     );
@@ -140,6 +144,12 @@ export function getOpenAiOptions(
         Default: 'default',
         Priority: 'priority',
     };
+    if (provider === Providers.openai && isOpenAIGptVersionGTE(model, 6, 0)) {
+        serviceTiers.Fast = 'fast';
+        if (model.includes('astra') || (model.includes('sol') && isOpenAIGptVersionGTE(model, 6, 1))) {
+            serviceTiers.Ultrafast = 'ultrafast';
+        }
+    }
     if (isFlexSupportedOpenAIModel(model)) {
         serviceTiers.Flex = 'flex';
     }
@@ -175,22 +185,36 @@ export function getOpenAiOptions(
             sizeOptions['1024x1792'] = '1024x1792';
         }
 
-        const baseImageOptions: ModelOptionInfoItem[] = [
-            {
-                name: 'size',
-                type: OptionType.enum,
-                enum: sizeOptions,
-                default: '1024x1024',
-                description: 'The size of the generated image',
-            },
-        ];
+        const baseImageOptions: ModelOptionInfoItem[] = isOpenAIImageVersionGTE(model, 2)
+            ? ['width', 'height'].map((name) => ({
+                  name,
+                  type: OptionType.numeric,
+                  integer: true,
+                  default: 1024,
+                  description: `The ${name} of the generated image in pixels`,
+              }))
+            : [
+                  {
+                      name: 'size',
+                      type: OptionType.enum,
+                      enum: sizeOptions,
+                      default: '1024x1024',
+                      description: 'The size of the generated image',
+                  },
+              ];
 
         const gptImageOptions: ModelOptionInfoItem[] = isGPTImage
             ? [
                   {
                       name: 'image_quality',
                       type: OptionType.enum,
-                      enum: { Low: 'low', Medium: 'medium', High: 'high', Auto: 'auto' },
+                      enum: {
+                          Low: 'low',
+                          Medium: 'medium',
+                          High: 'high',
+                          Auto: 'auto',
+                          ...(isOpenAIImageVersionGTE(model, 2, 5) ? { 'Extra high': 'xhigh', Max: 'max' } : {}),
+                      },
                       default: 'auto',
                       description: 'The quality of the generated image',
                   },
@@ -238,29 +262,64 @@ export function getOpenAiOptions(
                   ]
                 : [];
 
-        const nImagesOption: ModelOptionInfoItem[] = isDallE2
-            ? [
-                  {
-                      name: 'n',
-                      type: OptionType.numeric,
-                      min: 1,
-                      max: 10,
-                      default: 1,
-                      integer: true,
-                      description: 'Number of images to generate (DALL-E 2 only)',
-                  },
-              ]
-            : [];
+        const nImagesOption: ModelOptionInfoItem[] =
+            isDallE2 || isGPTImage
+                ? [
+                      {
+                          name: 'n',
+                          type: OptionType.numeric,
+                          min: 1,
+                          max: 10,
+                          default: 1,
+                          integer: true,
+                          description: 'Number of images to generate',
+                      },
+                  ]
+                : [];
 
         return {
             _option_id: isGPTImage ? 'openai-gpt-image' : 'openai-dalle',
-            options: [...baseImageOptions, ...gptImageOptions, ...dalleOptions, ...nImagesOption],
+            options: [
+                ...baseImageOptions,
+                ...gptImageOptions,
+                ...dalleOptions,
+                ...nImagesOption,
+                ...(isGPTImage
+                    ? [
+                          {
+                              name: 'output_compression',
+                              type: OptionType.numeric as const,
+                              min: 0,
+                              max: 100,
+                              integer: true,
+                          },
+                          { name: 'moderation', type: OptionType.enum as const, enum: { Auto: 'auto', Low: 'low' } },
+                          {
+                              name: 'partial_images',
+                              type: OptionType.numeric as const,
+                              min: 0,
+                              max: 3,
+                              integer: true,
+                              default: 0,
+                          },
+                          ...(!isOpenAIImageVersionGTE(model, 2) || isOpenAIImageVersionGTE(model, 2, 5)
+                              ? [
+                                    {
+                                        name: 'input_fidelity',
+                                        type: OptionType.enum as const,
+                                        enum: { Low: 'low', High: 'high' },
+                                    },
+                                ]
+                              : []),
+                      ]
+                    : []),
+            ],
         };
     }
 
     if (isReasoningModel(model)) {
         //Is thinking text model
-        let max_tokens_limit = 4096;
+        let max_tokens_limit: number | undefined = 4096;
         if (model.includes('o1')) {
             if (model.includes('preview')) {
                 max_tokens_limit = 32768;
@@ -322,15 +381,22 @@ export function getOpenAiOptions(
         return {
             _option_id: 'openai-thinking',
             options: [
-                ...commonOptions,
+                ...commonOptions.filter(
+                    (item) => provider === Providers.openai_compatible || item.name !== SharedOptions.stop_sequence,
+                ),
                 ...reasoningOptions,
                 ...reasoningContextOptions,
                 ...visionOptions,
                 ...serviceTierOptions,
+                {
+                    name: 'image_generation',
+                    type: OptionType.json_object,
+                    description: 'Optional image generation tool configuration; requires an image model.',
+                },
             ],
         };
     } else {
-        let max_tokens_limit = 4096;
+        let max_tokens_limit: number | undefined = 4096;
         if (model.includes('gpt-4o')) {
             max_tokens_limit = 16384;
             if (model.includes('gpt-4o-2024-05-13') || model.includes('realtime')) {
@@ -405,7 +471,24 @@ export function getOpenAiOptions(
 
         return {
             _option_id: 'openai-text',
-            options: [...commonOptions, ...visionOptions, ...serviceTierOptions],
+            options: [
+                ...commonOptions.filter(
+                    (item) =>
+                        provider === Providers.openai_compatible ||
+                        ![
+                            SharedOptions.stop_sequence,
+                            SharedOptions.presence_penalty,
+                            SharedOptions.frequency_penalty,
+                        ].includes(item.name as SharedOptions),
+                ),
+                ...visionOptions,
+                ...serviceTierOptions,
+                {
+                    name: 'image_generation',
+                    type: OptionType.json_object,
+                    description: 'Optional image generation tool configuration; requires an image model.',
+                },
+            ],
         };
     }
 }
@@ -417,13 +500,23 @@ export function getAzureOpenAiOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.azure_openai),
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile, Providers.azure_openai);
+    // Azure Flex availability is model-specific; do not inherit direct OpenAI tier support.
+    // https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/flex-processing
+    const supportsAzureFlex = /^gpt-(?:5\.6-(?:sol|luna|terra)|6-astra)(?:$|-\d{4}-\d{2}-\d{2}$)/i.test(
+        profile.canonical_id,
+    );
     return {
         ...options,
         options: options.options.map((item) =>
             item.name === 'service_tier' && item.type === OptionType.enum
                 ? {
                       ...item,
-                      enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
+                      enum: {
+                          Auto: 'auto',
+                          Default: 'default',
+                          Priority: 'priority',
+                          ...(supportsAzureFlex ? { Flex: 'flex' } : {}),
+                      },
                       description: 'Select the Azure OpenAI processing tier for this request.',
                   }
                 : item,
@@ -439,7 +532,9 @@ export function getOpenAiCompatibleOptions(
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile, Providers.openai_compatible);
     if (profile.family === 'speech' || profile.family === 'transcription') return options;
-    const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
+    const compatibleOptions = options.options.filter(
+        (item) => item.name !== 'service_tier' && item.name !== 'image_generation',
+    );
     const maxOutputTokens = profile.max_output_tokens;
     const profileEffortLevels = profile.reasoning_effort_levels?.length
         ? new Set(profile.reasoning_effort_levels)
@@ -448,6 +543,11 @@ export function getOpenAiCompatibleOptions(
         .map((item): ModelOptionInfoItem | null => {
             if (item.name === SharedOptions.max_tokens && maxOutputTokens !== undefined) {
                 return { ...item, max: maxOutputTokens } as ModelOptionInfoItem;
+            }
+            if (item.name === SharedOptions.max_tokens && profile.context_window !== undefined) {
+                // A known model without a published output limit must not inherit the legacy GPT text-model cap.
+                const { max: _legacyMax, ...withoutMax } = item as ModelOptionInfoItem & { max?: number };
+                return withoutMax as ModelOptionInfoItem;
             }
             if (item.name === SharedOptions.effort && item.type === OptionType.enum) {
                 if (!profileEffortLevels) return null;
