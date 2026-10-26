@@ -10,6 +10,7 @@ import {
     type LlumiverseErrorContext,
     type Logger,
     type ModelSearchPayload,
+    PromptRole,
 } from '@llumiverse/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { errorWith, getProp } from '../test/__helpers__/test-utils.js';
@@ -308,3 +309,48 @@ describe('AbstractDriver execution logging', () => {
         expect(logger.info).not.toHaveBeenCalled();
     });
 });
+
+describe('AbstractDriver prompt creation errors', () => {
+    class RejectingPromptDriver extends TestDriver {
+        promptError: unknown = new Error('This model does not support tools');
+
+        async createPrompt(): Promise<string> {
+            throw this.promptError;
+        }
+    }
+
+    it.each(['execute', 'stream'] as const)(
+        'normalizes a %s prompt failure like a failed request',
+        async (operation) => {
+            const driver = new RejectingPromptDriver({});
+            const segments = [{ role: PromptRole.user, content: 'prompt' }];
+
+            const failure =
+                operation === 'execute'
+                    ? driver.execute(segments, { model: 'test-model' })
+                    : driver.stream(segments, { model: 'test-model' });
+
+            await expect(failure).rejects.toBeInstanceOf(LlumiverseError);
+            await expect(failure).rejects.toMatchObject({
+                message: '[test-provider] This model does not support tools',
+                context: { provider: 'test-provider', model: 'test-model', operation },
+            });
+        },
+    );
+
+    it('keeps an error the model already classified', async () => {
+        const driver = new RejectingPromptDriver({});
+        const classified = new LlumiverseError('unsupported', false, mockPromptContext, undefined, 400);
+        driver.promptError = classified;
+
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: 'prompt' }], { model: 'test-model' }),
+        ).rejects.toBe(classified);
+    });
+});
+
+const mockPromptContext: LlumiverseErrorContext = {
+    provider: 'test-provider',
+    model: 'test-model',
+    operation: 'execute',
+};
