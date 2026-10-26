@@ -333,7 +333,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ExecutionResponse<PromptT>> {
-        const prompt = await this.createPrompt(segments, options, signal);
+        const prompt = await this.createExecutionPrompt(segments, options, 'execute', signal);
         return await this._execute(prompt, options, signal).catch((error: unknown) => {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
@@ -345,6 +345,28 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 operation: 'execute',
             });
         });
+    }
+
+    /**
+     * Builds the prompt for an execution, normalizing a failure like a failed request. A model that rejects
+     * the request while building it (an unsupported option, a missing input) then reports a classified,
+     * usually non-retryable error instead of a bare one its callers can only treat as unknown.
+     */
+    private async createExecutionPrompt(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        operation: LlumiverseErrorContext['operation'],
+        signal?: AbortSignal,
+    ): Promise<PromptT> {
+        try {
+            return await this.createPrompt(segments, options, signal);
+        } catch (error) {
+            // A cancellation keeps the caller's own abort reason, as it does before the prompt is built.
+            if (signal?.aborted || LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            throw this.formatLlumiverseError(error, { provider: this.provider, model: options.model, operation });
+        }
     }
 
     async _execute(
@@ -412,7 +434,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             options,
             `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
         );
-        const prompt = await this.createPrompt(segments, options, signal);
+        const prompt = await this.createExecutionPrompt(segments, options, 'stream', signal);
         signal?.throwIfAborted();
         if (await this.canStream(options, signal)) {
             signal?.throwIfAborted();
