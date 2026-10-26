@@ -53,6 +53,14 @@ class OmniVideoTerminalError extends Error {
     }
 }
 
+/** A request this model cannot run, rejected before anything is sent: the caller's to fix, never retried. */
+class OmniVideoRequestError extends OmniVideoTerminalError {
+    constructor(message: string) {
+        super(message);
+        this.name = 'OmniVideoRequestError';
+    }
+}
+
 class OmniVideoInteractionError extends Error {
     constructor(
         message: string,
@@ -70,7 +78,7 @@ function isGcsUri(value: string, requireObject = false): boolean {
 
 function normalizeOutputPrefix(value: string | undefined): string {
     if (!value || !isGcsUri(value)) {
-        throw new OmniVideoTerminalError('Gemini Omni video generation requires a valid GCS output prefix');
+        throw new OmniVideoRequestError('Gemini Omni video generation requires a valid GCS output prefix');
     }
     return value.endsWith('/') ? value : `${value}/`;
 }
@@ -84,42 +92,42 @@ function resolveTask(
     const videoCount = media.filter((item) => item.type === 'video').length;
     const task = options?.task ?? (media.length === 0 ? 'text_to_video' : undefined);
     if (!task) {
-        throw new OmniVideoTerminalError('Gemini Omni video generation with media requires an explicit task');
+        throw new OmniVideoRequestError('Gemini Omni video generation with media requires an explicit task');
     }
     if (task === 'extend' && model !== GEMINI_OMNI_1_1_VIDEO_MODEL) {
-        throw new OmniVideoTerminalError(`${model} does not support extend`);
+        throw new OmniVideoRequestError(`${model} does not support extend`);
     }
     if (options?.resolution && model === GEMINI_OMNI_VIDEO_MODEL && options.resolution !== '720p') {
-        throw new OmniVideoTerminalError(`${model} only supports 720p output`);
+        throw new OmniVideoRequestError(`${model} only supports 720p output`);
     }
 
     switch (task) {
         case 'text_to_video':
-            if (media.length !== 0) throw new OmniVideoTerminalError('text_to_video does not accept media inputs');
+            if (media.length !== 0) throw new OmniVideoRequestError('text_to_video does not accept media inputs');
             break;
         case 'image_to_video': {
             const maximumImages = model === GEMINI_OMNI_1_1_VIDEO_MODEL ? 2 : 1;
             if (videoCount !== 0 || imageCount < 1 || imageCount > maximumImages) {
                 const expected = maximumImages === 1 ? 'exactly one image input' : 'one or two image inputs';
-                throw new OmniVideoTerminalError(`image_to_video requires ${expected}`);
+                throw new OmniVideoRequestError(`image_to_video requires ${expected}`);
             }
             break;
         }
         case 'reference_to_video':
             if (media.length === 0 || imageCount > 10 || videoCount > 3) {
-                throw new OmniVideoTerminalError(
+                throw new OmniVideoRequestError(
                     'reference_to_video requires media with at most ten images and three videos',
                 );
             }
             break;
         case 'edit':
             if (imageCount !== 0 || videoCount !== 1) {
-                throw new OmniVideoTerminalError('edit requires exactly one video input');
+                throw new OmniVideoRequestError('edit requires exactly one video input');
             }
             break;
         case 'extend':
             if (imageCount !== 0 || videoCount !== 1) {
-                throw new OmniVideoTerminalError('extend requires exactly one video input');
+                throw new OmniVideoRequestError('extend requires exactly one video input');
             }
             break;
     }
@@ -224,16 +232,15 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
         options: ExecutionOptions,
     ): Promise<OmniVideoPrompt> {
         if (options.conversation)
-            throw new OmniVideoTerminalError('Gemini Omni video does not support conversation resume');
-        if (options.tools?.length) throw new OmniVideoTerminalError('Gemini Omni video does not support tools');
-        if (options.result_schema)
-            throw new OmniVideoTerminalError('Gemini Omni video does not support result schemas');
+            throw new OmniVideoRequestError('Gemini Omni video does not support conversation resume');
+        if (options.tools?.length) throw new OmniVideoRequestError('Gemini Omni video does not support tools');
+        if (options.result_schema) throw new OmniVideoRequestError('Gemini Omni video does not support result schemas');
 
         const text = segments
             .map((segment) => segment.content.trim())
             .filter(Boolean)
             .join('\n');
-        if (!text) throw new OmniVideoTerminalError('Gemini Omni video requires a non-empty text prompt');
+        if (!text) throw new OmniVideoRequestError('Gemini Omni video requires a non-empty text prompt');
 
         const media: OmniVideoMediaInput[] = [];
         for (const segment of segments) {
@@ -244,13 +251,13 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
                       ? 'video'
                       : undefined;
                 if (!type) {
-                    throw new OmniVideoTerminalError(
+                    throw new OmniVideoRequestError(
                         `Gemini Omni video does not support input MIME type ${file.mime_type}`,
                     );
                 }
                 const uri = await file.getURI();
                 if (!isGcsUri(uri, true)) {
-                    throw new OmniVideoTerminalError('Gemini Omni video media inputs must expose a GCS object URI');
+                    throw new OmniVideoRequestError('Gemini Omni video media inputs must expose a GCS object URI');
                 }
                 media.push({ type, uri, mime_type: file.mime_type });
             }
@@ -305,7 +312,7 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
     }
 
     requestTextCompletionStream(): Promise<DriverCompletionStream> {
-        return Promise.reject(new OmniVideoTerminalError('Gemini Omni video does not support streaming'));
+        return Promise.reject(new OmniVideoRequestError('Gemini Omni video does not support streaming'));
     }
 
     formatLlumiverseError(_driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError {
@@ -323,7 +330,7 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
             retryable,
             context,
             error,
-            undefined,
+            error instanceof OmniVideoRequestError ? 400 : undefined,
             name,
         );
     }
