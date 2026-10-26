@@ -449,6 +449,35 @@ describe('GeminiOmniVideoModelDefinition', () => {
         }
     });
 
+    it('reports a request it cannot run as a non-retryable 400, and invalid provider output without a status', async () => {
+        const definition = new GeminiOmniVideoModelDefinition();
+        const context = { provider: 'vertexai', model: GEMINI_OMNI_VIDEO_MODEL, operation: 'execute' as const };
+        const rejected = await definition
+            .createPrompt(
+                {} as VertexAIDriver,
+                [{ role: PromptRole.user, content: 'prompt' }],
+                options({ tools: [{ name: 'lookup', input_schema: { type: 'object' } }] }),
+            )
+            .catch((error: unknown) => error);
+        const prompt = await definition.createPrompt(
+            {} as VertexAIDriver,
+            [{ role: PromptRole.user, content: 'prompt' }],
+            options(),
+        );
+        const invalidOutput = await definition
+            .requestTextCompletion(driverWithResponse(completedResponse()).driver, prompt, options())
+            .catch((error: unknown) => error);
+
+        expect(definition.formatLlumiverseError({} as VertexAIDriver, rejected, context)).toMatchObject({
+            code: 400,
+            retryable: false,
+        });
+        expect(definition.formatLlumiverseError({} as VertexAIDriver, invalidOutput, context)).toMatchObject({
+            code: undefined,
+            retryable: false,
+        });
+    });
+
     it.each([
         ['in_progress', undefined, true],
         ['incomplete', undefined, true],
