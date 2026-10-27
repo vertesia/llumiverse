@@ -7,21 +7,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import {
-    AnthropicError,
-    APIConnectionError,
-    APIConnectionTimeoutError,
-    APIError,
-    APIUserAbortError,
-    AuthenticationError,
-    BadRequestError,
-    ConflictError,
-    InternalServerError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
-} from '@anthropic-ai/sdk/error';
+import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
 import type { AnthropicBeta, BetaMessage, BetaRawMessageDeltaEvent } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
@@ -219,6 +205,40 @@ type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     finalMessage(): Promise<Message>;
 };
 type ClaudeMessagesClient = { messages: Pick<Anthropic['messages'], 'stream'> };
+
+/**
+ * A client-side failure while reading a response stream that had started (e.g. a dropped connection or an event
+ * the SDK could not decode). The request reached the provider, so it can be retried.
+ */
+export class ClaudeStreamError extends AnthropicError {
+    constructor(cause: AnthropicError) {
+        super(cause.message, { cause });
+        this.name = 'ClaudeStreamError';
+    }
+}
+
+/**
+ * A message stream's events, then its outcome. The SDK's iterator drops an error that arrives while no read is
+ * pending (the consumer is busy with the previous chunk) and only `finalMessage()` rejects with it, so await it
+ * here for the error to surface during iteration, where the driver formats it.
+ *
+ * A client-side SDK error after the first event is a stream fault (API errors carry their own status and type);
+ * before it, the same error type means a configuration problem such as a missing credential.
+ */
+async function* eventsThenOutcome(stream: ClaudeMessageStream): AsyncGenerator<RawMessageStreamEvent> {
+    let started = false;
+    try {
+        for await (const event of stream) {
+            started = true;
+            yield event;
+        }
+        await stream.finalMessage();
+    } catch (error) {
+        throw started && isAnthropicSdkError(error) && !isAnthropicApiError(error)
+            ? new ClaudeStreamError(error)
+            : error;
+    }
+}
 
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
@@ -1100,7 +1120,7 @@ export async function executeClaudeCompletion(
         transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
     );
     let transformations: InputTransformations;
-    for await (const event of responseStream) {
+    for await (const event of eventsThenOutcome(responseStream)) {
         transformations = trackInputTransformations(transformations, event);
     }
     const result = await responseStream.finalMessage();
@@ -1160,7 +1180,7 @@ export async function streamClaudeCompletion(
     let transformations: InputTransformations;
     let responseId: string | undefined;
 
-    const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+    const stream = asyncMap(eventsThenOutcome(response_stream), async (streamEvent: RawMessageStreamEvent) => {
         transformations = trackInputTransformations(transformations, streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
@@ -1265,8 +1285,45 @@ export async function streamClaudeCompletion(
 // Error handling
 // ============================================================================
 
+/**
+ * Class names along an error's prototype chain. The platform SDKs (Bedrock, Vertex AI, Foundry) can resolve their
+ * own copy of the Anthropic SDK, so its error classes are matched by name: `instanceof` fails across copies.
+ */
+function errorClassNames(error: unknown): Set<string> {
+    const names = new Set<string>();
+    let prototype = error && typeof error === 'object' ? Object.getPrototypeOf(error) : null;
+    while (prototype && prototype !== Object.prototype) {
+        const name = (prototype.constructor as { name?: unknown } | undefined)?.name;
+        if (typeof name === 'string') names.add(name);
+        prototype = Object.getPrototypeOf(prototype);
+    }
+    return names;
+}
+
+/** Whether an error comes from any copy of the Anthropic SDK. */
+export function isAnthropicSdkError(error: unknown): error is AnthropicError {
+    return error instanceof AnthropicError || errorClassNames(error).has('AnthropicError');
+}
+
+/** Whether an error is an Anthropic SDK API error (HTTP, connection, abort), from any copy of the SDK. */
+export function isAnthropicApiError(error: unknown): error is APIError {
+    if (error instanceof APIError) return true;
+    const classes = errorClassNames(error);
+    return classes.has('APIError') && classes.has('AnthropicError');
+}
+
 export function formatAnthropicLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-    if (error instanceof AnthropicError && !(error instanceof APIError)) {
+    if (error instanceof ClaudeStreamError) {
+        return new LlumiverseError(
+            `[${context.provider}] ${error.message}`,
+            true,
+            context,
+            error,
+            undefined,
+            error.name,
+        );
+    }
+    if (isAnthropicSdkError(error) && !isAnthropicApiError(error)) {
         // Client-side SDK error (e.g. "Streaming is required for operations that may take longer than 10 minutes").
         // These are structural/configuration errors — retrying will never succeed.
         const errorName = error.constructor?.name || 'AnthropicError';
@@ -1279,7 +1336,7 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
             errorName,
         );
     }
-    if (!(error instanceof APIError)) {
+    if (!isAnthropicApiError(error)) {
         // Not an Anthropic error — rethrow for default handling
         throw error;
     }
@@ -1329,22 +1386,28 @@ export function isClaudeErrorRetryable(
     if (shouldRetryHeader === 'true') return true;
     if (shouldRetryHeader === 'false') return false;
 
-    if (error instanceof APIUserAbortError) return false;
-    if (error instanceof RateLimitError) return true;
-    if (error instanceof InternalServerError) return true;
-    if (error instanceof APIConnectionTimeoutError) return true;
-    if (error instanceof BadRequestError) return false;
-    if (error instanceof AuthenticationError) return false;
-    if (error instanceof PermissionDeniedError) return false;
-    if (error instanceof NotFoundError) return false;
-    if (error instanceof ConflictError) return true; // SDK retries 409 (lock timeouts)
-    if (error instanceof UnprocessableEntityError) return false;
+    // Class names only count for Anthropic SDK errors; other SDKs reuse names such as APIError.
+    const names = errorClassNames(error);
+    const classes = names.has('AnthropicError') ? names : new Set<string>();
+
+    if (classes.has('APIUserAbortError')) return false;
+    if (classes.has('RateLimitError')) return true;
+    if (classes.has('InternalServerError')) return true;
+    if (classes.has('APIConnectionTimeoutError')) return true;
+    if (classes.has('BadRequestError')) return false;
+    if (classes.has('AuthenticationError')) return false;
+    if (classes.has('PermissionDeniedError')) return false;
+    if (classes.has('NotFoundError')) return false;
+    if (classes.has('ConflictError')) return true; // SDK retries 409 (lock timeouts)
+    if (classes.has('UnprocessableEntityError')) return false;
     if (errorType === 'invalid_request_error') return false;
+    // A mid-stream error event has a type but no HTTP status.
+    if (httpStatusCode === undefined && (errorType === 'overloaded_error' || errorType === 'api_error')) return true;
     if (httpStatusCode !== undefined) {
         if (httpStatusCode === 429 || httpStatusCode === 408 || httpStatusCode === 529) return true;
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true;
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
     }
-    if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) return true;
+    if (classes.has('APIConnectionError') && !classes.has('APIConnectionTimeoutError')) return true;
     return undefined;
 }
