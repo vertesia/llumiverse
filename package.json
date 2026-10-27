@@ -27,7 +27,7 @@
         "typescript": "catalog:",
         "vitest": "catalog:"
     },
-    "packageManager": "pnpm@12.13.0",
+    "packageManager": "pnpm@12.14.0",
     "gitHead": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
     "releaseIdentity": {
         "source_sha": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
