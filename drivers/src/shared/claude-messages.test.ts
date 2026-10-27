@@ -1,10 +1,16 @@
+import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
     anthropicUsageToTokenUsage,
     buildClaudeStreamingConversation,
+    ClaudeStreamError,
+    formatAnthropicLlumiverseError,
     formatClaudePrompt,
     getClaudePayload,
+    isAnthropicSdkError,
+    isClaudeErrorRetryable,
+    streamClaudeCompletion,
     updateClaudeConversation,
 } from './claude-messages.js';
 
@@ -460,5 +466,142 @@ describe('anthropic-beta header', () => {
             { messages: [{ role: 'user', content: 'Hello' }] },
         );
         expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'output-128k-2025-02-19' });
+    });
+});
+
+describe('isClaudeErrorRetryable', () => {
+    it.each(['overloaded_error', 'api_error'])('retries a mid-stream %s without an HTTP status', (type) => {
+        // The SDK raises a plain APIError (no status) for an SSE error event.
+        const error = new APIError(
+            undefined,
+            { type: 'error', error: { type, message: 'm' } },
+            undefined,
+            new Headers(),
+        );
+        expect(isClaudeErrorRetryable(error, undefined, type)).toBe(true);
+        const formatted = formatAnthropicLlumiverseError(error, {
+            provider: 'anthropic',
+            model: 'claude-sonnet-5-5',
+            operation: 'stream',
+        });
+        expect(formatted.retryable).toBe(true);
+    });
+
+    it('does not retry a mid-stream invalid request', () => {
+        expect(isClaudeErrorRetryable(new Error('bad'), undefined, 'invalid_request_error')).toBe(false);
+    });
+});
+
+describe('streamClaudeCompletion errors', () => {
+    it('surfaces an error the SDK iterator dropped, before the stream ends', async () => {
+        const failure = new APIError(
+            undefined,
+            { type: 'error', error: { type: 'overloaded_error' } },
+            'mid',
+            undefined,
+        );
+        const stream = () => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'message_start', message: { id: 'm', usage: { input_tokens: 1, output_tokens: 0 } } };
+            },
+            abort: () => undefined,
+            finalMessage: () => Promise.reject(failure),
+        });
+        const completion = await streamClaudeCompletion(
+            { messages: { stream } } as never,
+            { messages: [] },
+            {
+                model: 'claude-sonnet-4-6',
+            },
+        );
+        const chunks: unknown[] = [];
+        await expect(
+            (async () => {
+                for await (const chunk of completion) chunks.push(chunk);
+            })(),
+        ).rejects.toBe(failure);
+        expect(chunks).toHaveLength(1);
+    });
+
+    const failingStream = (eventsBeforeFailure: number, failure: Error) => () => ({
+        async *[Symbol.asyncIterator]() {
+            for (let i = 0; i < eventsBeforeFailure; i++) {
+                yield { type: 'message_start', message: { id: 'm', usage: { input_tokens: 1, output_tokens: 0 } } };
+            }
+            throw failure;
+        },
+        abort: () => undefined,
+        finalMessage: () => Promise.reject(failure),
+    });
+
+    async function streamError(eventsBeforeFailure: number, failure: Error): Promise<unknown> {
+        const stream = failingStream(eventsBeforeFailure, failure);
+        const completion = await streamClaudeCompletion(
+            { messages: { stream } } as never,
+            { messages: [] },
+            {
+                model: 'claude-sonnet-4-6',
+            },
+        );
+        return (async () => {
+            for await (const _chunk of completion) {
+                // drain
+            }
+        })().catch((error: unknown) => error);
+    }
+
+    const context = { provider: 'anthropic', model: 'claude-sonnet-4-6', operation: 'stream' as const };
+
+    it('retries a client-side failure after the stream started', async () => {
+        const error = await streamError(1, new AnthropicError('terminated'));
+        expect(error).toBeInstanceOf(ClaudeStreamError);
+        const formatted = formatAnthropicLlumiverseError(error, context);
+        expect(formatted.retryable).toBe(true);
+        expect(formatted.message).toContain('terminated');
+    });
+
+    it('keeps a client-side error before the first event a configuration error', async () => {
+        const error = await streamError(0, new AnthropicError('Could not resolve authentication method'));
+        expect(error).not.toBeInstanceOf(ClaudeStreamError);
+        expect(formatAnthropicLlumiverseError(error, context).retryable).toBe(false);
+    });
+
+    it('leaves API errors after the stream started to their own classification', async () => {
+        const overloaded = new APIError(
+            undefined,
+            { type: 'error', error: { type: 'overloaded_error' } },
+            'o',
+            undefined,
+        );
+        const error = await streamError(1, overloaded);
+        expect(error).toBe(overloaded);
+    });
+});
+
+describe('Anthropic SDK error identity', () => {
+    const context = { provider: 'vertexai', model: 'claude-sonnet-4-6', operation: 'stream' as const };
+
+    it('recognises errors from another copy of the Anthropic SDK', () => {
+        // Platform SDKs can resolve their own Anthropic SDK copy, whose classes fail instanceof checks here.
+        class AnthropicError extends Error {}
+        class APIError extends AnthropicError {
+            status = 429;
+            error = { error: { type: 'rate_limit_error', message: 'slow down' } };
+            headers = new Headers();
+            requestID = 'req-1';
+        }
+        class RateLimitError extends APIError {}
+        const formatted = formatAnthropicLlumiverseError(new RateLimitError('slow down'), context);
+        expect(formatted.retryable).toBe(true);
+        expect(formatted.message).toContain('slow down');
+    });
+
+    it('does not treat another SDK error named APIError as an Anthropic error', () => {
+        class APIError extends Error {
+            status = 429;
+        }
+        const error = new APIError('other sdk');
+        expect(isAnthropicSdkError(error)).toBe(false);
+        expect(() => formatAnthropicLlumiverseError(error, context)).toThrow(error);
     });
 });
