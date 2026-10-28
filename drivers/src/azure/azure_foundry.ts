@@ -57,6 +57,7 @@ import {
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { azureFoundryScope } from './entra-scope.js';
 
 export type { AzureFoundryDriverOptions } from '../driver-options.js';
 
@@ -191,6 +192,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private readonly deploymentSources = new Map<string, string>();
     private anthropicClient?: AnthropicFoundry;
     private readonly endpoint: string;
+    /** Entra scope of the endpoint's cloud: `ai.azure.us` for Azure Government, else `ai.azure.com`. */
+    private readonly scope: string;
     readonly provider = Providers.azure_foundry;
 
     override async execute(
@@ -231,6 +234,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         this.endpoint = opts.endpoint;
+        this.scope = azureFoundryScope(opts.endpoint);
 
         try {
             if (!opts.azureADTokenProvider) {
@@ -247,15 +251,17 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
-        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
+        // The SDK defaults to the public-cloud scope.
+        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider, {
+            credentials: { scopes: [this.scope] },
+        });
     }
 
     /**
      * Get default authentication for Azure AI Foundry API
      */
     getDefaultAIFoundryAuth() {
-        const scope = 'https://ai.azure.com/.default';
-        const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
+        const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), this.scope);
         return azureADTokenProvider;
     }
 
@@ -331,7 +337,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 baseURL: url.toString(),
                 azureADTokenProvider: getBearerTokenProvider(
                     this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
-                    'https://ai.azure.com/.default',
+                    this.scope,
                 ),
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
@@ -361,7 +367,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 baseURL: configured.baseURL,
                 apiKey: getBearerTokenProvider(
                     this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
-                    'https://ai.azure.com/.default',
+                    this.scope,
                 ),
                 defaultQuery: this.options.apiVersion ? { 'api-version': this.options.apiVersion } : undefined,
                 fetch: this.getDriverFetch(),

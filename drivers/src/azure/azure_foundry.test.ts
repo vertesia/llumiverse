@@ -25,6 +25,24 @@ function createDriver(): AzureFoundryDriver {
     });
 }
 
+describe('AzureFoundryDriver Entra scope', () => {
+    it.each([
+        ['https://acme.services.ai.azure.com/api/projects/p', 'https://ai.azure.com/.default'],
+        ['https://acme.services.ai.azure.us/api/projects/p', 'https://ai.azure.us/.default'],
+    ])('requests tokens for %s with scope %s', async (endpoint, scope) => {
+        const getToken = vi.fn(async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 60_000 }));
+        const driver = new AzureFoundryDriver({ endpoint, azureADTokenProvider: { getToken } });
+        try {
+            const client = exposePrivate<FoundryInternals>(driver).getInferenceClient();
+            // The OpenAI SDK resolves a function apiKey before each request.
+            await (client as unknown as { _callApiKey(): Promise<boolean> })._callApiKey();
+            expect(getToken).toHaveBeenCalledWith([scope], expect.anything());
+        } finally {
+            driver.destroy();
+        }
+    });
+});
+
 describe('AzureFoundryDriver protocol composition', () => {
     it('preserves required tool choice when adapting an OpenAI chat request', () => {
         const body = toOpenAINonStreamingPayload({

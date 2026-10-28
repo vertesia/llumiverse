@@ -8,6 +8,7 @@ import {
     resolveModelProfile,
 } from '@llumiverse/core';
 import OpenAI, { AzureOpenAI } from 'openai';
+import { cognitiveServicesScope } from '../azure/entra-scope.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
@@ -32,7 +33,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
         super(opts);
         this.sourceModel = opts.sourceModel;
         if (!opts.azureADTokenProvider && !opts.apiKey) {
-            opts.azureADTokenProvider = this.getDefaultCognitiveServicesAuth();
+            opts.azureADTokenProvider = this.getDefaultCognitiveServicesAuth(opts.endpoint);
         }
 
         this.service = new AzureOpenAI({
@@ -89,9 +90,11 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
     /**
      * Get default authentication for Azure Cognitive Services API
      */
-    getDefaultCognitiveServicesAuth() {
-        const scope = 'https://cognitiveservices.azure.com/.default';
-        const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
+    getDefaultCognitiveServicesAuth(endpoint?: string) {
+        const azureADTokenProvider = getBearerTokenProvider(
+            new DefaultAzureCredential(),
+            cognitiveServicesScope(endpoint),
+        );
         return azureADTokenProvider;
     }
 
