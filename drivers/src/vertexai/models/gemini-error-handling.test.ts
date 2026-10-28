@@ -432,6 +432,29 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.retryable).toBe(true);
         });
 
+        it.each(['URL_REJECTED-REJECTED_NO_RPC_BUFFERS', 'URL_REJECTED-REJECTED_FC_TIMEOUT'])(
+            'should mark %s 400s (fetcher overload or timeout) as retryable',
+            (status) => {
+                // Seen on multimodal requests passing documents and media by URL: the
+                // fetcher is out of capacity or timed out, not rejecting the URL itself.
+                const googleError = {
+                    status: 400,
+                    message:
+                        'Cannot fetch content from the provided URL. Please ensure the URL is valid ' +
+                        `and accessible. Status: ${status}`,
+                };
+
+                const error = modelDef.formatLlumiverseError(driver, googleError, {
+                    provider: 'vertexai',
+                    model: 'gemini-2.5-flash',
+                    operation: 'execute',
+                });
+
+                expect(error.code).toBe(400);
+                expect(error.retryable).toBe(true);
+            },
+        );
+
         it('should keep permanent URL_REJECTED rejections (robots-denied) non-retryable', () => {
             // A URL_REJECTED status without a throttle marker is a permanent failure
             // (e.g. robots.txt denied) and must not be retried.
