@@ -45,3 +45,23 @@ describe('streaming tool-use accumulation for calls that share a provider id', (
         ]);
     });
 });
+
+describe('streamed tool calls from a refused turn', () => {
+    const context = { provider: 'vertexai', model: 'claude-test' };
+    const calls = (): StreamingToolUse[] => [
+        { id: 'toolu_1', tool_name: 'search', tool_input: '{"query":"expenses 2025"}' },
+        { id: 'toolu_2', tool_name: 'think', tool_input: '{"message_to_human":"Plan' },
+        { id: 'toolu_3', tool_name: 'think', tool_input: '' },
+    ];
+
+    it('drops every call, complete or cut off, when the turn was refused', () => {
+        expect(finalizeStreamingToolUse(calls(), 'refusal', context)).toBeUndefined();
+        expect(finalizeStreamingToolUse(calls().slice(0, 1), 'refusal', context)).toBeUndefined();
+    });
+
+    it('keeps complete calls for other finish reasons', () => {
+        expect(finalizeStreamingToolUse(calls().slice(0, 1), 'tool_use', context)).toEqual([
+            { id: 'toolu_1', tool_name: 'search', tool_input: { query: 'expenses 2025' } },
+        ]);
+    });
+});

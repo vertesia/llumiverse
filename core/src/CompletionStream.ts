@@ -247,6 +247,9 @@ export function finalizeStreamingToolUse(
     context: { provider: string; model: string },
 ): ToolUse<unknown>[] | undefined {
     if (!toolUseArray) return undefined;
+    // A refusal (Claude's `refusal` stop) can cut a streamed call off mid-input, and even a complete call from
+    // a refused turn must not run: the provider asks for the whole response to be discarded.
+    if (finishReason === 'refusal') return undefined;
 
     const malformedToolIds = new Set<string>();
     let parseError: unknown;

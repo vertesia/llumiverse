@@ -1225,7 +1225,11 @@ function finalizeClaudeConversation(
     result: Message,
     options: ExecutionOptions,
 ): ClaudePrompt {
-    let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
+    // A refused response is partial output to discard: keeping it would replay its cut-off tool calls with
+    // synthesized results and re-send the content the classifier declined.
+    const response: ClaudePrompt =
+        result.stop_reason === 'refusal' ? { messages: [], system: undefined } : createPromptFromResponse(result);
+    let completedConversation = updateClaudeConversation(conversation, response);
     completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
     completedConversation = pruneClaudeThinking(completedConversation);
     const currentTurn = getConversationMeta(completedConversation).turnNumber;
@@ -1387,7 +1391,8 @@ export async function executeClaudeCompletion(
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
-    const tool_use = collectClaudeTools(result.content);
+    // A refusal can cut a tool call off mid-input, so a refused turn's tool calls must never run.
+    const tool_use = result.stop_reason === 'refusal' ? undefined : collectClaudeTools(result.content);
 
     const processedConversation = finalizeClaudeConversation(conversation, result, options);
 
