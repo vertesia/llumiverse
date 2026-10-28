@@ -153,7 +153,7 @@
         "@huggingface/inference": "^4.13.32",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
-        "@mistralai/mistralai": "^2.7.0",
+        "@mistralai/mistralai": "^3.1.0",
         "@openrouter/sdk": "^1.4.25",
         "@vertesia/api-fetch-client": "^1.5.1",
         "eventsource": "^5.1.3",
