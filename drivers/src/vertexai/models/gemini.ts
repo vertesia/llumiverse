@@ -1580,22 +1580,26 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode === 504) return true; // Gateway timeout
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
 
-        // Vertex AI URL fetcher transient throttling, surfaced as 400 INVALID_ARGUMENT
-        // but really a Google-side rate limit on the inline-content fetcher. The fetcher
-        // rejects with a family of transient throttle statuses that share the
-        // THROTTLED / RATE_LIMITED / TOO_MANY_PENDING markers, e.g.
+        // Vertex AI URL fetcher transient failures, surfaced as 400 INVALID_ARGUMENT
+        // but really Google-side throttling, overload or timeouts of the inline-content
+        // fetcher. The fetcher rejects with a family of transient statuses that share the
+        // THROTTLED / RATE_LIMITED / TOO_MANY_PENDING / NO_RPC_BUFFERS / TIMEOUT markers, e.g.
         //   URL_REJECTED-REJECTED_CLIENT_THROTTLED
         //   URL_REJECTED-REJECTED_PROXY_THROTTLED
         //   URL_REJECTED-REJECTED_RATE_LIMITED
         //   URL_REJECTED-REJECTED_FC_TOO_MANY_PENDING
-        // Match on the marker rather than an exact status so new fetcher-throttle
+        //   URL_REJECTED-REJECTED_NO_RPC_BUFFERS
+        //   URL_REJECTED-REJECTED_FC_TIMEOUT
+        // Match on the marker rather than an exact status so new transient fetcher
         // variants are retried too; permanent URL rejections (robots-denied, unsafe,
         // unsupported content) lack these markers and fall through to non-retryable.
         if (httpStatusCode === 400 && message && message.includes('URL_REJECTED')) {
             if (
                 message.includes('THROTTLED') ||
                 message.includes('RATE_LIMITED') ||
-                message.includes('TOO_MANY_PENDING')
+                message.includes('TOO_MANY_PENDING') ||
+                message.includes('NO_RPC_BUFFERS') ||
+                message.includes('TIMEOUT')
             ) {
                 return true;
             }
