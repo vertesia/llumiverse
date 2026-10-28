@@ -247,9 +247,8 @@ export function finalizeStreamingToolUse(
     context: { provider: string; model: string },
 ): ToolUse<unknown>[] | undefined {
     if (!toolUseArray) return undefined;
-    // A refusal (Claude's `refusal` stop) can cut a streamed call off mid-input, and even a complete call from
-    // a refused turn must not run: the provider asks for the whole response to be discarded.
-    if (finishReason === 'refusal') return undefined;
+    // A length stop or a refusal (Claude's `refusal` stop) can end the response in the middle of a call.
+    const cutOff = finishReason === 'length' || finishReason === 'refusal';
 
     const malformedToolIds = new Set<string>();
     let parseError: unknown;
@@ -261,9 +260,9 @@ export function finalizeStreamingToolUse(
         if (typeof tool.tool_input === 'string') {
             // Claude streams a call with no arguments as a single empty `partial_json`, so the
             // accumulated buffer is empty rather than "{}". That is a complete, valid call, unless
-            // a length stop cut the call off before its first argument fragment arrived.
+            // the response stopped before the call's first argument fragment arrived.
             if (tool.tool_input.trim() === '') {
-                if (finishReason === 'length') {
+                if (cutOff) {
                     malformedToolIds.add(tool.id);
                 } else {
                     tool.tool_input = {};
@@ -281,9 +280,9 @@ export function finalizeStreamingToolUse(
 
     if (malformedToolIds.size === 0) return toolUseArray;
 
-    // A length stop means the model ran out of tokens mid-call. The partial call must not be
-    // returned, but other complete calls from the same response remain usable.
-    if (finishReason === 'length') {
+    // The response stopped mid-call. The partial call must not be returned, but other complete calls
+    // from the same response remain usable.
+    if (cutOff) {
         const completeTools = toolUseArray.filter((tool) => !malformedToolIds.has(tool.id));
         return completeTools.length > 0 ? completeTools : undefined;
     }

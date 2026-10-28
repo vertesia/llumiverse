@@ -1225,11 +1225,7 @@ function finalizeClaudeConversation(
     result: Message,
     options: ExecutionOptions,
 ): ClaudePrompt {
-    // A refused response is partial output to discard: keeping it would replay its cut-off tool calls with
-    // synthesized results and re-send the content the classifier declined.
-    const response: ClaudePrompt =
-        result.stop_reason === 'refusal' ? { messages: [], system: undefined } : createPromptFromResponse(result);
-    let completedConversation = updateClaudeConversation(conversation, response);
+    let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
     completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
     completedConversation = pruneClaudeThinking(completedConversation);
     const currentTurn = getConversationMeta(completedConversation).turnNumber;
@@ -1391,8 +1387,7 @@ export async function executeClaudeCompletion(
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
-    // A refusal can cut a tool call off mid-input, so a refused turn's tool calls must never run.
-    const tool_use = result.stop_reason === 'refusal' ? undefined : collectClaudeTools(result.content);
+    const tool_use = collectClaudeTools(result.content);
 
     const processedConversation = finalizeClaudeConversation(conversation, result, options);
 
@@ -1401,7 +1396,10 @@ export async function executeClaudeCompletion(
         tool_use,
         token_usage: anthropicUsageToTokenUsage(result.usage),
         service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
-        finish_reason: tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
+        // A refusal can arrive after tool calls have started, so it must not be reported as `tool_use`: the
+        // caller decides what to do with the refused turn's calls.
+        finish_reason:
+            result.stop_reason !== 'refusal' && tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
         conversation: processedConversation,
         ...(options.include_original_response ? { original_response: result } : {}),
     };

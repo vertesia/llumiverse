@@ -46,22 +46,20 @@ describe('streaming tool-use accumulation for calls that share a provider id', (
     });
 });
 
-describe('streamed tool calls from a refused turn', () => {
+describe('streamed tool calls cut off by a stop', () => {
     const context = { provider: 'vertexai', model: 'claude-test' };
     const calls = (): StreamingToolUse[] => [
         { id: 'toolu_1', tool_name: 'search', tool_input: '{"query":"expenses 2025"}' },
         { id: 'toolu_2', tool_name: 'think', tool_input: '{"message_to_human":"Plan' },
         { id: 'toolu_3', tool_name: 'think', tool_input: '' },
     ];
+    const complete = [{ id: 'toolu_1', tool_name: 'search', tool_input: { query: 'expenses 2025' } }];
 
-    it('drops every call, complete or cut off, when the turn was refused', () => {
-        expect(finalizeStreamingToolUse(calls(), 'refusal', context)).toBeUndefined();
-        expect(finalizeStreamingToolUse(calls().slice(0, 1), 'refusal', context)).toBeUndefined();
+    it.each(['refusal', 'length'])('keeps complete calls and leaves out cut-off ones after a %s stop', (reason) => {
+        expect(finalizeStreamingToolUse(calls(), reason, context)).toEqual(complete);
     });
 
-    it('keeps complete calls for other finish reasons', () => {
-        expect(finalizeStreamingToolUse(calls().slice(0, 1), 'tool_use', context)).toEqual([
-            { id: 'toolu_1', tool_name: 'search', tool_input: { query: 'expenses 2025' } },
-        ]);
+    it('still rejects malformed arguments when the response was not cut off', () => {
+        expect(() => finalizeStreamingToolUse(calls(), 'tool_use', context)).toThrow(/malformed JSON arguments/);
     });
 });

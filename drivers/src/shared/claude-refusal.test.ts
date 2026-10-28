@@ -1,7 +1,7 @@
 /**
- * A Claude `refusal` stop can arrive mid-stream, after a tool call has started, so the tool input may be cut off.
- * The refused turn must be discarded: its tool calls are never returned for execution, and the assistant message is
- * not kept in the conversation sent on the next turn.
+ * A Claude `refusal` stop can arrive after a tool call has started. The completion must report the refusal rather
+ * than `tool_use`, so the caller can tell the turn was refused, while the refused turn and its tool calls stay on
+ * record in the result and the conversation.
  */
 
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
@@ -27,8 +27,7 @@ function message(stopReason: string, content: unknown[]): Message {
 
 const preamble = { type: 'text', text: 'Searching the 2025 expenses.', citations: null };
 const searchCall = { type: 'tool_use', id: 'toolu_search', name: 'search', input: { query: 'expenses 2025' } };
-// The input the API reports for a call the refusal cut off: whatever was streamed before the stop.
-const cutOffThinkCall = { type: 'tool_use', id: 'toolu_think', name: 'think', input: { message_to_human: 'Planning' } };
+const thinkCall = { type: 'tool_use', id: 'toolu_think', name: 'think', input: { message_to_human: 'Planning' } };
 
 function clientFor(final: Message, events: RawMessageStreamEvent[] = []) {
     const stream = () => ({
@@ -42,38 +41,30 @@ function clientFor(final: Message, events: RawMessageStreamEvent[] = []) {
     return { messages: { stream } } as never;
 }
 
-function lastRole(conversation: unknown): string | undefined {
-    return (conversation as ClaudePrompt).messages.at(-1)?.role;
+function lastMessage(conversation: unknown) {
+    return (conversation as ClaudePrompt).messages.at(-1);
 }
 
-describe('Claude refusal discards the refused turn', () => {
-    it('returns no tool calls and reports refusal for a non-streaming refusal after tool calls', async () => {
-        const refused = message('refusal', [preamble, searchCall, cutOffThinkCall]);
+describe('Claude refusal after tool calls', () => {
+    it('reports refusal, not tool_use, and keeps the calls and the turn on record', async () => {
+        const refused = message('refusal', [preamble, searchCall, thinkCall]);
         const completion = await executeClaudeCompletion(clientFor(refused), prompt, { model: 'claude-test' });
 
         expect(completion.finish_reason).toBe('refusal');
-        expect(completion.tool_use).toBeUndefined();
-        expect(lastRole(completion.conversation)).toBe('user');
-        expect(JSON.stringify(completion.conversation)).not.toContain('toolu_');
+        expect(completion.tool_use?.map((tool) => tool.id)).toEqual(['toolu_search', 'toolu_think']);
+        expect(lastMessage(completion.conversation)).toEqual({ role: 'assistant', content: refused.content });
     });
 
-    it('still returns tool calls and keeps the assistant turn for a normal tool_use stop', async () => {
+    it('reports tool_use for a normal tool_use stop', async () => {
         const normal = message('tool_use', [preamble, searchCall]);
         const completion = await executeClaudeCompletion(clientFor(normal), prompt, { model: 'claude-test' });
 
         expect(completion.finish_reason).toBe('tool_use');
-        expect(completion.tool_use).toEqual([
-            expect.objectContaining({
-                id: 'toolu_search',
-                tool_name: 'search',
-                tool_input: { query: 'expenses 2025' },
-            }),
-        ]);
-        expect(lastRole(completion.conversation)).toBe('assistant');
+        expect(completion.tool_use?.map((tool) => tool.id)).toEqual(['toolu_search']);
     });
 
-    it('leaves the refused turn out of a streamed conversation', async () => {
-        const refused = message('refusal', [preamble, cutOffThinkCall]);
+    it('keeps the refused turn in a streamed conversation', async () => {
+        const refused = message('refusal', [preamble, thinkCall]);
         const events = [
             { type: 'message_start', message: { ...refused, content: [], stop_reason: null, stop_details: null } },
             {
@@ -88,8 +79,9 @@ describe('Claude refusal discards the refused turn', () => {
             // drain
         }
 
-        const conversation = await stream.finalizeConversation?.();
-        expect(lastRole(conversation)).toBe('user');
-        expect(JSON.stringify(conversation)).not.toContain('toolu_think');
+        expect(lastMessage(await stream.finalizeConversation?.())).toEqual({
+            role: 'assistant',
+            content: refused.content,
+        });
     });
 });
