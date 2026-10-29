@@ -11,6 +11,20 @@ export function extractAndParseJSON(text: string): JSONValue {
     return parseJSON(extractJsonFromText(text));
 }
 
+/**
+ * Whether text is a complete JSON object, parsed strictly. Unlike {@link parseJSON} it never repairs the text, so
+ * tool-call arguments that were cut off do not count as complete.
+ */
+export function isJSONObjectText(text: unknown): boolean {
+    if (typeof text !== 'string') return false;
+    try {
+        const parsed: unknown = JSON.parse(text);
+        return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+    } catch {
+        return false;
+    }
+}
+
 export function parseJSON(text: string): JSONValue {
     text = text.trim();
     try {

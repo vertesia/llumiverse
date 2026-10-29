@@ -144,6 +144,90 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    const cutOffResponse = (reason: string, toolCalls: unknown[]) =>
+        ({
+            id: 'chatcmpl-cut-off-only',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: null, tool_calls: toolCalls },
+                    finish_reason: reason,
+                    logprobs: null,
+                },
+            ],
+        }) as unknown as OpenAIChatCompletionsResponse;
+
+    it('reports a cut-off stop instead of failing when the only tool call was cut off', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            cutOffResponse('length', [
+                { id: 'call_1', type: 'function', function: { name: 'delete_rows', arguments: '{"where":"id=' } },
+            ]),
+        );
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.finish_reason).toBe('length');
+        expect(completion.tool_use).toBeUndefined();
+    });
+
+    it('keeps an earlier no-argument call sent with empty arguments: only the last call can be cut off', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            cutOffResponse('content_filter', [
+                { id: 'call_1', type: 'function', function: { name: 'list_files', arguments: '' } },
+                { id: 'call_2', type: 'function', function: { name: 'write', arguments: '{"pa' } },
+            ]),
+        );
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.tool_use).toEqual([{ id: 'call_1', tool_name: 'list_files', tool_input: {} }]);
+    });
+
+    it.each(['content_filter', 'length'])(
+        'leaves out a cut-off tool call from a non-streaming %s stop instead of giving it empty input',
+        async (reason) => {
+            const model = new TestOpenAIChatCompletionsProtocol({
+                id: 'chatcmpl-cut-off',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test/model',
+                choices: [
+                    {
+                        index: 0,
+                        message: {
+                            role: 'assistant',
+                            content: null,
+                            tool_calls: [
+                                {
+                                    id: 'call_1',
+                                    type: 'function',
+                                    function: { name: 'search', arguments: '{"query":"expenses 2025"}' },
+                                },
+                                {
+                                    id: 'call_2',
+                                    type: 'function',
+                                    function: { name: 'delete_rows', arguments: '{"where":"id=' },
+                                },
+                            ],
+                        },
+                        finish_reason: reason,
+                        logprobs: null,
+                    },
+                ],
+            } as unknown as OpenAIChatCompletionsResponse);
+
+            const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+            expect(completion.finish_reason).toBe(reason);
+            expect(completion.tool_use).toEqual([
+                { id: 'call_1', tool_name: 'search', tool_input: { query: 'expenses 2025' } },
+            ]);
+        },
+    );
+
     it('preserves compatible-provider prompt cache usage', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-cache',
@@ -1185,57 +1269,63 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(chunks[chunks.length - 1].finish_reason).toBe('tool_use');
     });
 
-    it('keeps empty argument deltas as strings and preserves a length stop', async () => {
-        const model = new TestOpenAIChatCompletionsProtocol(
-            undefined,
-            createSSEStream([
-                {
-                    type: 'event',
-                    data: JSON.stringify({
-                        id: 'chatcmpl-1',
-                        object: 'chat.completion.chunk',
-                        created: 1,
-                        model: 'test/model',
-                        choices: [
-                            {
-                                index: 0,
-                                delta: {
-                                    tool_calls: [
-                                        {
-                                            index: 0,
-                                            id: 'call_real_id',
-                                            type: 'function',
-                                            function: { name: 'write_artifact', arguments: '{"name"' },
-                                        },
-                                    ],
+    it.each(['length', 'content_filter'])(
+        'keeps empty argument deltas as strings and preserves a %s stop',
+        async (reason) => {
+            const model = new TestOpenAIChatCompletionsProtocol(
+                undefined,
+                createSSEStream([
+                    {
+                        type: 'event',
+                        data: JSON.stringify({
+                            id: 'chatcmpl-1',
+                            object: 'chat.completion.chunk',
+                            created: 1,
+                            model: 'test/model',
+                            choices: [
+                                {
+                                    index: 0,
+                                    delta: {
+                                        tool_calls: [
+                                            {
+                                                index: 0,
+                                                id: 'call_real_id',
+                                                type: 'function',
+                                                function: { name: 'write_artifact', arguments: '{"name"' },
+                                            },
+                                        ],
+                                    },
                                 },
-                            },
-                        ],
-                    }),
-                },
-                {
-                    type: 'event',
-                    data: JSON.stringify({
-                        id: 'chatcmpl-1',
-                        object: 'chat.completion.chunk',
-                        created: 1,
-                        model: 'test/model',
-                        choices: [
-                            {
-                                index: 0,
-                                delta: { tool_calls: [{ index: 0, function: { arguments: '' } }] },
-                                finish_reason: 'length',
-                            },
-                        ],
-                    }),
-                },
-            ]),
-        );
+                            ],
+                        }),
+                    },
+                    {
+                        type: 'event',
+                        data: JSON.stringify({
+                            id: 'chatcmpl-1',
+                            object: 'chat.completion.chunk',
+                            created: 1,
+                            model: 'test/model',
+                            choices: [
+                                {
+                                    index: 0,
+                                    delta: { tool_calls: [{ index: 0, function: { arguments: '' } }] },
+                                    finish_reason: reason,
+                                },
+                            ],
+                        }),
+                    },
+                ]),
+            );
 
-        const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
-        expect(chunks.flatMap((chunk) => chunk.tool_use ?? []).map((tool) => tool.tool_input)).toEqual(['{"name"', '']);
-        expect(chunks.at(-1)?.finish_reason).toBe('length');
-    });
+            const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
+            expect(chunks.flatMap((chunk) => chunk.tool_use ?? []).map((tool) => tool.tool_input)).toEqual([
+                '{"name"',
+                '',
+            ]);
+            expect(chunks.at(-1)?.finish_reason).toBe(reason);
+        },
+    );
 
     it('normalizes tool schemas and structured-output schemas for Chat Completions payloads', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({

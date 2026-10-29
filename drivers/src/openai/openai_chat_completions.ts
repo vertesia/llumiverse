@@ -12,9 +12,11 @@ import {
     type ExecutionResponse,
     getConversationMeta,
     incrementConversationTurn,
+    isCutOffFinishReason,
     isDedicatedInferenceModel,
     isDeepSeekVersionGte,
     isEmbeddingModel,
+    isJSONObjectText,
     type JSONObject,
     type JSONSchema,
     type Logger,
@@ -356,9 +358,9 @@ function normalizeOpenAIChatCompletionsFinishReason(
     reason: string | null | undefined,
     hasToolUse: boolean = false,
 ): string | undefined {
-    // A provider may include a partial tool-call delta on the token-limit chunk. Preserve
-    // truncation so core drops the incomplete call instead of classifying it as malformed JSON.
-    if (reason === 'length') return 'length';
+    // A provider may include a partial tool-call delta on the token-limit or content-filter chunk. Preserve
+    // the stop so core drops the incomplete call instead of classifying it as malformed JSON.
+    if (reason === 'length' || reason === 'content_filter') return reason;
     if (hasToolUse || reason === 'tool_calls' || reason === 'function_call') {
         return 'tool_use';
     }
@@ -1008,7 +1010,16 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const choice = result?.choices?.[0];
         const message = choice?.message;
         const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
-        const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
+        // A cut-off stop may have ended inside the last tool call. Leave that call out when its arguments are not
+        // complete JSON, rather than return it with invented empty input; earlier calls had finished. The streaming
+        // path does the same.
+        const cutOff = isCutOffFinishReason(choice?.finish_reason);
+        const lastCall = cutOff ? message?.tool_calls?.at(-1) : undefined;
+        const tool_use = parseOpenAIChatCompletionsToolCalls(
+            lastCall?.type === 'function' && !isJSONObjectText(lastCall.function?.arguments)
+                ? message?.tool_calls?.slice(0, -1)
+                : message?.tool_calls,
+        );
         const finish_reason = normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length);
         if (message?.refusal || choice?.finish_reason === 'content_filter') {
             logModelRefusal(logger, {
@@ -1024,9 +1035,13 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 >,
             });
         }
+        // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
         if (
             !message ||
-            (completionResults.length === 0 && !extractOpenAIChatCompletionsReasoningText(message) && !tool_use?.length)
+            (completionResults.length === 0 &&
+                !extractOpenAIChatCompletionsReasoningText(message) &&
+                !tool_use?.length &&
+                !cutOff)
         ) {
             throw new Error('Chat Completions response is not valid: no data');
         }

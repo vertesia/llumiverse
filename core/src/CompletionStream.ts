@@ -7,6 +7,7 @@ import {
     type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
+    isCutOffFinishReason,
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
@@ -247,6 +248,9 @@ export function finalizeStreamingToolUse(
     context: { provider: string; model: string },
 ): ToolUse<unknown>[] | undefined {
     if (!toolUseArray) return undefined;
+    const cutOff = isCutOffFinishReason(finishReason);
+    // Calls stream one after another, so only the last one can have been cut off.
+    const lastTool = toolUseArray.at(-1);
 
     const malformedToolIds = new Set<string>();
     let parseError: unknown;
@@ -258,9 +262,9 @@ export function finalizeStreamingToolUse(
         if (typeof tool.tool_input === 'string') {
             // Claude streams a call with no arguments as a single empty `partial_json`, so the
             // accumulated buffer is empty rather than "{}". That is a complete, valid call, unless
-            // a length stop cut the call off before its first argument fragment arrived.
+            // the response stopped before the last call's first argument fragment arrived.
             if (tool.tool_input.trim() === '') {
-                if (finishReason === 'length') {
+                if (cutOff && tool === lastTool) {
                     malformedToolIds.add(tool.id);
                 } else {
                     tool.tool_input = {};
@@ -278,9 +282,9 @@ export function finalizeStreamingToolUse(
 
     if (malformedToolIds.size === 0) return toolUseArray;
 
-    // A length stop means the model ran out of tokens mid-call. The partial call must not be
-    // returned, but other complete calls from the same response remain usable.
-    if (finishReason === 'length') {
+    // The response stopped mid-call. The partial call must not be returned, but other complete calls
+    // from the same response remain usable.
+    if (cutOff) {
         const completeTools = toolUseArray.filter((tool) => !malformedToolIds.has(tool.id));
         return completeTools.length > 0 ? completeTools : undefined;
     }

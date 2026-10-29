@@ -15,7 +15,9 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
+    isCutOffFinishReason,
     isDedicatedInferenceModel,
+    isJSONObjectText,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
     type JSONSchema,
@@ -660,7 +662,18 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         assertOpenAIResponseSucceeded(result);
         const tokenInfo = mapUsage(result.usage);
 
-        const tools = collectTools(result.output);
+        // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
+        // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
+        // streaming path does the same.
+        const lastCall =
+            result.status === 'incomplete'
+                ? result.output.filter((item) => item.type === 'function_call').at(-1)
+                : undefined;
+        const tools = collectTools(
+            lastCall && !isJSONObjectText(lastCall.arguments)
+                ? result.output.filter((item) => item !== lastCall)
+                : result.output,
+        );
         const finish_reason = responseFinishReason(result, tools);
         const refusalDetails = responseRefusalDetails(result);
         if (refusalDetails) {
@@ -683,7 +696,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
         );
 
-        if (allResults.length === 0 && !tools) {
+        // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
+        if (allResults.length === 0 && !tools && !isCutOffFinishReason(finish_reason)) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
             throw new Error('Response is not valid: no data');
         }
@@ -1589,14 +1603,16 @@ function responseFinishReason(
     response: OpenAI.Responses.Response,
     tools?: ToolUse<unknown>[] | undefined,
 ): string | undefined {
-    if (tools && tools.length > 0) {
-        return 'tool_use';
-    }
+    // An incomplete response can stop after a function call has started, so its stop is reported even when calls
+    // are present: callers must not mistake those calls for a completed `tool_use` turn.
     if (response.status === 'incomplete') {
         if (response.incomplete_details?.reason === 'max_output_tokens') {
             return 'length';
         }
         return response.incomplete_details?.reason ?? 'incomplete';
+    }
+    if (tools && tools.length > 0) {
+        return 'tool_use';
     }
     if (response.status && response.status !== 'completed') {
         return response.status;
