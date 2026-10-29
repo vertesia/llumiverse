@@ -76,6 +76,7 @@ import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/form
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'lru-cache';
 import type { BedrockDriverOptions } from '../driver-options.js';
+import { CLAUDE_BEDROCK_API_VERSION, claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
@@ -732,9 +733,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 awsRegion: this.options.region,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
+                defaultHeaders: claudeApiVersionHeaders(CLAUDE_BEDROCK_API_VERSION),
                 // Configured credentials must win over an AWS_BEARER_TOKEN_BEDROCK environment token, which the
-                // SDK would otherwise prefer. The SDK only types the field as a string.
-                ...(credentials && { apiKey: null as unknown as undefined }),
+                // SDK would otherwise prefer. `null` clears the key, so the client signs with SigV4.
+                ...(credentials && { apiKey: null }),
             };
             // Separate calls: the constructor's overloads take static keys or a provider resolver, not a union.
             if (credentials && typeof credentials !== 'function') {

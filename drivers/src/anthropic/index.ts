@@ -18,6 +18,7 @@ import {
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type { AnthropicDriverOptions } from '../driver-options.js';
+import { claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
@@ -41,6 +42,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
             fetch: this.getDriverFetch(),
             timeout: this.getDriverRequestTimeoutMs(),
+            defaultHeaders: claudeApiVersionHeaders(),
         });
     }
 

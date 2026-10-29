@@ -175,14 +175,32 @@ function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBloc
 export function formatClaudeDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {
     return {
         ...prompt,
-        messages: prompt.messages.map((message) => ({
-            ...message,
-            content: Array.isArray(message.content)
-                ? message.content.map(formatClaudeContentBlockForDebug)
-                : message.content,
-        })),
+        messages: prompt.messages.map((message) =>
+            Array.isArray(message.content)
+                ? withClaudeMessageContent(message, message.content.map(formatClaudeContentBlockForDebug))
+                : message,
+        ),
     };
 }
+
+/**
+ * Copy a message with new content blocks. Anthropic SDK v1 types `MessageParam` as one type per role; these
+ * helpers transform blocks of any role (filtering, stripping cache control, tool blocks to text) without changing
+ * which kinds of blocks a message holds, so the copy stays valid for its role.
+ */
+export function withClaudeMessageContent(message: MessageParam, content: ContentBlockParam[]): MessageParam {
+    return { ...message, content } as MessageParam;
+}
+
+/**
+ * Sampling parameters, which API version 2023-06-01 (pinned in claude-api-version.ts) still accepts but Anthropic
+ * SDK v1 no longer declares.
+ */
+export type ClaudeMessageCreateParams = MessageCreateParamsBase & {
+    temperature?: number;
+    top_p?: number;
+    top_k?: number;
+};
 
 export interface AnthropicUsageLike {
     input_tokens: number;
@@ -579,7 +597,7 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
     while (i < messages.length) {
         const current = messages[i];
         if (current.role === 'user') {
-            const mergedContent: MessageParam['content'] = [];
+            const mergedContent: ContentBlockParam[] = [];
             while (i < messages.length && messages[i].role === 'user') {
                 const userMsg = messages[i];
                 if (Array.isArray(userMsg.content)) {
@@ -628,7 +646,7 @@ export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
             return true;
         });
         if (filteredContent.length > 0) {
-            result.push({ ...message, content: filteredContent });
+            result.push(withClaudeMessageContent(message, filteredContent));
         }
     }
     return result;
@@ -788,7 +806,7 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
         }
         if (!hasToolBlocks) return msg;
 
-        const newContent: MessageParam['content'] = [];
+        const newContent: ContentBlockParam[] = [];
         for (const block of msg.content) {
             if (typeof block === 'string') {
                 newContent.push(block);
@@ -819,7 +837,7 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
                 newContent.push(block as ContentBlockParam);
             }
         }
-        return { ...msg, content: newContent };
+        return withClaudeMessageContent(msg, newContent);
     });
 }
 
@@ -837,7 +855,7 @@ function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T)
 function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageParam[] {
     return messages.map((msg) => {
         if (!Array.isArray(msg.content)) return msg;
-        return { ...msg, content: msg.content.map(stripClaudeCacheControlFromBlock) };
+        return withClaudeMessageContent(msg, msg.content.map(stripClaudeCacheControlFromBlock));
     });
 }
 
@@ -866,7 +884,7 @@ export function getClaudePayload(
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
     logger?: Logger,
-): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
+): { payload: ClaudeMessageCreateParams; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
@@ -1067,7 +1085,7 @@ export function getClaudePayload(
               : [],
         hasSamplingRestriction ? 'claude_sampling_restriction' : 'claude_sampling_precedence',
     );
-    const payload: MessageCreateParamsBase = {
+    const payload: ClaudeMessageCreateParams = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
