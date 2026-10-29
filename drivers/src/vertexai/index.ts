@@ -52,6 +52,7 @@ export type {
 } from './models/gemini-context-cache.js';
 
 import type { VertexAIDriverOptions } from '../driver-options.js';
+import { CLAUDE_VERTEX_API_VERSION, claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 
 export type { VertexAIDriverOptions } from '../driver-options.js';
 
@@ -224,6 +225,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             projectId: this.options.project,
             authClient: authClient,
             fetch: this.getDriverFetch(),
+            defaultHeaders: claudeApiVersionHeaders(CLAUDE_VERTEX_API_VERSION),
         };
     }
 

@@ -47,6 +47,7 @@ import {
     formatOpenAIDebugPrompt,
     formatOpenAILikeMultimodalPrompt,
 } from '../openai/openai_format.js';
+import { claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
@@ -342,6 +343,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
                 maxRetries: 0,
+                defaultHeaders: claudeApiVersionHeaders(),
             });
         }
         return this.anthropicClient;

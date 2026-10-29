@@ -217,7 +217,8 @@ export function stripClaudeToolChanges(messages: MessageParam[]): MessageParam[]
             continue;
         }
         const content = message.content.filter((block) => !isClaudeToolChangeBlock(block));
-        if (content.length > 0) result.push({ ...message, content });
+        // Only tool-change blocks are removed, so the copy stays valid for its role (SDK v1 types one per role).
+        if (content.length > 0) result.push({ ...message, content } as MessageParam);
     }
     return result;
 }
