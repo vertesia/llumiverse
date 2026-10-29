@@ -7,6 +7,7 @@ import {
     type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
+    isCutOffFinishReason,
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
@@ -241,26 +242,15 @@ export function leaseCompletionStream<PromptT>(
     return new LeasedCompletionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
 }
 
-/**
- * Provider finish reasons that can end a streamed response in the middle of a tool call: a token limit, a refusal
- * (Claude `refusal`), or a content filter (OpenAI `content_filter`, Bedrock `content_filtered` and
- * `guardrail_intervened`). Drivers pass these through unnormalized apart from `length`.
- */
-const CUT_OFF_FINISH_REASONS = new Set([
-    'length',
-    'refusal',
-    'content_filter',
-    'content_filtered',
-    'guardrail_intervened',
-]);
-
 export function finalizeStreamingToolUse(
     toolUseArray: StreamingToolUse[] | undefined,
     finishReason: string | undefined,
     context: { provider: string; model: string },
 ): ToolUse<unknown>[] | undefined {
     if (!toolUseArray) return undefined;
-    const cutOff = finishReason !== undefined && CUT_OFF_FINISH_REASONS.has(finishReason);
+    const cutOff = isCutOffFinishReason(finishReason);
+    // Calls stream one after another, so only the last one can have been cut off.
+    const lastTool = toolUseArray.at(-1);
 
     const malformedToolIds = new Set<string>();
     let parseError: unknown;
@@ -272,9 +262,9 @@ export function finalizeStreamingToolUse(
         if (typeof tool.tool_input === 'string') {
             // Claude streams a call with no arguments as a single empty `partial_json`, so the
             // accumulated buffer is empty rather than "{}". That is a complete, valid call, unless
-            // the response stopped before the call's first argument fragment arrived.
+            // the response stopped before the last call's first argument fragment arrived.
             if (tool.tool_input.trim() === '') {
-                if (cutOff) {
+                if (cutOff && tool === lastTool) {
                     malformedToolIds.add(tool.id);
                 } else {
                     tool.tool_input = {};

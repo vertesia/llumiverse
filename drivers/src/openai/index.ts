@@ -16,6 +16,7 @@ import {
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
+    isJSONObjectText,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
     type JSONSchema,
@@ -659,7 +660,13 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         assertOpenAIResponseSucceeded(result);
         const tokenInfo = mapUsage(result.usage);
 
-        const tools = collectTools(result.output);
+        // An incomplete response may have stopped inside its last function call. Leave out calls whose arguments are
+        // not complete JSON rather than return them with invented empty input; the streaming path does the same.
+        const tools = collectTools(
+            result.status === 'incomplete'
+                ? result.output.filter((item) => item.type !== 'function_call' || isJSONObjectText(item.arguments))
+                : result.output,
+        );
         const finish_reason = responseFinishReason(result, tools);
         const refusalDetails = responseRefusalDetails(result);
         if (refusalDetails) {
@@ -1589,14 +1596,16 @@ function responseFinishReason(
     response: OpenAI.Responses.Response,
     tools?: ToolUse<unknown>[] | undefined,
 ): string | undefined {
-    if (tools && tools.length > 0) {
-        return 'tool_use';
-    }
+    // An incomplete response can stop after a function call has started, so its stop is reported even when calls
+    // are present: callers must not mistake those calls for a completed `tool_use` turn.
     if (response.status === 'incomplete') {
         if (response.incomplete_details?.reason === 'max_output_tokens') {
             return 'length';
         }
         return response.incomplete_details?.reason ?? 'incomplete';
+    }
+    if (tools && tools.length > 0) {
+        return 'tool_use';
     }
     if (response.status && response.status !== 'completed') {
         return response.status;
