@@ -46,6 +46,7 @@ import {
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { APIError } from 'openai/error';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.js';
@@ -548,6 +549,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
+        if (result.status === 'failed') {
+            throw new APIError(
+                undefined,
+                result.error ?? undefined,
+                result.error?.message ?? 'Response failed',
+                undefined,
+            );
+        }
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
@@ -1164,16 +1173,14 @@ export function mapResponseStream(
                         } satisfies OpenAI.Responses.ResponseOutputRefusal,
                     });
                     throw new Error(`[OpenAI] Model refused: ${event.refusal || refusalText}`);
-                } else if ((event as { type: string }).type === 'response.error') {
-                    const errEvent = event as unknown as { message: string; code?: string | null };
-                    throw new Error(
-                        `[OpenAI Responses API] ${errEvent.message}${errEvent.code ? ` (${errEvent.code})` : ''}`,
-                    );
-                } else if (
-                    event.type === 'response.completed' ||
-                    event.type === 'response.incomplete' ||
-                    event.type === 'response.failed'
-                ) {
+                } else if (event.type === 'error' || (event as { type: string }).type === 'response.error') {
+                    // Retain the legacy event alias for compatible endpoints; OpenAI emits `error`.
+                    const errEvent = event as OpenAI.Responses.ResponseErrorEvent;
+                    throw new APIError(undefined, errEvent, errEvent.message, undefined);
+                } else if (event.type === 'response.failed') {
+                    const error = event.response.error;
+                    throw new APIError(undefined, error ?? undefined, error?.message ?? 'Response failed', undefined);
+                } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     const finish_reason = responseFinishReason(event.response, finalTools);

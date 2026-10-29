@@ -9,46 +9,121 @@ function prompt(): ConverseRequest {
 }
 
 describe('Bedrock native reasoning replay', () => {
-    it('preserves reasoning signatures and redacted bytes across a JSON roundtrip', async () => {
+    it.each(
+        ['openai.gpt-6-sol', 'openai.gpt-6-luna', 'openai.gpt-6.1-sol', 'global.openai.gpt-6.1-terra'].flatMap(
+            (model) => [false, true].map((streaming) => ({ model, streaming })),
+        ),
+    )('keeps encrypted $model reasoning out of answers when streaming=$streaming', async ({ model, streaming }) => {
         const redacted = new Uint8Array([1, 2, 255]);
         const response: ConverseResponse = {
             output: {
                 message: {
                     role: 'assistant',
-                    content: [
-                        { reasoningContent: { reasoningText: { text: 'plan', signature: 'signed-chain' } } },
-                        { reasoningContent: { redactedContent: redacted } },
-                        { text: 'answer' },
-                    ],
+                    content: [{ reasoningContent: { redactedContent: redacted } }, { text: '{"answer":"ok"}' }],
                 },
             },
             stopReason: 'end_turn',
             usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
             metrics: { latencyMs: 1 },
         };
+        const events: ConverseStreamOutput[] = [
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 0,
+                    start: {
+                        reasoningContent: { redactedContent: redacted.slice(0, 1) },
+                    },
+                },
+            } as unknown as ConverseStreamOutput,
+            {
+                contentBlockDelta: {
+                    contentBlockIndex: 0,
+                    delta: { reasoningContent: { redactedContent: redacted.slice(1) } },
+                },
+            },
+            { contentBlockDelta: { contentBlockIndex: 1, delta: { text: '{"answer":"ok"}' } } },
+            { messageStop: { stopReason: 'end_turn' } },
+        ];
         const converse = vi.fn(async (_request: ConverseRequest) => response);
         const driver = new BedrockDriver({ region: 'us-east-1' });
         Object.defineProperty(driver, 'getExecutor', {
-            value: () => ({ converse, destroy: vi.fn() }),
+            value: () => ({
+                converse,
+                converseStream: vi.fn(async () => ({
+                    stream: (async function* () {
+                        for (const event of events) yield event;
+                    })(),
+                })),
+                destroy: vi.fn(),
+            }),
         });
-
-        const first = await driver.requestTextCompletion(prompt(), {
-            model: MODEL,
-            stripTextMaxTokens: 1,
-            stripImagesAfterTurns: 0,
+        const options = { model, model_options: { _option_id: 'bedrock-converse' as const, include_thoughts: true } };
+        const input = { ...prompt(), modelId: model };
+        let conversation: unknown;
+        if (streaming) {
+            const stream = await driver.requestTextCompletionStream(input, options);
+            const results = [];
+            for await (const chunk of stream) results.push(...chunk.result);
+            expect(results).toEqual([{ type: 'text', value: '{"answer":"ok"}' }]);
+            conversation = await stream.finalizeConversation?.();
+        } else {
+            const completion = await driver.requestTextCompletion(input, options);
+            expect(completion.result).toEqual([{ type: 'text', value: '{"answer":"ok"}' }]);
+            conversation = completion.conversation;
+        }
+        await driver.requestTextCompletion(input, {
+            ...options,
+            conversation: JSON.parse(JSON.stringify(conversation)),
         });
-        expect(first.result).toEqual([{ type: 'text', value: 'answer' }]);
-        const persisted = JSON.parse(JSON.stringify(first.conversation));
-
-        await driver.requestTextCompletion(
-            { modelId: MODEL, messages: [{ role: 'user', content: [{ text: 'continue' }] }] },
-            { model: MODEL, conversation: persisted },
+        expect(converse.mock.calls.at(-1)?.[0].messages?.[1]?.content?.[0].reasoningContent?.redactedContent).toEqual(
+            redacted,
         );
-        const replay = converse.mock.calls[1][0] as ConverseRequest;
-        expect(replay.messages?.[0]?.content?.[0]?.text).toBe('question');
-        expect(replay.messages).toContainEqual(response.output?.message);
-        expect(replay.messages?.[1]?.content?.[1].reasoningContent?.redactedContent).toEqual(redacted);
     });
+
+    it.each([false, true])(
+        'preserves signed reasoning and redacted replay with include_thoughts=%s',
+        async (include_thoughts) => {
+            const redacted = new Uint8Array([1, 2, 255]);
+            const response: ConverseResponse = {
+                output: {
+                    message: {
+                        role: 'assistant',
+                        content: [
+                            { reasoningContent: { reasoningText: { text: 'plan', signature: 'signed-chain' } } },
+                            { reasoningContent: { redactedContent: redacted } },
+                            { text: 'answer' },
+                        ],
+                    },
+                },
+                stopReason: 'end_turn',
+                usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+                metrics: { latencyMs: 1 },
+            };
+            const converse = vi.fn(async (_request: ConverseRequest) => response);
+            const driver = new BedrockDriver({ region: 'us-east-1' });
+            Object.defineProperty(driver, 'getExecutor', {
+                value: () => ({ converse, destroy: vi.fn() }),
+            });
+
+            const first = await driver.requestTextCompletion(prompt(), {
+                model: MODEL,
+                model_options: { _option_id: 'bedrock-claude', include_thoughts },
+                stripTextMaxTokens: 1,
+                stripImagesAfterTurns: 0,
+            });
+            expect(first.result).toEqual([{ type: 'text', value: include_thoughts ? 'plan\n\nanswer' : 'answer' }]);
+            const persisted = JSON.parse(JSON.stringify(first.conversation));
+
+            await driver.requestTextCompletion(
+                { modelId: MODEL, messages: [{ role: 'user', content: [{ text: 'continue' }] }] },
+                { model: MODEL, conversation: persisted },
+            );
+            const replay = converse.mock.calls[1][0] as ConverseRequest;
+            expect(replay.messages?.[0]?.content?.[0]?.text).toBe('question');
+            expect(replay.messages).toContainEqual(response.output?.message);
+            expect(replay.messages?.[1]?.content?.[1].reasoningContent?.redactedContent).toEqual(redacted);
+        },
+    );
 
     it('reconstructs fragmented reasoning, text, redaction, and tool blocks by native index', async () => {
         const events: ConverseStreamOutput[] = [

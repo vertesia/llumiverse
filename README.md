@@ -250,7 +250,16 @@ pnpm exec vitest run --exclude '**/*.live.test.ts'
 
 # One live file, narrowed to a provider or model
 LLUMIVERSE_LIVE_PROVIDERS=google-vertex pnpm exec vitest run drivers/test/model-smoke.live.test.ts
+
+# On-demand GPT-6 / GPT-6.1 schemas, streaming, tool calls, and persisted reasoning replay
+LLUMIVERSE_LIVE_PROVIDERS=openai LLUMIVERSE_LIVE_MODELS=gpt-6.1-terra \
+pnpm exec vitest run drivers/test/gpt-6.live.test.ts
 ```
+
+The GPT compatibility file also accepts `bedrock` and `bedrock-mantle` as provider selectors. Use their
+provider-specific model IDs when setting `LLUMIVERSE_LIVE_MODELS`.
+The suite exercises the streaming API, which can use the driver's blocking fallback when streaming discovery
+reports that native streaming is unavailable.
 
 Live tests run only for providers whose credentials are set, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
 `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
