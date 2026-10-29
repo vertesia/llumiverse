@@ -10,7 +10,7 @@
 import type { Content } from '@google/genai';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
-import type { VertexAIDriver } from '../index.js';
+import { VertexAIDriver } from '../index.js';
 import {
     conversationInlineBytes,
     GEMINI_INLINE_MEDIA_MAX_BYTES,
@@ -94,10 +94,20 @@ describe('Gemini tool result attachments', () => {
             getURI: vi.fn().mockResolvedValue('https://bucket.s3.amazonaws.com/video.mp4?X-Amz-Signature=x'),
         } as unknown as DataSource;
 
-        await expect(createPrompt([{ role: PromptRole.user, content: 'Describe', files: [file] }])).rejects.toThrow(
+        const failure = await createPrompt([{ role: PromptRole.user, content: 'Describe', files: [file] }]).catch(
+            (err: unknown) => err,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toContain(
             `video.mp4 exceeds the ${GEMINI_INLINE_MEDIA_MAX_BYTES} byte limit for inline Gemini input`,
         );
         expect(cancel).toHaveBeenCalled();
+        // The caller sent too much: a non-retryable 413, not an unclassified failure blamed on the provider.
+        const formatted = new VertexAIDriver({ project: 'test-project', region: 'us-central1' }).formatLlumiverseError(
+            failure,
+            { provider: 'vertexai', model: 'gemini-3-pro', operation: 'execute' },
+        );
+        expect(formatted).toMatchObject({ code: 413, retryable: false, name: 'GeminiInlineMediaLimitError' });
         expect(reads).toBeLessThanOrEqual(GEMINI_INLINE_MEDIA_MAX_BYTES / chunk.byteLength + 2);
     });
 
