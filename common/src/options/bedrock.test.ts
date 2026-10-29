@@ -187,11 +187,13 @@ describe('Bedrock Mantle metadata', () => {
     );
 
     it('carries GPT-5.6 reasoning options forward to future GPT releases', () => {
-        const options = getOptions('openai.gpt-6.1', Providers.bedrock_mantle);
+        const options = getOptions('openai.gpt-6.1-terra', Providers.bedrock_mantle);
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
             enum: { none: 'none', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
         });
-        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 131_072 });
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
+        const sol = getOptions('openai.gpt-6.1-sol', Providers.bedrock_mantle);
+        expect(sol.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 131_072 });
     });
 
     it('carries modern Claude limits forward to newer Claude families', () => {
@@ -210,7 +212,8 @@ describe('Bedrock Mantle metadata', () => {
         expect(capabilities.tool_support).toBe(true);
         expect(capabilities.tool_support_streaming).toBe(true);
         expect(resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle).context_window).toBe(1_050_000);
-        expect(resolveModelProfile('openai.gpt-6.1', Providers.bedrock_mantle).context_window).toBe(1_000_000);
+        expect(resolveModelProfile('openai.gpt-6.1-sol', Providers.bedrock_mantle).context_window).toBe(1_000_000);
+        expect(resolveModelProfile('openai.gpt-6.1-terra', Providers.bedrock_mantle).context_window).toBe(1_050_000);
         expect(getContextWindowSize('openai.gpt-5.5')).toBe(1_050_000);
     });
 
@@ -421,6 +424,10 @@ describe('current Bedrock GPT families', () => {
         ['openai.gpt-6-sol', 1_050_000, 128_000, true],
         ['openai.gpt-6-luna', 1_050_000, 128_000, true],
         ['openai.gpt-6.1-sol', 1_000_000, 131_072, false],
+        ['openai.gpt-6.1-terra', 1_050_000, 128_000, true],
+        ['openai.gpt-6.1-terra-v1:0', 1_050_000, 128_000, true],
+        ['openai.gpt-6.2-terra', 1_050_000, 128_000, true],
+        ['openai.gpt-6.1-luna', 1_050_000, 128_000, true],
         ['openai.gpt-7-sol', 1_000_000, 131_072, false],
     ])('resolves limits and Mantle effort for %s', (model, context_window, max_output_tokens, allowsNone) => {
         for (const id of [model, `us.${model}`, `global.${model}`]) {
@@ -438,21 +445,25 @@ describe('current Bedrock GPT families', () => {
 });
 
 describe('Bedrock Converse GPT options', () => {
-    it.each(['openai.gpt-5.5', 'us.openai.gpt-5.6-sol', 'global.openai.gpt-6-luna', 'us.openai.gpt-6.1-sol'])(
-        'exposes model-specific effort and verbosity for %s',
-        (model) => {
-            const runtime = getOptions(model, Providers.bedrock);
-            const mantle = getOptions(model, Providers.bedrock_mantle);
-            expect(runtime._option_id).toBe('bedrock-converse');
-            expect(runtime.options).toEqual(mantle.options.filter((item) => item.name !== 'image_detail'));
-            expect(runtime.options.map((item) => item.name)).not.toEqual(
-                expect.arrayContaining(['temperature', 'top_p', 'stop_sequence']),
-            );
-            expect(resolveModelProfile(model, Providers.bedrock).reasoning_effort_levels).toEqual(
-                resolveModelProfile(model, Providers.bedrock_mantle).reasoning_effort_levels,
-            );
-        },
-    );
+    it.each([
+        'openai.gpt-5.5',
+        'us.openai.gpt-5.6-sol',
+        'global.openai.gpt-6-luna',
+        'us.openai.gpt-6.1-sol',
+        'us.openai.gpt-6.1-terra',
+        'global.openai.gpt-6.1-terra',
+    ])('exposes model-specific effort and verbosity for %s', (model) => {
+        const runtime = getOptions(model, Providers.bedrock);
+        const mantle = getOptions(model, Providers.bedrock_mantle);
+        expect(runtime._option_id).toBe('bedrock-converse');
+        expect(runtime.options).toEqual(mantle.options.filter((item) => item.name !== 'image_detail'));
+        expect(runtime.options.map((item) => item.name)).not.toEqual(
+            expect.arrayContaining(['temperature', 'top_p', 'stop_sequence']),
+        );
+        expect(resolveModelProfile(model, Providers.bedrock).reasoning_effort_levels).toEqual(
+            resolveModelProfile(model, Providers.bedrock_mantle).reasoning_effort_levels,
+        );
+    });
 });
 
 describe('Bedrock open-weight model cards', () => {

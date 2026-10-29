@@ -1,16 +1,17 @@
 import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
+import { APIError } from 'openai/error';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {
-    provider: Providers.openai | Providers.azure_openai | Providers.openai_compatible;
+    provider: OpenAIResponsesDriverBase['provider'];
     service: OpenAI;
 
     constructor(
         create: (request: unknown) => Promise<unknown>,
-        provider: Providers.openai | Providers.azure_openai | Providers.openai_compatible = Providers.openai,
+        provider: OpenAIResponsesDriverBase['provider'] = Providers.openai,
     ) {
         super({});
         this.provider = provider;
@@ -85,6 +86,201 @@ describe('OpenAI Responses reasoning', () => {
         expect(JSON.stringify(prompt)).toContain('<response_schema>');
         expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ text: expect.anything() }));
     });
+
+    it.each(
+        ['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra'].flatMap((model) =>
+            [false, true].map((streaming) => ({ model, streaming })),
+        ),
+    )(
+        'uses Responses with native schemas and reasoning replay for $model when streaming=$streaming',
+        async ({ model, streaming }) => {
+            const toolCall: OpenAI.Responses.ResponseFunctionToolCall = {
+                type: 'function_call',
+                call_id: 'call-1',
+                name: 'lookup',
+                arguments: '{"city":"Paris"}',
+            };
+            const final = { ...response(), model, output: [reasoningItem, toolCall] };
+            const create = vi.fn(async (request: unknown) =>
+                (request as { stream?: boolean }).stream
+                    ? (async function* () {
+                          yield { type: 'response.completed', sequence_number: 1, response: final };
+                      })()
+                    : final,
+            );
+            const driver = new TestResponsesDriver(create);
+            const options = {
+                model,
+                model_options: ModelOptionsSchema.parse({
+                    _option_id: 'openai-thinking',
+                    effort: 'max',
+                    verbosity: 'low',
+                    include_thoughts: false,
+                    max_tokens: 128_000,
+                    service_tier: 'fast',
+                }),
+                tools: [
+                    {
+                        name: 'lookup',
+                        description: 'Look up a city.',
+                        input_schema: {
+                            type: 'object',
+                            properties: { city: { type: 'string' } },
+                            required: ['city'],
+                            additionalProperties: false,
+                        },
+                    },
+                ],
+                result_schema: {
+                    type: 'object' as const,
+                    properties: { answer: { type: 'string' as const } },
+                    required: ['answer'],
+                    additionalProperties: false,
+                },
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Look up Paris.' }], options);
+            expect(JSON.stringify(prompt)).not.toContain('<response_schema>');
+            let conversation: unknown;
+            if (streaming) {
+                const stream = await driver.requestTextCompletionStream(prompt, options);
+                for await (const chunk of stream) expect(chunk.result).toEqual([]);
+                conversation = await stream.finalizeConversation?.();
+            } else {
+                const completion = await driver.requestTextCompletion(prompt, options);
+                expect(completion.result).toEqual([]);
+                expect(completion.tool_use).toEqual([
+                    { id: 'call-1', tool_name: 'lookup', tool_input: { city: 'Paris' } },
+                ]);
+                conversation = completion.conversation;
+            }
+            expect(create.mock.calls[0][0]).toMatchObject({
+                model,
+                reasoning: { effort: 'max', summary: 'auto' },
+                include: ['reasoning.encrypted_content'],
+                max_output_tokens: 128_000,
+                service_tier: 'fast',
+                tools: [expect.objectContaining({ type: 'function', name: 'lookup', strict: true })],
+                text: { verbosity: 'low', format: expect.objectContaining({ type: 'json_schema', strict: true }) },
+            });
+            await driver.requestTextCompletion(
+                [{ type: 'function_call_output', call_id: 'call-1', output: 'Paris is in France.' }],
+                {
+                    ...options,
+                    conversation: JSON.parse(JSON.stringify(conversation)),
+                },
+            );
+            expect(create.mock.calls[1][0]).toMatchObject({ input: expect.arrayContaining([reasoningItem, toolCall]) });
+        },
+    );
+
+    it.each(['error', 'response.error', 'response.failed'] as const)(
+        'propagates a streamed %s with provider error details',
+        async (type) => {
+            const error = { code: 'server_error' as const, message: 'Provider failed after generation started.' };
+            const event =
+                type === 'response.failed'
+                    ? { type, sequence_number: 2, response: { ...response(), status: 'failed', error } }
+                    : { type, sequence_number: 2, ...error, param: null };
+            const create = vi.fn(async () =>
+                (async function* () {
+                    yield { type: 'response.output_text.delta', delta: 'partial', sequence_number: 1 };
+                    yield event;
+                })(),
+            );
+            const driver = new TestResponsesDriver(create);
+            const stream = await driver.requestTextCompletionStream([], { model: 'gpt-6.1-terra' });
+            const consume = async () => {
+                for await (const _chunk of stream) {
+                    /* Consume stream. */
+                }
+            };
+            const failure = await consume().catch((err: unknown) => err);
+            if (type !== 'response.failed') expect(failure).toBeInstanceOf(APIError);
+            expect(failure).toMatchObject({ ...error, message: expect.stringContaining(error.message) });
+            expect(
+                driver.formatLlumiverseError(failure, {
+                    provider: Providers.openai,
+                    model: 'gpt-6.1-terra',
+                    operation: 'stream',
+                }).retryable,
+            ).toBe(true);
+        },
+    );
+
+    it('rejects failed blocking responses even if they contain partial output', async () => {
+        const error = { code: 'server_error' as const, message: 'Provider failed.' };
+        const driver = new TestResponsesDriver(vi.fn(async () => ({ ...response(), status: 'failed', error })));
+        await expect(driver.requestTextCompletion([], { model: 'gpt-6-sol' })).rejects.toMatchObject({
+            ...error,
+            message: expect.stringContaining(error.message),
+        });
+    });
+
+    it.each(
+        (
+            [
+                Providers.openai,
+                Providers.azure_openai,
+                Providers.xai,
+                Providers.bedrock_mantle,
+                Providers.openai_compatible,
+            ] as const
+        )
+            .flatMap((provider) => [
+                { provider, code: 'server_error' as const, retryable: true },
+                { provider, code: 'insufficient_quota' as const, retryable: false },
+            ])
+            .flatMap((scenario) => [false, true].map((streaming) => ({ ...scenario, streaming }))),
+    )(
+        'classifies $provider/$code through the SDK when streaming=$streaming',
+        async ({ provider, code, retryable, streaming }) => {
+            const error = { code, message: 'Provider failure after partial output.' };
+            const failed = { ...response(), status: 'failed', error };
+            const events = [
+                { type: 'response.output_text.delta', sequence_number: 1, delta: 'partial' },
+                { type: 'response.failed', sequence_number: 2, response: failed },
+            ];
+            const fetchMock = vi.fn(
+                async () =>
+                    new Response(
+                        streaming
+                            ? events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
+                            : JSON.stringify(failed),
+                        { headers: { 'content-type': streaming ? 'text/event-stream' : 'application/json' } },
+                    ),
+            );
+            const driver = new TestResponsesDriver(async () => failed, provider);
+            driver.service = new OpenAI({ apiKey: 'test-key', fetch: fetchMock, maxRetries: 0 });
+            const options = { model: 'gpt-6.1-terra', model_options: { include_thoughts: false } };
+            const prompt = [{ role: PromptRole.user, content: 'question' }];
+            const expected = {
+                retryable,
+                context: { provider, model: options.model, operation: streaming ? 'stream' : 'execute' },
+                originalError: expect.objectContaining({ ...error, message: expect.stringContaining(error.message) }),
+            };
+            if (streaming) {
+                const stream = await driver.stream(prompt, options);
+                const iterator = stream[Symbol.asyncIterator]();
+                await expect(iterator.next()).resolves.toMatchObject({ done: false, value: 'partial' });
+                const consume = async () => {
+                    while (!(await iterator.next()).done) {
+                        /* Consume terminal usage before the provider failure is raised. */
+                    }
+                };
+                await expect(consume()).rejects.toMatchObject(expected);
+                // Retain failed-turn usage without exposing a successful result or replayable conversation.
+                expect(stream.completion).toMatchObject({
+                    finish_reason: 'failed',
+                    token_usage: { prompt: 1, result: 2, total: 3 },
+                });
+                expect(stream.completion?.conversation).toBeUndefined();
+            } else {
+                await expect(driver.execute(prompt, options)).rejects.toMatchObject(expected);
+            }
+            expect(fetchMock).toHaveBeenCalledOnce();
+            driver.destroy();
+        },
+    );
 
     it.each(['minimax/minimax-m3', 'minimax/minimax-m4'])(
         'supplements native structured output for %s on OpenAI-compatible Responses',

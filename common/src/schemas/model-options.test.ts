@@ -37,6 +37,33 @@ const union = emitted.$defs.ModelOptions;
 const MEMBERS = (union.oneOf ?? union.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
+    it.each(['openai-thinking', 'openai-text'] as const)('accepts and publishes verbosity for %s', (_option_id) => {
+        const options = { _option_id, verbosity: 'low' as const };
+        const typed: ModelOptions = options;
+        expect(ModelOptionsSchema.parse(typed)).toEqual(options);
+        const component = _option_id === 'openai-thinking' ? 'OpenAiThinkingOptions' : 'OpenAiTextOptions';
+        expect(emitted.$defs[component].properties?.verbosity).toEqual({
+            type: 'string',
+            enum: ['low', 'medium', 'high'],
+        });
+        expect(emitted.$defs[component].required ?? []).not.toContain('verbosity');
+        expect(ModelOptionsSchema.safeParse({ _option_id }).success).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id, verbosity: 'invalid' }).success).toBe(false);
+    });
+
+    it.each(['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-7-terra'])(
+        'offers optional verbosity independently of effort for %s',
+        (model) => {
+            const options = getOptions(model, Providers.openai);
+            expect(options.options.find((option) => option.name === 'verbosity')).toEqual({
+                name: 'verbosity',
+                type: 'enum',
+                enum: { Low: 'low', Medium: 'medium', High: 'high' },
+                description: expect.any(String),
+            });
+        },
+    );
+
     it.each([42, 0])('accepts and publishes optional seed %s for compatible chat options', (seed) => {
         const options = { _option_id: 'openai-text', effort: 'high', seed } as const;
         const typed: ModelOptions = options;
