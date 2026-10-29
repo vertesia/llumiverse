@@ -55,9 +55,12 @@ describe('streamed tool calls cut off by a stop', () => {
     ];
     const complete = [{ id: 'toolu_1', tool_name: 'search', tool_input: { query: 'expenses 2025' } }];
 
-    it.each(['refusal', 'length'])('keeps complete calls and leaves out cut-off ones after a %s stop', (reason) => {
-        expect(finalizeStreamingToolUse(calls(), reason, context)).toEqual(complete);
-    });
+    it.each(['length', 'refusal', 'content_filter', 'content_filtered', 'guardrail_intervened'])(
+        'keeps complete calls and leaves out cut-off ones after a %s stop',
+        (reason) => {
+            expect(finalizeStreamingToolUse(calls(), reason, context)).toEqual(complete);
+        },
+    );
 
     it('still rejects malformed arguments when the response was not cut off', () => {
         expect(() => finalizeStreamingToolUse(calls(), 'tool_use', context)).toThrow(/malformed JSON arguments/);

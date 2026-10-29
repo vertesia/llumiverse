@@ -241,14 +241,26 @@ export function leaseCompletionStream<PromptT>(
     return new LeasedCompletionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
 }
 
+/**
+ * Provider finish reasons that can end a streamed response in the middle of a tool call: a token limit, a refusal
+ * (Claude `refusal`), or a content filter (OpenAI `content_filter`, Bedrock `content_filtered` and
+ * `guardrail_intervened`). Drivers pass these through unnormalized apart from `length`.
+ */
+const CUT_OFF_FINISH_REASONS = new Set([
+    'length',
+    'refusal',
+    'content_filter',
+    'content_filtered',
+    'guardrail_intervened',
+]);
+
 export function finalizeStreamingToolUse(
     toolUseArray: StreamingToolUse[] | undefined,
     finishReason: string | undefined,
     context: { provider: string; model: string },
 ): ToolUse<unknown>[] | undefined {
     if (!toolUseArray) return undefined;
-    // A length stop or a refusal (Claude's `refusal` stop) can end the response in the middle of a call.
-    const cutOff = finishReason === 'length' || finishReason === 'refusal';
+    const cutOff = finishReason !== undefined && CUT_OFF_FINISH_REASONS.has(finishReason);
 
     const malformedToolIds = new Set<string>();
     let parseError: unknown;

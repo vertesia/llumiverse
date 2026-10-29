@@ -1396,10 +1396,9 @@ export async function executeClaudeCompletion(
         tool_use,
         token_usage: anthropicUsageToTokenUsage(result.usage),
         service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
-        // A refusal can arrive after tool calls have started, so it must not be reported as `tool_use`: the
-        // caller decides what to do with the refused turn's calls.
-        finish_reason:
-            result.stop_reason !== 'refusal' && tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
+        // Report Claude's own stop, as the streaming path does: a refusal or token limit can arrive after tool
+        // calls have started, and callers must not mistake those calls for a completed `tool_use` turn.
+        finish_reason: claudeFinishReason(result.stop_reason ?? undefined),
         conversation: processedConversation,
         ...(options.include_original_response ? { original_response: result } : {}),
     };

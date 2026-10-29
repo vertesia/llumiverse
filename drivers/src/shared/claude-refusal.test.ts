@@ -55,6 +55,14 @@ describe('Claude refusal after tool calls', () => {
         expect(lastMessage(completion.conversation)).toEqual({ role: 'assistant', content: refused.content });
     });
 
+    it('reports length, not tool_use, when the token limit stops the response after tool calls', async () => {
+        const truncated = message('max_tokens', [preamble, searchCall]);
+        const completion = await executeClaudeCompletion(clientFor(truncated), prompt, { model: 'claude-test' });
+
+        expect(completion.finish_reason).toBe('length');
+        expect(completion.tool_use?.map((tool) => tool.id)).toEqual(['toolu_search']);
+    });
+
     it('reports tool_use for a normal tool_use stop', async () => {
         const normal = message('tool_use', [preamble, searchCall]);
         const completion = await executeClaudeCompletion(clientFor(normal), prompt, { model: 'claude-test' });

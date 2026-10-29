@@ -356,9 +356,9 @@ function normalizeOpenAIChatCompletionsFinishReason(
     reason: string | null | undefined,
     hasToolUse: boolean = false,
 ): string | undefined {
-    // A provider may include a partial tool-call delta on the token-limit chunk. Preserve
-    // truncation so core drops the incomplete call instead of classifying it as malformed JSON.
-    if (reason === 'length') return 'length';
+    // A provider may include a partial tool-call delta on the token-limit or content-filter chunk. Preserve
+    // the stop so core drops the incomplete call instead of classifying it as malformed JSON.
+    if (reason === 'length' || reason === 'content_filter') return reason;
     if (hasToolUse || reason === 'tool_calls' || reason === 'function_call') {
         return 'tool_use';
     }
