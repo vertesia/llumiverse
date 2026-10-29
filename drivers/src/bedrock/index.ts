@@ -111,11 +111,6 @@ type AwsSdkError = {
     };
     $fault?: string;
 };
-type ReasoningBlockStart = {
-    reasoningContent?: {
-        redactedContent?: Uint8Array;
-    };
-};
 type BedrockRuntimeExecutorScope = {
     executor: BedrockRuntime;
     close(): void;
@@ -792,6 +787,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 if (content.text) {
                     resultText += content.text;
                 } else if (content.reasoningContent) {
+                    // Encrypted redactedContent belongs only in native conversation replay, never visible output.
                     // Extract reasoning content if include_thoughts is true, or if it's a
                     // reasoning-only model (e.g. DeepSeek R1) that returns no text blocks
                     const claudeOptions = options?.model_options as BedrockClaudeOptions;
@@ -799,10 +795,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     if (claudeOptions?.include_thoughts || isReasoningModel) {
                         if (content.reasoningContent.reasoningText) {
                             reasoning += content.reasoningContent.reasoningText.text;
-                        } else if (content.reasoningContent.redactedContent) {
-                            // Handle redacted thinking content
-                            const redactedData = new TextDecoder().decode(content.reasoningContent.redactedContent);
-                            reasoning += `[Redacted thinking: ${redactedData}]`;
                         }
                     } else {
                         this.logger.info('[Bedrock] Not outputting reasoning content as include_thoughts is false');
@@ -879,17 +871,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const name = toolUseStart.name ?? '';
                 streamingToolBlocks?.set(blockIndex, { id, name });
                 tool_use = [{ id, tool_name: name, tool_input: '' }];
-            } else if (
-                result.contentBlockStart.start &&
-                'reasoningContent' in result.contentBlockStart.start &&
-                shouldIncludeThoughts
-            ) {
-                // Handle redacted content at block start
-                const reasoningStart = result.contentBlockStart.start as ReasoningBlockStart;
-                if (reasoningStart.reasoningContent?.redactedContent) {
-                    const redactedData = new TextDecoder().decode(reasoningStart.reasoningContent.redactedContent);
-                    reasoning = `[Redacted thinking: ${redactedData}]`;
-                }
             }
         }
 
@@ -908,9 +889,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             } else if (delta?.reasoningContent && shouldIncludeThoughts) {
                 if (delta.reasoningContent.text) {
                     reasoning = delta.reasoningContent.text;
-                } else if (delta.reasoningContent.redactedContent) {
-                    const redactedData = new TextDecoder().decode(delta.reasoningContent.redactedContent);
-                    reasoning = `[Redacted thinking: ${redactedData}]`;
                 } else if (delta.reasoningContent.signature) {
                     // Handle signature updates for reasoning content - end of thinking
                     reasoning = '\n\n';

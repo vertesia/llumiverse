@@ -321,6 +321,16 @@ export function getOpenAiOptions(
                 ),
                 ...reasoningOptions,
                 ...reasoningContextOptions,
+                ...(isOpenAIGptVersionGTE(model, 5, 0)
+                    ? [
+                          {
+                              name: 'verbosity',
+                              type: OptionType.enum as const,
+                              enum: { Low: 'low', Medium: 'medium', High: 'high' },
+                              description: 'Controls the detail of the final answer independently of reasoning effort.',
+                          },
+                      ]
+                    : []),
                 ...visionOptions,
                 ...serviceTierOptions,
                 {
