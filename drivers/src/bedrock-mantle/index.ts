@@ -27,6 +27,7 @@ import {
     OpenAISDKChatCompletionsProtocol,
 } from '../openai/openai_chat_completions.js';
 import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
+import { claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
@@ -157,6 +158,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             awsRegion: opts.region,
             fetch: driverFetch,
             timeout,
+            defaultHeaders: claudeApiVersionHeaders(),
             ...credentialOptions,
         });
     }

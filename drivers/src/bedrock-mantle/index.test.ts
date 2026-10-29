@@ -440,6 +440,7 @@ describe('BedrockMantleDriver protocol execution', () => {
                 output_tokens_details: null,
                 server_tool_use: null,
                 service_tier: null,
+                speed: null,
             },
         } satisfies Anthropic.Message;
         const finalMessage = vi.fn(async () => message);
