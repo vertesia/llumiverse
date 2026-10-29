@@ -1010,13 +1010,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const choice = result?.choices?.[0];
         const message = choice?.message;
         const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
-        // A cut-off stop may have ended inside the last tool call. Leave out calls whose arguments are not complete JSON
-        // rather than return them with invented empty input; the streaming path does the same.
+        // A cut-off stop may have ended inside the last tool call. Leave that call out when its arguments are not
+        // complete JSON, rather than return it with invented empty input; earlier calls had finished. The streaming
+        // path does the same.
+        const cutOff = isCutOffFinishReason(choice?.finish_reason);
+        const lastCall = cutOff ? message?.tool_calls?.at(-1) : undefined;
         const tool_use = parseOpenAIChatCompletionsToolCalls(
-            isCutOffFinishReason(choice?.finish_reason)
-                ? message?.tool_calls?.filter(
-                      (toolCall) => toolCall.type !== 'function' || isJSONObjectText(toolCall.function?.arguments),
-                  )
+            lastCall?.type === 'function' && !isJSONObjectText(lastCall.function?.arguments)
+                ? message?.tool_calls?.slice(0, -1)
                 : message?.tool_calls,
         );
         const finish_reason = normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length);
@@ -1034,9 +1035,13 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 >,
             });
         }
+        // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
         if (
             !message ||
-            (completionResults.length === 0 && !extractOpenAIChatCompletionsReasoningText(message) && !tool_use?.length)
+            (completionResults.length === 0 &&
+                !extractOpenAIChatCompletionsReasoningText(message) &&
+                !tool_use?.length &&
+                !cutOff)
         ) {
             throw new Error('Chat Completions response is not valid: no data');
         }

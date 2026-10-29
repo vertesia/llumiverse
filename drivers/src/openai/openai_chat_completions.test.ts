@@ -144,6 +144,48 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    const cutOffResponse = (reason: string, toolCalls: unknown[]) =>
+        ({
+            id: 'chatcmpl-cut-off-only',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: null, tool_calls: toolCalls },
+                    finish_reason: reason,
+                    logprobs: null,
+                },
+            ],
+        }) as unknown as OpenAIChatCompletionsResponse;
+
+    it('reports a cut-off stop instead of failing when the only tool call was cut off', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            cutOffResponse('length', [
+                { id: 'call_1', type: 'function', function: { name: 'delete_rows', arguments: '{"where":"id=' } },
+            ]),
+        );
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.finish_reason).toBe('length');
+        expect(completion.tool_use).toBeUndefined();
+    });
+
+    it('keeps an earlier no-argument call sent with empty arguments: only the last call can be cut off', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            cutOffResponse('content_filter', [
+                { id: 'call_1', type: 'function', function: { name: 'list_files', arguments: '' } },
+                { id: 'call_2', type: 'function', function: { name: 'write', arguments: '{"pa' } },
+            ]),
+        );
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.tool_use).toEqual([{ id: 'call_1', tool_name: 'list_files', tool_input: {} }]);
+    });
+
     it.each(['content_filter', 'length'])(
         'leaves out a cut-off tool call from a non-streaming %s stop instead of giving it empty input',
         async (reason) => {

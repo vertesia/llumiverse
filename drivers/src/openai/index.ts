@@ -15,6 +15,7 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
+    isCutOffFinishReason,
     isDedicatedInferenceModel,
     isJSONObjectText,
     isOpenAIGptVersionGTE,
@@ -660,11 +661,16 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         assertOpenAIResponseSucceeded(result);
         const tokenInfo = mapUsage(result.usage);
 
-        // An incomplete response may have stopped inside its last function call. Leave out calls whose arguments are
-        // not complete JSON rather than return them with invented empty input; the streaming path does the same.
-        const tools = collectTools(
+        // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
+        // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
+        // streaming path does the same.
+        const lastCall =
             result.status === 'incomplete'
-                ? result.output.filter((item) => item.type !== 'function_call' || isJSONObjectText(item.arguments))
+                ? result.output.filter((item) => item.type === 'function_call').at(-1)
+                : undefined;
+        const tools = collectTools(
+            lastCall && !isJSONObjectText(lastCall.arguments)
+                ? result.output.filter((item) => item !== lastCall)
                 : result.output,
         );
         const finish_reason = responseFinishReason(result, tools);
@@ -689,7 +695,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
         );
 
-        if (allResults.length === 0 && !tools) {
+        // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
+        if (allResults.length === 0 && !tools && !isCutOffFinishReason(finish_reason)) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
             throw new Error('Response is not valid: no data');
         }

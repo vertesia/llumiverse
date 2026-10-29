@@ -35,6 +35,19 @@ describe('OpenAI Responses cut off inside a function call', () => {
         ]);
     });
 
+    it('reports the stop instead of failing when the only call was cut off', () => {
+        const response = {
+            ...incompleteResponse('max_output_tokens'),
+            output: [{ type: 'function_call', call_id: 'call_2', name: 'delete_rows', arguments: '{"where":"id=' }],
+        } as unknown as OpenAI.Responses.Response;
+
+        const completion = driver.extractDataFromResponse({ model: 'gpt-test' }, response);
+
+        expect(completion.finish_reason).toBe('length');
+        expect(completion.tool_use).toBeUndefined();
+        expect(completion.result).toEqual([]);
+    });
+
     it('still reports tool_use for a completed response with function calls', () => {
         const completed = {
             ...incompleteResponse('content_filter'),
