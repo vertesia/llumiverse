@@ -10,6 +10,7 @@ import { AzureOpenAIDriver } from './openai/azure_openai.js';
 import { OpenAIDriver } from './openai/openai.js';
 import { OpenAIResponsesDriver } from './openai/openai_responses.js';
 import { ReplicateDriver } from './replicate.js';
+import { CLAUDE_VERTEX_API_VERSION, claudeApiVersionHeaders } from './shared/claude-api-version.js';
 import { TogetherAIDriver } from './togetherai/index.js';
 import { VertexAIDriver } from './vertexai/index.js';
 import { WatsonxDriver } from './watsonx/index.js';
@@ -325,6 +326,7 @@ describe('driver HTTP timeout wiring', () => {
             projectId: 'project',
             authClient: {},
             fetch: driverFetch(driver),
+            defaultHeaders: claudeApiVersionHeaders(CLAUDE_VERTEX_API_VERSION),
         });
         expect(
             internals.getAnthropicVertexClientOptions(
@@ -341,6 +343,7 @@ describe('driver HTTP timeout wiring', () => {
             projectId: 'project',
             authClient: {},
             fetch: driverFetch(driver),
+            defaultHeaders: claudeApiVersionHeaders(CLAUDE_VERTEX_API_VERSION),
         });
 
         const defaultGoogleClient = driver.getGoogleGenAIClient();
