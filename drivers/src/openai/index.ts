@@ -49,6 +49,7 @@ import {
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { APIError } from 'openai/error';
 import { assertConversationArray } from '../shared/conversation-shape.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
@@ -1265,11 +1266,10 @@ export function mapResponseStream(
                         } satisfies OpenAI.Responses.ResponseOutputRefusal,
                     });
                     throw new Error(`[OpenAI] Model refused: ${event.refusal || refusalText}`);
-                } else if ((event as { type: string }).type === 'response.error') {
-                    const errEvent = event as unknown as { message: string; code?: string | null };
-                    throw new Error(
-                        `[OpenAI Responses API] ${errEvent.message}${errEvent.code ? ` (${errEvent.code})` : ''}`,
-                    );
+                } else if (event.type === 'error' || (event as { type: string }).type === 'response.error') {
+                    // Retain the legacy event alias for compatible endpoints; OpenAI emits `error`.
+                    const errEvent = event as OpenAI.Responses.ResponseErrorEvent;
+                    throw new APIError(undefined, errEvent, errEvent.message, undefined);
                 } else if (
                     event.type === 'response.completed' ||
                     event.type === 'response.incomplete' ||

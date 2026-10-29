@@ -205,12 +205,15 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     if (model.includes('nvidia.nemotron-nano-')) return { context_window: 128_000, max_output_tokens: 8_192 };
     if (isFamilyVersionGte(model, 'openai.gpt-', 5) && !model.includes('gpt-oss')) {
         // 272K is the long-context pricing threshold, not the model context limit.
-        if (isFamilyVersionGte(model, 'openai.gpt-', 6, 1)) {
+        // The GPT-5.6 and GPT-6.1+ Sol cards specify 1M (6.1+ with a 131,072 output limit); every other variant,
+        // GPT-6 Sol included, specifies 1.05M.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html
+        const isSol = /^openai\.gpt-[\d.]+-sol(?:[-:]|$)/.test(model);
+        if (isSol && isFamilyVersionGte(model, 'openai.gpt-', 6, 1)) {
             return { context_window: 1_000_000, max_output_tokens: 131_072 };
         }
         if (isFamilyVersionGte(model, 'openai.gpt-', 5, 5)) {
-            // The GPT-5.6 Sol card specifies 1M; its Terra/Luna siblings specify 1.05M.
-            const isGpt56Sol = model.startsWith('openai.gpt-5.6-sol');
+            const isGpt56Sol = isSol && model.startsWith('openai.gpt-5.6-');
             return { context_window: isGpt56Sol ? 1_000_000 : 1_050_000, max_output_tokens: 128_000 };
         }
         return { context_window: 272_000, max_output_tokens: 128_000 };
