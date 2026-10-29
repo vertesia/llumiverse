@@ -735,8 +735,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 timeout: this.getDriverRequestTimeoutMs(),
                 defaultHeaders: claudeApiVersionHeaders(CLAUDE_BEDROCK_API_VERSION),
                 // Configured credentials must win over an AWS_BEARER_TOKEN_BEDROCK environment token, which the
-                // SDK would otherwise prefer. The SDK only types the field as a string.
-                ...(credentials && { apiKey: null as unknown as undefined }),
+                // SDK would otherwise prefer. `null` clears the key, so the client signs with SigV4.
+                ...(credentials && { apiKey: null }),
             };
             // Separate calls: the constructor's overloads take static keys or a provider resolver, not a union.
             if (credentials && typeof credentials !== 'function') {
