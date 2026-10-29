@@ -118,6 +118,19 @@ const geminiFinishReasonHandling: Partial<Record<FinishReason, GeminiFinishReaso
     [FinishReason.OTHER]: { message: 'Gemini stopped generation for an unspecified reason.', retryable: true },
 };
 
+/**
+ * Media too large to send inline. The caller's input is at fault, so it is reported as a non-retryable 413 rather
+ * than as an unclassified failure, which callers would attribute to the provider.
+ */
+class GeminiInlineMediaLimitError extends Error {
+    readonly status = 413;
+
+    constructor(message: string) {
+        super(message);
+        this.name = 'GeminiInlineMediaLimitError';
+    }
+}
+
 class GeminiFinishReasonError extends Error {
     readonly retryable: boolean | undefined;
 
@@ -1485,6 +1498,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             );
         }
 
+        if (error instanceof GeminiInlineMediaLimitError) {
+            return new LlumiverseError(
+                `[${context.provider}] ${error.message}`,
+                false,
+                context,
+                error,
+                error.status,
+                error.name,
+            );
+        }
+
         // Check if it's a Google API error with status code
         const isApiError = this.isGoogleApiError(error);
 
@@ -1808,13 +1832,13 @@ function boundedInlineStream(
                 bytes += size;
                 budget.bytes += size;
                 if (bytes > GEMINI_INLINE_MEDIA_MAX_BYTES) {
-                    throw new Error(
+                    throw new GeminiInlineMediaLimitError(
                         `Media file ${name} exceeds the ${GEMINI_INLINE_MEDIA_MAX_BYTES} byte limit for inline ` +
                             'Gemini input; provide it as a gs:// URI instead',
                     );
                 }
                 if (budget.bytes > GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES) {
-                    throw new Error(
+                    throw new GeminiInlineMediaLimitError(
                         `Inline media for this request exceeds the ${GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES} byte ` +
                             `limit at ${name}; provide the larger files as gs:// URIs instead`,
                     );
