@@ -1,7 +1,7 @@
 /**
- * A Claude `refusal` stop can arrive after a tool call has started. The completion must report the refusal rather
- * than `tool_use`, so the caller can tell the turn was refused, while the refused turn and its tool calls stay on
- * record in the result and the conversation.
+ * A Claude `refusal` or token-limit stop can arrive after a tool call has started. The completion must report that
+ * stop rather than `tool_use`, and must not return a trailing call that may have been cut off, while the turn stays
+ * on record in the conversation.
  */
 
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
@@ -45,22 +45,32 @@ function lastMessage(conversation: unknown) {
     return (conversation as ClaudePrompt).messages.at(-1);
 }
 
-describe('Claude refusal after tool calls', () => {
+describe('Claude stops after tool calls', () => {
     it('reports refusal, not tool_use, and keeps the calls and the turn on record', async () => {
         const refused = message('refusal', [preamble, searchCall, thinkCall]);
         const completion = await executeClaudeCompletion(clientFor(refused), prompt, { model: 'claude-test' });
 
         expect(completion.finish_reason).toBe('refusal');
-        expect(completion.tool_use?.map((tool) => tool.id)).toEqual(['toolu_search', 'toolu_think']);
+        // The trailing call may have been cut off; the complete one before it is still returned.
+        expect(completion.tool_use?.map((tool) => tool.id)).toEqual(['toolu_search']);
         expect(lastMessage(completion.conversation)).toEqual({ role: 'assistant', content: refused.content });
     });
 
     it('reports length, not tool_use, when the token limit stops the response after tool calls', async () => {
-        const truncated = message('max_tokens', [preamble, searchCall]);
+        const truncated = message('max_tokens', [preamble, searchCall, thinkCall]);
         const completion = await executeClaudeCompletion(clientFor(truncated), prompt, { model: 'claude-test' });
 
         expect(completion.finish_reason).toBe('length');
         expect(completion.tool_use?.map((tool) => tool.id)).toEqual(['toolu_search']);
+    });
+
+    it('returns no tool calls when the only call was cut off', async () => {
+        const truncated = message('max_tokens', [preamble, searchCall]);
+        const completion = await executeClaudeCompletion(clientFor(truncated), prompt, { model: 'claude-test' });
+
+        expect(completion.finish_reason).toBe('length');
+        expect(completion.tool_use).toBeUndefined();
+        expect(lastMessage(completion.conversation)).toEqual({ role: 'assistant', content: truncated.content });
     });
 
     it('reports tool_use for a normal tool_use stop', async () => {

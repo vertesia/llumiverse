@@ -327,6 +327,9 @@ export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): Execution
 // Content extraction
 // ============================================================================
 
+/** Claude stop reasons that can end a response in the middle of its last content block. */
+const CLAUDE_CUT_OFF_STOP_REASONS = new Set(['max_tokens', 'model_context_window_exceeded', 'refusal']);
+
 export function collectClaudeTools(content: ContentBlock[]): ToolUse[] | undefined {
     const out: ToolUse[] = [];
     for (const block of content) {
@@ -1387,7 +1390,14 @@ export async function executeClaudeCompletion(
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
-    const tool_use = collectClaudeTools(result.content);
+    // A token limit or refusal can stop the response inside its last tool call, and the SDK still parses that call's
+    // partial input into an object. Leave the trailing call out, as the streaming path does; the conversation keeps it.
+    const lastBlock = result.content.at(-1);
+    const toolBlocks =
+        lastBlock?.type === 'tool_use' && CLAUDE_CUT_OFF_STOP_REASONS.has(result.stop_reason ?? '')
+            ? result.content.slice(0, -1)
+            : result.content;
+    const tool_use = collectClaudeTools(toolBlocks);
 
     const processedConversation = finalizeClaudeConversation(conversation, result, options);
 
