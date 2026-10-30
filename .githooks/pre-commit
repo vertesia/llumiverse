@@ -21,7 +21,7 @@ while IFS= read -r -d '' file; do
             workflow_files+=("$file")
             ;;
         package.json | */package.json | \
-        *.js | *.cjs | *.mjs | *.jsx | *.ts | *.tsx)
+        *.js | *.cjs | *.mjs | *.jsx | *.ts | *.tsx | *.md | *.yml | *.yaml)
             staged_files+=("$file")
             ;;
     esac

@@ -249,7 +249,7 @@ export class GeminiContextCacheManager {
             return { entry: existing, path: 'local_memo_hit' };
         }
         const inflight = this.pending.get(key);
-        if (inflight) {
+        if (inflight !== undefined) {
             const startedAt = Date.now();
             const resolution = await inflight;
             return resolution.entry

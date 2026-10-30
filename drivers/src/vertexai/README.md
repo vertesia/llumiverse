@@ -1,7 +1,11 @@
+# Vertex AI model notes
+
 ## Palm2 for text
+
 See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/text
 
 ### Request
+
 `POST https://us-central1-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/us-central1/publishers/google/models/text-bison:predict`
 
 ```json
@@ -32,9 +36,11 @@ See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/text
 ### Properties
 
 #### prompt
+
 Text input to generate model response. Prompts can include preamble, questions, suggestions, instructions, or examples.
 
 ### Response
+
 ```json
 {
   "predictions":[
@@ -85,6 +91,7 @@ Text input to generate model response. Prompts can include preamble, questions, 
 See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/code-generation
 
 ### Request:
+
 `POST https://us-central1-googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/code-gecko:predict`
 
 ```json
@@ -116,6 +123,7 @@ See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/code-g
 For code models, prefix represents the beginning of a piece of meaningful programming code or a natural language prompt that describes code to be generated. The model attempts to fill in the code in between the prefix and suffix.
 
 #### suffix (optional)
+
 For code completion, suffix represents the end of a piece of meaningful programming code. The model attempts to fill in the code in between the prefix and suffix.
 
 
@@ -161,6 +169,7 @@ For code completion, suffix represents the end of a piece of meaningful programm
 See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/code-generation
 
 ### Request
+
 `POST https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/code-bison:predict`
 
 
@@ -190,6 +199,7 @@ See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/code-g
 For code models, prefix represents the beginning of a piece of meaningful programming code or a natural language prompt that describes code to be generated. The model attempts to fill in the code in between the prefix and suffix.
 
 ### Response
+
 ```json
 {
   "predictions": [
@@ -225,9 +235,11 @@ For code models, prefix represents the beginning of a piece of meaningful progra
 ```
 
 ## Embeddings
+
 See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/text-embeddings
 
 ### Request
+
 `POST https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/textembedding-gecko:predict`
 
 ```json

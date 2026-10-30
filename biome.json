@@ -10,6 +10,10 @@
         "includes": [
             "**/package.json",
             "**/*.{js,cjs,mjs,jsx,ts,tsx}",
+            "**/*.{md,yml,yaml}",
+            "!**/pnpm-lock.yaml",
+            "!**/pnpm-workspace.yaml",
+            "!**/templates/**/*.{yml,yaml}",
             "!**/dist/**",
             "!**/lib/**",
             "!**/node_modules/**",
@@ -40,15 +44,21 @@
             },
             "complexity": {
                 "useLiteralKeys": "error",
-                "useOptionalChain": "error"
+                "useOptionalChain": "error",
+                "noUnnecessaryTemplateExpression": "error",
+                "useArraySome": "error",
+                "useMathMinMax": "error",
+                "useRegexpTest": "error"
             },
             "security": {
-                "noDangerouslySetInnerHtml": "error"
+                "noDangerouslySetInnerHtml": "error",
+                "useIframeSandbox": "error"
             },
             "style": {
                 "useImportType": "error",
                 "useNodejsImportProtocol": "error",
-                "useTemplate": "error"
+                "useTemplate": "error",
+                "useReduceTypeParameter": "error"
             },
             "suspicious": {
                 "noControlCharactersInRegex": "error",
@@ -61,16 +71,62 @@
                 "noUnusedExpressions": "error",
                 "useBiomeIgnoreFolder": "off",
                 "useIterableCallbackReturn": "error",
-                "noImportCycles": "error"
+                "noImportCycles": "error",
+                "noDuplicateSelectors": "error",
+                "noEmptyObjectKeys": "error",
+                "noIdenticalTestTitle": "error",
+                "noJsxLeakedDollar": "error"
+            },
+            "performance": {
+                "useDomNodeTextContent": "error"
             },
             "nursery": {
-                "noFloatingPromises": "error"
+                "noFloatingPromises": "error",
+                "noMisusedPromises": "error",
+                "noAccidentalBitwiseOperators": "error",
+                "noArgumentsCallerOrCallee": "error",
+                "noArraySortForMinMax": "error",
+                "noBooleanSortComparator": "error",
+                "noDoubleComparison": "error",
+                "noDuplicateMapKeys": "error",
+                "noNewRequire": "error",
+                "noObjectConstructor": "error",
+                "noObsoleteAttributes": "error",
+                "noOctal": "error",
+                "noPathConcat": "error",
+                "noSelfNestedLayer": "error",
+                "noTailwindLegacyUtilities": "error",
+                "noUnsafeUnaryMinus": "error",
+                "noUselessCall": "error",
+                "noUselessDateGetTime": "error",
+                "noUselessSplice": "error",
+                "useConsistentHeadingLevel": "error",
+                "useFencedCodeLanguage": "error",
+                "useMathAbs": "error",
+                "usePackageJsonValidCpu": "error",
+                "usePackageJsonValidEngines": "error",
+                "useSimplifiedBooleanReturn": "error",
+                "useSingleTopLevelHeading": "error",
+                "useTopLevelHeading": "error"
             }
         }
     },
     "javascript": {
         "formatter": {
             "quoteStyle": "single"
+        }
+    },
+    "markdown": {
+        "parser": {
+            "frontmatter": true
+        },
+        "formatter": {
+            "formatEmbeds": false
+        }
+    },
+    "yaml": {
+        "formatter": {
+            "indentWidth": 2
         }
     },
     "assist": {
@@ -80,5 +136,27 @@
                 "organizeImports": "on"
             }
         }
-    }
+    },
+    "overrides": [
+        {
+            "includes": ["AGENTS.md"],
+            "linter": {
+                "rules": {
+                    "nursery": {
+                        "useSingleTopLevelHeading": "off"
+                    }
+                }
+            }
+        },
+        {
+            "includes": [".github/**/*.md", "**/.claude/agents/**/*.md"],
+            "linter": {
+                "rules": {
+                    "nursery": {
+                        "useTopLevelHeading": "off"
+                    }
+                }
+            }
+        }
+    ]
 }

@@ -2,11 +2,11 @@
 
 This file provides guidance to Vertesia Code Review when working with code in this repository.
 
-# Llumiverse
+## Llumiverse
 
 Llumiverse is a universal interface for interacting with Large Language Models for the TypeScript/JavaScript ecosystem. It provides a lightweight modular library for interacting with various LLM models and execution platforms.
 
-## Architecture
+### Architecture
 
 Llumiverse is structured as a monorepo with two main packages:
 
@@ -19,7 +19,7 @@ The main abstractions are:
 - `PromptSegment` - Represents a piece of a prompt with a role (user, system, assistant)
 - `CompletionStream` - Handles streaming responses from LLMs
 
-## Build & Test Commands
+### Build & Test Commands
 
 - **Build all packages**: `pnpm build`
 - **Build core package**: `cd core && pnpm build`
@@ -29,7 +29,7 @@ The main abstractions are:
 - **Run all tests, including live provider tests**: `pnpm -r test`
 - **Run linting**: `pnpm lint`
 
-## Code Style
+### Code Style
 
 - TypeScript strict mode with noUnusedLocals/Parameters
 - ESM modules with node-next resolution
@@ -42,7 +42,7 @@ The main abstractions are:
 - Error handling: use proper error types and propagation, especially with async code
 - Formatting: follows Prettier configuration
 
-## Testing
+### Testing
 
 Tests require API keys for the various LLM providers stored as environment variables:
 - OPENAI_API_KEY
@@ -61,7 +61,7 @@ Tests can be found in:
 - `drivers/test/embeddings.test.ts` - Tests for embedding functionality
 - `drivers/test/image-gen.test.ts` - Tests for image generation
 
-## Adding a New Driver
+### Adding a New Driver
 
 To add a new LLM provider:
 
@@ -71,14 +71,14 @@ To add a new LLM provider:
 4. Add the driver to the exports in `drivers/src/index.ts`
 5. Add tests in `drivers/test/`
 
-## Adding New Features
+### Adding New Features
 
 When adding new features:
 1. First add types and interfaces to `core/src/types.ts`
 2. Update the `AbstractDriver` class in `core/src/Driver.ts` if needed
 3. Implement the feature in the relevant drivers
 
-## Examples
+### Examples
 
 Examples demonstrating how to use Llumiverse can be found in the `examples/src` directory:
 - `examples/src/openai.ts` - Example for using OpenAI
