@@ -825,10 +825,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             return false;
                         }
                         // Check if the model belongs to the supported model families
-                        if (modelFamily.some((family) => modelName.includes(family))) {
-                            return true;
-                        }
-                        return false;
+                        return !!modelFamily.some((family) => modelName.includes(family));
                     })
                     .map((model) => {
                         const rawModelId = model.name ?? '';
@@ -863,10 +860,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                                     // Check if already present
                                     const shortName = modelName.split('/').pop();
                                     const globalName = `Global ${shortName}`;
-                                    if (models.some((m) => m.name === globalName)) {
-                                        return false;
-                                    }
-                                    return true;
+                                    return !models.some((m) => m.name === globalName);
                                 }
                             }
                             return false;

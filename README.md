@@ -10,53 +10,53 @@
 
 It solely focuses on **abstracting the connection and execution protocol**, letting you switch providers with zero code changes. It does **not** enforce prompt templating, rigid chain structures, or "magic" orchestration logic. You build the application; we handle the plumbing.
 
-### Why Llumiverse?
+## Why Llumiverse?
 
-*   **🚫 No Vendor Lock-in:** Switch from OpenAI to Vertex AI to Bedrock in minutes.
-*   **🧩 Modular & Lightweight:** Install only what you need. Zero bloat.
-*   **🛡️ Type-Safe:** First-class TypeScript support with normalized interfaces for completion, streaming, and tool use.
-*   **⚡ Universal Support:** Works in Node.js, serverless functions, and Bun.
-
----
-
-### Supported Platforms
-
-| Provider | Completion | Chat | Streaming | Multimodal | Tool Calling | Embeddings |
-| :--- | :-: | :-: | :-: | :-: | :-: | :-: |
-| **AWS Bedrock** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Azure Foundry** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Azure OpenAI** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Google Vertex AI** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Groq** | ✅ | ✅ | ✅ | N/A | ✅ | N/A |
-| **HuggingFace** | ✅ | ✅ | ✅ | N/A | N/A | N/A |
-| **IBM WatsonX** | ✅ | ✅ | ✅ | N/A | N/A | ✅ |
-| **Mistral AI** | ✅ | ✅ | ✅ | N/A | ✅ | ✅ |
-| **OpenAI** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **OpenAI Compatible** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Replicate** | ✅ | ✅ | ✅ | N/A | N/A | N/A |
-| **Together AI** | ✅ | ✅ | ✅ | N/A | N/A | N/A |
-| **xAI (Grok)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+-   **🚫 No Vendor Lock-in:** Switch from OpenAI to Vertex AI to Bedrock in minutes.
+-   **🧩 Modular & Lightweight:** Install only what you need. Zero bloat.
+-   **🛡️ Type-Safe:** First-class TypeScript support with normalized interfaces for completion, streaming, and tool use.
+-   **⚡ Universal Support:** Works in Node.js, serverless functions, and Bun.
 
 ---
 
-### Llumiverse vs. The Rest
+## Supported Platforms
+
+| Provider              | Completion | Chat | Streaming | Multimodal | Tool Calling | Embeddings |
+| :-------------------- | :--------: | :--: | :-------: | :--------: | :----------: | :--------: |
+| **AWS Bedrock**       |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **Azure Foundry**     |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **Azure OpenAI**      |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **Google Vertex AI**  |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **Groq**              |     ✅     |  ✅  |    ✅     |    N/A     |      ✅      |    N/A     |
+| **HuggingFace**       |     ✅     |  ✅  |    ✅     |    N/A     |     N/A      |    N/A     |
+| **IBM WatsonX**       |     ✅     |  ✅  |    ✅     |    N/A     |     N/A      |     ✅     |
+| **Mistral AI**        |     ✅     |  ✅  |    ✅     |    N/A     |      ✅      |     ✅     |
+| **OpenAI**            |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **OpenAI Compatible** |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **Replicate**         |     ✅     |  ✅  |    ✅     |    N/A     |     N/A      |    N/A     |
+| **Together AI**       |     ✅     |  ✅  |    ✅     |    N/A     |     N/A      |    N/A     |
+| **xAI (Grok)**        |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+
+---
+
+## Llumiverse vs. The Rest
 
 **Vs. LangChain / LlamaIndex:**
 These are **application frameworks** that provide high-level abstractions for chains, memory, and RAG. Llumiverse is a **driver** library. It operates at a lower level.
-*   *Use Llumiverse if:* You want full control over your prompt logic, you want to build your own custom framework, or you simply need a clean, unified way to call an API without the weight of a massive dependency tree.
-*   *Use LangChain if:* You want pre-built "chains" and are okay with higher complexity and abstraction overhead.
+-   _Use Llumiverse if:_ You want full control over your prompt logic, you want to build your own custom framework, or you simply need a clean, unified way to call an API without the weight of a massive dependency tree.
+-   _Use LangChain if:_ You want pre-built "chains" and are okay with higher complexity and abstraction overhead.
 
 **Vs. Vercel AI SDK:**
 Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
-*   *Use Llumiverse if:* You are building backend services, background workers, CLI tools, or generic Node.js applications where frontend-specific hooks aren't relevant. Llumiverse is environment-agnostic.
+-   _Use Llumiverse if:_ You are building backend services, background workers, CLI tools, or generic Node.js applications where frontend-specific hooks aren't relevant. Llumiverse is environment-agnostic.
 
 ---
 
 ## Requirements
 
-* Node.js 24.x
-* The OpenAI driver uses OpenAI SDK 7.25.0, whose minimum supported Node.js version is 22.
-* Bun 1.0+ (experimental support)
+- Node.js 24.x
+- The OpenAI driver uses OpenAI SDK 7.25.0, whose minimum supported Node.js version is 22.
+- Bun 1.0+ (experimental support)
 
 ## Azure Foundry SDKs
 
@@ -79,8 +79,8 @@ These callable paths do not establish Azure parity with OpenAI iterative image e
 pnpm add @llumiverse/core @llumiverse/drivers
 ```
 
-*   `@llumiverse/core`: The interfaces, types, and base abstractions.
-*   `@llumiverse/drivers`: The concrete implementations for all supported providers.
+-   `@llumiverse/core`: The interfaces, types, and base abstractions.
+-   `@llumiverse/drivers`: The concrete implementations for all supported providers.
 
 ## Quick Start
 
@@ -233,11 +233,11 @@ console.log(data.sentiment); // "positive"
 Tests fall into three tiers, chosen by file name and by the allow list in
 [`.github/workflows/build-and-test.yml`](.github/workflows/build-and-test.yml):
 
-| Tier | Files | Calls providers | Runs in CI |
-| --- | --- | --- | --- |
-| Functional | `*.test.ts` | No: provider calls are mocked | Yes, all of them |
-| Live | `*.live.test.ts` | Yes, using your credentials | No; run on demand |
-| Live in CI | `*.live.test.ts` listed in the CI allow list | Yes | Yes, on every push and pull request |
+| Tier       | Files                                        | Calls providers               | Runs in CI                          |
+| ---------- | -------------------------------------------- | ----------------------------- | ----------------------------------- |
+| Functional | `*.test.ts`                                  | No: provider calls are mocked | Yes, all of them                    |
+| Live       | `*.live.test.ts`                             | Yes, using your credentials   | No; run on demand                   |
+| Live in CI | `*.live.test.ts` listed in the CI allow list | Yes                           | Yes, on every push and pull request |
 
 A test that calls a provider must live in a `*.live.test.ts` file. Live files in CI are the curated smoke set:
 `model-smoke`, `conversation`, `tools` and `embeddings` (all under `drivers/test/`). Other live files cover

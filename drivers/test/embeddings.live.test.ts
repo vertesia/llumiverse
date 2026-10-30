@@ -1,6 +1,7 @@
 import { Base64DataSource, type Driver, WATSONX_DEFAULT_EMBEDDING_MODEL } from '@llumiverse/core';
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from '../src/index.js';
 import { withRateLimitBackoff } from './utils.js';
@@ -9,7 +10,7 @@ import { withRateLimitBackoff } from './utils.js';
 const TIMEOUT = 60000;
 const TEXT = 'Hello';
 
-const IMAGE_SRC = `${import.meta.dirname}/hello_world.jpg`;
+const IMAGE_SRC = join(import.meta.dirname, 'hello_world.jpg');
 
 async function convertImageToBase64(path: string) {
     const data = await readFile(path);
