@@ -825,7 +825,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             return false;
                         }
                         // Check if the model belongs to the supported model families
-                        return !!modelFamily.some((family) => modelName.includes(family));
+                        return modelFamily.some((family) => modelName.includes(family));
                     })
                     .map((model) => {
                         const rawModelId = model.name ?? '';
