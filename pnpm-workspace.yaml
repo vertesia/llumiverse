@@ -14,8 +14,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
-  # Renovate security update: undici@7.28.0
-  - undici@7.28.0
+  # Renovate security update: undici@7.28.0 || 7.30.1
+  - undici@7.28.0 || 7.30.1
   # Additional excludes, due to CVEs etc.
   # Nothing for now
 overrides:
