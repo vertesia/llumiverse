@@ -72,6 +72,12 @@ overrides:
   "@azure/msal-node@<7.1.0": ^7.1.0
   # GHSA-mrhx-c7xc-m3w5: SDK peers otherwise resolve an older zod 4 than the catalog.
   "zod@>=4.0.0 <4.6.6": 4.6.7
+  # GHSA-g3hv-75wg-m249: minimatch DoS through globparts amplification, fixed only in 11.0.1.
+  # GHSA-3g3m-2fjr-6pw4: glob AbortSignal bypass, fixed only in 14.0.2 (glob 14 uses minimatch 11).
+  # Only rimraf and glob consume them here, through glob()/globSync() and minimatch(), which
+  # glob 14 and minimatch 11 keep; their removals (makeRe, AST, Pattern#isRegExp) are unused.
+  "minimatch@<11.0.1": ^11.0.1
+  "glob@>=9.0.0 <14.0.2": ^14.0.2
 
 # Share package directories across local worktrees.
 virtualStoreType: global
