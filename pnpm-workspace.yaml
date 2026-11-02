@@ -16,6 +16,8 @@ minimumReleaseAgeExclude:
   - '@llumiverse/*'
   # Renovate security update: undici@7.28.0
   - undici@7.28.0
+  # Renovate security update: vitest@4.1.11
+  - vitest@4.1.11
   # Additional excludes, due to CVEs etc.
   # Nothing for now
 overrides:
