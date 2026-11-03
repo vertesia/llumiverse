@@ -1,5 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Commit as the Renovate bot, not as the account whose token runs Renovate. The automerge
+  // workflow only merges branches whose commits carry this author.
+  "gitAuthor": "Renovate Bot <renovate@whitesourcesoftware.com>",
   // Renovate reads this configuration from the default branch for every target branch.
   // Release lines receive security fixes only through the final package rule below.
   "baseBranchPatterns": [
