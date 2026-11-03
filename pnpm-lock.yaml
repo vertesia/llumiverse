@@ -305,8 +305,8 @@ importers:
         specifier: ^4.14.0
         version: 4.14.0
       '@google-cloud/aiplatform':
-        specifier: ^7.6.0
-        version: 7.6.0
+        specifier: ^7.7.0
+        version: 7.7.0
       '@google/genai':
         specifier: ^2.30.0
         version: 2.30.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
@@ -702,8 +702,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@google-cloud/aiplatform@7.6.0':
-    resolution: {integrity: sha512-/5D7W8oqTic84djYrbfjmfiXX2HSvM5PB8jj0/oj4pCSSN0DZSM+GjN+0w7poAsmzQq9hm6bmAD+6qxHlet+xg==}
+  '@google-cloud/aiplatform@7.7.0':
+    resolution: {integrity: sha512-40hBnQmTwXfem+kc7UVNPmxEIAPonop80aVsLbEpBTu57qroFFzOdV9r8u+L3/K0EuzuuHdt2ils5avKLsVrtw==}
     engines: {node: '>=22'}
 
   '@google/genai@2.30.0':
@@ -3002,7 +3002,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.6.3':
     optional: true
 
-  '@google-cloud/aiplatform@7.6.0':
+  '@google-cloud/aiplatform@7.7.0':
     dependencies:
       google-gax: 6.0.2
     transitivePeerDependencies:
