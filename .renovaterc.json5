@@ -1,5 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Commit as the Renovate bot, not as the account whose token runs Renovate. The automerge
+  // workflow only merges branches whose commits carry this author.
+  "gitAuthor": "Renovate Bot <renovate@whitesourcesoftware.com>",
+  // Branches Renovate created before gitAuthor was set carry this author. Without it, Renovate treats
+  // them as manually modified and stops rebasing them, so they never pick up the author above.
+  "gitIgnoredAuthors": ["remi@cattiau.com"],
   // Renovate reads this configuration from the default branch for every target branch.
   // Release lines receive security fixes only through the final package rule below.
   "baseBranchPatterns": [
