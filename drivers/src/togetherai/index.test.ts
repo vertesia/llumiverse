@@ -139,28 +139,55 @@ describe('TogetherAIDriver', () => {
         },
     );
 
-    it('maps Together array-shaped model catalog responses', async () => {
+    it('lists every page of the serverless catalog under the IDs inference accepts', async () => {
         const driver = new TogetherAIDriver({ apiKey: 'test-key' });
-        const list = vi.fn(async () => [
-            {
-                id: 'Qwen/Qwen3.5-9B',
-                display_name: 'Qwen3.5 9B',
-                organization: 'Qwen',
-                type: 'chat',
-            },
-            {
-                id: 'togethercomputer/m2-bert-80M-8k-retrieval',
-                display_name: 'M2 BERT Retrieval',
-                organization: 'Together',
-                type: 'embedding',
-            },
-        ]);
-        driver.service = { models: { list } } as unknown as TogetherAIDriver['service'];
+        const listSupported = vi.fn(async function* () {
+            yield {
+                id: 'catalog-qwen',
+                name: 'Qwen/Qwen3.5-9B',
+                displayName: 'Qwen3.5 9B',
+                displayType: 'chat',
+                publisher: 'Qwen',
+                status: 'SUPPORTED_MODEL_STATUS_RECOMMENDED',
+            };
+            yield {
+                id: 'catalog-endpoint',
+                name: 'Meta/Example-Model',
+                serverlessEndpoint: 'Meta/Example-Model-Turbo',
+                displayName: '',
+                displayType: 'language',
+                publisher: 'Meta',
+                status: 'SUPPORTED_MODEL_STATUS_SUPPORTED',
+            };
+            yield {
+                id: 'catalog-embedding',
+                name: 'togethercomputer/m2-bert-80M-8k-retrieval',
+                displayName: 'M2 BERT Retrieval',
+                displayType: 'embedding',
+                publisher: 'Together',
+                status: 'SUPPORTED_MODEL_STATUS_SUPPORTED',
+            };
+            yield {
+                id: 'catalog-hidden',
+                name: 'Example/Hidden',
+                displayName: 'Hidden',
+                displayType: 'chat',
+                publisher: 'Example',
+                status: 'SUPPORTED_MODEL_STATUS_HIDDEN',
+            };
+        });
+        driver.service = { models: { listSupported } } as unknown as TogetherAIDriver['service'];
 
         const models = await driver.listModels();
 
-        expect(list).toHaveBeenCalledOnce();
+        expect(listSupported).toHaveBeenCalledExactlyOnceWith({ product: 'PRODUCT_SERVERLESS' });
         expect(models).toEqual([
+            expect.objectContaining({
+                id: 'Meta/Example-Model-Turbo',
+                name: 'Meta/Example-Model-Turbo',
+                owner: 'Meta',
+                type: ModelType.Text,
+            }),
             expect.objectContaining({
                 id: 'Qwen/Qwen3.5-9B',
                 name: 'Qwen3.5 9B',
@@ -170,6 +197,17 @@ describe('TogetherAIDriver', () => {
                 tool_support: true,
             }),
         ]);
+    });
+
+    it.each([
+        [undefined, 'https://api.together.ai/v1/chat/completions'],
+        ['https://api.together.ai/v1', 'https://api.together.ai/v1/chat/completions'],
+        ['https://api.together.ai/v1/', 'https://api.together.ai/v1/chat/completions'],
+        ['https://proxy.example.test/together/v1', 'https://proxy.example.test/together/v1/chat/completions'],
+        ['https://proxy.example.test/together', 'https://proxy.example.test/together/v1/chat/completions'],
+    ])('resolves endpoint %s to a single API version segment', (endpoint, expected) => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key', endpoint });
+        expect(driver.service.buildURL('/v1/chat/completions', null)).toBe(expected);
     });
 
     it('keeps direct embedding generation support without listing embedding models', async () => {
