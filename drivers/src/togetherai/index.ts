@@ -38,6 +38,16 @@ import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 
 export type { TogetherAIDriverOptions } from '../driver-options.js';
 
+const TOGETHER_DEFAULT_BASE_URL = 'https://api.together.ai';
+
+/**
+ * The SDK's request paths carry the API version (`/v1/chat/completions`, `/v2/supported-models`), so the base URL must
+ * not. An endpoint configured with a trailing `/v1` keeps working instead of requesting `/v1/v1/...`.
+ */
+function togetherBaseURL(endpoint?: string): string {
+    return endpoint?.replace(/\/v1\/?$/, '') || TOGETHER_DEFAULT_BASE_URL;
+}
+
 export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAIDriverOptions> {
     static readonly PROVIDER = Providers.togetherai;
     readonly provider = Providers.togetherai;
@@ -52,7 +62,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
 
         this.service = new Together({
             apiKey: opts.apiKey,
-            baseURL: opts.endpoint ?? 'https://api.together.ai/v1',
+            baseURL: togetherBaseURL(opts.endpoint),
             fetch: this.getDriverFetch(),
             timeout: this.getDriverRequestTimeoutMs(),
         });
@@ -91,7 +101,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
      */
     async validateConnection(): Promise<boolean> {
         try {
-            await this.service.models.list();
+            await this.service.models.listSupported({ product: 'PRODUCT_SERVERLESS' });
             return true;
         } catch {
             return false;
@@ -136,30 +146,30 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
     }
 
     async listModels(): Promise<AIModel[]> {
-        const result = await this.service.models.list();
-        return result
-            .flatMap((model) => {
-                const type = togetherModelType(model.type);
-                if (type === ModelType.Embedding) {
-                    return [];
-                }
-                const modelCapability = getModelCapabilities(model.id, this.provider);
-                return [
-                    {
-                        id: model.id,
-                        name: model.display_name ?? model.id,
-                        provider: this.provider,
-                        owner: model.organization,
-                        type,
-                        can_stream: true,
-                        is_multimodal: modelCapability.input.image === true,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
-                    } satisfies AIModel,
-                ];
-            })
-            .sort((a, b) => a.id.localeCompare(b.id));
+        const models: AIModel[] = [];
+        // Awaiting the page promise would stop at the first page; iterating it follows the cursor.
+        for await (const model of this.service.models.listSupported({ product: 'PRODUCT_SERVERLESS' })) {
+            const type = togetherModelType(model.displayType);
+            if (type === ModelType.Embedding || model.status === 'SUPPORTED_MODEL_STATUS_HIDDEN') {
+                continue;
+            }
+            // `model.id` is the catalog ID; inference takes the serverless endpoint name or the catalog `name`.
+            const id = model.serverlessEndpoint || model.name;
+            const modelCapability = getModelCapabilities(id, this.provider);
+            models.push({
+                id,
+                name: model.displayName || id,
+                provider: this.provider,
+                owner: model.publisher,
+                type,
+                can_stream: true,
+                is_multimodal: modelCapability.input.image === true,
+                input_modalities: modelModalitiesToArray(modelCapability.input),
+                output_modalities: modelModalitiesToArray(modelCapability.output),
+                tool_support: modelCapability.tool_support,
+            } satisfies AIModel);
+        }
+        return models.sort((a, b) => a.id.localeCompare(b.id));
     }
 
     protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {

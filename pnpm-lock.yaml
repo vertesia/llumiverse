@@ -350,8 +350,8 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^0.58.0
-        version: 0.58.0
+        specifier: ^1.0.0
+        version: 1.0.0
     devDependencies:
       '@types/node':
         specifier: ^24.19.2
@@ -2232,8 +2232,8 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
-  together-ai@0.58.0:
-    resolution: {integrity: sha512-YzBMpfNoMbHmN46sT8AH3Ey6bf3TVYKhzfaG+fzh+V4oYD8jvt2m43qL1ut8DWEfYw+eD1ybyDOw5S+5uLTlGQ==}
+  together-ai@1.0.0:
+    resolution: {integrity: sha512-uJq1R6gACNd5OEi7ONlJLOMAfbbQCx2+/Pl/XQ+Cm5yEaPrkWIg87UMOjt4hV94lq7eVcivLAEVt/Ph8SqhH0w==}
     hasBin: true
 
   toidentifier@1.0.1:
@@ -4480,7 +4480,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
 
-  together-ai@0.58.0: {}
+  together-ai@1.0.0: {}
 
   toidentifier@1.0.1: {}
 
