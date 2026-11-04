@@ -163,7 +163,7 @@
         "node-web-stream-adapters": "^0.2.1",
         "openai": "7.42.0",
         "replicate": "^1.4.0",
-        "together-ai": "^0.58.0"
+        "together-ai": "^1.0.0"
     },
     "gitHead": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
     "releaseIdentity": {
