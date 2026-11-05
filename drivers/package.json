@@ -149,7 +149,7 @@
         "@azure/core-auth": "^1.11.0",
         "@azure/identity": "^4.14.0",
         "@google-cloud/aiplatform": "^7.7.0",
-        "@google/genai": "^2.31.0",
+        "@google/genai": "^2.32.0",
         "@huggingface/inference": "^4.13.32",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
