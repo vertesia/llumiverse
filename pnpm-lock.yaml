@@ -308,7 +308,7 @@ importers:
         specifier: ^7.7.0
         version: 7.7.0
       '@google/genai':
-        specifier: ^2.31.0
+        specifier: ^2.32.0
         version: 2.32.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
       '@huggingface/inference':
         specifier: ^4.13.32
