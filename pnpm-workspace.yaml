@@ -14,20 +14,10 @@ blockExoticSubdeps: true
 minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
 minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/foundry-sdk@0.5.2'
   # GPT Image 2.6 complexity, GIF and SVG output types (Images API).
   - openai@7.51.0
   - '@vertesia/*'
   - '@llumiverse/*'
-  # Gemini 4 Argon long decode (automatic continuation) needs @google/genai >= 2.29.1.
-  - '@google/genai@2.30.0'
-  # Sonnet 5.5 native thinking types and aligned platform wrappers.
-  - '@anthropic-ai/sdk@0.129.0'
-  - '@anthropic-ai/vertex-sdk@0.20.0'
-  - '@anthropic-ai/bedrock-sdk@0.34.0'
-  # Security fixes published inside the 3-day cooldown.
-  - brace-expansion@5.0.12
-  - '@grpc/grpc-js@1.14.5'
 
 catalog:
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from
