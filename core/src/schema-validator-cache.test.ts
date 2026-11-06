@@ -78,13 +78,38 @@ describe('SchemaValidatorCache', () => {
         expect(cache.size).toBe(3);
     });
 
-    it('compiles a schema larger than the size budget without caching it', () => {
-        const { cache, createAjv } = trackingCache({ maxEntries: 100, maxSchemaChars: 10 });
+    it('caches a schema larger than the size budget on its own, evicting the rest', () => {
+        const schemaChars = JSON.stringify(schemaRequiring('a')).length;
+        const { cache, createAjv } = trackingCache({ maxEntries: 100, maxSchemaChars: schemaChars * 2 });
+        cache.get(schemaRequiring('a'));
+        cache.get(schemaRequiring('b'));
+        const large = () => ({ ...schemaRequiring('large'), description: 'x'.repeat(schemaChars * 5) });
 
-        expect(cache.get(schemaRequiring('a'))({ a: 'x' })).toBe(true);
-        expect(cache.get(schemaRequiring('a'))({})).toBe(false);
-        expect(cache.size).toBe(0);
-        expect(createAjv).toHaveBeenCalledTimes(2);
+        const validate = cache.get(large());
+
+        expect(cache.size).toBe(1);
+        expect(cache.get(large())).toBe(validate);
+        expect(validate({ large: 'x' })).toBe(true);
+        expect(validate({})).toBe(false);
+        expect(createAjv).toHaveBeenCalledTimes(3);
+    });
+
+    it('is not affected by a caller editing its schema object after the first call', () => {
+        const { cache } = trackingCache();
+        const schema = () => ({
+            type: 'object',
+            properties: { status: { const: { code: 1 } }, kind: { enum: ['a', 'b'] } },
+        });
+        const first = schema();
+        const validate = cache.get(first);
+
+        first.properties.status.const.code = 2;
+        first.properties.kind.enum.push('c');
+
+        expect(cache.get(schema())).toBe(validate);
+        expect(validate({ status: { code: 1 }, kind: 'a' })).toBe(true);
+        expect(validate({ status: { code: 2 } })).toBe(false);
+        expect(validate({ kind: 'c' })).toBe(false);
     });
 
     // An Ajv instance keeps everything it compiled reachable from each of its validators, so memory

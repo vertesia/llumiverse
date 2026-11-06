@@ -30,7 +30,7 @@ function errorMessage(error: unknown): string {
 /**
  * Compiled validators for result schemas, reused across executions with identical schema content.
  * Bounded at 500,000 characters of schema JSON (fifty 10 KB schemas, or up to 1,000 small ones),
- * which holds about 20 MB of compiled validators.
+ * which holds about 20 MB of compiled validators; a single larger schema is cached alone.
  */
 const validators = new SchemaValidatorCache(createAjv, { maxEntries: 1000, maxSchemaChars: 500_000 });
 
