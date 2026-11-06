@@ -1,49 +1,38 @@
 import type { CompletionResult, JSONValue, ResultValidationError } from '@llumiverse/common';
-import { Ajv, type ValidateFunction } from 'ajv';
+import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from './json.js';
 import { resolveField } from './resolver.js';
+import { SchemaValidatorCache } from './schema-validator-cache.js';
 
-const ajv = new Ajv({
-    coerceTypes: 'array',
-    allowDate: true,
-    strict: false,
-    useDefaults: true,
-    removeAdditional: 'failing',
-    // Result schemas come from callers and often carry formats nobody registered (`format: "string"`).
-    // `strict: false` already ignores them; without this, AJV still reports each one on the console.
-    logger: false,
-});
+function createAjv(): Ajv {
+    const ajv = new Ajv({
+        coerceTypes: 'array',
+        allowDate: true,
+        strict: false,
+        useDefaults: true,
+        removeAdditional: 'failing',
+        // Result schemas come from callers and often carry formats nobody registered (`format: "string"`).
+        // `strict: false` already ignores them; without this, AJV still reports each one on the console.
+        logger: false,
+    });
 
-// biome-ignore lint/suspicious/noTsIgnore: ajv-formats' runtime module.exports is the callable plugin, but its shipped .d.ts declares an ESM default that resolves to a non-callable namespace under module:nodenext; no cast-free import form works
-// @ts-ignore - ajv-formats default export is not callable under module:nodenext ESM resolution
-addFormats(ajv);
+    // biome-ignore lint/suspicious/noTsIgnore: ajv-formats' runtime module.exports is the callable plugin, but its shipped .d.ts declares an ESM default that resolves to a non-callable namespace under module:nodenext; no cast-free import form works
+    // @ts-ignore - ajv-formats default export is not callable under module:nodenext ESM resolution
+    addFormats(ajv);
+    return ajv;
+}
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * Compile `schema` against the shared Ajv instance without tripping over its `$id` registry.
- *
- * `ajv.compile()` registers a schema under its `$id` and caches compiled validators by object
- * identity. A stored result schema is deserialized into a *fresh* object on every execution, so the
- * second execution of any interaction whose schema declares an `$id` reached Ajv as an unknown
- * object claiming an already-taken id and threw `schema with key or id "..." already exists`. That
- * turned every such run into a `validation_error` on output the model had produced correctly.
- *
- * Dropping the previous registration first — rather than reusing the cached validator — keeps the
- * newest definition authoritative, because a schema can be edited between executions while keeping
- * its `$id`. `removeSchema` is a no-op when nothing is registered, and it also bounds the registry
- * at one entry per id instead of leaking one per execution.
+ * Compiled validators for result schemas, reused across executions with identical schema content.
+ * Bounded at 500,000 characters of schema JSON (fifty 10 KB schemas, or up to 1,000 small ones),
+ * which holds about 20 MB of compiled validators; a single larger schema is cached alone.
  */
-function compileSchema(schema: object): ValidateFunction {
-    const id = (schema as { $id?: unknown }).$id;
-    if (typeof id === 'string' && id) {
-        ajv.removeSchema(id);
-    }
-    return ajv.compile(schema);
-}
+const validators = new SchemaValidatorCache(createAjv, { maxEntries: 1000, maxSchemaChars: 500_000 });
 
 function getRequiredFields(schemaField: unknown): string[] {
     if (!schemaField || typeof schemaField !== 'object') {
@@ -98,7 +87,7 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
         throw new Error('Data to validate must be an array');
     }
 
-    const validate = compileSchema(schema);
+    const validate = validators.get(schema);
     const valid = validate(json);
 
     if (!valid && validate.errors) {
