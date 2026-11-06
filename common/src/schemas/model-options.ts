@@ -642,7 +642,7 @@ export const OpenAiAudioOptionsSchema = z
 // When supplied, each literal ID still restricts validation to its named family.
 // Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
 // Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
-export const ModelOptionsSchema = z
+const modelOptionsSchema = z
     .union([
         TextFallbackOptionsSchema,
         AzureFoundryChatOptionsSchema,
@@ -678,3 +678,9 @@ export const ModelOptionsSchema = z
         AnthropicClaudeOptionsSchema,
     ])
     .meta({ id: 'ModelOptions', type: 'object' });
+
+// Declaration emit prints an inferred Zod type in full wherever it is used, so every schema that embeds this
+// union would repeat all of its members in its own .d.ts. An interface is always emitted by name, so consumers
+// reference this one type however many options are added; it is exactly the inferred union type.
+export interface ModelOptionsSchemaType extends z.core.util.Identity<typeof modelOptionsSchema> {}
+export const ModelOptionsSchema: ModelOptionsSchemaType = modelOptionsSchema;

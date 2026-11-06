@@ -3,7 +3,8 @@
   "compilerOptions": {
     "composite": false,
     "declaration": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": ["node"]
   },
   "include": [
     "src"
