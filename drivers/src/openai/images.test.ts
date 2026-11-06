@@ -320,6 +320,29 @@ describe('image requests', () => {
         expect(generate.mock.calls[0][0].stream).toBeUndefined();
         expect(stream.completion?.result?.[0]?.type).toBe('image');
     });
+
+    it.each(['gif', 'svg'] as const)('returns %s output without streaming from direct stream calls', async (format) => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const generate = vi.fn().mockResolvedValue({ data: [{ b64_json: 'YQ==' }], output_format: format });
+        driver.service.images.generate = generate;
+        const options = {
+            model: 'gpt-image-2.6-sunburst',
+            model_options: { _option_id: 'openai-gpt-image' as const, output_format: format },
+        };
+        const prompt = [{ role: 'user' as const, content: 'Draw' }];
+        for (const stream of [
+            await driver.requestImageStream(prompt, options),
+            await driver.requestTextCompletionStream(prompt, options),
+        ]) {
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(chunk);
+            expect(chunks).toEqual([
+                expect.objectContaining({ result: [{ type: 'image', value: expect.stringContaining(format) }] }),
+            ]);
+        }
+        expect(generate).toHaveBeenCalledTimes(2);
+        for (const [params] of generate.mock.calls) expect(params.stream).toBeUndefined();
+    });
 });
 
 describe('image stream lifecycle', () => {

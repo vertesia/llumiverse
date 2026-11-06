@@ -1014,6 +1014,15 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        // GIF and SVG outputs cannot stream, so direct stream calls return the whole image as one chunk.
+        if (!canStreamImage(this.getImageSourceModel(options.model), options.model_options)) {
+            const { result, token_usage } = await this.requestImageGeneration(prompt, options, signal);
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { result, token_usage } satisfies CompletionChunkObject;
+                },
+            };
+        }
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const request = await imageRequest(
             this.getImageService(),
