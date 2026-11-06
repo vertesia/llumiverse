@@ -168,8 +168,9 @@ export function getOpenAiOptions(
         const isGPTImage = model.includes('gpt-image') || model.includes('chatgpt-image');
         const isDallE2 = model.includes('dall-e-2');
         const isDallE3 = model.includes('dall-e-3');
-        // GPT Image 2.6 adds planning complexity and GIF/SVG outputs; later generations inherit them.
-        const hasGptImage26Controls = isOpenAIImageVersionGTE(model, 2, 6);
+        // GPT Image 2.6 adds planning complexity and GIF/SVG outputs; later generations inherit them. Azure OpenAI
+        // documents only PNG, JPEG and WebP, so it does not advertise them; explicit values are still forwarded.
+        const hasGptImage26Controls = provider !== Providers.azure_openai && isOpenAIImageVersionGTE(model, 2, 6);
 
         const sizeOptions: Record<string, string> = {};
         if (isGPTImage) {
@@ -263,6 +264,7 @@ export function getOpenAiOptions(
                             {
                                 name: 'frame_duration_ms',
                                 type: OptionType.numeric,
+                                min: 20,
                                 integer: true,
                                 description: 'Delay per GIF frame in milliseconds, rounded to 10 ms (GIF output only)',
                             },

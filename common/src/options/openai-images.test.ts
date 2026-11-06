@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { OpenAiGptImageOptionsSchema, OpenAiTextOptionsSchema } from '../schemas/model-options.js';
 import { OptionType } from '../types.js';
-import { getOpenAiOptions } from './openai.js';
+import { getAzureOpenAiOptions, getOpenAiOptions } from './openai.js';
 import { isOpenAIImageVersionGTE } from './version-parsing.js';
 
 describe('GPT Image versions and options', () => {
@@ -48,6 +48,18 @@ describe('GPT Image versions and options', () => {
                 expect(Object.values(format.enum).includes('gif')).toBe(has26);
             }
         }
+    });
+    it('does not advertise GIF/SVG controls on Azure OpenAI', () => {
+        const options = getAzureOpenAiOptions('gpt-image-2.6-sunburst').options;
+        for (const name of ['complexity', 'frame_count', 'frame_duration_ms', 'svg']) {
+            expect(options.some((option) => option.name === name)).toBe(false);
+        }
+        const format = options.find((option) => option.name === 'output_format');
+        expect(format?.type === OptionType.enum && Object.values(format.enum)).toEqual(['png', 'webp', 'jpeg']);
+    });
+    it('advertises the 20 ms GIF frame-delay minimum', () => {
+        const frame = getOpenAiOptions('gpt-image-2.6-sunburst').options.find((o) => o.name === 'frame_duration_ms');
+        expect(frame?.type === OptionType.numeric && frame.min).toBe(20);
     });
     it('accepts GPT Image 2.6 options and rejects unknown complexity', () => {
         expect(
