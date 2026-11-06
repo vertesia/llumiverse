@@ -344,8 +344,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1
       openai:
-        specifier: 7.45.1
-        version: 7.45.1(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+        specifier: 7.51.0
+        version: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -1987,8 +1987,8 @@ packages:
     resolution: {integrity: sha512-++Zlftm0kVLPmzC06t6epuWmcRMDbI4z5P3NNX979WA/k23+NtSOynEGzsVfZwguKw2mi5umVgnBlJQMwRz4Pg==}
     engines: {node: '>=20'}
 
-  openai@7.45.1:
-    resolution: {integrity: sha512-mutrJXwhJIMZ24Lab2COFtNp44OcpZSnV4O2O7q38wAHUa2m2fQqUO5pj1XS3PqLfOTeODBUS9YoadqDnnGk5A==}
+  openai@7.51.0:
+    resolution: {integrity: sha512-Ibu1d3ilmMbXRS8Y3WUPNTKk96p0rg1/BSlqASnvKy6i8efKjliUZGSfUTTCRcZJNGQ3xXMdita2REQOlH68JA==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
@@ -2824,7 +2824,7 @@ snapshots:
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
       https-proxy-agent: 9.1.0
-      openai: 7.45.1(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+      openai: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
       tslib: 2.8.1
       ws: 8.21.0
     transitivePeerDependencies:
@@ -4229,7 +4229,7 @@ snapshots:
       powershell-utils: 0.2.1
       wsl-utils: 1.0.1
 
-  openai@7.45.1(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
+  openai@7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.4.6

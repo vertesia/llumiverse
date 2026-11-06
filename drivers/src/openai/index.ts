@@ -59,7 +59,7 @@ import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.j
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
-import { imageDataUrl, imageRequest } from './images.js';
+import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
@@ -730,9 +730,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        // GPT Image supports completed-image streaming; legacy image endpoints use the fallback.
         if (this.isImageModel(_options.model)) {
-            return Promise.resolve(this.getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'));
+            return Promise.resolve(canStreamImage(this.getImageSourceModel(_options.model), _options.model_options));
         }
 
         if (_options.model.includes('o1') && !(_options.model.includes('mini') || _options.model.includes('preview'))) {
@@ -1015,6 +1014,15 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        // GIF and SVG outputs cannot stream, so direct stream calls return the whole image as one chunk.
+        if (!canStreamImage(this.getImageSourceModel(options.model), options.model_options)) {
+            const { result, token_usage } = await this.requestImageGeneration(prompt, options, signal);
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { result, token_usage } satisfies CompletionChunkObject;
+                },
+            };
+        }
         const requestOptions = this.getDriverRequestOptions(options, signal);
         const request = await imageRequest(
             this.getImageService(),

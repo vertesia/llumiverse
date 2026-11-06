@@ -346,6 +346,17 @@ export const OpenAiImageGenerationMaskSchema = z
     })
     .meta({ id: 'OpenAiImageGenerationMask' });
 
+/**
+ * SVG author settings for GPT Image SVG output. Accounts with SVG model selection require `model` on the Images
+ * API; the Responses tool falls back to the outer response model.
+ */
+export const OpenAiImageSvgOptionsSchema = z
+    .strictObject({
+        model: z.string().min(1).optional(),
+        reasoning: z.strictObject({ effort: ReasoningEffortSchema.optional() }).optional(),
+    })
+    .meta({ id: 'OpenAiImageSvgOptions' });
+
 export const OpenAiImageGenerationOptionsSchema = z
     .strictObject({
         model: z.string(),
@@ -354,11 +365,14 @@ export const OpenAiImageGenerationOptionsSchema = z
         size: z.string().optional(),
         quality: z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
         background: z.enum(['auto', 'opaque', 'transparent']).optional(),
-        output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+        output_format: z.enum(['png', 'jpeg', 'webp', 'gif', 'svg']).optional(),
         output_compression: z.number().int().min(0).max(100).optional(),
         moderation: z.enum(['auto', 'low']).optional(),
         input_fidelity: z.enum(['low', 'high']).optional(),
         partial_images: z.number().optional(),
+        complexity: z.enum(['low', 'medium', 'high']).optional(),
+        frame_count: z.number().int().optional(),
+        frame_duration_ms: z.number().int().optional(),
         input_image_mask: OpenAiImageGenerationMaskSchema.optional(),
     })
     .meta({ id: 'OpenAiImageGenerationOptions' });
@@ -458,12 +472,16 @@ export const OpenAiGptImageOptionsSchema = z
         height: z.number().optional(),
         image_quality: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'auto']).optional(),
         background: z.enum(['transparent', 'opaque', 'auto']).optional(),
-        output_format: z.enum(['png', 'webp', 'jpeg']).optional(),
+        output_format: z.enum(['png', 'webp', 'jpeg', 'gif', 'svg']).optional(),
         n: z.number().optional(),
         output_compression: z.number().int().min(0).max(100).optional(),
         moderation: z.enum(['auto', 'low']).optional(),
         input_fidelity: z.enum(['low', 'high']).optional(),
         partial_images: z.number().optional(),
+        complexity: z.enum(['low', 'medium', 'high']).optional(),
+        frame_count: z.number().int().optional(),
+        frame_duration_ms: z.number().int().optional(),
+        svg: OpenAiImageSvgOptionsSchema.optional(),
     })
     .meta({ id: 'OpenAiGptImageOptions' });
 
