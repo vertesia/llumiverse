@@ -27,7 +27,6 @@ describe('image requests', () => {
         const driver = new OpenAIDriver({ apiKey: 'test' });
         for (const [config, size] of [
             [{ width: 2048, height: 1536, size: '1024x1024' }, '2048x1536'],
-            [{ width: 2048 }, '2048x1024'],
             [{ size: 'auto' }, 'auto'],
             [{}, undefined],
         ] as const) {
@@ -37,6 +36,16 @@ describe('image requests', () => {
         const legacy = await imageRequest(driver.service, input, 'dall-e-3', {}, 'dall-e-3');
         expect(legacy.generate?.size).toBe('1024x1024');
     });
+
+    it.each([{ width: 2048 }, { height: 1536 }, { width: 2048, size: '1024x1024' }])(
+        'rejects a single dimension %o',
+        async (config) => {
+            const driver = new OpenAIDriver({ apiKey: 'test' });
+            await expect(imageRequest(driver.service, input, options.model, config, options.model)).rejects.toThrow(
+                'Set both width and height',
+            );
+        },
+    );
 
     it('serializes generation options and zero values', async () => {
         const driver = new OpenAIDriver({ apiKey: 'test' });

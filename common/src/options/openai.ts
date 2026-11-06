@@ -193,8 +193,8 @@ export function getOpenAiOptions(
                   type: OptionType.numeric,
                   integer: true,
                   description:
-                      `The ${name} of the generated image in pixels. Leave width and height empty to let the ` +
-                      'model choose the size; if only one is set, the other is 1024.',
+                      `The ${name} of the generated image in pixels. Set both width and height, or leave both ` +
+                      'empty to let the model choose the size.',
               }))
             : [
                   {

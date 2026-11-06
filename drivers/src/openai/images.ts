@@ -83,14 +83,17 @@ export async function imageRequest(
     if (masks.length && !images.length) throw new Error('An image mask requires a reference image');
     const gpt = options as OpenAiGptImageOptions | undefined;
     const legacy = sourceModel.toLowerCase().includes('dall-e');
+    // The Images API has no single-dimension size, so a lone width or height cannot be translated.
+    if (!legacy && (gpt?.width === undefined) !== (gpt?.height === undefined)) {
+        throw new Error('Set both width and height, or neither to let the model choose the image size');
+    }
     const common: OpenAI.Images.ImageGenerateParamsNonStreaming = {
         model,
         prompt: texts.join('\n'),
         // An unset GPT Image size is omitted so the model's `auto` sizing applies; DALL-E keeps its fixed default.
-        // When only one dimension is set, the other is 1024.
         size:
-            !legacy && (gpt?.width !== undefined || gpt?.height !== undefined)
-                ? `${gpt?.width ?? 1024}x${gpt?.height ?? 1024}`
+            !legacy && gpt?.width !== undefined && gpt?.height !== undefined
+                ? `${gpt.width}x${gpt.height}`
                 : (options?.size ?? (legacy ? '1024x1024' : undefined)),
         n: options?.n ?? 1,
         ...(legacy
