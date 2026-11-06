@@ -29,11 +29,13 @@ describe('image requests', () => {
             [{ width: 2048, height: 1536, size: '1024x1024' }, '2048x1536'],
             [{ width: 2048 }, '2048x1024'],
             [{ size: 'auto' }, 'auto'],
-            [{}, '1024x1024'],
+            [{}, undefined],
         ] as const) {
             const request = await imageRequest(driver.service, input, options.model, config, options.model);
             expect(request.generate?.size).toBe(size);
         }
+        const legacy = await imageRequest(driver.service, input, 'dall-e-3', {}, 'dall-e-3');
+        expect(legacy.generate?.size).toBe('1024x1024');
     });
 
     it('serializes generation options and zero values', async () => {

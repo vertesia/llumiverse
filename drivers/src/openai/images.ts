@@ -86,10 +86,12 @@ export async function imageRequest(
     const common: OpenAI.Images.ImageGenerateParamsNonStreaming = {
         model,
         prompt: texts.join('\n'),
+        // An unset GPT Image size is omitted so the model's `auto` sizing applies; DALL-E keeps its fixed default.
+        // When only one dimension is set, the other is 1024.
         size:
             !legacy && (gpt?.width !== undefined || gpt?.height !== undefined)
                 ? `${gpt?.width ?? 1024}x${gpt?.height ?? 1024}`
-                : (options?.size ?? '1024x1024'),
+                : (options?.size ?? (legacy ? '1024x1024' : undefined)),
         n: options?.n ?? 1,
         ...(legacy
             ? {

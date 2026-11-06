@@ -192,15 +192,16 @@ export function getOpenAiOptions(
                   name,
                   type: OptionType.numeric,
                   integer: true,
-                  default: 1024,
-                  description: `The ${name} of the generated image in pixels`,
+                  description:
+                      `The ${name} of the generated image in pixels. Leave width and height empty to let the ` +
+                      'model choose the size; if only one is set, the other is 1024.',
               }))
             : [
                   {
                       name: 'size',
                       type: OptionType.enum,
                       enum: sizeOptions,
-                      default: '1024x1024',
+                      default: isGPTImage ? 'auto' : '1024x1024',
                       description: 'The size of the generated image',
                   },
               ];
