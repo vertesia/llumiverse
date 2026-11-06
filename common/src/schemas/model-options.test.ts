@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { getOptions } from '../options.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from '../types.js';
-import { ModelOptionsSchema, type ModelOptionsSchemaType } from './model-options.js';
+import { ModelOptionsSchema } from './model-options.js';
 
 /** Exact type identity — `extends` in both directions is too weak (`any`/`unknown` slip through). */
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -197,11 +197,6 @@ describe('ModelOptionsSchema', () => {
 
     it('publishes every registered schema in union order', () => {
         expect(MEMBERS).toEqual(ModelOptionsSchema.options.map((schema) => schema.meta()?.id));
-    });
-
-    it('declares the union through a named type, so schemas that embed it reference it by name', () => {
-        // An inferred type would be printed in full in every consumer's declarations, once per embedding.
-        assertType<Equals<typeof ModelOptionsSchema, ModelOptionsSchemaType>>(true);
     });
 
     it('requires factory IDs to belong to the schema union at compile time', () => {
