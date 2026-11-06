@@ -54,8 +54,9 @@ describe('ModelOptionsSchema declarations', () => {
                 'export const Embedded = { direct: ModelOptionsSchema, optional: ModelOptionsSchema.optional() };\n',
         );
 
-        expect(declaration).toContain('ModelOptionsSchemaType');
+        const unnamed = 'the embedded union is printed in full: keep the `ModelOptionsSchemaType` annotation';
+        expect(declaration, unnamed).toContain('ModelOptionsSchemaType');
         // Printed in full, the union spells out every member, including this family ID.
-        expect(declaration).not.toContain('openai-thinking');
+        expect(declaration, unnamed).not.toContain('openai-thinking');
     });
 });
