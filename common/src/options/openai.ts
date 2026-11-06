@@ -168,6 +168,8 @@ export function getOpenAiOptions(
         const isGPTImage = model.includes('gpt-image') || model.includes('chatgpt-image');
         const isDallE2 = model.includes('dall-e-2');
         const isDallE3 = model.includes('dall-e-3');
+        // GPT Image 2.6 adds planning complexity and GIF/SVG outputs; later generations inherit them.
+        const hasGptImage26Controls = isOpenAIImageVersionGTE(model, 2, 6);
 
         const sizeOptions: Record<string, string> = {};
         if (isGPTImage) {
@@ -228,10 +230,50 @@ export function getOpenAiOptions(
                   {
                       name: 'output_format',
                       type: OptionType.enum,
-                      enum: { PNG: 'png', WebP: 'webp', JPEG: 'jpeg' },
+                      enum: {
+                          PNG: 'png',
+                          WebP: 'webp',
+                          JPEG: 'jpeg',
+                          ...(hasGptImage26Controls ? { GIF: 'gif', SVG: 'svg' } : {}),
+                      },
                       default: 'png',
-                      description: 'The output format for the image',
+                      description: hasGptImage26Controls
+                          ? 'The output format for the image. GIF and SVG outputs do not support streaming.'
+                          : 'The output format for the image',
                   },
+                  ...(hasGptImage26Controls
+                      ? ([
+                            {
+                                name: 'complexity',
+                                type: OptionType.enum,
+                                enum: { Low: 'low', Medium: 'medium', High: 'high' },
+                                description:
+                                    'Planning effort for the image, independent of rendering quality. ' +
+                                    'The provider default applies when omitted.',
+                            },
+                            {
+                                name: 'frame_count',
+                                type: OptionType.numeric,
+                                min: 2,
+                                max: 16,
+                                integer: true,
+                                description: 'Number of GIF frames (GIF output only)',
+                            },
+                            {
+                                name: 'frame_duration_ms',
+                                type: OptionType.numeric,
+                                integer: true,
+                                description: 'Delay per GIF frame in milliseconds, rounded to 10 ms (GIF output only)',
+                            },
+                            {
+                                name: 'svg',
+                                type: OptionType.json_object,
+                                description:
+                                    'SVG author settings (SVG output only), e.g. {"model": "<model>", ' +
+                                    '"reasoning": {"effort": "low"}}. Required when SVG model selection is enabled.',
+                            },
+                        ] satisfies ModelOptionInfoItem[])
+                      : []),
               ]
             : [];
 

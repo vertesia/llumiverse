@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { Base64DataSource, type ExecutionOptions, type OpenAiGptImageOptions, PromptRole } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
-import { imageDataUrl, imageRequest } from './images.js';
+import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { OpenAIDriver } from './openai.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 
@@ -222,6 +222,92 @@ describe('image requests', () => {
         expect(imageDataUrl('a', 'webp', 'jpeg')).toContain('image/webp');
         expect(imageDataUrl('a', undefined, 'jpeg')).toContain('image/jpeg');
         expect(imageDataUrl('a')).toContain('image/png');
+        expect(imageDataUrl('a', 'svg')).toBe('data:image/svg+xml;base64,a');
+        expect(imageDataUrl('a', undefined, 'gif')).toBe('data:image/gif;base64,a');
+    });
+
+    it('forwards GPT Image 2.6 complexity and GIF controls to generations and edits', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const config: OpenAiGptImageOptions = {
+            complexity: 'low',
+            output_format: 'gif',
+            frame_count: 4,
+            frame_duration_ms: 120,
+        };
+        const generate = await imageRequest(
+            driver.service,
+            input,
+            'gpt-image-2.6-flare',
+            config,
+            'gpt-image-2.6-flare',
+        );
+        expect(generate.generate).toMatchObject(config);
+        const reference = [
+            {
+                role: 'user',
+                content: [{ type: 'input_image', image_url: 'data:image/png;base64,YQ==', detail: 'auto' }],
+            },
+        ] as OpenAI.Responses.ResponseInputItem[];
+        const edit = await imageRequest(
+            driver.service,
+            reference,
+            'gpt-image-2.6-sunburst',
+            { ...config, output_format: 'svg' },
+            'gpt-image-2.6-sunburst',
+        );
+        expect(edit.edit).toMatchObject({ ...config, output_format: 'svg' });
+    });
+
+    it('forwards SVG author settings to generations', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const svg = { model: 'gpt-6-astra', reasoning: { effort: 'low' as const } };
+        const request = await imageRequest(
+            driver.service,
+            input,
+            'gpt-image-2.6-flare',
+            { output_format: 'svg', svg },
+            'gpt-image-2.6-flare',
+        );
+        expect(request.generate).toMatchObject({ output_format: 'svg', svg });
+    });
+
+    it('leaves omitted 2.6 controls to the provider', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const request = await imageRequest(
+            driver.service,
+            input,
+            'gpt-image-2.6-sunburst',
+            {},
+            'gpt-image-2.6-sunburst',
+        );
+        for (const name of ['complexity', 'frame_count', 'frame_duration_ms', 'svg'] as const) {
+            expect(request.generate?.[name]).toBeUndefined();
+        }
+    });
+
+    it('streams GPT Image except GIF and SVG outputs, and never legacy endpoints', () => {
+        for (const model of ['gpt-image-2', 'gpt-image-2.5-flare', 'deployment::gpt-image-2.6-sunburst']) {
+            expect(canStreamImage(model, undefined)).toBe(true);
+            expect(canStreamImage(model, { _option_id: 'openai-gpt-image', output_format: 'webp' })).toBe(true);
+            expect(canStreamImage(model, { _option_id: 'openai-gpt-image', output_format: 'gif' })).toBe(false);
+            expect(canStreamImage(model, { _option_id: 'openai-gpt-image', output_format: 'svg' })).toBe(false);
+        }
+        expect(canStreamImage('dall-e-3', undefined)).toBe(false);
+    });
+
+    it.each(['gif', 'svg'] as const)('returns %s output without streaming', async (output_format) => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const generate = vi.fn().mockResolvedValue({ data: [{ b64_json: 'YQ==' }], output_format });
+        driver.service.images.generate = generate;
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Draw' }], {
+            model: 'gpt-image-2.6-sunburst',
+            model_options: { _option_id: 'openai-gpt-image', output_format },
+        });
+        for await (const _chunk of stream) {
+            /* consume */
+        }
+        expect(generate.mock.calls[0][0].stream).toBeUndefined();
+        expect(stream.completion?.result?.[0]?.type).toBe('image');
     });
 });
 

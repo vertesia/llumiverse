@@ -27,6 +27,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
+import { canStreamImage } from '../openai/images.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     normalizeOpenAIChatCompletionsResponse,
@@ -355,7 +356,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
         if (this.isImageModel(_options.model)) {
             return Promise.resolve(
-                this.getOpenAIProtocolDriver().getImageSourceModel(_options.model).toLowerCase().includes('gpt-image'),
+                canStreamImage(
+                    this.getOpenAIProtocolDriver().getImageSourceModel(_options.model),
+                    _options.model_options,
+                ),
             );
         }
         return Promise.resolve(true);

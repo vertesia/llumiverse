@@ -28,6 +28,53 @@ describe('GPT Image versions and options', () => {
             }
         }
     });
+    it('exposes complexity and GIF/SVG controls only at 2.6 onward', () => {
+        for (const model of [
+            'gpt-image-2',
+            'gpt-image-2.5-flare',
+            'gpt-image-2.6-sunburst',
+            'gpt-image-2.6-flare',
+            'gpt-image-3',
+        ]) {
+            const options = getOpenAiOptions(model).options;
+            const has26 = isOpenAIImageVersionGTE(model, 2, 6);
+            for (const name of ['complexity', 'frame_count', 'frame_duration_ms', 'svg']) {
+                expect(options.some((option) => option.name === name)).toBe(has26);
+            }
+            const format = options.find((option) => option.name === 'output_format');
+            expect(format?.type).toBe(OptionType.enum);
+            if (format?.type === OptionType.enum) {
+                expect(Object.values(format.enum).includes('svg')).toBe(has26);
+                expect(Object.values(format.enum).includes('gif')).toBe(has26);
+            }
+        }
+    });
+    it('accepts GPT Image 2.6 options and rejects unknown complexity', () => {
+        expect(
+            OpenAiGptImageOptionsSchema.parse({
+                complexity: 'medium',
+                output_format: 'gif',
+                frame_count: 9,
+                frame_duration_ms: 200,
+            }),
+        ).toMatchObject({ complexity: 'medium', output_format: 'gif' });
+        expect(
+            OpenAiTextOptionsSchema.parse({
+                image_generation: {
+                    model: 'gpt-image-2.6-sunburst',
+                    complexity: 'high',
+                    output_format: 'svg',
+                    frame_count: 4,
+                    frame_duration_ms: 3000,
+                },
+            }).image_generation,
+        ).toMatchObject({ complexity: 'high', output_format: 'svg', frame_duration_ms: 3000 });
+        expect(OpenAiGptImageOptionsSchema.parse({ output_format: 'svg', svg: { model: 'gpt-6-astra' } }).svg).toEqual({
+            model: 'gpt-6-astra',
+        });
+        expect(OpenAiGptImageOptionsSchema.safeParse({ complexity: 'max' }).success).toBe(false);
+        expect(OpenAiGptImageOptionsSchema.safeParse({ frame_count: 2.5 }).success).toBe(false);
+    });
     it('keeps the previous ChatGPT image alias on legacy size and quality controls', () => {
         const options = getOpenAiOptions('chatgpt-image-latest').options;
         expect(options.some((option) => option.name === 'width' || option.name === 'height')).toBe(false);
