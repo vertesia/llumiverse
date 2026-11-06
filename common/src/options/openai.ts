@@ -6,6 +6,7 @@ import type {
     OpenAiGptImageOptionsSchema,
     OpenAiImageGenerationMaskSchema,
     OpenAiImageGenerationOptionsSchema,
+    OpenAiImageSvgOptionsSchema,
     OpenAiSpeechOptionsSchema,
     OpenAiTextOptionsSchema,
     OpenAiThinkingOptionsSchema,
@@ -35,6 +36,7 @@ export type OpenAiTextOptions = z.infer<typeof OpenAiTextOptionsSchema>;
 export type OpenAiDalleOptions = z.infer<typeof OpenAiDalleOptionsSchema>;
 export type OpenAiImageGenerationOptions = z.infer<typeof OpenAiImageGenerationOptionsSchema>;
 export type OpenAiImageGenerationMask = z.infer<typeof OpenAiImageGenerationMaskSchema>;
+export type OpenAiImageSvgOptions = z.infer<typeof OpenAiImageSvgOptionsSchema>;
 export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
 export type OpenAiTranscriptionOptions = z.infer<typeof OpenAiTranscriptionOptionsSchema>;
