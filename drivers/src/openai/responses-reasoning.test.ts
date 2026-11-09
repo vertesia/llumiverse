@@ -523,7 +523,7 @@ describe('OpenAI Responses reasoning', () => {
                     _option_id: 'openai-thinking' as const,
                     effort: 'low' as const,
                     reasoning_effort: 'high' as const,
-                    prompt_cache_retention: '24h' as const,
+                    cache_ttl: '24h' as const,
                     extra_body: { model: 'override' },
                 },
             };
@@ -537,7 +537,7 @@ describe('OpenAI Responses reasoning', () => {
             }
             expect(warn.mock.calls.map(([fields]) => fields)).toEqual([
                 { model: options.model, option_names: ['reasoning_effort'], reason: 'openai_effort_alias_precedence' },
-                { model: options.model, option_names: ['prompt_cache_retention'], reason: 'openai_cache_retention' },
+                { model: options.model, option_names: ['cache_ttl'], reason: 'openai_cache_ttl_unsupported' },
                 { model: options.model, option_names: ['model'], reason: 'openai_extra_body_precedence' },
             ]);
         },
@@ -873,7 +873,7 @@ describe('OpenAI Responses reasoning', () => {
             model_options: {
                 _option_id: 'openai-thinking' as const,
                 prompt_cache_key: 'agent-cache-key',
-                prompt_cache_retention: '24h' as const,
+                cache_ttl: '24h' as const,
             },
         };
 
@@ -897,79 +897,92 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
-    it.each([false, true])('preserves GPT-5.6+ cache controls when stream=%s', async (streaming) => {
-        const create = vi.fn(async (request: unknown) =>
-            (request as { stream?: boolean }).stream
-                ? (async function* () {
-                      yield { type: 'response.completed', sequence_number: 1, response: response() };
-                  })()
-                : response(),
-        );
+    it.each([
+        ['gpt-6-astra', '12h', { prompt_cache_options: { ttl: '12h' } }],
+        ['gpt-5.6-sol', '30m', { prompt_cache_options: { ttl: '30m' } }],
+        ['gpt-5.1', 'in_memory', { prompt_cache_retention: 'in_memory' }],
+        ['gpt-4.1-2025-04-14', '24h', { prompt_cache_retention: '24h' }],
+    ] as const)('sends %s cache_ttl=%s in the parameter the model takes', async (model, cache_ttl, expected) => {
+        for (const streaming of [false, true]) {
+            const create = vi.fn(async (request: unknown) =>
+                (request as { stream?: boolean }).stream
+                    ? (async function* () {
+                          yield { type: 'response.completed', sequence_number: 1, response: response() };
+                      })()
+                    : response(),
+            );
+            const driver = new TestResponsesDriver(create);
+            const warn = vi.fn();
+            driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+            const options = { model, model_options: { _option_id: 'openai-thinking' as const, cache_ttl } };
+            const prompt = [{ type: 'message' as const, role: 'user' as const, content: 'question' }];
+            if (streaming) {
+                for await (const _chunk of await driver.requestTextCompletionStream(prompt, options)) {
+                    // Consume the provider stream.
+                }
+            } else {
+                await driver.requestTextCompletion(prompt, options);
+            }
+
+            const request = create.mock.calls[0][0] as Record<string, unknown>;
+            expect({
+                prompt_cache_options: request.prompt_cache_options,
+                prompt_cache_retention: request.prompt_cache_retention,
+            }).toEqual(expected);
+            expect(warn).not.toHaveBeenCalled();
+        }
+    });
+
+    it('keeps the explicit breakpoint mode when a GPT-5.6+ cache_ttl is set', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create);
         const options = {
             model: 'gpt-6-astra',
             model_options: {
                 _option_id: 'openai-thinking' as const,
-                prompt_cache_retention: '24h' as const,
+                prompt_cache_key: 'agent-cache-key',
+                cache_ttl: '12h' as const,
             },
         };
 
-        if (streaming) {
-            const stream = await driver.requestTextCompletionStream(
-                [{ type: 'message', role: 'user', content: 'question' }],
-                options,
-            );
-            for await (const _chunk of stream) {
-                // Consume the provider stream.
-            }
-        } else {
-            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], options);
-        }
+        await driver.requestTextCompletion(
+            [
+                { type: 'message', role: 'user', content: 'first question' },
+                { type: 'message', role: 'assistant', content: 'first answer' },
+                { type: 'message', role: 'user', content: 'second question' },
+            ],
+            options,
+        );
 
         const request = create.mock.calls[0][0] as Record<string, unknown>;
-        expect(request.prompt_cache_options).toEqual({ ttl: '30m' });
-        expect(request.prompt_cache_retention).toBe('24h');
+        expect(request.prompt_cache_options).toEqual({ mode: 'explicit', ttl: '12h' });
     });
 
-    it.each([false, true])('passes explicit in-memory cache retention through when stream=%s', async (streaming) => {
-        const create = vi.fn(async (request: unknown) =>
-            (request as { stream?: boolean }).stream
-                ? (async function* () {
-                      yield { type: 'response.completed', sequence_number: 1, response: response() };
-                  })()
-                : response(),
+    it.each([
+        ['gpt-5.5', '24h', Providers.openai],
+        ['gpt-5.5', 'in_memory', Providers.openai],
+        ['gpt-6-astra', 'in_memory', Providers.openai],
+        ['gpt-5.1', '12h', Providers.openai],
+        ['gpt-4o', '24h', Providers.openai],
+        ['gpt-6-astra', '12h', Providers.azure_openai],
+    ] as const)('drops %s cache_ttl=%s on %s with a warning', async (model, cache_ttl, provider) => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create, provider);
+        const warn = vi.fn();
+        driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model,
+            model_options: { _option_id: 'openai-thinking' as const, cache_ttl },
+        });
+
+        const request = create.mock.calls[0][0] as Record<string, unknown>;
+        expect(request.prompt_cache_options).toBeUndefined();
+        expect(request.prompt_cache_retention).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+            { model, option_names: ['cache_ttl'], reason: 'openai_cache_ttl_unsupported' },
+            'Model option compatibility exception changed caller input',
         );
-        const driver = new TestResponsesDriver(create);
-        for (const model of ['gpt-5.5', 'gpt-5.6', 'gpt-6-astra']) {
-            const options = {
-                model,
-                model_options: {
-                    _option_id: 'openai-thinking' as const,
-                    prompt_cache_retention: 'in_memory' as const,
-                },
-            };
-
-            const request = async () => {
-                if (streaming) {
-                    const stream = await driver.requestTextCompletionStream(
-                        [{ type: 'message', role: 'user', content: 'question' }],
-                        options,
-                    );
-                    for await (const _chunk of stream) {
-                        // Consume the provider stream.
-                    }
-                } else {
-                    await driver.requestTextCompletion(
-                        [{ type: 'message', role: 'user', content: 'question' }],
-                        options,
-                    );
-                }
-            };
-
-            await request();
-            expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ prompt_cache_retention: 'in_memory' }));
-        }
-        expect(create).toHaveBeenCalledTimes(3);
     });
 
     it.each([false, true])('forwards the Flex service tier when stream=%s', async (streaming) => {
