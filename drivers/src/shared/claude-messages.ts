@@ -53,6 +53,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
+import { usesClaudeNativeResultSchema } from './claude-structured-output.js';
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import {
     applyClaudeToolChanges,
@@ -486,13 +487,15 @@ export async function formatClaudePrompt(
     segments: PromptSegment[],
     options: ExecutionOptions,
     logger?: WarnLogger,
+    { nativeResultSchema = false }: { nativeResultSchema?: boolean } = {},
 ): Promise<ClaudePrompt> {
     let system: TextBlockParam[] | undefined = segments
         .filter((s) => s.role === PromptRole.system)
         .map((s) => ({ text: s.content, type: 'text' as const }));
 
     let schemaText: string | undefined;
-    if (options.result_schema) {
+    // A schema the provider enforces natively (output_config.format) needs no prompt instructions.
+    if (options.result_schema && !nativeResultSchema) {
         schemaText =
             options.tools && options.tools.length > 0
                 ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`
@@ -1031,6 +1034,11 @@ export function getClaudePayload(
         hasSamplingRestriction,
     } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1], logger);
     betas.push(...thinkingBetas);
+    // Bedrock enforces the result schema for recent Claude models; formatClaudePrompt left it out of the prompt.
+    const nativeFormat =
+        provider === 'bedrock' && options.result_schema && usesClaudeNativeResultSchema(options)
+            ? { format: { type: 'json_schema' as const, schema: options.result_schema as Record<string, unknown> } }
+            : undefined;
     const forcedToolChoice = model_options?.required_tool_name
         ? ({ type: 'tool', name: model_options.required_tool_name } as const)
         : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
@@ -1108,7 +1116,8 @@ export function getClaudePayload(
             ? { type: 'disabled' }
             : (thinking as MessageCreateParamsBase['thinking']),
         stream: true,
-        ...(!disableManualThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
+        ...(!disableManualThinkingForForcedTool &&
+            (outputConfig || nativeFormat) && { output_config: { ...outputConfig, ...nativeFormat } }),
         // `speed` is a beta request field the base type doesn't declare yet.
         ...(fastMode && ({ speed: 'fast' } as Partial<MessageCreateParamsBase>)),
     };

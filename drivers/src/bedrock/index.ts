@@ -88,6 +88,7 @@ import {
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
+import { usesClaudeNativeResultSchema } from '../shared/claude-structured-output.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
@@ -870,7 +871,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         const baseModel = await this.resolveBaseModel(opts.model);
         if (usesClaudeMessagesApi({ ...opts, model: baseModel })) {
-            const claudePrompt = await formatClaudePrompt(segments, { ...opts, model: baseModel }, this.logger);
+            const claudeOptions = { ...opts, model: baseModel };
+            const claudePrompt = await formatClaudePrompt(segments, claudeOptions, this.logger, {
+                nativeResultSchema: usesClaudeNativeResultSchema(claudeOptions),
+            });
             return { ...claudePrompt, _is_claude_messages: true };
         }
         return await formatConversePrompt(segments, opts);
