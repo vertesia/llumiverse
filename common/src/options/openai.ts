@@ -56,6 +56,72 @@ export type OpenAiOptions =
     | OpenAiSpeechOptions
     | OpenAiAudioOptions;
 
+/** A prompt-cache lifetime: `30m`/`12h` for GPT-5.6 and later, `in_memory`/`24h` for earlier models. */
+export type OpenAIPromptCacheTtl = NonNullable<OpenAiThinkingOptions['cache_ttl']>;
+
+/**
+ * Earlier models that OpenAI documents as accepting extended (`24h`) prompt-cache retention as well as `in_memory`.
+ * GPT-5.5 and GPT-5.5 Pro accept `24h` only, so they offer no choice and are not listed.
+ * https://developers.openai.com/api/docs/guides/prompt-caching
+ */
+const OPENAI_EXTENDED_CACHE_RETENTION_MODELS: ReadonlySet<string> = new Set([
+    'gpt-5.4',
+    'gpt-5.2',
+    'gpt-5.1-codex-max',
+    'gpt-5.1',
+    'gpt-5.1-codex',
+    'gpt-5.1-codex-mini',
+    'gpt-5.1-chat-latest',
+    'gpt-5',
+    'gpt-5-codex',
+    'gpt-4.1',
+]);
+
+/**
+ * The prompt-cache lifetimes the OpenAI API accepts for a model, or an empty list when the model offers no choice.
+ * GPT-5.6 and later take `prompt_cache_options.ttl`; the earlier models take the legacy `prompt_cache_retention`.
+ */
+export function getOpenAIPromptCacheTtls(model: string): readonly OpenAIPromptCacheTtl[] {
+    if (isOpenAIGptVersionGTE(model, 5, 6)) return ['30m', '12h'];
+    const modelName = (model.split('/').pop() ?? model)
+        .toLowerCase()
+        .replace(/^openai\./, '')
+        .replace(/-\d{4}-\d{2}-\d{2}$/, '');
+    return OPENAI_EXTENDED_CACHE_RETENTION_MODELS.has(modelName) ? ['in_memory', '24h'] : [];
+}
+
+function getOpenAIPromptCacheOptions(model: string, provider: Providers): ModelOptionInfoItem[] {
+    // The lifetimes are documented for the OpenAI API only; Azure and compatible endpoints keep their defaults.
+    if (provider !== Providers.openai) return [];
+    const ttls = getOpenAIPromptCacheTtls(model);
+    if (ttls.includes('12h')) {
+        return [
+            {
+                name: 'cache_ttl',
+                type: OptionType.enum,
+                enum: { '30 minutes (default)': '30m', '12 hours': '12h' },
+                default: '30m',
+                description:
+                    'Minimum lifetime of prompt-cache entries. Cache writes cost 1.25× the input rate for 30 minutes ' +
+                    'and 2.5× for 12 hours; cache reads cost the same for both.',
+            },
+        ];
+    }
+    if (ttls.includes('24h')) {
+        return [
+            {
+                name: 'cache_ttl',
+                type: OptionType.enum,
+                enum: { 'In memory': 'in_memory', '24 hours': '24h' },
+                description:
+                    'Prompt-cache retention. Leave unset for the organization default: 24 hours, or in memory with ' +
+                    'Zero Data Retention. Cache writes have no extra charge on these models.',
+            },
+        ];
+    }
+    return [];
+}
+
 /** OpenAI model families with published Flex processing support. */
 export function isFlexSupportedOpenAIModel(model: string): boolean {
     const modelName = (model.split('/').pop() ?? model).toLowerCase();
@@ -445,6 +511,7 @@ export function getOpenAiOptions(
                     : []),
                 ...visionOptions,
                 ...serviceTierOptions,
+                ...getOpenAIPromptCacheOptions(model, provider),
                 {
                     name: 'image_generation',
                     type: OptionType.json_object,
@@ -540,6 +607,7 @@ export function getOpenAiOptions(
                 ),
                 ...visionOptions,
                 ...serviceTierOptions,
+                ...getOpenAIPromptCacheOptions(model, provider),
                 {
                     name: 'image_generation',
                     type: OptionType.json_object,

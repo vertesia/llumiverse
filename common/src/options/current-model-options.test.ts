@@ -221,6 +221,27 @@ describe('current reasoning model options', () => {
         expect(reasoningContext('gpt-5.6-sol', Providers.openai_compatible)).toBeUndefined();
     });
 
+    it('advertises the prompt-cache lifetimes each OpenAI model accepts', () => {
+        const cacheTtls = (model: string, provider: Providers = Providers.openai) => {
+            const option = getOptions(model, provider).options.find((item) => item.name === 'cache_ttl');
+            return option?.type === OptionType.enum ? Object.values(option.enum) : undefined;
+        };
+
+        for (const model of ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra', 'gpt-6.1-terra']) {
+            expect(cacheTtls(model)).toEqual(['30m', '12h']);
+        }
+        for (const model of ['gpt-5.4', 'gpt-5.1-codex-mini', 'gpt-5', 'gpt-4.1', 'gpt-4.1-2025-04-14']) {
+            expect(cacheTtls(model)).toEqual(['in_memory', '24h']);
+        }
+        // GPT-5.5 accepts 24h only, and models outside OpenAI's extended-retention list have no choice.
+        for (const model of ['gpt-5.5', 'gpt-5.5-pro', 'gpt-5-mini', 'gpt-4.1-mini', 'gpt-4o']) {
+            expect(cacheTtls(model)).toBeUndefined();
+        }
+        // The lifetimes are documented for the OpenAI API only.
+        expect(cacheTtls('gpt-6-astra', Providers.azure_openai)).toBeUndefined();
+        expect(cacheTtls('gpt-6-astra', Providers.openai_compatible)).toBeUndefined();
+    });
+
     it('does not advertise unverified effort for unknown OpenAI-compatible models', () => {
         const options = getOptions('custom-reasoning-model', Providers.openai_compatible).options;
         expect(options.map((option) => option.name)).not.toContain(SharedOptions.effort);

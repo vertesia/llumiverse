@@ -14,6 +14,7 @@ import {
     type ExecutionResponse,
     type ExecutionTokenUsage,
     getConversationMeta,
+    getOpenAIPromptCacheTtls,
     incrementConversationTurn,
     isCutOffFinishReason,
     isDedicatedInferenceModel,
@@ -26,6 +27,7 @@ import {
     ModelType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
+    type OpenAIPromptCacheTtl,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
     type OpenAiImageGenerationOptions,
@@ -78,7 +80,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     reasoning_context?: 'auto' | 'current_turn' | 'all_turns';
     verbosity?: 'low' | 'medium' | 'high';
     prompt_cache_key?: string;
-    prompt_cache_retention?: 'in_memory' | '24h';
+    cache_ttl?: OpenAIPromptCacheTtl;
     service_tier?: string;
     extra_body?: OpenAIExtraBody;
     /** Internal execution hint supplied after public model-option validation. */
@@ -225,29 +227,27 @@ function configureOpenAIPromptCaching(
     return { input: markedInput, options: { mode: 'explicit' } };
 }
 
+/**
+ * Applies the caller's prompt-cache lifetime in the parameter the model takes: `prompt_cache_options.ttl` on GPT-5.6
+ * and later, the legacy `prompt_cache_retention` on earlier models. A lifetime the model does not accept is dropped
+ * with a warning instead of failing the request with a 400.
+ */
 function getPromptCacheRequestOptions(
     model: string,
-    retention: OpenAIRequestOptions['prompt_cache_retention'],
+    provider: string,
+    cacheTtl: OpenAIPromptCacheTtl | undefined,
     options: OpenAIPromptCacheConfig['options'],
     logger?: Logger,
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
-    if (isOpenAIGptVersionGTE(model, 5, 6)) {
-        // Compatibility exception: legacy 24h cache retention maps to the newer API's 30m TTL.
-        if (retention === '24h') {
-            logModelOptionException(
-                logger,
-                model,
-                { prompt_cache_retention: retention },
-                ['prompt_cache_retention'],
-                'openai_cache_retention',
-            );
-        }
-        return {
-            prompt_cache_retention: retention,
-            prompt_cache_options: retention === '24h' ? { ...options, ttl: '30m' } : options,
-        };
+    if (!cacheTtl) return { prompt_cache_options: options };
+    if (provider !== Providers.openai || !getOpenAIPromptCacheTtls(model).includes(cacheTtl)) {
+        logModelOptionException(logger, model, { cache_ttl: cacheTtl }, ['cache_ttl'], 'openai_cache_ttl_unsupported');
+        return { prompt_cache_options: options };
     }
-    return { prompt_cache_retention: retention, prompt_cache_options: options };
+    if (cacheTtl === '30m' || cacheTtl === '12h') {
+        return { prompt_cache_options: { ...options, ttl: cacheTtl } };
+    }
+    return { prompt_cache_options: options, prompt_cache_retention: cacheTtl };
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -347,7 +347,6 @@ export class OpenAIResponsesProtocol {
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
-        const promptCacheRetention = model_options?.prompt_cache_retention;
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
@@ -357,7 +356,8 @@ export class OpenAIResponsesProtocol {
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
             options.model,
-            promptCacheRetention,
+            driver.provider,
+            model_options?.cache_ttl,
             promptCache.options,
             driver.logger,
         );
@@ -483,7 +483,6 @@ export class OpenAIResponsesProtocol {
         const reasoningContext = model_options?.reasoning_context;
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
-        const promptCacheRetention = model_options?.prompt_cache_retention;
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
@@ -493,7 +492,8 @@ export class OpenAIResponsesProtocol {
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
             options.model,
-            promptCacheRetention,
+            driver.provider,
+            model_options?.cache_ttl,
             promptCache.options,
             driver.logger,
         );

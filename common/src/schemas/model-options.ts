@@ -377,6 +377,12 @@ export const OpenAiImageGenerationOptionsSchema = z
     })
     .meta({ id: 'OpenAiImageGenerationOptions' });
 
+/**
+ * Prompt-cache lifetime for an OpenAI model: `30m` or `12h` on GPT-5.6 and later, `in_memory` or `24h` on the earlier
+ * models that support extended retention. The option list offers only the values a model accepts.
+ */
+export const OpenAiPromptCacheTtlSchema = z.enum(['30m', '12h', 'in_memory', '24h']);
+
 export const OpenAiThinkingOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-thinking').optional(),
@@ -391,6 +397,7 @@ export const OpenAiThinkingOptionsSchema = z
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
+        cache_ttl: OpenAiPromptCacheTtlSchema.optional(),
         extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
@@ -413,12 +420,14 @@ export const OpenAiTextOptionsSchema = z
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
+        cache_ttl: OpenAiPromptCacheTtlSchema.optional(),
         extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
 
 export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({
     _option_id: true,
+    cache_ttl: true,
     extra_body: true,
     image_generation: true,
 })

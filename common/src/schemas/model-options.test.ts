@@ -348,6 +348,16 @@ describe('ModelOptionsSchema', () => {
         ).toBe(false);
     });
 
+    it('accepts OpenAI prompt-cache lifetimes and rejects other values', () => {
+        for (const _option_id of ['openai-thinking', 'openai-text'] as const) {
+            for (const cache_ttl of ['30m', '12h', 'in_memory', '24h']) {
+                expect(ModelOptionsSchema.safeParse({ _option_id, cache_ttl }).success).toBe(true);
+            }
+            expect(ModelOptionsSchema.safeParse({ _option_id, cache_ttl: '1h' }).success).toBe(false);
+        }
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openrouter-text', cache_ttl: '12h' }).success).toBe(false);
+    });
+
     it('accepts persisted reasoning context choices for OpenAI thinking options', () => {
         for (const reasoning_context of ['auto', 'current_turn', 'all_turns']) {
             expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', reasoning_context }).success).toBe(
