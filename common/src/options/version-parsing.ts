@@ -422,15 +422,41 @@ export function supportsEffort(modelString: string): boolean {
     return false;
 }
 
+/** Where a model's fast mode stands on the Claude API. */
+export type ClaudeFastModeStatus = 'research_preview' | 'available';
+
 /**
- * Check if a model can run in fast mode: Opus 4.8 and later. Opus 4.7 rejects `speed: "fast"` and Opus 4.6 ignores
- * it. Fast mode is served by the Claude API only, not by cloud platforms.
+ * Classify a model's fast mode on the Claude API: generally available on Opus 5.5 and later and on Fable and
+ * Mythos 5.2 and later, a research preview on Opus 4.8 and Opus 5, and otherwise absent. Opus 4.7 rejects
+ * `speed: "fast"` and Opus 4.6 ignores it. The Opus 4.8 preview is deprecated and ends on 2026-11-30.
+ *
+ * Other platforms differ. Vertex AI takes `speed` for Fable and Mythos 5.2 and later only, Microsoft Foundry serves
+ * fast mode as a separate `-fast` model and rejects `speed`, and Amazon Bedrock has no fast mode.
+ *
+ * @param modelString - The model identifier string
+ * @returns the fast mode status, or undefined if the model has no fast mode
+ */
+export function getClaudeFastModeStatus(modelString: string): ClaudeFastModeStatus | undefined {
+    switch (parseClaudeVersion(modelString)?.variant) {
+        case 'opus':
+            if (isClaudeVersionGTE(modelString, 5, 5)) return 'available';
+            return isClaudeVersionGTE(modelString, 4, 8) ? 'research_preview' : undefined;
+        case 'fable':
+        case 'mythos':
+            return isClaudeVersionGTE(modelString, 5, 2) ? 'available' : undefined;
+        default:
+            return undefined;
+    }
+}
+
+/**
+ * Check if a model can run in fast mode on the Claude API. See {@link getClaudeFastModeStatus}.
  *
  * @param modelString - The model identifier string
  * @returns true if the model supports fast mode
  */
 export function supportsClaudeFastMode(modelString: string): boolean {
-    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 8);
+    return getClaudeFastModeStatus(modelString) !== undefined;
 }
 
 /**

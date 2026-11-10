@@ -5,7 +5,7 @@ import type {
     BedrockMantleClaudeOptionsSchema,
     BedrockMantleResponsesOptionsSchema,
 } from '../schemas/model-options.js';
-import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
+import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType, Providers } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { textOptionsFallback } from './fallback.js';
 import { getOpenAIReasoningEffortLevels, isModelFamilyVersionGTE } from './version-parsing.js';
@@ -241,7 +241,7 @@ export function getBedrockMantleOptions(model: string, option?: ModelOptions): M
         case 'chat_completions':
             return getChatCompletionsOptions(model);
         case 'messages': {
-            const anthropicOptions = getAnthropicOptions(model, option);
+            const anthropicOptions = getAnthropicOptions(model, option, Providers.bedrock_mantle);
             return { ...anthropicOptions, _option_id: 'bedrock-mantle-claude' };
         }
         default:

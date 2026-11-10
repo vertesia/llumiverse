@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { AnthropicClaudeOptionsSchema } from '../schemas/model-options.js';
-import { type ModelOptions, type ModelOptionsInfo, OptionType, SharedOptions } from '../types.js';
+import { type ModelOptions, type ModelOptionsInfo, OptionType, Providers, SharedOptions } from '../types.js';
 import { textOptionsFallback } from './fallback.js';
 import {
     buildClaudeCacheOptions,
@@ -16,7 +16,16 @@ import { hasSamplingParameterRestriction } from './version-parsing.js';
 
 export type AnthropicClaudeOptions = z.infer<typeof AnthropicClaudeOptionsSchema>;
 
-export function getAnthropicOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+/**
+ * Claude options on the Messages API, for the platforms that serve it with this option surface. `provider` selects
+ * what differs between them: only the Claude API takes the `speed` field. Microsoft Foundry serves fast mode as a
+ * separate `-fast` model and rejects the field, and Amazon Bedrock has no fast mode.
+ */
+export function getAnthropicOptions(
+    model: string,
+    option?: ModelOptions,
+    provider: Providers = Providers.anthropic,
+): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);
     const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty', 'include_thoughts'];
     let commonOptions = textOptionsFallback.options.filter((o) => !excludeOptions.includes(o.name));
@@ -47,7 +56,7 @@ export function getAnthropicOptions(model: string, option?: ModelOptions): Model
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as unknown as AnthropicClaudeOptions)?.cache_enabled),
-            ...buildClaudeSpeedOption(model),
+            ...(provider === Providers.anthropic ? buildClaudeSpeedOption(model) : []),
         ],
     };
 }

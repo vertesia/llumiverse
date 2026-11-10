@@ -33,12 +33,18 @@ export const THINKING_BINDING_BETA: AnthropicBeta = 'thinking-binding-controls-2
 
 /**
  * Whether the model binds each thinking block to the conversation before it (system, tools, earlier
- * messages) and rejects a replayed block once that prefix changes: Claude Fable 5.1 and Claude 5.5+.
+ * messages) and rejects a replayed block once that prefix changes: Claude Fable and Mythos 5.1+ and Claude 5.5+.
+ *
+ * Whether the API enforces this by default depends on the model, the account's age and the platform: Fable and
+ * Mythos 5.2 enforce it for every account, while Mythos 5.1 on Amazon Bedrock does not. Asking for `drop_block`
+ * opts the request into the check everywhere, so a block the API would have let through after an edit is dropped
+ * instead. That is accepted to keep one rule per model and never fail the request.
  */
 function enforcesThinkingBinding(version: ClaudeVersion | null): boolean {
     if (!version) return false;
     const { major, minor, variant } = version;
-    return major > 5 || (major === 5 && (minor >= 5 || (variant === 'fable' && minor >= 1)));
+    if (major !== 5) return major > 5;
+    return minor >= 5 || ((variant === 'fable' || variant === 'mythos') && minor >= 1);
 }
 
 /**

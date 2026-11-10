@@ -12,6 +12,7 @@ const routes: Record<Providers, readonly (readonly [string, ModelOptions['_optio
         ['claude-sonnet-4-6', 'anthropic-claude'],
         ['claude-opus-4-7', 'anthropic-claude'],
         ['claude-fable-5', 'anthropic-claude'],
+        ['claude-fable-5-2', 'anthropic-claude'],
     ],
     openai: [
         ['gpt-4.1', 'openai-text'],
@@ -54,6 +55,7 @@ const routes: Record<Providers, readonly (readonly [string, ModelOptions['_optio
     ],
     bedrock_mantle: [
         ['anthropic.claude-sonnet-4-6', 'bedrock-mantle-claude'],
+        ['anthropic.claude-fable-5-2', 'bedrock-mantle-claude'],
         ['openai.gpt-5.6', 'bedrock-mantle-responses'],
         ['openai.gpt-oss-120b', 'bedrock-mantle-chat-completions'],
         ['xai.grok-4', 'bedrock-mantle-responses'],

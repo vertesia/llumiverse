@@ -10,10 +10,10 @@ import { type ModelOptionInfoItem, OptionType } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
 import {
     getAvailableEffortLevels,
+    getClaudeFastModeStatus,
     isClaudeVersionGTE,
     parseClaudeVersion,
     requiresAdaptiveThinkingOnly,
-    supportsClaudeFastMode,
 } from './version-parsing.js';
 
 // ============================================================================
@@ -71,14 +71,19 @@ export function buildClaudeCacheTtlOptions(cacheEnabled?: boolean): ModelOptionI
 
 /** Fast mode selector, for the Claude API models that support it. */
 export function buildClaudeSpeedOption(model: string): ModelOptionInfoItem[] {
-    if (!supportsClaudeFastMode(model)) return [];
+    const status = getClaudeFastModeStatus(model);
+    if (!status) return [];
+    const description = 'Fast mode generates output faster at premium pricing.';
     return [
         {
             name: 'speed',
             type: OptionType.enum,
             enum: { Standard: 'standard', Fast: 'fast' },
             default: 'standard',
-            description: 'Fast mode generates output faster at premium pricing. It requires fast mode access.',
+            description:
+                status === 'research_preview'
+                    ? `${description} It is a research preview on this model and requires fast mode access.`
+                    : description,
         },
     ];
 }

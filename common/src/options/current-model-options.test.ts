@@ -3,6 +3,10 @@ import { resolveModelProfile } from '../model-directory.js';
 import { getOptions } from '../options.js';
 import { OptionType, Providers, SharedOptions } from '../types.js';
 
+function speedOption(model: string, provider: Providers) {
+    return getOptions(model, provider).options.find((option) => option.name === 'speed');
+}
+
 function effortValues(model: string, provider: Providers): string[] {
     const effort = getOptions(model, provider).options.find((option) => option.name === SharedOptions.effort);
     expect(effort?.type).toBe(OptionType.enum);
@@ -336,20 +340,64 @@ describe('current reasoning model options', () => {
         });
     });
 
-    it('offers fast mode on the Claude API for Opus 4.8 and later only', () => {
-        const speed = (model: string, provider: Providers) =>
-            getOptions(model, provider).options.find((option) => option.name === 'speed');
-        for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5']) {
-            expect(speed(model, Providers.anthropic)).toMatchObject({
+    it('offers fast mode on the Claude API only, for the models that support it', () => {
+        for (const model of [
+            'claude-opus-4-8',
+            'claude-opus-5',
+            'claude-opus-5-5',
+            'claude-fable-5-2',
+            'claude-mythos-5-2',
+        ]) {
+            expect(speedOption(model, Providers.anthropic)).toMatchObject({
                 type: OptionType.enum,
                 default: 'standard',
                 enum: { Standard: 'standard', Fast: 'fast' },
             });
         }
-        expect(speed('claude-opus-4-7', Providers.anthropic)).toBeUndefined();
-        expect(speed('claude-sonnet-5', Providers.anthropic)).toBeUndefined();
-        // Cloud platforms don't serve fast mode.
-        expect(speed('claude-opus-5-5', Providers.vertexai)).toBeUndefined();
+        expect(speedOption('claude-opus-4-7', Providers.anthropic)).toBeUndefined();
+        expect(speedOption('claude-sonnet-5', Providers.anthropic)).toBeUndefined();
+        expect(speedOption('claude-fable-5-1', Providers.anthropic)).toBeUndefined();
+        // Vertex AI does not serve fast mode for Opus.
+        expect(speedOption('claude-opus-5-5', Providers.vertexai)).toBeUndefined();
+        // Microsoft Foundry (a separate `-fast` model) and Amazon Bedrock don't take the `speed` field.
+        for (const model of ['claude-opus-5-5', 'claude-fable-5-2']) {
+            expect(speedOption(`deployment::${model}`, Providers.azure_foundry)).toBeUndefined();
+            expect(speedOption(`deployment::${model}-fast`, Providers.azure_foundry)).toBeUndefined();
+            expect(speedOption(`anthropic.${model}`, Providers.bedrock_mantle)).toBeUndefined();
+            expect(speedOption(`global.anthropic.${model}`, Providers.bedrock)).toBeUndefined();
+        }
+    });
+
+    it('describes the fast mode research preview only on the models still in it', () => {
+        const description = (model: string) => speedOption(model, Providers.anthropic)?.description;
+        expect(description('claude-opus-5')).toContain('research preview');
+        expect(description('claude-opus-5-5')).not.toContain('research preview');
+        expect(description('claude-fable-5-2')).not.toContain('research preview');
+    });
+
+    it.each([
+        [Providers.anthropic, 'claude-fable-5-2'],
+        [Providers.anthropic, 'claude-mythos-5-2'],
+        [Providers.vertexai, 'locations/global/publishers/anthropic/models/claude-fable-5-2'],
+        [Providers.bedrock, 'global.anthropic.claude-fable-5-2'],
+        [Providers.bedrock_mantle, 'anthropic.claude-fable-5-2'],
+        [Providers.azure_foundry, 'deployment::claude-fable-5-2'],
+    ])('exposes Fable and Mythos 5.2 limits and supported controls through %s for %s', (provider, model) => {
+        const options = getOptions(model, provider).options;
+        const names = options.map((option) => option.name);
+        expect(resolveModelProfile(model, provider).context_window).toBe(1_000_000);
+        // Amazon Bedrock Runtime enforces an exclusive 128K bound.
+        expect(options.find((option) => option.name === SharedOptions.max_tokens)).toMatchObject({
+            max: provider === Providers.bedrock ? 127_999 : 128_000,
+        });
+        expect(options.find((option) => option.name === SharedOptions.effort)).toMatchObject({
+            enum: { Low: 'low', Medium: 'medium', 'High (default)': 'high', 'Extra High': 'xhigh', Max: 'max' },
+        });
+        expect(effortValues(model, provider)).toHaveLength(5);
+        expect(names).toContain('include_thoughts');
+        for (const removed of ['temperature', 'top_p', 'top_k', 'thinking_budget_tokens', 'thinking_mode']) {
+            expect(names).not.toContain(removed);
+        }
     });
 
     it('advertises current Gemini thinking levels without adding a default', () => {
