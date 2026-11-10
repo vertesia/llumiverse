@@ -176,7 +176,7 @@ catalogs:
 
 overrides:
   source-map-js@<1.2.2: 1.2.2
-  google-auth-library: ^11.3.1
+  google-auth-library: ^11.3.2
   '@types/node': ^24.19.2
   vite: ^8.3.4
   brace-expansion@>=3.0.0 <5.0.12: 5.0.12
@@ -300,7 +300,7 @@ importers:
         version: 1.1.0
       '@azure/ai-projects':
         specifier: ^2.9.0
-        version: 2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(zod@4.6.7)
+        version: 2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(zod@4.6.7)
       '@azure/core-auth':
         specifier: ^1.11.0
         version: 1.11.0
@@ -335,8 +335,8 @@ importers:
         specifier: ^5.1.3
         version: 5.1.3
       google-auth-library:
-        specifier: ^11.3.1
-        version: 11.3.1
+        specifier: ^11.3.2
+        version: 11.3.3
       groq-sdk:
         specifier: ^1.6.0
         version: 1.6.0
@@ -348,7 +348,7 @@ importers:
         version: 0.2.1
       openai:
         specifier: 7.51.0
-        version: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+        version: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -1645,16 +1645,12 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  gaxios@7.1.4:
-    resolution: {integrity: sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==}
-    engines: {node: '>=18'}
-
   gaxios@8.3.1:
     resolution: {integrity: sha512-h4/R7ay7JFXU5kmAkp/Y4Y4Vmm7m83tD579GUgfQQsRRGQ4TzSedyHla6XgTWohQuVffT3ldN4FF6uCqlRGaEA==}
     engines: {node: '>=22'}
 
-  gcp-metadata@9.0.3:
-    resolution: {integrity: sha512-2YYnIlHaKBGT2IPg3G2M57hia9Galz15zsEOvw9T3oRf0lSn6KN6VcHQLqby7x8ksYKnjXvp3rp2KJyLCN6zfQ==}
+  gcp-metadata@9.2.3:
+    resolution: {integrity: sha512-d2OI/dJJ3IIaeOz3c9jvr5j5G5beI5fQzbgilNiWhDKGwvJN9o10Qub70NkbF6PNJSUoNKZ77JKYGz0Fs4+9Lg==}
     engines: {node: '>=22'}
 
   get-caller-file@2.0.5:
@@ -1673,8 +1669,8 @@ packages:
     resolution: {integrity: sha512-A1vjIwC3qpdCso45Iw127gnp7sPhqgY8lUQhDrArIs+GbmfaaVPFuoyy7WyLT9EPZCRZ7j7aLdwUhQmHWesEow==}
     engines: {node: 18 || 20 || >=22}
 
-  google-auth-library@11.3.1:
-    resolution: {integrity: sha512-mQS0R2Ev/DKkzuWSYtDeq15uhDeaWuT2qzLYqJ41LmooxVKHmn5ut3pc6dlHY6wfHW/D7FBmOYjAtkjaD1A7qA==}
+  google-auth-library@11.3.3:
+    resolution: {integrity: sha512-VxjQ5+zHeR4RcRi001qnT/6KRKy2CIjQ5I7/wFErvRqr0+setlRqjDOAzvjzWEzyvsWswZE6WMQJtS8OpeTqAQ==}
     engines: {node: '>=22'}
 
   google-gax@6.0.2:
@@ -1683,6 +1679,10 @@ packages:
 
   google-logging-utils@2.0.1:
     resolution: {integrity: sha512-HMhaQghlOTvbcb3c4T5jmmOMtG3JUF1iOQMezaJXL86CDS+Tm2vHd0IeLFRAx3+ewd+bo9E1HFHoy17X5aJa9A==}
+    engines: {node: '>=22'}
+
+  google-logging-utils@2.1.1:
+    resolution: {integrity: sha512-jYZOPMaRGS3Hldyudft6bdibW9ZWUKBkMdB2TeSETkV1c2T9TR4zxEWZETHv9xJ8KHr2hgkNLaSa8kcEcwlpeQ==}
     engines: {node: '>=22'}
 
   gopd@1.2.0:
@@ -1997,7 +1997,7 @@ packages:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
-      google-auth-library: ^11.3.1
+      google-auth-library: ^11.3.2
       undici: '>=5 <9'
       ws: ^8.21.0
       zod: 4.6.7
@@ -2478,7 +2478,7 @@ snapshots:
     dependencies:
       '@anthropic-ai/sdk': 1.3.0(zod@4.6.7)
       '@opentelemetry/api': 1.9.1
-      google-auth-library: 11.3.1
+      google-auth-library: 11.3.3
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -2812,7 +2812,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(zod@4.6.7)':
+  '@azure/ai-projects@2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(zod@4.6.7)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -2827,7 +2827,7 @@ snapshots:
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
       https-proxy-agent: 9.1.0
-      openai: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+      openai: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
       tslib: 2.8.1
       ws: 8.21.0
     transitivePeerDependencies:
@@ -3032,7 +3032,7 @@ snapshots:
 
   '@google/genai@2.32.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))':
     dependencies:
-      google-auth-library: 11.3.1
+      google-auth-library: 11.3.3
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
@@ -3894,14 +3894,6 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  gaxios@7.1.4:
-    dependencies:
-      extend: 3.0.2
-      https-proxy-agent: 7.0.6
-      node-fetch: 3.3.2
-    transitivePeerDependencies:
-      - supports-color
-
   gaxios@8.3.1:
     dependencies:
       extend: 3.0.2
@@ -3910,10 +3902,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  gcp-metadata@9.0.3:
+  gcp-metadata@9.2.3:
     dependencies:
-      gaxios: 7.1.4
-      google-logging-utils: 2.0.1
+      gaxios: 8.3.1
+      google-logging-utils: 2.1.1
       json-bigint: 1.0.0
     transitivePeerDependencies:
       - supports-color
@@ -3944,13 +3936,13 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 3.0.0
 
-  google-auth-library@11.3.1:
+  google-auth-library@11.3.3:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
       gaxios: 8.3.1
-      gcp-metadata: 9.0.3
-      google-logging-utils: 2.0.1
+      gcp-metadata: 9.2.3
+      google-logging-utils: 2.1.1
       jws: 4.0.1
     transitivePeerDependencies:
       - supports-color
@@ -3960,7 +3952,7 @@ snapshots:
       '@grpc/grpc-js': 1.14.5
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
-      google-auth-library: 11.3.1
+      google-auth-library: 11.3.3
       google-logging-utils: 2.0.1
       node-fetch: 3.3.2
       object-hash: 3.0.0
@@ -3971,6 +3963,8 @@ snapshots:
       - supports-color
 
   google-logging-utils@2.0.1: {}
+
+  google-logging-utils@2.1.1: {}
 
   gopd@1.2.0: {}
 
@@ -4232,12 +4226,12 @@ snapshots:
       powershell-utils: 0.2.1
       wsl-utils: 1.0.1
 
-  openai@7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.1)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
+  openai@7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.4.6
       '@smithy/signature-v4': 5.7.4
-      google-auth-library: 11.3.1
+      google-auth-library: 11.3.3
       undici: 7.30.1
       ws: 8.21.0
       zod: 4.6.7
