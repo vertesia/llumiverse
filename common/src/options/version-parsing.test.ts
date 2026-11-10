@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     getAvailableEffortLevels,
+    getClaudeFastModeStatus,
     getGeminiModelVersion,
     getOpenAIReasoningEffortLevels,
     isClaudeVersionGTE,
@@ -11,6 +12,7 @@ import {
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
+    supportsClaudeFastMode,
     supportsClaudeForcedToolChoice,
     supportsEffort,
     supportsMidConversationToolChanges,
@@ -239,6 +241,9 @@ describe('supportsClaudeForcedToolChoice', () => {
         'global.anthropic.claude-fable-5-1',
         'claude-fable-6',
         'claude-mythos-5-1',
+        'claude-fable-5-2',
+        'anthropic.claude-fable-5-2',
+        'claude-mythos-5-2',
     ])('rejects a forced tool choice on %s', (model) => {
         expect(supportsClaudeForcedToolChoice(model)).toBe(false);
     });
@@ -260,6 +265,68 @@ describe('supportsClaudeForcedToolChoice', () => {
         'gpt-5',
     ])('accepts a forced tool choice on %s', (model) => {
         expect(supportsClaudeForcedToolChoice(model)).toBe(true);
+    });
+});
+
+describe('Claude fast mode', () => {
+    it.each([
+        ['claude-opus-4-8', 'research_preview'],
+        ['claude-opus-5', 'research_preview'],
+        ['claude-opus-5-5', 'available'],
+        ['claude-opus-6', 'available'],
+        ['claude-fable-5-2', 'available'],
+        ['claude-mythos-5-2', 'available'],
+        ['claude-fable-5-3', 'available'],
+        ['claude-fable-6', 'available'],
+        ['claude-opus-4-7', undefined],
+        ['claude-sonnet-5-5', undefined],
+        ['claude-haiku-5-5', undefined],
+        ['claude-fable-5', undefined],
+        ['claude-fable-5-1', undefined],
+        ['claude-mythos-5-1', undefined],
+        ['claude-mythos-preview', undefined],
+        ['claude-3-7-sonnet-20250219', undefined],
+        ['my-deployment', undefined],
+        ['gpt-5', undefined],
+    ] as const)('classifies %s as %s', (model, status) => {
+        expect(getClaudeFastModeStatus(model)).toBe(status);
+        expect(supportsClaudeFastMode(model)).toBe(status !== undefined);
+    });
+
+    // Every family and version from Claude 4.0 to 6.9, oldest first.
+    const generations = (['opus', 'sonnet', 'haiku', 'fable', 'mythos'] as const).map((variant) =>
+        [4, 5, 6].flatMap((major) =>
+            Array.from({ length: 10 }, (_, minor) => ({
+                bare: `claude-${variant}-${major}${minor ? `-${minor}` : ''}`,
+                dotted: `claude-${variant}-${major}.${minor}`,
+            })),
+        ),
+    );
+
+    it('classifies every provider form of a model ID like the bare ID', () => {
+        for (const { bare, dotted } of generations.flat()) {
+            const status = getClaudeFastModeStatus(bare);
+            for (const id of [
+                `anthropic.${bare}`,
+                `global.anthropic.${bare}-v1:0`,
+                `arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.${bare}`,
+                `locations/global/publishers/anthropic/models/${bare}@20261109`,
+                `${bare}-20261109`,
+                `${bare}-fast`,
+                `anthropic/${dotted}`,
+            ]) {
+                expect(getClaudeFastModeStatus(id), id).toBe(status);
+            }
+        }
+    });
+
+    it('never withdraws fast mode from a later generation of a family', () => {
+        const rank = (model: string) => ['research_preview', 'available'].indexOf(getClaudeFastModeStatus(model) ?? '');
+        for (const family of generations) {
+            for (let i = 1; i < family.length; i++) {
+                expect(rank(family[i].bare), family[i].bare).toBeGreaterThanOrEqual(rank(family[i - 1].bare));
+            }
+        }
     });
 });
 

@@ -640,16 +640,19 @@ describe('central model directory', () => {
 });
 
 describe('Foundry Claude source capabilities', () => {
-    it.each(['claude-opus-5-5', 'claude-sonnet-5-5-20260901', 'claude-opus-6'])(
-        'matches Anthropic controls and capabilities for %s',
+    it.each(['claude-opus-5-5', 'claude-sonnet-5-5-20260901', 'claude-opus-6', 'claude-fable-5-2'])(
+        'matches Anthropic controls and capabilities for %s, apart from fast mode',
         (model) => {
             const foundry = resolveModelProfile(`opaque::${model}`, Providers.azure_foundry);
             expect(foundry.capabilities).toEqual(resolveModelProfile(model, Providers.anthropic).capabilities);
             expect(foundry.capabilities.input.image).toBe(true);
             expect(foundry.capabilities.tool_support).toBe(true);
-            expect(getOptions(`opaque::${model}`, Providers.azure_foundry)).toEqual(
-                getOptions(model, Providers.anthropic),
-            );
+            // Foundry serves fast mode as a separate `-fast` model, not through the `speed` option.
+            const anthropic = getOptions(model, Providers.anthropic);
+            expect(getOptions(`opaque::${model}`, Providers.azure_foundry)).toEqual({
+                ...anthropic,
+                options: anthropic.options.filter((option) => option.name !== 'speed'),
+            });
         },
     );
 });

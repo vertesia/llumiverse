@@ -33,6 +33,7 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    getClaudeFastModeStatus,
     getConversationMeta,
     incrementConversationTurn,
     isClaudeVersionGTE,
@@ -231,7 +232,7 @@ export interface ClaudeBaseOptions {
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
-    /** `fast` runs the request in fast mode (Claude API only). */
+    /** `fast` runs the request in fast mode, where the platform takes the `speed` field. */
     speed?: 'standard' | 'fast';
     tool_choice?: 'auto' | 'none' | 'any' | 'required';
     /** Internal execution hint supplied after public model-option validation. */
@@ -902,7 +903,9 @@ export function getClaudePayload(
         betas.push('output-128k-2025-02-19');
     }
     const fastMode = model_options?.speed === 'fast';
-    if (fastMode) betas.push(CLAUDE_FAST_MODE_BETA);
+    // Generally available fast mode takes `speed` alone. The research preview needs the beta, and so does any
+    // model not known to have left it, which keeps the header on unrecognised model IDs.
+    if (fastMode && getClaudeFastModeStatus(modelName) !== 'available') betas.push(CLAUDE_FAST_MODE_BETA);
 
     // Append-only tool changes (see claude-tool-changes.ts). Where they are not supported, send this request's
     // tools the old way and leave out any tool-change blocks recorded while the conversation ran elsewhere.
@@ -1118,8 +1121,9 @@ export function getClaudePayload(
         stream: true,
         ...(!disableManualThinkingForForcedTool &&
             (outputConfig || nativeFormat) && { output_config: { ...outputConfig, ...nativeFormat } }),
-        // `speed` is a beta request field the base type doesn't declare yet.
-        ...(fastMode && ({ speed: 'fast' } as Partial<MessageCreateParamsBase>)),
+        // Compatibility exception: `standard` is the provider default and is left out rather than sent, because
+        // the research-preview models reject any `speed` value without the fast mode beta.
+        ...(fastMode && { speed: 'fast' as const }),
     };
 
     // One comma-separated header: Google Cloud reads only the first anthropic-beta header.

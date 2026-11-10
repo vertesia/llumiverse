@@ -477,13 +477,11 @@ describe('formatClaudePrompt', () => {
         });
     });
 
-    it('requests fast mode with its beta header, alongside another beta', () => {
+    it('requests fast mode with its beta header unless the model has generally available fast mode', () => {
         const prompt = { system: [{ type: 'text' as const, text: 'system' }], messages: [] };
-        const fast = getClaudePayload({ model: 'claude-opus-5-5', model_options: { speed: 'fast' } as never }, prompt);
-        expect(fast.payload).toMatchObject({ speed: 'fast' });
-        expect(fast.requestOptions?.headers).toEqual({
-            'anthropic-beta': 'fast-mode-2026-02-01,thinking-binding-controls-2026-08-01',
-        });
+        const preview = getClaudePayload({ model: 'claude-opus-5', model_options: { speed: 'fast' } as never }, prompt);
+        expect(preview.payload).toMatchObject({ speed: 'fast' });
+        expect(preview.requestOptions?.headers).toEqual({ 'anthropic-beta': 'fast-mode-2026-02-01' });
 
         const both = getClaudePayload(
             { model: 'claude-3-7-sonnet-20250219', model_options: { speed: 'fast', max_tokens: 100_000 } as never },
@@ -493,12 +491,76 @@ describe('formatClaudePrompt', () => {
             'anthropic-beta': 'output-128k-2025-02-19,fast-mode-2026-02-01',
         });
 
-        const standard = getClaudePayload(
-            { model: 'claude-opus-5-5', model_options: { speed: 'standard' } as never },
+        // A model with no known fast mode keeps the header it was always sent with.
+        const unknown = getClaudePayload(
+            { model: 'claude-sonnet-5-5', model_options: { speed: 'fast' } as never },
             prompt,
         );
-        expect(standard.payload).not.toHaveProperty('speed');
-        expect(standard.requestOptions?.headers).toEqual({ 'anthropic-beta': 'thinking-binding-controls-2026-08-01' });
+        expect(unknown.payload).toMatchObject({ speed: 'fast' });
+        expect(unknown.requestOptions?.headers).toEqual({
+            'anthropic-beta': 'fast-mode-2026-02-01,thinking-binding-controls-2026-08-01',
+        });
+    });
+
+    it.each(['claude-opus-5-5', 'claude-fable-5-2', 'claude-mythos-5-2'])(
+        'requests generally available fast mode on %s without a fast mode beta header',
+        (model) => {
+            const prompt = { system: [{ type: 'text' as const, text: 'system' }], messages: [] };
+            const bindingOnly = { 'anthropic-beta': 'thinking-binding-controls-2026-08-01' };
+            const fast = getClaudePayload({ model, model_options: { speed: 'fast' } as never }, prompt);
+            expect(fast.payload).toMatchObject({ speed: 'fast' });
+            expect(fast.requestOptions?.headers).toEqual(bindingOnly);
+
+            const standard = getClaudePayload({ model, model_options: { speed: 'standard' } as never }, prompt);
+            expect(standard.payload).not.toHaveProperty('speed');
+            expect(standard.requestOptions?.headers).toEqual(bindingOnly);
+        },
+    );
+
+    it('builds a Claude Fable 5.2 request with always-on adaptive thinking and automatic tool choice', () => {
+        const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const { payload, requestOptions } = getClaudePayload(
+            {
+                model: 'claude-fable-5-2',
+                tools: [{ name: 'lookup', description: 'Look up', input_schema: { type: 'object', properties: {} } }],
+                model_options: {
+                    effort: 'xhigh',
+                    include_thoughts: true,
+                    temperature: 0.2,
+                    top_p: 0.9,
+                    top_k: 5,
+                    thinking_budget_tokens: 4096,
+                    tool_choice: 'required',
+                } as never,
+            },
+            { messages: [{ role: 'user', content: 'question' }] },
+            'anthropic',
+            'stream',
+            logger,
+        );
+        expect(payload).toMatchObject({
+            model: 'claude-fable-5-2',
+            thinking: {
+                type: 'adaptive',
+                display: 'summarized',
+                block_binding: { prefix_mismatch_behavior: 'drop_block' },
+            },
+            output_config: { effort: 'xhigh' },
+            tool_choice: { type: 'auto' },
+        });
+        expect(payload.temperature).toBeUndefined();
+        expect(payload.top_p).toBeUndefined();
+        expect(payload.top_k).toBeUndefined();
+        expect(requestOptions?.headers).toEqual({ 'anthropic-beta': 'thinking-binding-controls-2026-08-01' });
+        // Each caller option the request overrides is reported, by name only.
+        expect(logger.warn.mock.calls.map(([entry]) => [entry.reason, entry.option_names])).toEqual(
+            expect.arrayContaining([
+                ['claude_thinking_mode', ['thinking_budget_tokens']],
+                ['claude_forced_tool_choice', ['tool_choice']],
+                ['claude_sampling_restriction', ['temperature', 'top_p', 'top_k']],
+            ]),
+        );
+        expect(logger.warn).toHaveBeenCalledTimes(3);
     });
 
     it('reports fast mode as the fast tier, otherwise the service tier the response reports', () => {
