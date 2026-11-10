@@ -1,6 +1,20 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createRequire } from 'node:module';
 import type { HttpTimeoutOptions } from '@llumiverse/common';
-import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
+import type { Agent } from 'undici';
+
+type Undici = typeof import('undici');
+let undici: Undici | undefined;
+
+/**
+ * Load undici on first use. Importing it statically made every importer of the driver base class
+ * evaluate undici's ~110 CommonJS modules at startup, before any driver issued a request. It is
+ * CommonJS, so `require` keeps the functions below synchronous.
+ */
+function loadUndici(): Undici {
+    undici ??= createRequire(import.meta.url)('undici') as Undici;
+    return undici;
+}
 
 /**
  * Default HTTP timeouts used by {@link createDriverHttpAgent} when the
@@ -29,9 +43,10 @@ const scopedHttpAgent = new AsyncLocalStorage<Agent>();
 
 // SDKs without a fetch hook can opt in without changing unrelated HTTP traffic.
 const sdkHttpAgent = new AsyncLocalStorage<Agent>();
-let scopedGlobalDispatcher: ReturnType<typeof getGlobalDispatcher> | undefined;
+let scopedGlobalDispatcher: ReturnType<Undici['getGlobalDispatcher']> | undefined;
 
 export function runWithDriverHttpAgent<T>(agent: Agent, callback: () => T): T {
+    const { getGlobalDispatcher, setGlobalDispatcher } = loadUndici();
     const currentDispatcher = getGlobalDispatcher();
     if (currentDispatcher !== scopedGlobalDispatcher) {
         scopedGlobalDispatcher = currentDispatcher.compose((dispatch) => (options, handler) => {
@@ -80,6 +95,7 @@ export function mergeDriverHttpTimeoutOptions(
  */
 export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
     const timeouts = resolveDriverHttpTimeouts(opts);
+    const { Agent } = loadUndici();
     return new Agent({
         headersTimeout: timeouts.headersTimeout,
         bodyTimeout: timeouts.bodyTimeout,
