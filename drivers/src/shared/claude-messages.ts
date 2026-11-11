@@ -158,10 +158,12 @@ function isPlainUserTurn(message: MessageParam): boolean {
  * Provider behaviour, measured live with this layout. Check usage with these in mind before changing it:
  * - A breakpoint may move between requests on every provider, Vertex AI and Bedrock included. An earlier layout kept
  *   markers on fixed blocks on the belief that Vertex requires it; that stopped the cached prefix growing.
- * - Vertex's global endpoint sometimes misses a request outright: it reads nothing, not even an unchanged system
- *   prompt, and the next request reads normally again. It happens most while a conversation is small (roughly under
- *   10k tokens) and can hit identical requests, so don't chase it in the request layout. Expect a few misses per
- *   long conversation; a run of them points at a real prefix change.
+ * - Vertex's global endpoint takes a few requests to settle after a conversation starts or a large new prefix is
+ *   written: a request may read nothing, not even an unchanged system prompt, or read an entry from two requests
+ *   earlier. After that every request reads the previous one. It happens with byte-identical prefixes, so don't
+ *   chase it in the request layout; misses that continue after the first few requests point at a real prefix change.
+ * - Models without mid-conversation tool changes (see canUseClaudeToolChanges) resend the whole tool list when a
+ *   tool is added, which invalidates the cache from the tools onward. Expect one full write per tool unlock there.
  * - Bedrock reads reliably on the 5.5 models. On some earlier models served through cross-region inference profiles
  *   a request can read an older entry, or none, even when the prefix is unchanged; that is provider-side too.
  * - Cache hits are never guaranteed. Judge a change by `prompt_cached` against the previous request's `prompt`
