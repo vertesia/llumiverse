@@ -10,6 +10,7 @@ Llumiverse is structured as a monorepo with two main packages:
 2. **@llumiverse/drivers** - Contains implementations for various LLM providers (OpenAI, Bedrock, VertexAI, etc.).
 
 The main abstractions are:
+
 - `Driver` - Base interface for all LLM provider implementations
 - `AbstractDriver` - Abstract class that provider-specific drivers extend
 - `PromptSegment` - Represents a piece of a prompt with a role (user, system, assistant)
@@ -132,6 +133,7 @@ Llumiverse supports multi-turn conversations via the `conversation` property in 
 ### Image Handling in Conversations
 
 Images in conversations can cause issues:
+
 - **Bedrock (Converse)**: Stores images as `Uint8Array` which corrupts during `JSON.stringify()` (becomes `{ "0": 137, "1": 80, ... }`). This covers non-Claude models and Claude conversations started on Converse; Claude on Bedrock now uses the Anthropic Messages API and stores base64 like the other Claude providers.
 - **OpenAI/Gemini/Claude**: Stores images as base64 strings which can bloat storage
 
@@ -158,6 +160,7 @@ driver.execute(prompt, {
 ```
 
 When `stripImagesAfterTurns > 0`:
+
 - Bedrock (Converse): `Uint8Array` is converted to `{ _base64: '...' }` for safe JSON serialization, then deserialized back before API calls
 - OpenAI/Gemini/Claude: Base64 strings are preserved as-is (already JSON-safe)
 
@@ -188,12 +191,14 @@ Tests are functional (`*.test.ts`, no provider calls), live (`*.live.test.ts`, r
 and the credentials each provider needs. A test that calls a provider must be in a `*.live.test.ts` file.
 
 Live tests in CI, under `drivers/test/`:
+
 - `model-smoke.live.test.ts` - Curated smoke coverage for a small set of models across providers
 - `conversation.live.test.ts` - Multi-turn conversations, images in conversations, Claude prompt caching
 - `tools.live.test.ts` - Tool call, tool result, then a summary with tools turned off
 - `embeddings.live.test.ts` - Embeddings per provider
 
 Live tests run on demand:
+
 - `max-tokens-limit.live.test.ts` - Each smoke model at its documented output limit (`live-smoke-drivers.ts` holds the shared model list)
 - `vertexai-embedding-models.live.test.ts` - Older Vertex embedding models, one per request path
 - `api-key-list-models.live.test.ts` - Gemini model listing with an API key
@@ -219,6 +224,7 @@ To add a new LLM provider:
 ## Adding New Features
 
 When adding new features:
+
 1. First add types and interfaces to `core/src/types.ts`
 2. Update the `AbstractDriver` class in `core/src/Driver.ts` if needed
 3. Implement the feature in the relevant drivers
@@ -234,6 +240,7 @@ construct or transport the operation, and never silently no-op.
 ## Examples
 
 Examples demonstrating how to use Llumiverse can be found in the `examples/src` directory:
+
 - `examples/src/openai.ts` - Example for using OpenAI
 - `examples/src/bedrock.ts` - Example for using AWS Bedrock
 - `examples/src/vertexai.ts` - Example for using Google Vertex AI

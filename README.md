@@ -43,11 +43,13 @@ It solely focuses on **abstracting the connection and execution protocol**, lett
 
 **Vs. LangChain / LlamaIndex:**
 These are **application frameworks** that provide high-level abstractions for chains, memory, and RAG. Llumiverse is a **driver** library. It operates at a lower level.
+
 -   _Use Llumiverse if:_ You want full control over your prompt logic, you want to build your own custom framework, or you simply need a clean, unified way to call an API without the weight of a massive dependency tree.
 -   _Use LangChain if:_ You want pre-built "chains" and are okay with higher complexity and abstraction overhead.
 
 **Vs. Vercel AI SDK:**
 Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
+
 -   _Use Llumiverse if:_ You are building backend services, background workers, CLI tools, or generic Node.js applications where frontend-specific hooks aren't relevant. Llumiverse is environment-agnostic.
 
 ---
@@ -75,6 +77,7 @@ These callable paths do not establish Azure parity with OpenAI iterative image e
 ## Installation
 
 **For most use cases (recommended):**
+
 ```bash
 pnpm add @llumiverse/core @llumiverse/drivers
 ```
