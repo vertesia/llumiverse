@@ -14,6 +14,7 @@ Llumiverse is structured as a monorepo with two main packages:
 2. **@llumiverse/drivers** - Contains implementations for various LLM providers (OpenAI, Bedrock, VertexAI, etc.).
 
 The main abstractions are:
+
 - `Driver` - Base interface for all LLM provider implementations
 - `AbstractDriver` - Abstract class that provider-specific drivers extend
 - `PromptSegment` - Represents a piece of a prompt with a role (user, system, assistant)
@@ -45,6 +46,7 @@ The main abstractions are:
 ### Testing
 
 Tests require API keys for the various LLM providers stored as environment variables:
+
 - OPENAI_API_KEY
 - BEDROCK_REGION
 - GOOGLE_PROJECT_ID and GOOGLE_REGION
@@ -56,6 +58,7 @@ Tests require API keys for the various LLM providers stored as environment varia
 - XAI_API_KEY
 
 Tests can be found in:
+
 - `drivers/test/model-smoke.live.test.ts` - Curated live smoke coverage for a small set of models across providers
 - `drivers/test/tools.test.ts` - Tests for LLM tool functionality
 - `drivers/test/embeddings.test.ts` - Tests for embedding functionality
@@ -74,6 +77,7 @@ To add a new LLM provider:
 ### Adding New Features
 
 When adding new features:
+
 1. First add types and interfaces to `core/src/types.ts`
 2. Update the `AbstractDriver` class in `core/src/Driver.ts` if needed
 3. Implement the feature in the relevant drivers
@@ -81,6 +85,7 @@ When adding new features:
 ### Examples
 
 Examples demonstrating how to use Llumiverse can be found in the `examples/src` directory:
+
 - `examples/src/openai.ts` - Example for using OpenAI
 - `examples/src/bedrock.ts` - Example for using AWS Bedrock
 - `examples/src/vertexai.ts` - Example for using Google Vertex AI

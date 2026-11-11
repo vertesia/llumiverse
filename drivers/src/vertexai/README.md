@@ -126,7 +126,6 @@ For code models, prefix represents the beginning of a piece of meaningful progra
 
 For code completion, suffix represents the end of a piece of meaningful programming code. The model attempts to fill in the code in between the prefix and suffix.
 
-
 ### Response
 
 ```json
@@ -163,7 +162,6 @@ For code completion, suffix represents the end of a piece of meaningful programm
 }
 ```
 
-
 ## Code generation
 
 See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/code-generation
@@ -171,7 +169,6 @@ See https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/code-g
 ### Request
 
 `POST https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/code-bison:predict`
-
 
 ```json
 {
