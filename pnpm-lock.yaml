@@ -267,17 +267,17 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/bedrock-sdk':
-        specifier: ^1.1.0
-        version: 1.1.0(zod@4.6.7)
+        specifier: ^1.1.1
+        version: 1.1.1(zod@4.6.7)
       '@anthropic-ai/foundry-sdk':
-        specifier: 1.1.0
-        version: 1.1.0(zod@4.6.7)
+        specifier: 1.1.1
+        version: 1.1.1(zod@4.6.7)
       '@anthropic-ai/sdk':
-        specifier: ^1.3.0
-        version: 1.3.0(zod@4.6.7)
+        specifier: ^1.6.0
+        version: 1.6.0(zod@4.6.7)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^1.1.0
-        version: 1.1.0(zod@4.6.7)
+        specifier: ^1.1.2
+        version: 1.1.2(zod@4.6.7)
       '@aws-sdk/client-bedrock':
         specifier: ^3.1159.0
         version: 3.1161.0
@@ -301,7 +301,7 @@ importers:
         version: 1.1.0
       '@azure/ai-projects':
         specifier: ^2.9.0
-        version: 2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(zod@4.6.7)
+        version: 2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.3)(undici@7.30.1)(zod@4.6.7)
       '@azure/core-auth':
         specifier: ^1.11.0
         version: 1.11.0
@@ -349,7 +349,7 @@ importers:
         version: 0.2.1
       openai:
         specifier: 7.51.0
-        version: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+        version: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -394,14 +394,14 @@ importers:
 
 packages:
 
-  '@anthropic-ai/bedrock-sdk@1.1.0':
-    resolution: {integrity: sha512-20WmisbL9GT3n4ikK2Ml7GVQrkz6Go+aitM5RAPRBQGY54fv52/KKr4K36PwZmLoG4O7RagRIdNLJHqgAv2OlA==}
+  '@anthropic-ai/bedrock-sdk@1.1.1':
+    resolution: {integrity: sha512-o6NdU+NWaGlFxDI7Kzu7rCXbwu9QalXU0vIZ8AGzk1ESoX8qeIZtDS+aJRm7P3LC7p0WPX0IMcg6aUUNIhdhOw==}
 
-  '@anthropic-ai/foundry-sdk@1.1.0':
-    resolution: {integrity: sha512-wle+8L/JvPNF3MBinSbgglV1Vt5fkPaOZJm0XS2SmFKKHkErZf1DXAWHjXKRKgf+ml8VM60Bp1sTrZ5sl3GK0Q==}
+  '@anthropic-ai/foundry-sdk@1.1.1':
+    resolution: {integrity: sha512-GgNBIjm4RkcaKaxynU8OrE/HGCpst966L3hq6rQ9GhtJ+sPVORq9f3GuKieZ4++kI3aEJ/IYqiQ1w0Zs8ijJQw==}
 
-  '@anthropic-ai/sdk@1.3.0':
-    resolution: {integrity: sha512-k7z9BlLLPxfZH+ov7dS6EnaN/wiZeV8YNT1LZfrpAHIy7oY7pHr4UzirF9f2OlHtFEnRBOX+AZQ91Y5fK+TPTw==}
+  '@anthropic-ai/sdk@1.6.0':
+    resolution: {integrity: sha512-XqiO/46n8S6So8jQ/6/uNCkHntyW6QHHs1gZ+hlwTx1fWDr929g4VmwIXfdMVk7SuBWNdQvAlwyi1G3t6SEIuQ==}
     hasBin: true
     peerDependencies:
       zod: 4.6.7
@@ -409,8 +409,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@1.1.0':
-    resolution: {integrity: sha512-Mcb8LgXbBpNix4Hxt7YlHRmpjDBuu5phuWYQsb8D5TTSMgr2JVyoOCXTcECFIMlBDyis2PPnaKXNcG+UFBj4MA==}
+  '@anthropic-ai/vertex-sdk@1.1.2':
+    resolution: {integrity: sha512-mLdfLqJjXN/RxqcqWmKAUcDZtSOFFja9IXcqDcBRkpoW1TMxBN1I/AUouLDq5SE67DmIANoNiWLzax28psSOmw==}
 
   '@aws-crypto/crc32@3.0.0':
     resolution: {integrity: sha512-IzSgsrxUcsrejQbPVilIKy16kAT52EwB6zSaI+M3xxIhKh5+aldEyvI+z6erM7TCLB2BJsFrtHjp6/4/sr+3dA==}
@@ -438,10 +438,6 @@ packages:
 
   '@aws-sdk/client-s3@3.1161.0':
     resolution: {integrity: sha512-iRZGMsJnYRrI98O+U6o5fHeLPQTP+Dc/w0mWLcBLQcEQ10DA06+XQj0WmdRiCM7vIso7QEtN1fsj9Vzo5/R3LQ==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/core@3.978.5':
-    resolution: {integrity: sha512-ruI0AWqcrfL20XDS6SwZIJFPOBZ6N0ADa9nLzWlBhxk1aoUjbUX3JkTR9vEmk7o35XpAHi68ahZ4T6RE2U9XyA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.979.1':
@@ -532,10 +528,6 @@ packages:
 
   '@aws-sdk/util-utf8-browser@3.259.0':
     resolution: {integrity: sha512-UvFa/vR+e19XookZF8RzFZBrw2EUkQWxiBW0yYQAhvk3C+QVGl0H3ouca8LDBlBfQKXwmW3huo/59H8rwb1wJw==}
-
-  '@aws-sdk/xml-builder@3.972.41':
-    resolution: {integrity: sha512-ctjVSyCMegrWfXlx6VqzSBFI6UqmQ5ZlnfMhdLIiWmhoH8UAQxSCP5N3OpG7X3k4LnS7ou74C4mt20+bfTW2aQ==}
-    engines: {node: '>=20.0.0'}
 
   '@aws-sdk/xml-builder@3.972.42':
     resolution: {integrity: sha512-smX8/gNP8Kjq+CWTBMZQLQ912vOQjiWExzwzvMO+eujPB5RY8IbtF0AGdUUXHKN7KoDWK9dIcuW0WG269kiP6w==}
@@ -967,11 +959,6 @@ packages:
     resolution: {integrity: sha512-yI8StAYGQKiI+DxT0xkLhHSzxcIFSZTTWi0c4Lk3WLgmbe2QfLpR/Roo81ZF3VYwfwqH4IQVTKsy3FLZiVRaTQ==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/core@3.36.2':
-    resolution: {integrity: sha512-oRw0rB9QSUiCZfEs23G5F4Af+b2rQt1lItIICWu5IejFNd+uPM8SWqiKLMpQ6bX1Q7slsLbjuoE2niErFtkVPQ==}
-    engines: {node: '>=18.0.0'}
-    deprecated: Deprecated due to a bug in custom logger data redaction. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
-
   '@smithy/core@3.38.1':
     resolution: {integrity: sha512-U/mB2XiwTLaf+NSgLSWwJfptsMT/H8aBi0aTAA/E5e2/TagFeGCqAyhKGG0w0A9IWTkm4qYEmLoD/HB6aYfnRA==}
     engines: {node: '>=18.0.0'}
@@ -1069,10 +1056,6 @@ packages:
   '@smithy/signature-v4@3.1.2':
     resolution: {integrity: sha512-3BcPylEsYtD0esM4Hoyml/+s7WP2LFhcM3J2AGdcL2vx9O60TtfpDOL72gjb4lU8NeRPeKAwR77YNyyGvMbuEA==}
     engines: {node: '>=16.0.0'}
-
-  '@smithy/signature-v4@5.7.4':
-    resolution: {integrity: sha512-tHy0K0VtqNd5Y7Y41h0a0Lhh0L1GzC08dTWg0F7vRJWFtTENg7IZikf3wQkanYIRdb7ngoIPMTmqgUi401fEeQ==}
-    engines: {node: '>=18.0.0'}
 
   '@smithy/signature-v4@5.7.5':
     resolution: {integrity: sha512-WPjdr5oWOk1LArpI4pavu+fSo+/evi0Re1olxGvqwuZopd4gYR1UGCi+Soyn/IjmafqbWs+ZC+3AKxJS3ZpwUg==}
@@ -1679,10 +1662,6 @@ packages:
 
   google-gax@6.0.2:
     resolution: {integrity: sha512-9O+aJyiZrGcEggeG9FoA1R3HRQEUi32ydPSvE42lFbh+D8KwQS57CgMsZ0JPpGCM1LFwEWe+yr2h/53xmgHnQA==}
-    engines: {node: '>=22'}
-
-  google-logging-utils@2.0.1:
-    resolution: {integrity: sha512-HMhaQghlOTvbcb3c4T5jmmOMtG3JUF1iOQMezaJXL86CDS+Tm2vHd0IeLFRAx3+ewd+bo9E1HFHoy17X5aJa9A==}
     engines: {node: '>=22'}
 
   google-logging-utils@2.1.1:
@@ -2449,9 +2428,9 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/bedrock-sdk@1.1.0(zod@4.6.7)':
+  '@anthropic-ai/bedrock-sdk@1.1.1(zod@4.6.7)':
     dependencies:
-      '@anthropic-ai/sdk': 1.3.0(zod@4.6.7)
+      '@anthropic-ai/sdk': 1.6.0(zod@4.6.7)
       '@aws-crypto/sha256-js': 4.0.0
       '@aws-sdk/client-bedrock-runtime': 3.1161.0
       '@aws-sdk/credential-providers': 3.1161.0
@@ -2466,14 +2445,14 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@anthropic-ai/foundry-sdk@1.1.0(zod@4.6.7)':
+  '@anthropic-ai/foundry-sdk@1.1.1(zod@4.6.7)':
     dependencies:
-      '@anthropic-ai/sdk': 1.3.0(zod@4.6.7)
+      '@anthropic-ai/sdk': 1.6.0(zod@4.6.7)
       '@opentelemetry/api': 1.9.1
     transitivePeerDependencies:
       - zod
 
-  '@anthropic-ai/sdk@1.3.0(zod@4.6.7)':
+  '@anthropic-ai/sdk@1.6.0(zod@4.6.7)':
     dependencies:
       '@opentelemetry/api': 1.9.1
       json-schema-to-ts: 3.1.1
@@ -2481,9 +2460,9 @@ snapshots:
     optionalDependencies:
       zod: 4.6.7
 
-  '@anthropic-ai/vertex-sdk@1.1.0(zod@4.6.7)':
+  '@anthropic-ai/vertex-sdk@1.1.2(zod@4.6.7)':
     dependencies:
-      '@anthropic-ai/sdk': 1.3.0(zod@4.6.7)
+      '@anthropic-ai/sdk': 1.6.0(zod@4.6.7)
       '@opentelemetry/api': 1.9.1
       google-auth-library: 11.3.3
     transitivePeerDependencies:
@@ -2561,17 +2540,6 @@ snapshots:
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.14.1
       '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
-  '@aws-sdk/core@3.978.5':
-    dependencies:
-      '@aws-sdk/types': 3.975.0
-      '@aws-sdk/xml-builder': 3.972.41
-      '@aws/lambda-invoke-store': 0.3.0
-      '@smithy/core': 3.36.2
-      '@smithy/signature-v4': 5.7.4
-      '@smithy/types': 4.19.0
-      bowser: 2.11.0
       tslib: 2.8.1
 
   '@aws-sdk/core@3.979.1':
@@ -2773,16 +2741,11 @@ snapshots:
 
   '@aws-sdk/util-format-url@3.972.29':
     dependencies:
-      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/core': 3.979.1
       tslib: 2.8.1
 
   '@aws-sdk/util-utf8-browser@3.259.0':
     dependencies:
-      tslib: 2.8.1
-
-  '@aws-sdk/xml-builder@3.972.41':
-    dependencies:
-      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.42':
@@ -2799,7 +2762,7 @@ snapshots:
       '@smithy/invalid-dependency': 4.4.6
       '@smithy/node-config-provider': 4.5.6
       '@smithy/protocol-http': 5.5.6
-      '@smithy/signature-v4': 5.7.4
+      '@smithy/signature-v4': 5.7.5
       '@smithy/types': 4.19.0
 
   '@aws/lambda-invoke-store@0.3.0': {}
@@ -2819,7 +2782,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(zod@4.6.7)':
+  '@azure/ai-projects@2.9.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.3)(undici@7.30.1)(zod@4.6.7)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -2834,7 +2797,7 @@ snapshots:
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
       https-proxy-agent: 9.1.0
-      openai: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+      openai: 7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
       tslib: 2.8.1
       ws: 8.21.0
     transitivePeerDependencies:
@@ -3214,12 +3177,7 @@ snapshots:
 
   '@smithy/config-resolver@4.6.6':
     dependencies:
-      '@smithy/core': 3.36.2
-      tslib: 2.8.1
-
-  '@smithy/core@3.36.2':
-    dependencies:
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.38.1
       tslib: 2.8.1
 
   '@smithy/core@3.38.1':
@@ -3262,18 +3220,18 @@ snapshots:
 
   '@smithy/fetch-http-handler@5.8.0':
     dependencies:
-      '@smithy/core': 3.36.2
+      '@smithy/core': 3.38.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/hash-node@4.4.6':
     dependencies:
-      '@smithy/core': 3.36.2
+      '@smithy/core': 3.38.1
       tslib: 2.8.1
 
   '@smithy/invalid-dependency@4.4.6':
     dependencies:
-      '@smithy/core': 3.36.2
+      '@smithy/core': 3.38.1
       tslib: 2.8.1
 
   '@smithy/is-array-buffer@2.2.0':
@@ -3313,7 +3271,7 @@ snapshots:
 
   '@smithy/node-config-provider@4.5.6':
     dependencies:
-      '@smithy/core': 3.36.2
+      '@smithy/core': 3.38.1
       tslib: 2.8.1
 
   '@smithy/node-http-handler@2.5.0':
@@ -3342,7 +3300,7 @@ snapshots:
 
   '@smithy/protocol-http@5.5.6':
     dependencies:
-      '@smithy/core': 3.36.2
+      '@smithy/core': 3.38.1
       tslib: 2.8.1
 
   '@smithy/querystring-builder@2.2.0':
@@ -3369,12 +3327,6 @@ snapshots:
       '@smithy/util-middleware': 3.0.11
       '@smithy/util-uri-escape': 3.0.0
       '@smithy/util-utf8': 3.0.0
-      tslib: 2.8.1
-
-  '@smithy/signature-v4@5.7.4':
-    dependencies:
-      '@smithy/core': 3.36.2
-      '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@smithy/signature-v4@5.7.5':
@@ -3963,7 +3915,7 @@ snapshots:
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
       google-auth-library: 11.3.3
-      google-logging-utils: 2.0.1
+      google-logging-utils: 2.1.1
       node-fetch: 3.3.2
       object-hash: 3.0.0
       proto3-json-serializer: 4.0.2
@@ -3971,8 +3923,6 @@ snapshots:
       retry-request: 9.0.1
     transitivePeerDependencies:
       - supports-color
-
-  google-logging-utils@2.0.1: {}
 
   google-logging-utils@2.1.1: {}
 
@@ -4238,11 +4188,11 @@ snapshots:
       powershell-utils: 0.2.1
       wsl-utils: 1.0.1
 
-  openai@7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.4)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
+  openai@7.51.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.3)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.4.6
-      '@smithy/signature-v4': 5.7.4
+      '@smithy/signature-v4': 5.7.5
       google-auth-library: 11.3.3
       undici: 7.30.1
       ws: 8.21.0
