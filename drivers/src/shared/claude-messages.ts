@@ -38,6 +38,7 @@ import {
     incrementConversationTurn,
     isClaudeVersionGTE,
     type JSONObject,
+    keepsClaudePriorTurnThinking,
     LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
@@ -82,8 +83,6 @@ import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 // below — so long agent conversations don't balloon context.
 const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
-const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
-const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
 const CLAUDE_FAST_MODE_BETA = 'fast-mode-2026-02-01';
 const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
@@ -115,30 +114,77 @@ function mergeClaudeSystemBlocks(base: TextBlockParam[], additions: TextBlockPar
     return combined.filter((block, index) => !isResultSchemaSystemBlock(block) || index === latestSchemaIndex);
 }
 
-function addAgentMessageCacheBreakpoints(
+type ClaudeCacheControl = { type: 'ephemeral'; ttl?: '5m' | '1h' };
+
+/**
+ * Exception to preserving supplied options: with prompt caching on, `stripHeartbeatsAfterTurns` is ignored, as
+ * `stripTextMaxTokens` is. Stripping rewrites an earlier user turn on the next request, so the cached prefix
+ * stops matching from that point. Heartbeats are short status messages, so cached conversations keep them.
+ */
+export function claudeHeartbeatKeepTurns(options: ExecutionOptions): number {
+    return isClaudePromptCacheEnabled(options) ? Infinity : (options.stripHeartbeatsAfterTurns ?? 1);
+}
+
+/** The last block of a message that can carry cache_control: thinking and empty text blocks cannot. */
+function lastCacheableBlock(message: MessageParam): { cache_control?: unknown } | undefined {
+    // Breakpoints go on conversation turns, not on tool-change system messages.
+    if (message.role === 'system' || !Array.isArray(message.content)) return undefined;
+    const block = message.content.findLast(
+        (block) =>
+            block.type !== 'thinking' && block.type !== 'redacted_thinking' && !(block.type === 'text' && !block.text),
+    );
+    return block as { cache_control?: unknown } | undefined;
+}
+
+function isPlainUserTurn(message: MessageParam): boolean {
+    return (
+        message.role === 'user' &&
+        !(Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result'))
+    );
+}
+
+/**
+ * Agent conversations only append between checkpoints, so each request is the previous request plus one tool
+ * iteration. Breakpoints:
+ * - the static prefix: the last system block, or the last tool loaded up front when there is no system prompt;
+ * - the tail: the last block of the conversation. It moves every request; the provider's lookback (about 20
+ *   blocks, a run of tool_use or tool_result blocks counting as one) finds the previous request's entry;
+ * - with `markUserTurns`, for models whose earlier-turn thinking is pruned (see pruneClaudeThinking), the two latest
+ *   plain user turns before the tail. Pruning rewrites history at turn boundaries: an answer drops the finished tool
+ *   loop's thinking, and the first response to the next user turn drops that answer's. Everything up to the user
+ *   turn before the rewritten span stays readable through these markers. The latest one is also marked once its
+ *   prefix is final, so the next turn has an entry to read there.
+ */
+function addAgentCacheBreakpoints(
+    system: TextBlockParam[] | undefined,
+    tools: ClaudeTool[] | undefined,
     messages: MessageParam[],
-    cacheControl: { type: 'ephemeral'; ttl?: '5m' | '1h' },
-): boolean {
-    let cacheableBlockIndex = 0;
-    let breakpointCount = 0;
+    cacheControl: ClaudeCacheControl,
+    markUserTurns: boolean,
+): void {
+    // Deferred tools cannot carry cache_control.
+    const prefixBlock: { cache_control?: unknown } | undefined =
+        system?.at(-1) ?? tools?.findLast((tool) => !(tool as { defer_loading?: boolean }).defer_loading);
+    if (prefixBlock) prefixBlock.cache_control = cacheControl;
 
-    for (const message of messages) {
-        // Breakpoints go on conversation turns, not on tool-change system messages.
-        if (message.role === 'system' || !Array.isArray(message.content)) continue;
-
-        for (const block of message.content) {
-            if (block.type === 'thinking' || block.type === 'redacted_thinking') continue;
-
-            if (cacheableBlockIndex === breakpointCount * AGENT_MESSAGE_CACHE_BLOCK_INTERVAL) {
-                block.cache_control = cacheControl;
-                breakpointCount++;
-                if (breakpointCount === MAX_CLAUDE_CACHE_BREAKPOINTS) return true;
-            }
-            cacheableBlockIndex++;
+    let tailIndex = -1;
+    for (let index = messages.length - 1; index >= 0 && tailIndex < 0; index--) {
+        const block = lastCacheableBlock(messages[index]);
+        if (block) {
+            block.cache_control = cacheControl;
+            tailIndex = index;
         }
     }
 
-    return breakpointCount > 0;
+    if (!markUserTurns) return;
+    let userTurnMarkers = 0;
+    for (let index = tailIndex - 1; index >= 0 && userTurnMarkers < 2; index--) {
+        const block = isPlainUserTurn(messages[index]) ? lastCacheableBlock(messages[index]) : undefined;
+        if (block) {
+            block.cache_control = cacheControl;
+            userTurnMarkers++;
+        }
+    }
 }
 
 interface WarnLogger {
@@ -974,19 +1020,20 @@ export function getClaudePayload(
     const cacheEnabled = isClaudePromptCacheEnabled(options);
     if (cacheEnabled) {
         const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
-        const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
+        const cacheControl: ClaudeCacheControl = { type: 'ephemeral', ...(cacheTtl && { ttl: cacheTtl }) };
 
-        // Vertex requires cache_control to remain on the same blocks across
-        // requests. Agent conversations therefore use fixed block ordinals:
-        // each newly reached breakpoint extends the cached prefix without
-        // relocating or deleting an earlier breakpoint. Four message markers
-        // also cache the preceding system and tool definitions, while covering
-        // the growing tool loop until the next semantic checkpoint.
-        const hasAgentMessageBreakpoints =
-            isAgentPromptCacheKey(options.prompt_cache_key) &&
-            addAgentMessageCacheBreakpoints(sanitizedMessages, cacheControl);
+        const isAgentLayout = isAgentPromptCacheKey(options.prompt_cache_key);
+        if (isAgentLayout) {
+            addAgentCacheBreakpoints(
+                sanitizedSystem,
+                sanitizedTools as ClaudeTool[] | undefined,
+                sanitizedMessages,
+                cacheControl,
+                !keepsClaudePriorTurnThinking(modelName),
+            );
+        }
 
-        if (!hasAgentMessageBreakpoints && sanitizedSystem && sanitizedSystem.length > 0) {
+        if (!isAgentLayout && sanitizedSystem && sanitizedSystem.length > 0) {
             const lastBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & {
                 cache_control?: unknown;
             };
@@ -994,12 +1041,12 @@ export function getClaudePayload(
         }
         // Deferred tools cannot carry cache_control, so mark the last tool loaded up front.
         const lastLoadedTool = sanitizedTools?.findLast((tool) => !(tool as { defer_loading?: boolean }).defer_loading);
-        if (!hasAgentMessageBreakpoints && lastLoadedTool) {
+        if (!isAgentLayout && lastLoadedTool) {
             (lastLoadedTool as ClaudeTool & { cache_control?: unknown }).cache_control = cacheControl;
         }
         // Breakpoints below go on conversation turns, not on a trailing tool-change system message.
         const turns = sanitizedMessages.filter((message) => message.role !== 'system');
-        if (!hasAgentMessageBreakpoints && options.prompt_cache_key !== undefined) {
+        if (!isAgentLayout && options.prompt_cache_key !== undefined) {
             const lastMessage = turns[turns.length - 1];
             if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length >= 2) {
                 const stablePrefixBlock = lastMessage.content[lastMessage.content.length - 2];
@@ -1013,7 +1060,7 @@ export function getClaudePayload(
                     stablePrefixBlock.cache_control = cacheControl;
                 }
             }
-        } else if (!hasAgentMessageBreakpoints && turns.length >= 4) {
+        } else if (!isAgentLayout && turns.length >= 4) {
             const pivotMsg = turns[turns.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
@@ -1248,7 +1295,7 @@ export function buildClaudeStreamingConversation(
     let processed = stripBase64ImagesFromConversation(conversation, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
     processed = stripHeartbeatsFromConversation(processed, {
-        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        keepForTurns: claudeHeartbeatKeepTurns(options),
         currentTurn,
     });
     return processed as ClaudePrompt;
@@ -1261,7 +1308,12 @@ function finalizeClaudeConversation(
 ): ClaudePrompt {
     let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
     completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
-    completedConversation = pruneClaudeThinking(completedConversation);
+    // Models that keep earlier turns' thinking get it back unchanged, as Anthropic recommends; removing it rewrites
+    // the history after the first removed block. Earlier models strip it themselves on the next plain user turn,
+    // invalidating the cache from the first stripped block, so pruning it here confines that to the latest loop.
+    if (!keepsClaudePriorTurnThinking(options.model)) {
+        completedConversation = pruneClaudeThinking(completedConversation);
+    }
     const currentTurn = getConversationMeta(completedConversation).turnNumber;
     const activeTurnStart = findClaudeActiveTurnStart(completedConversation);
     const protectedMessages = new Set(
@@ -1284,7 +1336,7 @@ function finalizeClaudeConversation(
     let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);
     processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
     processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        keepForTurns: claudeHeartbeatKeepTurns(options),
         currentTurn,
         preserveSubtree,
     });

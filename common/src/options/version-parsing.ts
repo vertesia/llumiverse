@@ -231,6 +231,15 @@ function isClaudeVariantVersionGTE(
 }
 
 /**
+ * Whether a Claude model keeps earlier turns' thinking blocks in context when a plain (non-tool-result) user turn
+ * follows: Opus 4.5 and later, and every 4.6+ model, including Haiku 5.5, Fable and Mythos. Earlier models strip
+ * those blocks on that request, so the prompt cache breaks at the first one.
+ */
+export function keepsClaudePriorTurnThinking(modelString: string): boolean {
+    return isClaudeVersionGTE(modelString, 4, 6) || isClaudeVariantVersionGTE(modelString, 'opus', 4, 5);
+}
+
+/**
  * Check if a model requires sampling parameter removal (behavior: sampling params removed on Opus 4.7+).
  *
  * This includes:
