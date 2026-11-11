@@ -154,6 +154,18 @@ function isPlainUserTurn(message: MessageParam): boolean {
  *   loop's thinking, and the first response to the next user turn drops that answer's. Everything up to the user
  *   turn before the rewritten span stays readable through these markers. The latest one is also marked once its
  *   prefix is final, so the next turn has an entry to read there.
+ *
+ * Provider behaviour, measured live with this layout. Check usage with these in mind before changing it:
+ * - A breakpoint may move between requests on every provider, Vertex AI and Bedrock included. An earlier layout kept
+ *   markers on fixed blocks on the belief that Vertex requires it; that stopped the cached prefix growing.
+ * - Vertex's global endpoint sometimes misses a request outright: it reads nothing, not even an unchanged system
+ *   prompt, and the next request reads normally again. It happens most while a conversation is small (roughly under
+ *   10k tokens) and can hit identical requests, so don't chase it in the request layout. Expect a few misses per
+ *   long conversation; a run of them points at a real prefix change.
+ * - Bedrock reads reliably on the 5.5 models. On some earlier models served through cross-region inference profiles
+ *   a request can read an older entry, or none, even when the prefix is unchanged; that is provider-side too.
+ * - Cache hits are never guaranteed. Judge a change by `prompt_cached` against the previous request's `prompt`
+ *   over a whole conversation, not one request.
  */
 function addAgentCacheBreakpoints(
     system: TextBlockParam[] | undefined,
