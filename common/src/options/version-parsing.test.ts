@@ -9,6 +9,7 @@ import {
     isGeminiModelVersionGte,
     isOpenAIGptVersionGTE,
     isQwenVersionGte,
+    keepsClaudePriorTurnThinking,
     parseClaudeVersion,
     parseOpenAIGptVersion,
     supportsAdaptiveThinking,
@@ -35,6 +36,21 @@ describe('Claude model version parsing', () => {
         expect(isClaudeVersionGTE('claude-sonnet-5', 4, 7)).toBe(true);
         expect(isClaudeVersionGTE('claude-opus-4-10', 4, 8)).toBe(true);
         expect(isClaudeVersionGTE('claude-sonnet-4-6', 4, 7)).toBe(false);
+    });
+
+    it.each([
+        ['claude-opus-4-5-20251101', true],
+        ['locations/global/publishers/anthropic/models/claude-sonnet-4-6', true],
+        ['global.anthropic.claude-haiku-5-5', true],
+        ['claude-fable-5-2', true],
+        ['claude-mythos-preview', true],
+        ['claude-opus-6', true],
+        ['claude-sonnet-4-5', false],
+        ['us.anthropic.claude-haiku-4-5-20251001-v1:0', false],
+        ['claude-opus-4-1', false],
+        ['claude-3-7-sonnet-20250219', false],
+    ] as const)('reports whether %s keeps earlier-turn thinking', (model, expected) => {
+        expect(keepsClaudePriorTurnThinking(model)).toBe(expected);
     });
 
     it('does not infer behavior for an unknown Claude family', () => {

@@ -342,6 +342,51 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             },
         );
 
+        test.skipIf(!name.includes('claude'))(
+            `${name}: agent conversation reads the previous request from cache`,
+            { timeout: TIMEOUT, retry: retryUnlessRateLimited(1) },
+            async () => {
+                // An agent cache key selects the agent layout: the breakpoint moves to the last block every request,
+                // so each turn can read the whole previous request. A fixed breakpoint would read only the first
+                // block, under 80% of it. Vertex's global endpoint occasionally misses a request outright, so the
+                // test needs two of the three later turns to read it. The test model keeps earlier turns' thinking,
+                // so its history is append-only whether or not it thinks.
+                const options = { ...getClaudeOptionsWithCache(textModel, name), prompt_cache_key: 'agent-live-test' };
+                let conversation: unknown;
+                let previousPromptTokens = 0;
+                let turnsReadingPrevious = 0;
+                const usageByTurn: string[] = [];
+                for (let turn = 1; turn <= 4; turn++) {
+                    const prompt: PromptSegment[] = [
+                        ...(turn === 1
+                            ? [
+                                  { role: PromptRole.system, content: 'Respond briefly.' },
+                                  { role: PromptRole.user, content: buildCacheableContext() },
+                              ]
+                            : []),
+                        {
+                            role: PromptRole.user,
+                            content: `Turn ${turn} notes: ${'additional verification detail. '.repeat(250)}\nReply with exactly: TURN-${turn}-OK`,
+                        },
+                    ];
+                    const result = await withRateLimitBackoff(() =>
+                        driver.execute(prompt, { ...options, conversation }),
+                    );
+                    conversation = JSON.parse(JSON.stringify(result.conversation));
+                    const cached = result.token_usage?.prompt_cached ?? 0;
+                    usageByTurn.push(`${cached}/${result.token_usage?.prompt ?? 0}`);
+                    if (turn > 1 && cached >= previousPromptTokens * 0.9) turnsReadingPrevious++;
+                    previousPromptTokens = result.token_usage?.prompt ?? 0;
+                }
+
+                expect(
+                    turnsReadingPrevious,
+                    `[${name}] Expected turns 2-4 to read the previous request from cache. ` +
+                        `Cached/prompt tokens by turn: ${usageByTurn.join(', ')}`,
+                ).toBeGreaterThanOrEqual(2);
+            },
+        );
+
         /** Two images in one turn, then a follow-up after the images were stripped from the stored conversation. */
         test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
             if (!visionModel) {

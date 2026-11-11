@@ -30,7 +30,12 @@ import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
-import { type ClaudePrompt, formatClaudeDebugPrompt, isClaudePromptCacheEnabled } from '../shared/claude-messages.js';
+import {
+    type ClaudePrompt,
+    claudeHeartbeatKeepTurns,
+    formatClaudeDebugPrompt,
+    isClaudePromptCacheEnabled,
+} from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 
@@ -669,7 +674,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         let processedConversation = stripBase64ImagesFromConversation(withTurn, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
         processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            keepForTurns: claudeHeartbeatKeepTurns(options),
             currentTurn,
         });
 
