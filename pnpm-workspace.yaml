@@ -34,6 +34,8 @@ catalog:
   "@types/node": "^24.13.3"
   google-auth-library: "^11.0.2"
 overrides:
+  # GHSA-474x-hrwr-fgx4: bound CPU use when scanning unterminated stop-node tags.
+  "fast-xml-parser@>=5.0.0 <5.12.0": 5.12.0
   # GHSA-3wwx-pv8p-q78v: WebSocket decompression DoS; keep each consumer on its major line.
   # GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685, and GHSA-f72v-6w45-q472 (DoS and SRI bypass).
   "undici@>=7.0.0 <7.30.1": 7.30.1
