@@ -1204,7 +1204,24 @@ export function mapResponseStream(
         }
     };
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
+    // Synthetic ids of the calls whose arguments were already yielded, from deltas or a completed event.
+    const callsWithArguments = new Set<string>();
     let finalResponse: OpenAI.Responses.Response | undefined;
+
+    /**
+     * The arguments of a completed call, unless they were already yielded for that call. Only a complete JSON object is
+     * taken: a response cut off inside its last call must still leave that call without arguments, so it is dropped.
+     */
+    const completedCallArguments = (
+        syntheticId: string,
+        callId: string,
+        name: string,
+        args: string | undefined,
+    ): (ToolUse<unknown> & { _actual_id?: string }) | undefined => {
+        if (!args || callsWithArguments.has(syntheticId) || !isJSONObjectText(args)) return undefined;
+        callsWithArguments.add(syntheticId);
+        return { id: syntheticId, _actual_id: callId, tool_name: name, tool_input: args };
+    };
 
     return {
         async *[Symbol.asyncIterator]() {
@@ -1240,6 +1257,9 @@ export function mapResponseStream(
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
                     const callId = metadata?.callId ?? event.item_id;
+                    if (event.delta) {
+                        callsWithArguments.add(syntheticId);
+                    }
                     const toolUse: ToolUse<unknown> & { _actual_id?: string } = {
                         id: syntheticId,
                         _actual_id: callId,
@@ -1250,6 +1270,31 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
+                } else if (event.type === 'response.function_call_arguments.done') {
+                    // Some Responses-compatible endpoints send a call's arguments only in its completed events,
+                    // without deltas. Without this, every such call would reach the caller with empty input.
+                    const metadata = toolCallMetadata.get(event.item_id);
+                    const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
+                    const toolUse = completedCallArguments(
+                        syntheticId,
+                        metadata?.callId ?? event.item_id,
+                        metadata?.name ?? '',
+                        event.arguments,
+                    );
+                    if (toolUse) {
+                        yield { result: [], tool_use: [toolUse] } satisfies CompletionChunkObject;
+                    }
+                } else if (event.type === 'response.output_item.done' && event.item.type === 'function_call') {
+                    const syntheticId = `tool_${event.output_index}`;
+                    const toolUse = completedCallArguments(
+                        syntheticId,
+                        event.item.call_id ?? event.item.id ?? syntheticId,
+                        event.item.name,
+                        event.item.arguments,
+                    );
+                    if (toolUse) {
+                        yield { result: [], tool_use: [toolUse] } satisfies CompletionChunkObject;
+                    }
                 } else if (event.type === 'response.output_item.done' && event.item.type === 'image_generation_call') {
                     const results = extractCompletionResults([event.item], false, requestedFormat);
                     if (results.length && !emittedImages.has(event.item.id)) {
@@ -1298,6 +1343,19 @@ export function mapResponseStream(
                     event.type === 'response.failed'
                 ) {
                     finalResponse = event.response;
+                    const missedArguments = event.response.output.flatMap((item, index) => {
+                        if (item.type !== 'function_call') return [];
+                        const toolUse = completedCallArguments(
+                            `tool_${index}`,
+                            item.call_id ?? item.id ?? `tool_${index}`,
+                            item.name,
+                            item.arguments,
+                        );
+                        return toolUse ? [toolUse] : [];
+                    });
+                    if (missedArguments.length > 0) {
+                        yield { result: [], tool_use: missedArguments } satisfies CompletionChunkObject;
+                    }
                     const finalTools = collectTools(event.response.output);
                     const finish_reason = responseFinishReason(event.response, finalTools);
                     const refusalDetails = responseRefusalDetails(event.response);
