@@ -122,4 +122,39 @@ describe('mapResponseStream function call arguments', () => {
 
         expect(tools.at(-1)).toMatchObject({ id: 'tool_0', _actual_id: 'call_0', tool_input: '{"q":"x"}' });
     });
+
+    it('leaves a cut-off call without arguments when the response stopped inside it', async () => {
+        const inputs: Record<string, string> = {};
+        const stream = mapResponseStream(
+            events([
+                added(0, 'search'),
+                added(1, 'delete_rows'),
+                {
+                    type: 'response.incomplete',
+                    response: {
+                        id: 'resp_1',
+                        status: 'incomplete',
+                        incomplete_details: { reason: 'max_output_tokens' },
+                        output: [
+                            functionCall(0, 'search', '{"q":"x"}'),
+                            functionCall(1, 'delete_rows', '{"where":"id='),
+                        ],
+                        usage: null,
+                    },
+                },
+            ]),
+        );
+        try {
+            for await (const chunk of stream) {
+                for (const tool of (chunk as CompletionChunkObject).tool_use ?? []) {
+                    inputs[tool.id] =
+                        (inputs[tool.id] ?? '') + (typeof tool.tool_input === 'string' ? tool.tool_input : '');
+                }
+            }
+        } catch {
+            // An incomplete response may surface as an error after its chunks; the chunks are what matter here.
+        }
+
+        expect(inputs).toEqual({ tool_0: '{"q":"x"}', tool_1: '' });
+    });
 });

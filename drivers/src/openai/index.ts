@@ -1208,14 +1208,17 @@ export function mapResponseStream(
     const callsWithArguments = new Set<string>();
     let finalResponse: OpenAI.Responses.Response | undefined;
 
-    /** The arguments of a completed call, unless they were already yielded for that call. */
+    /**
+     * The arguments of a completed call, unless they were already yielded for that call. Only a complete JSON object is
+     * taken: a response cut off inside its last call must still leave that call without arguments, so it is dropped.
+     */
     const completedCallArguments = (
         syntheticId: string,
         callId: string,
         name: string,
         args: string | undefined,
     ): (ToolUse<unknown> & { _actual_id?: string }) | undefined => {
-        if (!args || callsWithArguments.has(syntheticId)) return undefined;
+        if (!args || callsWithArguments.has(syntheticId) || !isJSONObjectText(args)) return undefined;
         callsWithArguments.add(syntheticId);
         return { id: syntheticId, _actual_id: callId, tool_name: name, tool_input: args };
     };
