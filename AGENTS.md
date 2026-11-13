@@ -259,10 +259,8 @@ The document applies the same shape normalization as the Vertesia API contract (
 shares with that contract is identical apart from `additionalProperties`:
 
 - `additionalProperties: false`, which the API sets per request or response, is left as Zod writes it.
-- An open object keeps `additionalProperties: true` at its definition root, where the API contract leaves the
-  keyword out. `JSONSchema` is the one such definition today. A validator reads both the same way, but a code
-  generator reads a missing keyword as a closed object and drops the keywords `JSONSchema` does not declare
-  (`enum`, `oneOf`, `minimum`, ...).
+- Both documents publish `additionalProperties: true` for explicitly open objects with declared properties,
+  including `JSONSchema`, so generated clients can preserve keywords such as `enum`, `oneOf`, and `minimum`.
 
 ## Callable Driver Behavior
 
