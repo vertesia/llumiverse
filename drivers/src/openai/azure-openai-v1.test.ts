@@ -209,7 +209,7 @@ describe('Azure OpenAI v1 API', () => {
         }
     });
 
-    it('keeps typed access to the deployment and API version on both clients', () => {
+    it('types the service by how the driver was built', () => {
         const injected = new AzureOpenAI({
             endpoint: 'https://example.openai.azure.com',
             apiKey: 'test-key',
@@ -217,20 +217,26 @@ describe('Azure OpenAI v1 API', () => {
             deployment: 'legacy',
         });
         const legacy = new AzureOpenAIDriver(injected);
-        const pinned = new AzureOpenAIDriver({
+        const pinned = new AzureOpenAIDriver<AzureOpenAI>({
             endpoint: 'https://example.openai.azure.com',
             apiKey: 'test-key',
             apiVersion: '2025-04-01-preview',
             deployment: 'production',
         });
+        // @ts-expect-error The legacy client type needs the pinned apiVersion that builds it.
+        new AzureOpenAIDriver<AzureOpenAI>({ endpoint: 'https://example.openai.azure.com', apiKey: 'test-key' });
         const v1 = new AzureOpenAIDriver({
             endpoint: 'https://example.openai.azure.com',
             apiKey: 'test-key',
             deployment: 'production',
         });
-        expectTypeOf(legacy.service.deploymentName).toEqualTypeOf<string | undefined>();
-        expectTypeOf(legacy.service.apiVersion).toEqualTypeOf<string | undefined>();
+        expectTypeOf(legacy.service).toEqualTypeOf<AzureOpenAI>();
+        expectTypeOf(pinned.service).toEqualTypeOf<AzureOpenAI>();
+        expectTypeOf(pinned.service.apiVersion).toEqualTypeOf<string>();
+        expectTypeOf(v1.service.deploymentName).toEqualTypeOf<string | undefined>();
+        expectTypeOf(v1.service.apiVersion).toEqualTypeOf<string | undefined>();
         expect(legacy.service).toBe(injected);
+        expect(pinned.service).toBeInstanceOf(AzureOpenAI);
         expect([legacy.service.deploymentName, legacy.service.apiVersion]).toEqual(['legacy', '2024-10-21']);
         expect([pinned.service.deploymentName, pinned.service.apiVersion]).toEqual([
             'production',
@@ -262,6 +268,35 @@ describe('Azure OpenAI v1 API', () => {
             expect(JSON.stringify(unsupported.input)).not.toContain('prompt_cache_breakpoint');
             expect(supported).toMatchObject({ model: 'gpt-6-luna', prompt_cache_retention: '24h' });
             expect(supported.prompt_cache_options).toBeUndefined();
+        } finally {
+            await driver.destroy();
+        }
+    });
+
+    it('decides prompt caching by the sourceModel of a deployment named like another model', async () => {
+        const driver = new AzureOpenAIDriver({
+            endpoint: 'https://example.openai.azure.com',
+            apiKey: 'test-key',
+            sourceModel: 'gpt-5.4',
+        });
+        const requests = capture(driver);
+        try {
+            await driver.execute(
+                [
+                    { role: PromptRole.user, content: 'First question' },
+                    { role: PromptRole.assistant, content: 'First answer' },
+                    { role: PromptRole.user, content: 'Second question' },
+                ],
+                {
+                    model: 'gpt-6-luna',
+                    prompt_cache_key: 'key',
+                    model_options: { _option_id: 'openai-thinking', cache_ttl: '24h' },
+                },
+            );
+            const body = requests[0].body ?? {};
+            expect(body).toMatchObject({ model: 'gpt-6-luna', prompt_cache_retention: '24h' });
+            expect(body.prompt_cache_options).toBeUndefined();
+            expect(JSON.stringify(body.input)).not.toContain('prompt_cache_breakpoint');
         } finally {
             await driver.destroy();
         }

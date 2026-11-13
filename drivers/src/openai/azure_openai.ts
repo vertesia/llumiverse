@@ -92,27 +92,43 @@ function azureOpenAIV1BaseURL(endpoint: string): string {
     return `${endpoint.slice(0, end).replace(/\/openai(?:\/v1)?$/, '')}/openai/v1`;
 }
 
-export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
+/** The service an Azure OpenAI driver uses: the v1 client, or the legacy dated-API `AzureOpenAI` client. */
+export type AzureOpenAIService = AzureOpenAI | AzureOpenAIV1Client;
+
+/**
+ * Construction arguments for a driver whose service type is `S`. Selecting the legacy client type requires a pinned
+ * `apiVersion`, the setting that makes the driver build one.
+ */
+export type AzureOpenAIDriverArgs<S extends AzureOpenAIService> =
+    | S
+    | ([S] extends [AzureOpenAI] ? AzureOpenAIDriverOptions & { apiVersion: string } : AzureOpenAIDriverOptions);
+
+/**
+ * Azure OpenAI driver. `service` is typed by how the driver was built: an injected `AzureOpenAI` client infers
+ * `AzureOpenAIDriver<AzureOpenAI>`, and `new AzureOpenAIDriver<AzureOpenAI>({ apiVersion, ... })` selects the legacy
+ * client for a pinned API version. Otherwise it is either client, the v1 client by default.
+ */
+export class AzureOpenAIDriver<S extends AzureOpenAIService = AzureOpenAIService> extends OpenAIResponsesDriverBase {
     /**
      * The v1 client by default; the legacy AzureOpenAI client when an apiVersion is set or one is injected. Both expose
      * `deploymentName` and `apiVersion` (undefined on the version-less v1 API).
      */
-    service: AzureOpenAI | AzureOpenAIV1Client;
+    service: S;
     private imageService?: OpenAI;
     private sourceModel?: string;
     private readonly deploymentName?: string;
     private keyFetch?: typeof fetch;
     readonly provider = Providers.azure_openai;
 
-    //Overload to allow independent instantiation with AzureOpenAI service
-    constructor(serviceOrOpts: AzureOpenAI | AzureOpenAIDriverOptions) {
+    // Accepts an injected AzureOpenAI client, for independent instantiation, or the driver options.
+    constructor(serviceOrOpts: AzureOpenAIDriverArgs<S>) {
         if (serviceOrOpts instanceof AzureOpenAI) {
             super({});
-            this.service = serviceOrOpts;
+            this.service = serviceOrOpts as S;
             this.deploymentName = serviceOrOpts.deploymentName;
             return;
         }
-        const opts = serviceOrOpts ?? {};
+        const opts: AzureOpenAIDriverOptions = (serviceOrOpts as AzureOpenAIDriverOptions | undefined) ?? {};
         super(opts);
         this.sourceModel = opts.sourceModel;
         this.deploymentName = opts.deployment;
@@ -123,6 +139,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
 
         if (opts.endpoint && !opts.apiVersion) {
             // The v1 API is GA, needs no api-version, and is where Azure ships the Responses API.
+            // S is the v1 client or the union here: the argument type requires apiVersion for the legacy type.
             this.service = new AzureOpenAIV1Client({
                 baseURL: azureOpenAIV1BaseURL(opts.endpoint),
                 apiKey: opts.azureADTokenProvider ?? opts.apiKey,
@@ -131,7 +148,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
                 fetch: this.getDriverFetch(),
                 maxRetries: 0,
                 timeout: this.getDriverRequestTimeoutMs(),
-            });
+            }) as S;
         } else {
             // An explicit api-version keeps the dated `/openai/...?api-version=` API. Without an endpoint, the
             // legacy client reads AZURE_OPENAI_ENDPOINT as it always has.
@@ -144,7 +161,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
                 fetch: this.getDriverFetch(),
                 maxRetries: 0,
                 timeout: this.getDriverRequestTimeoutMs(),
-            });
+            }) as S;
         }
         if (opts.endpoint) {
             this.imageService = new AzureOpenAIV1Client({
@@ -185,6 +202,15 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
 
     getImageService(): OpenAI {
         return this.imageService ?? this.service;
+    }
+
+    /**
+     * The model whose prompt-cache support applies. A bare deployment name is only an alias, which may look like
+     * another model's ID, so a configured `sourceModel` describes it; a composite ID names its source model last.
+     */
+    override getPromptCacheSourceModel(model: string): string {
+        if (model.includes('::')) return model.split('::').pop() ?? model;
+        return this.sourceModel ?? model;
     }
 
     getResponsesService(options: ExecutionOptions): OpenAI {
