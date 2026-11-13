@@ -66,7 +66,8 @@ describe('image requests', () => {
             output_format: 'webp',
         });
         expect(result.result).toEqual([{ type: 'image', value: 'data:image/jpeg;base64,YWJj' }]);
-        expect(result.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 3, result_image: 3, total: 5 });
+        // Without output_tokens_details the image share of the output tokens is unknown.
+        expect(result.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 3, total: 5 });
     });
 
     it.each([

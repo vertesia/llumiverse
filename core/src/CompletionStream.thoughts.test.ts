@@ -56,6 +56,14 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
                 },
             };
         }
+        if (prompt === 'tool-usage-only') {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { result: [{ type: 'text', value: 'answer' }] };
+                    yield { result: [], token_usage: { tool_usage: { web_search_requests: 2 } } };
+                },
+            };
+        }
         if (prompt === 'finalize-fails') {
             return {
                 async *[Symbol.asyncIterator]() {
@@ -124,6 +132,16 @@ describe('DefaultCompletionStream thoughts', () => {
             total: 12,
             tool_usage: { image_generation: { prompt: 5, result: 7, total: 12 } },
         });
+    });
+
+    it('keeps hosted tool usage reported without token counts, without inventing zero counts', async () => {
+        const driver = new ThoughtsStreamDriver({});
+        const stream = new DefaultCompletionStream(driver, 'tool-usage-only', { model: 'test' });
+
+        for await (const _chunk of stream) {
+            // drain
+        }
+        expect(stream.completion?.token_usage).toEqual({ tool_usage: { web_search_requests: 2 } });
     });
 
     it('formats an error raised while finalizing the streamed conversation', async () => {

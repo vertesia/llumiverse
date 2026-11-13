@@ -408,9 +408,12 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let providerCostUsd: number | undefined;
         let resultImageTokens: number | undefined;
         // Undefined until the provider reports token data. resultTokens === 0 is valid (e.g. empty output with stop).
+        // Hosted tool usage is billed apart from the model's tokens, so it is kept even without token counts.
         const accumulatedUsage = (): ExecutionTokenUsage | undefined =>
             resultTokens === undefined
-                ? undefined
+                ? toolUsage != null
+                    ? { tool_usage: toolUsage }
+                    : undefined
                 : {
                       prompt: promptTokens,
                       result: resultTokens,
@@ -458,7 +461,11 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                         if (chunk.service_tier) {
                             serviceTier = chunk.service_tier;
                         }
-                        if (chunk.token_usage) {
+                        // A chunk that carries only hosted tool usage reports no token counts; do not invent zeros.
+                        const toolUsageOnly =
+                            chunk.token_usage != null &&
+                            Object.keys(chunk.token_usage).every((key) => key === 'tool_usage');
+                        if (chunk.token_usage && !toolUsageOnly) {
                             //Tokens returned include prior parts of stream,
                             //so overwrite rather than accumulate
                             //Math.max used as some models report final token count at beginning of stream
@@ -473,14 +480,14 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                 promptCacheWrite1hTokens = chunk.token_usage.prompt_cache_write_1h;
                             if (chunk.token_usage.prompt_cache_write_12h != null)
                                 promptCacheWrite12hTokens = chunk.token_usage.prompt_cache_write_12h;
-                            // Reported whole with the final usage, like the counts above.
-                            if (chunk.token_usage.tool_usage != null) toolUsage = chunk.token_usage.tool_usage;
                             if (chunk.token_usage.result_image != null)
                                 resultImageTokens = chunk.token_usage.result_image;
                             // The provider reports the call's cost once, with the final usage.
                             if (chunk.token_usage.provider_cost_usd != null)
                                 providerCostUsd = chunk.token_usage.provider_cost_usd;
                         }
+                        // Reported whole with the final usage, with or without the model's token counts.
+                        if (chunk.token_usage?.tool_usage != null) toolUsage = chunk.token_usage.tool_usage;
                         // Accumulate tool_use from chunks
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
                         if (chunk.tool_use && chunk.tool_use.length > 0) {

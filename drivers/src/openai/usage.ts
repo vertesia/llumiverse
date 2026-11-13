@@ -64,9 +64,13 @@ interface OpenAIImageTokenUsage {
     output_tokens_details?: { image_tokens: number } | null;
 }
 
-/** Image output is mostly image tokens; text output tokens are counted apart when the details are reported. */
-function imageResultTokens(usage: OpenAIImageTokenUsage): number {
-    return usage.output_tokens_details?.image_tokens ?? usage.output_tokens;
+/**
+ * Image output tokens, only when the provider reports the split. Output tokens can include text tokens, so the total
+ * is not reported as image tokens when the details are missing.
+ */
+function imageResultTokens(usage: OpenAIImageTokenUsage): { result_image?: number } {
+    const imageTokens = usage.output_tokens_details?.image_tokens;
+    return imageTokens != null ? { result_image: imageTokens } : {};
 }
 
 /**
@@ -84,7 +88,7 @@ export function mapOpenAIImageUsage(
                   prompt: usage.input_tokens,
                   prompt_new: usage.input_tokens,
                   result: usage.output_tokens,
-                  result_image: imageResultTokens(usage),
+                  ...imageResultTokens(usage),
                   total: usage.total_tokens,
               }
             : {}),
@@ -111,7 +115,9 @@ export function mapOpenAIResponsesUsage(
     usage: ResponsesUsage | null | undefined,
     toolUsage?: OpenAI.Responses.Response.ToolUsage | null,
 ): ExecutionTokenUsage | undefined {
-    if (!usage) return undefined;
+    const tools = mapOpenAIToolUsage(toolUsage);
+    // Hosted tools are billed apart from the model, so their usage is kept even when the model usage is missing.
+    if (!usage) return tools ? { tool_usage: tools } : undefined;
     const cachedTokens =
         usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
     const cacheWriteTokens =
@@ -119,7 +125,6 @@ export function mapOpenAIResponsesUsage(
         usage.prompt_tokens_details?.cache_write_tokens ??
         usage.cache_write_tokens;
     const cacheWrite12h = usage.input_tokens_details?.cache_write_tokens_details?.ttl_12h_tokens;
-    const tools = mapOpenAIToolUsage(toolUsage);
     return {
         ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         ...(cacheWrite12h ? { prompt_cache_write_12h: cacheWrite12h } : {}),
@@ -154,7 +159,7 @@ function mapOpenAIToolUsage(
                       // An omitted cache count means the cache use is unknown, so it stays omitted.
                       ...(image.cached_tokens != null ? { prompt_cached: image.cached_tokens } : {}),
                       result: image.output_tokens,
-                      result_image: imageResultTokens(image),
+                      ...imageResultTokens(image),
                       total: image.total_tokens,
                   },
               }

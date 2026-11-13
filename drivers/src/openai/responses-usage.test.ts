@@ -106,6 +106,32 @@ describe.each([false, true])('OpenAI Responses usage when streaming=%s', (stream
         });
     });
 
+    it('keeps hosted tool usage when the model usage is missing', async () => {
+        const { completion } = await complete(response({ usage: undefined, tool_usage: toolUsage }), streaming);
+        expect(completion.token_usage).toEqual({
+            tool_usage: {
+                image_generation: { prompt: 30, prompt_cached: 5, result: 1100, result_image: 1056, total: 1130 },
+                web_search_requests: 2,
+            },
+        });
+    });
+
+    it('reports no image tokens for the image tool when the output split is missing', async () => {
+        const { output_tokens_details: _omitted, ...imageGen } = toolUsage.image_gen as NonNullable<
+            OpenAI.Responses.Response.ToolUsage['image_gen']
+        >;
+        const { completion } = await complete(
+            response({ tool_usage: { image_gen: imageGen, web_search: { num_requests: 0 } } }),
+            streaming,
+        );
+        expect(completion.token_usage).toMatchObject({
+            tool_usage: { image_generation: { prompt: 30, prompt_cached: 5, result: 1100, total: 1130 } },
+        });
+        expect(
+            (completion.token_usage as { tool_usage: { image_generation: object } }).tool_usage.image_generation,
+        ).not.toHaveProperty('result_image');
+    });
+
     it('leaves out tools that report no use', async () => {
         const unused: OpenAI.Responses.Response.ToolUsage = {
             image_gen: {
