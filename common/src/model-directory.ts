@@ -1,5 +1,5 @@
 import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
-import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
+import { getAzureFoundryModelLimits, getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
 import { getBedrockModelCapabilities, getBedrockModelKnowledge } from './capability/bedrock-models.js';
 import { getMistralModelKnowledge } from './capability/mistral.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
@@ -458,6 +458,7 @@ function applyProviderOverlay(
                 ? capabilities
                 : providerCapabilities,
             ...getCanonicalLimits(sourceModel, family),
+            ...getAzureFoundryModelLimits(sourceModel),
         };
     }
 
