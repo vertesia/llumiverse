@@ -174,6 +174,24 @@ Claude conversations keep `tools` append-only: tools offered after the first req
 `_llumiverse_meta.claude_tools`, so keep `_llumiverse_meta` with the conversation when storing or editing it.
 Unsupported models and providers (Microsoft Foundry) receive `tools` as before, without the tool-change blocks.
 
+### Server-Side Compaction
+
+`ExecutionOptions.compaction` asks the provider to summarize a long conversation once its input reaches
+`trigger_tokens` (omitted: the provider's default). Claude providers send a `compact_20260112` edit with beta
+`compact-2026-01-12`; the OpenAI Responses drivers send `context_management: [{ type: 'compaction' }]` and drop
+`instructions`, which that API cannot carry. The provider returns an opaque compaction block or item that must go back
+unchanged, and the returned `conversation` starts at the latest one: the history before it is superseded, and Claude
+rejects a second summary alongside the first. Claude compaction iterations are added to `token_usage`, since the
+response's top-level usage leaves them out.
+
+`ExecutionOptions.compact_conversation` compacts the conversation now instead of answering (on-demand compaction).
+Claude providers send `compaction: { type: 'summarize' }` with beta `compact-2026-09-04` and leave out the threshold
+`compaction` settings, which the API rejects on the same request; the result is the summary text. The OpenAI Responses
+drivers call `POST /responses/compact`, whose output (the user messages, then one compaction item) replaces the
+conversation as is; the summary is encrypted, so the result is empty. Both report `finish_reason: 'compaction'`.
+The `native_compaction` model option (Claude and OpenAI Responses option sets) does nothing in the drivers: it tells
+the application that compacts conversations to request `compact_conversation`.
+
 ### Utility Functions
 
 The following functions are exported from `@llumiverse/core` for advanced use cases:

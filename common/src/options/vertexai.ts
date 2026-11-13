@@ -26,6 +26,7 @@ import {
     buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
     buildClaudeThinkingModeOption,
+    buildNativeCompactionOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import {
@@ -757,6 +758,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),
+            ...buildNativeCompactionOption(),
         ],
     };
 }
