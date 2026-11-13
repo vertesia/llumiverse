@@ -180,7 +180,13 @@ function getGeminiOmniVideoOptions(model: string, option?: ModelOptions): ModelO
     options.push({
         name: 'resolution',
         type: OptionType.enum,
-        enum: isOmni11OrLater ? { '360p': '360p', '720p': '720p', '1080p': '1080p', '4K': '4k' } : { '720p': '720p' },
+        // Upscaling targets 720p, 1080p or 4K only: 360p is an input resolution, never an upscale output.
+        enum:
+            task === 'upscale'
+                ? { '720p': '720p', '1080p': '1080p', '4K': '4k' }
+                : isOmni11OrLater
+                  ? { '360p': '360p', '720p': '720p', '1080p': '1080p', '4K': '4k' }
+                  : { '720p': '720p' },
         description:
             task === 'upscale'
                 ? 'Output resolution: 360p input upscales to 720p or 1080p, 720p input to 1080p or 4K.'

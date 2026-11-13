@@ -161,6 +161,9 @@ describe('Vertex AI MaaS metadata', () => {
 
             const upscale = getVertexAiOptions(model, { _option_id: 'vertexai-gemini-omni-video', task: 'upscale' });
             expect(upscale.options.map((option) => option.name)).toEqual(['task', 'resolution', 'seed']);
+            expect(find(upscale, 'resolution')).toMatchObject({
+                enum: { '720p': '720p', '1080p': '1080p', '4K': '4k' },
+            });
         },
     );
 

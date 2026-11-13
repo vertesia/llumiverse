@@ -363,6 +363,7 @@ describe('GeminiOmniVideoModelDefinition', () => {
         ],
         [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [video(), image()], 'upscale requires exactly one video'],
         [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [image()], 'upscale requires exactly one video'],
+        [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [video()], 'upscale requires a target resolution'],
     ] as const)('rejects invalid %s %s media combinations', async (model, task, files, message) => {
         const configured = options({ model_options: { _option_id: 'vertexai-gemini-omni-video', task } }, model);
 

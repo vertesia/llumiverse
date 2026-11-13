@@ -144,6 +144,11 @@ function resolveTask(
             if (imageCount !== 0 || videoCount !== 1) {
                 throw new OmniVideoRequestError('upscale requires exactly one video input');
             }
+            // Vertex rejects an upscale without a target resolution, and the driver cannot infer one from the input.
+            // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/upscale-videos
+            if (!options?.resolution) {
+                throw new OmniVideoRequestError('upscale requires a target resolution: 720p, 1080p or 4k');
+            }
             break;
     }
     return task;
