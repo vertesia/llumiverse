@@ -67,14 +67,15 @@ describe('Azure OpenAI v1 API', () => {
         }
     });
 
-    it.each(['https://example.openai.azure.com/openai', 'https://example.openai.azure.com/openai/v1/'])(
-        'accepts an endpoint that already names the API: %s',
-        (endpoint) => {
-            const driver = new AzureOpenAIDriver({ endpoint, apiKey: 'test-key' });
-            expect(driver.service.baseURL).toBe('https://example.openai.azure.com/openai/v1');
-            expect(driver.getImageService().baseURL).toBe('https://example.openai.azure.com/openai/v1');
-        },
-    );
+    it.each([
+        'https://example.openai.azure.com/openai',
+        'https://example.openai.azure.com/openai/v1/',
+        'https://example.openai.azure.com///',
+    ])('accepts an endpoint that already names the API: %s', (endpoint) => {
+        const driver = new AzureOpenAIDriver({ endpoint, apiKey: 'test-key' });
+        expect(driver.service.baseURL).toBe('https://example.openai.azure.com/openai/v1');
+        expect(driver.getImageService().baseURL).toBe('https://example.openai.azure.com/openai/v1');
+    });
 
     it('sends an Entra token as a bearer token', async () => {
         const azureADTokenProvider = vi.fn(async () => 'entra-token');

@@ -67,7 +67,10 @@ export class AzureOpenAIV1Client extends OpenAI {
 
 /** The v1 base URL of an Azure OpenAI or Microsoft Foundry resource endpoint. */
 function azureOpenAIV1BaseURL(endpoint: string): string {
-    return `${endpoint.replace(/\/+$/, '').replace(/\/openai(?:\/v1)?$/, '')}/openai/v1`;
+    // Trim trailing slashes with a scan: a `/\/+$/` regex backtracks quadratically on a long run of slashes.
+    let end = endpoint.length;
+    while (end > 0 && endpoint[end - 1] === '/') end--;
+    return `${endpoint.slice(0, end).replace(/\/openai(?:\/v1)?$/, '')}/openai/v1`;
 }
 
 export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
