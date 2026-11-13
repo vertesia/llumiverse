@@ -70,6 +70,9 @@ overrides:
   # glob 14 and minimatch 11 keep; their removals (makeRe, AST, Pattern#isRegExp) are unused.
   "minimatch@<11.0.1": ^11.0.1
   "glob@>=9.0.0 <14.0.2": ^14.0.2
+  # GHSA-qv5m-9pm6-hqp3 (WebSocket-upgrade ECONNRESET crash) and GHSA-jpvv-r467-5p4w (backslash path
+  # separator bypassing proxy path rules). Reached via @modelcontextprotocol/sdk.
+  "@hono/node-server@>=2.0.0 <2.1.6": 2.1.6
 
 # Share package directories across local worktrees.
 virtualStoreType: global
