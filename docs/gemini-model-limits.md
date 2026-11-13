@@ -24,6 +24,7 @@ The window column follows Google's **Context window** or **Maximum input tokens*
 | [Nano Banana 2.1](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/nano-banana-2-1)           |              131,072 |         32,768 |
 | [Omni Flash preview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-flash-preview)     |              131,072 |         57,920 |
 | [Omni 1.1 Flash preview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash)     |              131,072 |         57,920 |
+| [Omni 1.2 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash)             |              131,072 |        260,640 |
 | [3.5 Transcribe/preview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe)     |        Not published |  Not published |
 
 Retired 2.0 Flash/Flash-Lite retain their documented 1,048,576 window and 8,192 output limits for callers that

@@ -10,6 +10,7 @@ import type { VertexAIDriver } from '../index.js';
 import { getModelDefinition } from '../models.js';
 import {
     GEMINI_OMNI_1_1_VIDEO_MODEL,
+    GEMINI_OMNI_1_2_VIDEO_MODEL,
     GEMINI_OMNI_VIDEO_MODEL,
     type GeminiOmniVideoModel,
     GeminiOmniVideoModelDefinition,
@@ -79,15 +80,17 @@ function driverWithResponse(response: unknown) {
 }
 
 describe('GeminiOmniVideoModelDefinition', () => {
-    it.each([GEMINI_OMNI_VIDEO_MODEL, GEMINI_OMNI_1_1_VIDEO_MODEL])(
-        'routes %s to the dedicated non-streaming definition',
-        (model) => {
-            const definition = getModelDefinition(`publishers/google/models/${model}`);
+    it.each([
+        GEMINI_OMNI_VIDEO_MODEL,
+        GEMINI_OMNI_1_1_VIDEO_MODEL,
+        GEMINI_OMNI_1_2_VIDEO_MODEL,
+        'gemini-omni-1.3-flash',
+    ])('routes %s to the dedicated non-streaming definition', (model) => {
+        const definition = getModelDefinition(`publishers/google/models/${model}`);
 
-            expect(definition).toBeInstanceOf(GeminiOmniVideoModelDefinition);
-            expect(definition.model).toMatchObject({ id: model, type: 'video', can_stream: false });
-        },
-    );
+        expect(definition).toBeInstanceOf(GeminiOmniVideoModelDefinition);
+        expect(definition.model).toMatchObject({ id: model, type: 'video', can_stream: false });
+    });
 
     it('constructs a text-to-video request with defaults and the global beta endpoint', async () => {
         const definition = new GeminiOmniVideoModelDefinition();
@@ -245,6 +248,91 @@ describe('GeminiOmniVideoModelDefinition', () => {
         expect(prompt.media.map((item) => item.type)).toEqual(files.map((file) => file.mime_type.split('/')[0]));
     });
 
+    it('upscales one video on 1.2 with a seed, without imposing a duration', async () => {
+        const definition = new GeminiOmniVideoModelDefinition(GEMINI_OMNI_1_2_VIDEO_MODEL);
+        const configured = options(
+            {
+                model_options: {
+                    _option_id: 'vertexai-gemini-omni-video',
+                    task: 'upscale',
+                    resolution: '1080p',
+                    seed: 42,
+                },
+            },
+            GEMINI_OMNI_1_2_VIDEO_MODEL,
+        );
+        const prompt = await definition.createPrompt(
+            {} as VertexAIDriver,
+            [{ role: PromptRole.user, content: 'Upsample video.', files: [video('gs://inputs/source.mp4')] }],
+            configured,
+        );
+        const stub = driverWithResponse(completedResponse({ type: 'video', value: `${OUTPUT_PREFIX}upscaled.mp4` }));
+
+        await definition.requestTextCompletion(stub.driver, prompt, configured);
+
+        expect(stub.getFetchClientForRegion).toHaveBeenCalledWith('global', 'v1beta1');
+        expect(stub.post.mock.calls[0]?.[1]).toMatchObject({
+            payload: {
+                model: GEMINI_OMNI_1_2_VIDEO_MODEL,
+                input: [
+                    { type: 'text', text: 'Upsample video.' },
+                    { type: 'video', uri: 'gs://inputs/source.mp4', mime_type: 'video/mp4' },
+                ],
+                response_format: [{ type: 'video', delivery: 'uri', gcs_uri: OUTPUT_PREFIX, resolution: '1080p' }],
+                generation_config: { video_config: { task: 'upscale' }, seed: 42 },
+            },
+        });
+    });
+
+    it('sends a 15-second duration and a seed for 1.2 generation', async () => {
+        const definition = new GeminiOmniVideoModelDefinition(GEMINI_OMNI_1_2_VIDEO_MODEL);
+        const configured = options(
+            {
+                model_options: { _option_id: 'vertexai-gemini-omni-video', duration_seconds: 15, seed: 0 },
+            },
+            GEMINI_OMNI_1_2_VIDEO_MODEL,
+        );
+        const prompt = await definition.createPrompt(
+            {} as VertexAIDriver,
+            [{ role: PromptRole.user, content: 'A fox in snow' }],
+            configured,
+        );
+        const stub = driverWithResponse(completedResponse({ type: 'video', value: `${OUTPUT_PREFIX}video.mp4` }));
+
+        await definition.requestTextCompletion(stub.driver, prompt, configured);
+
+        expect(stub.post.mock.calls[0]?.[1]).toMatchObject({
+            payload: {
+                response_format: [{ type: 'video', delivery: 'uri', gcs_uri: OUTPUT_PREFIX, duration: '15s' }],
+                generation_config: { video_config: { task: 'text_to_video' }, seed: 0 },
+            },
+        });
+    });
+
+    it.each([GEMINI_OMNI_1_2_VIDEO_MODEL, 'gemini-omni-1.3-flash'])(
+        'accepts up to two reference images when %s edits or extends a video',
+        async (model) => {
+            for (const task of ['edit', 'extend'] as const) {
+                const configured = options(
+                    { model_options: { _option_id: 'vertexai-gemini-omni-video', task } },
+                    model,
+                );
+                const prompt = await new GeminiOmniVideoModelDefinition(model).createPrompt(
+                    {} as VertexAIDriver,
+                    [
+                        {
+                            role: PromptRole.user,
+                            content: 'Add the character',
+                            files: [video(), image('gs://inputs/one.png'), image('gs://inputs/two.png')],
+                        },
+                    ],
+                    configured,
+                );
+                expect(prompt.media.map((item) => item.type)).toEqual(['video', 'image', 'image']);
+            }
+        },
+    );
+
     it('supports video editing on the 1.0 model', async () => {
         const definition = new GeminiOmniVideoModelDefinition();
         const configured = options({
@@ -267,6 +355,14 @@ describe('GeminiOmniVideoModelDefinition', () => {
         [GEMINI_OMNI_VIDEO_MODEL, 'image_to_video', [image(), image('gs://inputs/last.png')], 'exactly one'],
         [GEMINI_OMNI_1_1_VIDEO_MODEL, 'edit', [image()], 'exactly one video'],
         [GEMINI_OMNI_1_1_VIDEO_MODEL, 'extend', [video(), video('gs://inputs/second.mp4')], 'exactly one video'],
+        [
+            GEMINI_OMNI_1_2_VIDEO_MODEL,
+            'edit',
+            [video(), image('gs://inputs/1.png'), image('gs://inputs/2.png'), image('gs://inputs/3.png')],
+            'at most 2 reference images',
+        ],
+        [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [video(), image()], 'upscale requires exactly one video'],
+        [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [image()], 'upscale requires exactly one video'],
     ] as const)('rejects invalid %s %s media combinations', async (model, task, files, message) => {
         const configured = options({ model_options: { _option_id: 'vertexai-gemini-omni-video', task } }, model);
 

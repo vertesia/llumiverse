@@ -87,6 +87,21 @@ describe('Vertex AI MaaS metadata', () => {
         },
     );
 
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash
+    it.each(['gemini-omni-1.2-flash', 'locations/global/publishers/google/models/gemini-omni-1.3-flash'])(
+        'uses the Omni 1.2 output limit for %s',
+        (model) => {
+            expect(getContextWindowSize(model)).toBe(131_072);
+            expect(getMaxOutputTokens(model)).toBe(260_640);
+            expect(resolveModelProfile(model, Providers.vertexai)).toMatchObject({
+                context_window: 131_072,
+                max_output_tokens: 260_640,
+            });
+            expect(getModelCapabilities(model, Providers.vertexai).output.video).toBe(true);
+            expect(getVertexAiOptions(model).options.map((item) => item.name)).not.toContain('max_tokens');
+        },
+    );
+
     it.each(['gemini-3.5-transcribe', 'gemini-3.5-transcribe-preview', 'gemini-4-transcribe'])(
         'leaves unpublished Transcribe limits unknown for %s',
         (model) => {
@@ -126,6 +141,40 @@ describe('Vertex AI MaaS metadata', () => {
             },
         });
     });
+
+    it.each(['gemini-omni-1.2-flash', 'gemini-omni-1.3-flash'])(
+        'offers upscaling, 15-second generation and a seed on %s',
+        (model) => {
+            const find = (options: ReturnType<typeof getVertexAiOptions>, name: string) =>
+                options.options.find((option) => option.name === name);
+            const generation = getVertexAiOptions(model);
+            expect(find(generation, 'task')).toMatchObject({
+                enum: { 'Extend video': 'extend', 'Upscale video': 'upscale' },
+                refresh: true,
+            });
+            expect(find(generation, 'duration_seconds')).toMatchObject({ min: 3, max: 15 });
+            expect(find(generation, 'seed')).toMatchObject({ type: 'numeric', integer: true });
+            expect(find(generation, 'seed')).not.toHaveProperty('default');
+
+            const extend = getVertexAiOptions(model, { _option_id: 'vertexai-gemini-omni-video', task: 'extend' });
+            expect(find(extend, 'duration_seconds')).toMatchObject({ max: 10 });
+
+            const upscale = getVertexAiOptions(model, { _option_id: 'vertexai-gemini-omni-video', task: 'upscale' });
+            expect(upscale.options.map((option) => option.name)).toEqual(['task', 'resolution', 'seed']);
+        },
+    );
+
+    it.each(['gemini-omni-flash-preview', 'gemini-omni-1.1-flash-preview'])(
+        'keeps the 10-second limit and no upscale or seed on %s',
+        (model) => {
+            const options = getVertexAiOptions(model);
+            expect(options.options.find((option) => option.name === 'duration_seconds')).toMatchObject({ max: 10 });
+            expect(options.options.find((option) => option.name === 'task')).not.toMatchObject({
+                enum: { 'Upscale video': 'upscale' },
+            });
+            expect(options.options.map((option) => option.name)).not.toContain('seed');
+        },
+    );
 
     it.each(['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-4.0-flash'])(
         'supports current Gemini Flash Flex inference for %s',

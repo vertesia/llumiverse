@@ -1,4 +1,5 @@
 import { isModelDirectoryEmbedding, resolveModelProfile } from './model-directory.js';
+import { isGeminiOmniVideoModel } from './options/version-parsing.js';
 import type { ModelCapabilities, ModelModalities, Providers } from './types.js';
 
 export function getModelCapabilities(model: string, provider: Providers): ModelCapabilities {
@@ -10,10 +11,7 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
         }
     }
     const modelName = model.split('/').pop()?.toLowerCase();
-    if (
-        provider === 'vertexai' &&
-        (modelName === 'gemini-omni-flash-preview' || modelName === 'gemini-omni-1.1-flash-preview')
-    ) {
+    if (provider === 'vertexai' && modelName && isGeminiOmniVideoModel(modelName)) {
         return {
             input: { text: true, image: true, video: true, audio: false, embed: false },
             output: { text: true, image: false, video: true, audio: false, embed: false },

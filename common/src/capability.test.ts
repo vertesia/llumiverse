@@ -70,17 +70,19 @@ describe('xAI Grok tool capabilities', () => {
 });
 
 describe('Gemini Omni video capabilities', () => {
-    it.each(['gemini-omni-flash-preview', 'gemini-omni-1.1-flash-preview'])(
-        'exposes the executable media capabilities for %s',
-        (model) => {
-            expect(getModelCapabilities(model, Providers.vertexai)).toEqual({
-                input: { text: true, image: true, video: true, audio: false, embed: false },
-                output: { text: true, image: false, video: true, audio: false, embed: false },
-                tool_support: false,
-                tool_support_streaming: false,
-            });
-        },
-    );
+    it.each([
+        'gemini-omni-flash-preview',
+        'gemini-omni-1.1-flash-preview',
+        'gemini-omni-1.2-flash',
+        'publishers/google/models/gemini-omni-1.3-flash',
+    ])('exposes the executable media capabilities for %s', (model) => {
+        expect(getModelCapabilities(model, Providers.vertexai)).toEqual({
+            input: { text: true, image: true, video: true, audio: false, embed: false },
+            output: { text: true, image: false, video: true, audio: false, embed: false },
+            tool_support: false,
+            tool_support_streaming: false,
+        });
+    });
 });
 
 describe('supportsToolUse streaming default', () => {

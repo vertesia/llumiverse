@@ -138,6 +138,19 @@ describe('ModelOptionsSchema', () => {
             ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 10 }).success,
         ).toBe(true);
         expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 15 }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'vertexai-gemini-omni-video',
+                task: 'upscale',
+                seed: 42,
+            }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 16 }).success,
+        ).toBe(false);
+        expect(
             ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 2 }).success,
         ).toBe(false);
         expect(
