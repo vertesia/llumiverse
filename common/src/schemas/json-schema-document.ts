@@ -70,12 +70,11 @@ function isEmptyObject(value: unknown): boolean {
  *   type the two spellings differently);
  * - a union of objects that share a required literal property gets an OpenAPI `discriminator`.
  *
- * Strictness (`additionalProperties: false`) is left as Zod writes it: the Vertesia contract opens or
- * closes objects per request or response, which is an API policy, not a shape. An open object stays
- * open, at a definition root too: the API-contract adapter drops a root's `{}`, which a validator reads
- * the same way, but a code generator reads the missing keyword as a closed object and then discards the
- * keys it does not declare. `JSONSchema` is open precisely so that it carries `enum`, `oneOf`,
- * `minimum` and the other keywords it does not list.
+ * The Llumiverse document preserves `additionalProperties: false` where Zod emits it. The Vertesia
+ * API contract applies its own strictness policy to requests and responses. Both documents publish
+ * `additionalProperties: true` for explicitly open objects with declared properties, including at
+ * definition roots. This lets generated clients preserve keywords such as `enum`, `oneOf` and
+ * `minimum` on `JSONSchema`.
  */
 export function normalizeDefinitions(defs: Record<string, JsonObject>): void {
     for (const definition of Object.values(defs)) normalize(definition, defs);
