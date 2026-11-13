@@ -583,7 +583,7 @@ export const VertexAIGeminiOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         seed: z.number().optional(),
-        effort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+        effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
         include_thoughts: z.boolean().optional(),
         thinking_budget_tokens: z.number().optional(),
         thinking_level: ThinkingLevelSchema.optional(),

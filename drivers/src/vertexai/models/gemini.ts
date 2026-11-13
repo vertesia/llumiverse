@@ -757,6 +757,8 @@ function geminiThinkingLevelForEffort(effort: VertexAIGeminiOptions['effort']): 
             return ThinkingLevel.MEDIUM;
         case 'high':
             return ThinkingLevel.HIGH;
+        case 'xhigh':
+            return ThinkingLevel.XHIGH;
         default:
             return undefined;
     }

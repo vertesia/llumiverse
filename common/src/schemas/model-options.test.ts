@@ -115,6 +115,15 @@ describe('ModelOptionsSchema', () => {
         },
     );
 
+    it('accepts the Gemini XHIGH thinking level as effort and as a native thinking level', () => {
+        for (const options of [
+            { _option_id: 'vertexai-gemini', effort: 'xhigh' },
+            { _option_id: 'vertexai-gemini', thinking_level: 'XHIGH' },
+        ]) {
+            expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        }
+    });
+
     it('validates strict Gemini Omni video option boundaries', () => {
         expect(
             ModelOptionsSchema.safeParse({

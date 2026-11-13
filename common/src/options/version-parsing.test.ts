@@ -16,6 +16,7 @@ import {
     supportsClaudeFastMode,
     supportsClaudeForcedToolChoice,
     supportsEffort,
+    supportsGeminiXHighThinking,
     supportsMidConversationToolChanges,
 } from './version-parsing.js';
 
@@ -343,6 +344,21 @@ describe('Claude fast mode', () => {
                 expect(rank(family[i].bare), family[i].bare).toBeGreaterThanOrEqual(rank(family[i - 1].bare));
             }
         }
+    });
+});
+
+describe('Gemini XHIGH thinking', () => {
+    it.each([
+        ['gemini-4-hydrogen', true],
+        ['publishers/google/models/gemini-4-hydrogen', true],
+        ['google/gemini-4-hydrogen:batch', true],
+        ['gemini-4.5-hydrogen-preview', true],
+        ['gemini-4-argon', false],
+        ['gemini-4-carbon', false],
+        ['gemini-4-flash', false],
+        ['gemini-4-hydrogenx', false],
+    ])('%s -> %s', (model, expected) => {
+        expect(supportsGeminiXHighThinking(model)).toBe(expected);
     });
 });
 

@@ -34,6 +34,7 @@ import {
     isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
+    supportsGeminiXHighThinking,
 } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
@@ -85,6 +86,7 @@ export enum ThinkingLevel {
     MEDIUM = 'MEDIUM',
     LOW = 'LOW',
     MINIMAL = 'MINIMAL',
+    XHIGH = 'XHIGH',
     THINKING_LEVEL_UNSPECIFIED = 'THINKING_LEVEL_UNSPECIFIED',
 }
 
@@ -410,6 +412,9 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
         model.includes('gemini-nano-banana')
     ) {
         return { Minimal: 'minimal', High: 'high' };
+    }
+    if (supportsGeminiXHighThinking(model)) {
+        return { Low: 'low', Medium: 'medium', High: 'high', 'Extra high': 'xhigh' };
     }
     if (hasGeminiSamplingRestriction(model) || (model.includes('pro') && isGeminiModelVersionGte(model, '3.1'))) {
         return { Low: 'low', Medium: 'medium', High: 'high' };

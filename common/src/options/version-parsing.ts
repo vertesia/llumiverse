@@ -109,6 +109,16 @@ export function hasGeminiSamplingRestriction(model: string): boolean {
 }
 
 /**
+ * Model-specific exception: Gemini 4 Hydrogen adds the XHIGH thinking level, which Gemini 4 Argon and Carbon do not
+ * offer, so it follows the Hydrogen tier rather than a version. The tier is matched on any generation and suffix
+ * (`gemini-4-hydrogen`, `google/gemini-4-hydrogen:batch`) so later Hydrogen releases keep it.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen
+ */
+export function supportsGeminiXHighThinking(model: string): boolean {
+    return /(?:^|[/.])gemini-\d+(?:\.\d+)?-hydrogen(?:$|[^a-z0-9])/.test(model.toLowerCase());
+}
+
+/**
  * Gemini 4+ chat models support long decodes on Vertex generateContent: output continues across requests up to the
  * unified 1,048,576-token input-plus-output limit. Specialised image, speech, live, audio and robotics variants do not.
  * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
