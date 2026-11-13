@@ -74,6 +74,19 @@ function imageResultTokens(usage: OpenAIImageTokenUsage): { result_image?: numbe
 }
 
 /**
+ * Usage of a streamed Images API completion event (`image_generation.completed`, `image_edit.completed`). The SDK
+ * defines these events' `output_tokens` as the image tokens of the output image, so they count as image tokens even
+ * without a separate breakdown.
+ */
+export function mapOpenAIImageStreamUsage(
+    usage: OpenAIImageTokenUsage | null | undefined,
+): ExecutionTokenUsage | undefined {
+    const mapped = mapOpenAIImageUsage(usage);
+    if (!usage || !mapped || mapped.result_image !== undefined) return mapped;
+    return { ...mapped, result_image: usage.output_tokens };
+}
+
+/**
  * Images API usage. An SVG output also reports the tokens of the model that authored it (`svg_usage`), billed apart
  * from the image tokens, so it goes to `tool_usage.svg` rather than into the main counts.
  */

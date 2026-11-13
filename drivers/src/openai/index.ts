@@ -65,7 +65,7 @@ import { logOpenAIInputTransformations } from './input-transformations.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
-import { mapOpenAIImageUsage, mapOpenAIResponsesUsage } from './usage.js';
+import { mapOpenAIImageStreamUsage, mapOpenAIImageUsage, mapOpenAIResponsesUsage } from './usage.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -1046,7 +1046,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                                 value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
                             },
                         ],
-                        token_usage: mapOpenAIImageUsage(event.usage),
+                        token_usage: mapOpenAIImageStreamUsage(event.usage),
                     } satisfies CompletionChunkObject;
                 }
                 if (!completed) throw new Error('Image stream ended without a completed image');
