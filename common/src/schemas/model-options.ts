@@ -78,6 +78,7 @@ export const AnthropicClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
         speed: z.enum(['standard', 'fast']).optional(),
     })
     .meta({ id: 'AnthropicClaudeOptions' });
@@ -223,6 +224,7 @@ export const BedrockClaudeOptionsSchema = z
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockClaudeOptions' });
@@ -334,6 +336,7 @@ export const BedrockMantleClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMantleClaudeOptions' });
 
@@ -398,6 +401,7 @@ export const OpenAiThinkingOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
         cache_ttl: OpenAiPromptCacheTtlSchema.optional(),
+        native_compaction: z.boolean().optional(),
         extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
@@ -421,6 +425,7 @@ export const OpenAiTextOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
         cache_ttl: OpenAiPromptCacheTtlSchema.optional(),
+        native_compaction: z.boolean().optional(),
         extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
@@ -428,6 +433,7 @@ export const OpenAiTextOptionsSchema = z
 export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({
     _option_id: true,
     cache_ttl: true,
+    native_compaction: true,
     extra_body: true,
     image_generation: true,
 })
@@ -569,6 +575,7 @@ export const VertexAIClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
     })
     .meta({ id: 'VertexAIClaudeOptions' });
 

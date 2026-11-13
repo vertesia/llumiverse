@@ -53,6 +53,23 @@ export function buildClaudeCacheOptions(): ModelOptionInfoItem[] {
 }
 
 /**
+ * native_compaction toggle — for the providers whose drivers implement on-demand compaction. The option is read by the
+ * application that compacts conversations (an agent checkpoint, for example), which then requests `compact_conversation`.
+ */
+export function buildNativeCompactionOption(): ModelOptionInfoItem[] {
+    return [
+        {
+            name: 'native_compaction',
+            type: OptionType.boolean,
+            default: false,
+            description:
+                "Compact long conversations with the provider's own server-side compaction instead of a summary " +
+                'written by the model. Applications that compact conversations, such as agent checkpoints, read it.',
+        },
+    ];
+}
+
+/**
  * cache_ttl selector — only shown when caching is enabled.
  * Pass `option?.cache_enabled` from the current saved options.
  */

@@ -64,6 +64,7 @@ import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
+import { openAIResponsesContextManagement, trimOpenAIConversationToCompaction } from './responses-compaction.js';
 import { formatOpenAISchema } from './schema.js';
 import { openAIPromptUsage } from './usage.js';
 
@@ -295,6 +296,19 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (options.compact_conversation) {
+            const completion = await this.compactConversation(driver, prompt, options, 'stream', signal);
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        result: completion.result,
+                        token_usage: completion.token_usage,
+                        finish_reason: completion.finish_reason,
+                    };
+                },
+                finalizeConversation: () => completion.conversation,
+            };
+        }
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -389,6 +403,7 @@ export class OpenAIResponsesProtocol {
                     model_options?.verbosity,
                     options.prompt_cache_schema_suffix === true && !!options.result_schema,
                 ),
+                context_management: openAIResponsesContextManagement(options.compaction, driver.logger, options.model),
             },
             model_options?.extra_body,
             driver.logger,
@@ -433,6 +448,9 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (options.compact_conversation) {
+            return this.compactConversation(driver, prompt, options, 'execute', signal);
+        }
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -525,6 +543,7 @@ export class OpenAIResponsesProtocol {
                     model_options?.verbosity,
                     options.prompt_cache_schema_suffix === true && !!options.result_schema,
                 ),
+                context_management: openAIResponsesContextManagement(options.compaction, driver.logger, options.model),
             },
             model_options?.extra_body,
             driver.logger,
@@ -564,6 +583,52 @@ export class OpenAIResponsesProtocol {
             : updateConversation(conversation, createAssistantMessageFromCompletion(completion));
 
         return completion;
+    }
+
+    /**
+     * On-demand compaction (`POST /responses/compact`). The compacted output (the user messages, then one opaque
+     * compaction item) replaces the conversation, and there is no answer: the summary is encrypted.
+     */
+    private async compactConversation(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        operation: 'execute' | 'stream',
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        assertConversationArray(options.conversation, { provider: driver.provider, model: options.model, operation });
+        convertRoles(prompt, options.model);
+        const conversation = fixOrphanedToolResults(
+            fixOrphanedToolUse(updateConversation(options.conversation, prompt)),
+        );
+        const model_options = options.model_options as OpenAIRequestOptions | undefined;
+        // Compatibility exception: the compact endpoint has no summarization prompt to carry `instructions`, and the
+        // threshold `compaction` settings belong to response requests, so both are left out of this one.
+        logModelOptionException(
+            driver.logger,
+            options.model,
+            options.compact_conversation,
+            ['instructions'],
+            'openai_compaction_instructions',
+        );
+        logModelOptionException(driver.logger, options.model, options, ['compaction'], 'openai_on_demand_compaction');
+        const request: OpenAI.Responses.ResponseCompactParams = {
+            model: driver.getResponsesRequestModel(options.model),
+            input: conversation,
+            prompt_cache_key: model_options?.prompt_cache_key ?? options.prompt_cache_key,
+        };
+        const requestOptions = this.getRequestOptions(driver, options, signal);
+        const res = requestOptions
+            ? await driver.getResponsesService(options).responses.compact(request, requestOptions)
+            : await driver.getResponsesService(options).responses.compact(request);
+
+        return {
+            result: [],
+            token_usage: mapUsage(res.usage),
+            finish_reason: 'compaction',
+            conversation: finalizeOpenAIResponsesConversation([], res.output, options, true),
+            ...(options.include_original_response ? { original_response: res } : {}),
+        };
     }
 }
 
@@ -1536,8 +1601,13 @@ function finalizeOpenAIResponsesConversation(
     conversation: ResponseInputItem[],
     output: OpenAI.Responses.ResponseOutputItem[],
     options: ExecutionOptions,
+    compacted = false,
 ): ResponseInputItem[] {
-    let completed = updateConversation(conversation, output as ResponseInputItem[]);
+    // The output of an on-demand compaction replaces the conversation as is: its user messages come before the
+    // compaction item and must be kept.
+    let completed = compacted
+        ? (output as ResponseInputItem[])
+        : trimOpenAIConversationToCompaction(updateConversation(conversation, output as ResponseInputItem[]));
     completed = incrementConversationTurn(completed) as ResponseInputItem[];
     const currentTurn = getConversationMeta(completed).turnNumber;
     const preserveSubtree = (value: unknown): boolean => {

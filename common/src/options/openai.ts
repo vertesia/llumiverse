@@ -21,6 +21,7 @@ import {
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
+import { buildNativeCompactionOption } from './shared-parsing.js';
 import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE, isOpenAIImageVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
@@ -512,6 +513,8 @@ export function getOpenAiOptions(
                 ...visionOptions,
                 ...serviceTierOptions,
                 ...getOpenAIPromptCacheOptions(model, provider),
+                // The Responses drivers (OpenAI, Azure OpenAI) implement on-demand compaction; Chat Completions do not.
+                ...(provider === Providers.openai_compatible ? [] : buildNativeCompactionOption()),
                 {
                     name: 'image_generation',
                     type: OptionType.json_object,
@@ -608,6 +611,8 @@ export function getOpenAiOptions(
                 ...visionOptions,
                 ...serviceTierOptions,
                 ...getOpenAIPromptCacheOptions(model, provider),
+                // The Responses drivers (OpenAI, Azure OpenAI) implement on-demand compaction; Chat Completions do not.
+                ...(provider === Providers.openai_compatible ? [] : buildNativeCompactionOption()),
                 {
                     name: 'image_generation',
                     type: OptionType.json_object,

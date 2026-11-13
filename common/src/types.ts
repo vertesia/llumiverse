@@ -743,6 +743,44 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      * - undefined: Same as 1, strip after 1 turn
      */
     stripHeartbeatsAfterTurns?: number;
+
+    /**
+     * Server-side compaction of a long conversation. Once the request's input reaches the trigger, the provider
+     * summarizes the earlier turns into an opaque compaction block, and the returned `conversation` keeps only that
+     * block and what follows it. Supported by Claude (Messages API) and the OpenAI Responses API.
+     * - undefined (default): no compaction
+     * - `{}`: compaction with the provider's own trigger and summarization prompt
+     */
+    compaction?: ConversationCompactionOptions;
+    /**
+     * Compact the conversation now instead of answering it (on-demand compaction).
+     *
+     * The provider summarizes `conversation` plus the prompt, and the returned `conversation` holds only what replaces
+     * them: Claude's compaction block, or the OpenAI Responses API's compacted items. Continue from that conversation.
+     * `finish_reason` is `compaction`, and Claude's `result` is the summary text (OpenAI's summary is encrypted).
+     * Takes precedence over `compaction`, which providers do not accept on the same request.
+     */
+    compact_conversation?: CompactConversationOptions;
+}
+
+/** On-demand conversation compaction. Omitted fields leave the provider's defaults in place. */
+export interface CompactConversationOptions {
+    /**
+     * Summarization prompt that replaces the provider's own. Claude only: the OpenAI Responses API has no
+     * equivalent, so the OpenAI drivers leave it out and log a warning.
+     */
+    instructions?: string;
+}
+
+/** Server-side conversation compaction. Omitted fields leave the provider's defaults in place. */
+export interface ConversationCompactionOptions {
+    /** Input tokens at which the provider compacts the conversation (Claude's default is 150,000). */
+    trigger_tokens?: number;
+    /**
+     * Summarization prompt that replaces the provider's own. Claude only: the OpenAI Responses API has no
+     * equivalent, so the OpenAI drivers leave it out and log a warning.
+     */
+    instructions?: string;
 }
 
 //Common names to share between different models
