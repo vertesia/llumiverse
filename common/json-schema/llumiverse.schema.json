@@ -148,6 +148,9 @@
                         "1h"
                     ]
                 },
+                "native_compaction": {
+                    "type": "boolean"
+                },
                 "speed": {
                     "type": "string",
                     "enum": [
@@ -350,6 +353,9 @@
                         "5m",
                         "1h"
                     ]
+                },
+                "native_compaction": {
+                    "type": "boolean"
                 },
                 "service_tier": {
                     "type": "string",
@@ -594,6 +600,9 @@
                         "5m",
                         "1h"
                     ]
+                },
+                "native_compaction": {
+                    "type": "boolean"
                 }
             },
             "additionalProperties": false
@@ -957,6 +966,10 @@
                     "type": "number",
                     "description": "Of `prompt_cache_write`, the tokens written with a one-hour cache lifetime, when the provider reports it. The remainder used the default (five-minute) lifetime."
                 },
+                "prompt_cache_write_12h": {
+                    "type": "number",
+                    "description": "Of `prompt_cache_write`, the tokens written with a 12-hour cache retention, when the provider reports it (OpenAI). The remainder used the default (30-minute) retention."
+                },
                 "prompt_new": {
                     "type": "number"
                 },
@@ -967,6 +980,9 @@
                 "provider_cost_usd": {
                     "type": "number",
                     "description": "Amount the provider reported charging for this request, in USD, when the provider returns it (e.g. OpenRouter). Absent for bring-your-own-key requests."
+                },
+                "tool_usage": {
+                    "$ref": "#/$defs/ToolUsage"
                 }
             },
             "additionalProperties": false
@@ -1938,6 +1954,9 @@
                 "cache_ttl": {
                     "$ref": "#/$defs/OpenAiPromptCacheTtl"
                 },
+                "native_compaction": {
+                    "type": "boolean"
+                },
                 "extra_body": {
                     "type": "object",
                     "additionalProperties": true,
@@ -2014,6 +2033,9 @@
                 },
                 "cache_ttl": {
                     "$ref": "#/$defs/OpenAiPromptCacheTtl"
+                },
+                "native_compaction": {
+                    "type": "boolean"
                 },
                 "extra_body": {
                     "type": "object",
@@ -2420,6 +2442,7 @@
                 "MEDIUM",
                 "LOW",
                 "MINIMAL",
+                "XHIGH",
                 "THINKING_LEVEL_UNSPECIFIED"
             ]
         },
@@ -2460,6 +2483,50 @@
             ],
             "additionalProperties": false,
             "description": "Tool definition for LLM tool use. The input_schema uses a permissive type to support both:\n- AJV's JSONSchemaType<T> for type-safe schema generation\n- Plain object schemas for simpler cases"
+        },
+        "ToolTokenUsage": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "number"
+                },
+                "prompt_cached": {
+                    "type": "number"
+                },
+                "result": {
+                    "type": "number"
+                },
+                "result_image": {
+                    "type": "number",
+                    "description": "Of `result`, the tokens of generated images, when the provider reports them."
+                },
+                "total": {
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false
+        },
+        "ToolUsage": {
+            "type": "object",
+            "properties": {
+                "image_generation": {
+                    "description": "Tokens of the hosted image generation tool (OpenAI Responses `tool_usage.image_gen`).",
+                    "$ref": "#/$defs/ToolTokenUsage"
+                },
+                "web_search_requests": {
+                    "type": "number",
+                    "description": "Billable web search requests (OpenAI Responses `tool_usage.web_search`)."
+                },
+                "svg": {
+                    "description": "Tokens of the model that authored SVG output (OpenAI Images API `svg_usage`).",
+                    "$ref": "#/$defs/ToolTokenUsage"
+                }
+            },
+            "additionalProperties": false,
+            "description": "Usage billed apart from the main model: hosted tools and auxiliary models. Not included in `prompt`, `result` or `total`. A tool with no reported usage is absent."
         },
         "ToolUse": {
             "type": "object",
@@ -2572,6 +2639,16 @@
                         "5m",
                         "1h"
                     ]
+                },
+                "speed": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "fast"
+                    ]
+                },
+                "native_compaction": {
+                    "type": "boolean"
                 }
             },
             "additionalProperties": false
@@ -2590,7 +2667,8 @@
                         "image_to_video",
                         "reference_to_video",
                         "edit",
-                        "extend"
+                        "extend",
+                        "upscale"
                     ]
                 },
                 "aspect_ratio": {
@@ -2603,7 +2681,7 @@
                 "duration_seconds": {
                     "type": "integer",
                     "minimum": 3,
-                    "maximum": 10
+                    "maximum": 15
                 },
                 "resolution": {
                     "type": "string",
@@ -2613,6 +2691,11 @@
                         "1080p",
                         "4k"
                     ]
+                },
+                "seed": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
                 }
             },
             "additionalProperties": false
@@ -2657,7 +2740,8 @@
                         "minimal",
                         "low",
                         "medium",
-                        "high"
+                        "high",
+                        "xhigh"
                     ]
                 },
                 "include_thoughts": {

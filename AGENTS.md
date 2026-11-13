@@ -255,10 +255,10 @@ output: [llumiverse-go](https://github.com/vertesia/llumiverse-go) generates its
 share one definition. After editing a schema in `common/src/schemas/`, run `pnpm --filter @llumiverse/common
 gen:json-schema` and commit the result; `json-schema-document.test.ts` fails when the committed file is stale.
 
-The document applies the same shape normalization as the Vertesia API contract (`@vertesia/common`), so a type it
-shares with that contract is identical apart from `additionalProperties`:
+The document follows the Vertesia API contract (`@vertesia/common`) for shape normalization.
+The Vertesia API applies its own strictness policy to requests and responses.
 
-- `additionalProperties: false`, which the API sets per request or response, is left as Zod writes it.
+- The Llumiverse document preserves `additionalProperties: false` where Zod emits it.
 - Both documents publish `additionalProperties: true` for explicitly open objects with declared properties,
   including `JSONSchema`, so generated clients can preserve keywords such as `enum`, `oneOf`, and `minimum`.
 
