@@ -7,7 +7,13 @@
  */
 
 import { AnthropicError, APIError } from '@anthropic-ai/sdk/error';
-import type { AnthropicBeta, BetaMessage, BetaRawMessageDeltaEvent } from '@anthropic-ai/sdk/resources/beta.js';
+import type {
+    AnthropicBeta,
+    BetaCompactionConfig,
+    BetaContextManagementConfig,
+    BetaMessage,
+    BetaRawMessageDeltaEvent,
+} from '@anthropic-ai/sdk/resources/beta.js';
 import type {
     ContentBlock,
     ContentBlockParam,
@@ -54,6 +60,17 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import {
+    CLAUDE_COMPACTION_BETA,
+    CLAUDE_ON_DEMAND_COMPACTION_BETA,
+    ClaudeCompactionDeltas,
+    claudeCompactionContextManagement,
+    claudeCompactionResults,
+    claudeCompactionUsage,
+    claudeOnDemandCompaction,
+    isClaudeCompactionBlock,
+    trimClaudeConversationToCompaction,
+} from './claude-compaction.js';
 import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
 import { usesClaudeNativeResultSchema } from './claude-structured-output.js';
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
@@ -262,6 +279,10 @@ export type ClaudeMessageCreateParams = MessageCreateParamsBase & {
     temperature?: number;
     top_p?: number;
     top_k?: number;
+    /** Beta: server-side compaction (see claude-compaction.ts), sent with its beta header. */
+    context_management?: BetaContextManagementConfig;
+    /** Beta: on-demand compaction (see claude-compaction.ts), sent with its beta header. */
+    compaction?: BetaCompactionConfig;
 };
 
 export interface AnthropicUsageLike {
@@ -273,6 +294,8 @@ export interface AnthropicUsageLike {
     service_tier?: string | null;
     /** `fast` when the request ran in fast mode. */
     speed?: string | null;
+    /** Per-iteration usage (beta); `compaction` entries are not counted in the fields above. */
+    iterations?: Parameters<typeof claudeCompactionUsage>[0];
 }
 
 /**
@@ -390,16 +413,22 @@ export function claudeServiceTier(usage: Pick<AnthropicUsageLike, 'service_tier'
 }
 
 export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): ExecutionTokenUsage {
-    const cacheRead = usage.cache_read_input_tokens ?? 0;
-    const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+    // A compaction runs as its own billed iteration that the top-level fields leave out; count it with the request.
+    const compaction = claudeCompactionUsage(usage.iterations);
+    const inputTokens = usage.input_tokens + compaction.input;
+    const outputTokens = usage.output_tokens + compaction.output;
+    const cacheRead = (usage.cache_read_input_tokens ?? 0) + compaction.cacheRead;
+    const cacheWrite = (usage.cache_creation_input_tokens ?? 0) + compaction.cacheWrite;
+    const cacheWrite1h = (usage.cache_creation?.ephemeral_1h_input_tokens ?? 0) + compaction.cacheWrite1h;
+    const compacted = compaction.count > 0;
     return {
-        prompt_new: usage.input_tokens,
-        prompt: usage.input_tokens + cacheRead + cacheWrite,
-        result: usage.output_tokens,
-        total: usage.input_tokens + usage.output_tokens + cacheRead + cacheWrite,
-        prompt_cached: usage.cache_read_input_tokens ?? undefined,
-        prompt_cache_write: usage.cache_creation_input_tokens ?? undefined,
-        prompt_cache_write_1h: usage.cache_creation?.ephemeral_1h_input_tokens || undefined,
+        prompt_new: inputTokens,
+        prompt: inputTokens + cacheRead + cacheWrite,
+        result: outputTokens,
+        total: inputTokens + outputTokens + cacheRead + cacheWrite,
+        prompt_cached: compacted ? cacheRead : (usage.cache_read_input_tokens ?? undefined),
+        prompt_cache_write: compacted ? cacheWrite : (usage.cache_creation_input_tokens ?? undefined),
+        prompt_cache_write_1h: cacheWrite1h || undefined,
     };
 }
 
@@ -1187,6 +1216,20 @@ export function getClaudePayload(
         ...(fastMode && { speed: 'fast' as const }),
     };
 
+    if (options.compact_conversation) {
+        payload.compaction = claudeOnDemandCompaction(options.compact_conversation);
+        betas.push(CLAUDE_ON_DEMAND_COMPACTION_BETA);
+        // Compatibility exception: the API rejects `context_management` alongside an on-demand compaction, so the
+        // explicit request to compact now wins over the threshold settings, which apply again on the next request.
+        logModelOptionException(logger, modelName, options, ['compaction'], 'claude_on_demand_compaction');
+    } else {
+        const contextManagement = claudeCompactionContextManagement(options.compaction);
+        if (contextManagement) {
+            payload.context_management = contextManagement;
+            betas.push(CLAUDE_COMPACTION_BETA);
+        }
+    }
+
     // One comma-separated header: Google Cloud reads only the first anthropic-beta header.
     const requestOptions: RequestOptions | undefined =
         betas.length > 0 ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined;
@@ -1321,6 +1364,7 @@ function finalizeClaudeConversation(
     options: ExecutionOptions,
 ): ClaudePrompt {
     let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
+    completedConversation = trimClaudeConversationToCompaction(completedConversation);
     completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
     // Models that keep earlier turns' thinking get it back unchanged, as Anthropic recommends; removing it rewrites
     // the history after the first removed block. Earlier models strip it themselves on the next plain user turn,
@@ -1337,7 +1381,8 @@ function finalizeClaudeConversation(
         if (!value || typeof value !== 'object') return false;
         if (protectedMessages.has(value as MessageParam)) return true;
         const type = (value as { type?: unknown }).type;
-        return type === 'thinking' || type === 'redacted_thinking';
+        // Compaction blocks go back verbatim: the API checks their summary and opaque fields.
+        return type === 'thinking' || type === 'redacted_thinking' || isClaudeCompactionBlock(value);
     };
     const stripOpts = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
@@ -1471,10 +1516,12 @@ export async function executeClaudeCompletion(
         mergeRequestOptions(requestOptions, transportOptions),
     );
     let transformations: InputTransformations;
+    const compactionDeltas = new ClaudeCompactionDeltas();
     for await (const event of eventsThenOutcome(responseStream)) {
         transformations = trackInputTransformations(transformations, event);
+        compactionDeltas.track(event);
     }
-    const result = await responseStream.finalMessage();
+    const result = compactionDeltas.apply(await responseStream.finalMessage());
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
     logClaudeRefusal(logger, result.stop_reason, {
         provider,
@@ -1486,7 +1533,10 @@ export async function executeClaudeCompletion(
     logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
-    const completionResults = collectClaudeResults(result.content, includeThoughts);
+    // An on-demand compaction answers with its summary alone.
+    const completionResults = options.compact_conversation
+        ? claudeCompactionResults(result.content)
+        : collectClaudeResults(result.content, includeThoughts);
     // A token limit or refusal can stop the response inside its last tool call, and the SDK still parses that call's
     // partial input into an object. Leave the trailing call out, as the streaming path does; the conversation keeps it.
     const lastBlock = result.content.at(-1);
@@ -1540,12 +1590,16 @@ export async function streamClaudeCompletion(
     let pendingSpacing = false;
     let responseId: string | undefined;
     let transformations: InputTransformations;
+    let startUsage: AnthropicUsageLike | undefined;
+    const compactionDeltas = new ClaudeCompactionDeltas();
 
     const stream = asyncMap(eventsThenOutcome(response_stream), async (streamEvent: RawMessageStreamEvent) => {
         transformations = trackInputTransformations(transformations, streamEvent);
+        compactionDeltas.track(streamEvent);
         switch (streamEvent.type) {
             case 'message_start':
                 responseId = streamEvent.message.id;
+                startUsage = streamEvent.message.usage as AnthropicUsageLike;
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
@@ -1563,10 +1617,16 @@ export async function streamClaudeCompletion(
                 logClaudeInputTransformations(logger, transformations, { provider, model: options.model });
                 return {
                     result: [{ type: 'text', value: '' }],
-                    token_usage: { result: streamEvent.usage.output_tokens },
+                    token_usage: streamedClaudeUsage(startUsage, streamEvent.usage),
                     finish_reason: claudeFinishReason(streamEvent.delta.stop_reason ?? undefined),
                 } satisfies CompletionChunkObject;
             case 'content_block_start':
+                // An on-demand compaction streams its block whole, here, and answers with its summary alone.
+                if (options.compact_conversation && isClaudeCompactionBlock(streamEvent.content_block)) {
+                    return {
+                        result: claudeCompactionResults([streamEvent.content_block]),
+                    } satisfies CompletionChunkObject;
+                }
                 if (streamEvent.content_block.type === 'tool_use') {
                     currentToolUse = {
                         id: streamEvent.content_block.id,
@@ -1637,10 +1697,24 @@ export async function streamClaudeCompletion(
     return {
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
-            const finalMessage = await response_stream.finalMessage();
+            const finalMessage = compactionDeltas.apply(await response_stream.finalMessage());
             return finalizeClaudeConversation(conversation, finalMessage, options);
         },
     };
+}
+
+/**
+ * Usage reported by the final `message_delta`: its output tokens, plus the request's full usage when it ran a
+ * compaction, whose tokens the earlier `message_start` usage could not include. Stream usage is merged by taking
+ * the largest prompt and result counts, so the full figures replace the earlier ones.
+ */
+function streamedClaudeUsage(
+    startUsage: AnthropicUsageLike | undefined,
+    deltaUsage: { output_tokens: number },
+): ExecutionTokenUsage {
+    const iterations = (deltaUsage as Pick<AnthropicUsageLike, 'iterations'>).iterations ?? startUsage?.iterations;
+    if (!startUsage || claudeCompactionUsage(iterations).count === 0) return { result: deltaUsage.output_tokens };
+    return anthropicUsageToTokenUsage({ ...startUsage, output_tokens: deltaUsage.output_tokens, iterations });
 }
 
 // ============================================================================

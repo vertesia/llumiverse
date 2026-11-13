@@ -64,6 +64,7 @@ import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { logOpenAIInputTransformations } from './input-transformations.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
+import { openAIResponsesContextManagement, trimOpenAIConversationToCompaction } from './responses-compaction.js';
 import { formatOpenAISchema } from './schema.js';
 import { mapOpenAIImageStreamUsage, mapOpenAIImageUsage, mapOpenAIResponsesUsage } from './usage.js';
 
@@ -226,13 +227,13 @@ function configureOpenAIPromptCaching(
  */
 function getPromptCacheRequestOptions(
     model: string,
-    provider: string,
+    provider: Providers,
     cacheTtl: OpenAIPromptCacheTtl | undefined,
     options: OpenAIPromptCacheConfig['options'],
     logger?: Logger,
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
     if (!cacheTtl) return { prompt_cache_options: options };
-    if (provider !== Providers.openai || !getOpenAIPromptCacheTtls(model).includes(cacheTtl)) {
+    if (!getOpenAIPromptCacheTtls(model, provider).includes(cacheTtl)) {
         logModelOptionException(logger, model, { cache_ttl: cacheTtl }, ['cache_ttl'], 'openai_cache_ttl_unsupported');
         return { prompt_cache_options: options };
     }
@@ -287,6 +288,19 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        if (options.compact_conversation) {
+            const completion = await this.compactConversation(driver, prompt, options, 'stream', signal);
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        result: completion.result,
+                        token_usage: completion.token_usage,
+                        finish_reason: completion.finish_reason,
+                    };
+                },
+                finalizeConversation: () => completion.conversation,
+            };
+        }
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -340,14 +354,12 @@ export class OpenAIResponsesProtocol {
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
-        const promptCache = configureOpenAIPromptCaching(
-            conversation,
-            driver.getResponsesRequestModel(options.model),
-            promptCacheKey,
-        );
+        // Prompt-cache support follows the source model, not a deployment alias that names another version.
+        const promptCacheModel = driver.getPromptCacheSourceModel(options.model);
+        const promptCache = configureOpenAIPromptCaching(conversation, promptCacheModel, promptCacheKey);
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
-            options.model,
+            promptCacheModel,
             driver.provider,
             model_options?.cache_ttl,
             promptCache.options,
@@ -381,6 +393,7 @@ export class OpenAIResponsesProtocol {
                     model_options?.verbosity,
                     options.prompt_cache_schema_suffix === true && !!options.result_schema,
                 ),
+                context_management: openAIResponsesContextManagement(options.compaction, driver.logger, options.model),
             },
             model_options?.extra_body,
             driver.logger,
@@ -425,6 +438,9 @@ export class OpenAIResponsesProtocol {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        if (options.compact_conversation) {
+            return this.compactConversation(driver, prompt, options, 'execute', signal);
+        }
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -476,14 +492,12 @@ export class OpenAIResponsesProtocol {
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
-        const promptCache = configureOpenAIPromptCaching(
-            conversation,
-            driver.getResponsesRequestModel(options.model),
-            promptCacheKey,
-        );
+        // Prompt-cache support follows the source model, not a deployment alias that names another version.
+        const promptCacheModel = driver.getPromptCacheSourceModel(options.model);
+        const promptCache = configureOpenAIPromptCaching(conversation, promptCacheModel, promptCacheKey);
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
-            options.model,
+            promptCacheModel,
             driver.provider,
             model_options?.cache_ttl,
             promptCache.options,
@@ -517,6 +531,7 @@ export class OpenAIResponsesProtocol {
                     model_options?.verbosity,
                     options.prompt_cache_schema_suffix === true && !!options.result_schema,
                 ),
+                context_management: openAIResponsesContextManagement(options.compaction, driver.logger, options.model),
             },
             model_options?.extra_body,
             driver.logger,
@@ -556,6 +571,52 @@ export class OpenAIResponsesProtocol {
             : updateConversation(conversation, createAssistantMessageFromCompletion(completion));
 
         return completion;
+    }
+
+    /**
+     * On-demand compaction (`POST /responses/compact`). The compacted output (the user messages, then one opaque
+     * compaction item) replaces the conversation, and there is no answer: the summary is encrypted.
+     */
+    private async compactConversation(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        operation: 'execute' | 'stream',
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        assertConversationArray(options.conversation, { provider: driver.provider, model: options.model, operation });
+        convertRoles(prompt, options.model);
+        const conversation = fixOrphanedToolResults(
+            fixOrphanedToolUse(updateConversation(options.conversation, prompt)),
+        );
+        const model_options = options.model_options as OpenAIRequestOptions | undefined;
+        // Compatibility exception: the compact endpoint has no summarization prompt to carry `instructions`, and the
+        // threshold `compaction` settings belong to response requests, so both are left out of this one.
+        logModelOptionException(
+            driver.logger,
+            options.model,
+            options.compact_conversation,
+            ['instructions'],
+            'openai_compaction_instructions',
+        );
+        logModelOptionException(driver.logger, options.model, options, ['compaction'], 'openai_on_demand_compaction');
+        const request: OpenAI.Responses.ResponseCompactParams = {
+            model: driver.getResponsesRequestModel(options.model),
+            input: conversation,
+            prompt_cache_key: model_options?.prompt_cache_key ?? options.prompt_cache_key,
+        };
+        const requestOptions = this.getRequestOptions(driver, options, signal);
+        const res = requestOptions
+            ? await driver.getResponsesService(options).responses.compact(request, requestOptions)
+            : await driver.getResponsesService(options).responses.compact(request);
+
+        return {
+            result: [],
+            token_usage: mapOpenAIResponsesUsage(res.usage),
+            finish_reason: 'compaction',
+            conversation: finalizeOpenAIResponsesConversation([], res.output, options, true),
+            ...(options.include_original_response ? { original_response: res } : {}),
+        };
     }
 }
 
@@ -995,6 +1056,15 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     getImageSourceModel(model: string): string {
         return model;
+    }
+
+    /**
+     * @internal The model whose prompt-cache support applies: the source model of a composite `<deployment>::<model>`
+     * ID or of a configured deployment, rather than the deployment name.
+     */
+    getPromptCacheSourceModel(model: string): string {
+        const source = this.getImageSourceModel(model);
+        return source.split('::').pop() ?? source;
     }
 
     getImageService(): OpenAI {
@@ -1521,8 +1591,13 @@ function finalizeOpenAIResponsesConversation(
     conversation: ResponseInputItem[],
     output: OpenAI.Responses.ResponseOutputItem[],
     options: ExecutionOptions,
+    compacted = false,
 ): ResponseInputItem[] {
-    let completed = updateConversation(conversation, output as ResponseInputItem[]);
+    // The output of an on-demand compaction replaces the conversation as is: its user messages come before the
+    // compaction item and must be kept.
+    let completed = compacted
+        ? (output as ResponseInputItem[])
+        : trimOpenAIConversationToCompaction(updateConversation(conversation, output as ResponseInputItem[]));
     completed = incrementConversationTurn(completed) as ResponseInputItem[];
     const currentTurn = getConversationMeta(completed).turnNumber;
     const preserveSubtree = (value: unknown): boolean => {

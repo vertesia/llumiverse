@@ -10,6 +10,7 @@ import {
     buildClaudeSpeedOption,
     buildClaudeThinkingBudgetOption,
     buildClaudeThinkingModeOption,
+    buildNativeCompactionOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import { hasSamplingParameterRestriction } from './version-parsing.js';
@@ -56,6 +57,7 @@ export function getAnthropicOptions(
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as unknown as AnthropicClaudeOptions)?.cache_enabled),
+            ...buildNativeCompactionOption(),
             ...(provider === Providers.anthropic ? buildClaudeSpeedOption(model) : []),
         ],
     };

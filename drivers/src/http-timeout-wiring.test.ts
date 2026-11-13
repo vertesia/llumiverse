@@ -169,7 +169,10 @@ describe('driver HTTP timeout wiring', () => {
             endpoint: 'https://example.openai.azure.com',
             deployment: 'deployment',
         });
-        expectSdkUsesDriverFetch(azure, azure.service);
+        // Azure wraps the agent-backed fetch so that key-carrying requests do not follow redirects.
+        expect(exposePrivate<SdkFetchHolder>(azure.service)._options?.fetch).toBe(
+            exposePrivate<{ getDriverFetch: () => typeof fetch }>(azure).getDriverFetch(),
+        );
         expectSdkUsesDriverRequestTimeout(azure.service);
         azure.destroy();
 
@@ -286,10 +289,12 @@ describe('driver HTTP timeout wiring', () => {
         }>(driver);
 
         expect(internals.getGoogleGenAIHttpOptions()).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
         });
         expect(internals.getGoogleGenAIHttpOptions('flex')).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
             headers: {
@@ -298,6 +303,7 @@ describe('driver HTTP timeout wiring', () => {
             },
         });
         expect(internals.getGoogleGenAIHttpOptions('future-tier')).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
             headers: {
@@ -306,6 +312,7 @@ describe('driver HTTP timeout wiring', () => {
             },
         });
         expect(internals.getGoogleGenAIHttpOptions('default')).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
         });
@@ -315,6 +322,7 @@ describe('driver HTTP timeout wiring', () => {
                 bodyTimeout: 20_000,
             }),
         ).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 20_000,
             fetch: driverFetch(driver),
         });

@@ -208,6 +208,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
         return {
+            // Pinned because @google/genai 3 lets GOOGLE_GENAI_API_VERSION change the default for Vertex clients too.
+            // Gemini long decodes (continuation_token) work only on v1beta1, the SDK's Vertex default.
+            // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen
+            apiVersion: 'v1beta1',
             timeout: this.getDriverRequestTimeoutMs(httpTimeout),
             // Since @google/genai 2.29, the SDK replaces the undici dispatcher with one that disables header and body
             // timeouts unless a fetch is supplied. Passing the driver fetch keeps the driver's per-call timeouts.

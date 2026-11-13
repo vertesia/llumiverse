@@ -16,6 +16,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   # Responses input_transformations (reasoning inputs the server withheld).
   - openai@7.56.0
+  # ThinkingLevel.XHIGH (Gemini 4 Hydrogen) and the new FinishReason values.
+  - '@google/genai@3.3.0'
   - '@vertesia/*'
   - '@llumiverse/*'
 

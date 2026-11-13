@@ -6,6 +6,8 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    isGeminiOmniVersionGte,
+    isGeminiOmniVideoModel,
     LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
@@ -17,13 +19,21 @@ import type { ModelDefinition } from '../models.js';
 
 export const GEMINI_OMNI_VIDEO_MODEL = 'gemini-omni-flash-preview';
 export const GEMINI_OMNI_1_1_VIDEO_MODEL = 'gemini-omni-1.1-flash-preview';
-export const GEMINI_OMNI_VIDEO_MODELS = [GEMINI_OMNI_VIDEO_MODEL, GEMINI_OMNI_1_1_VIDEO_MODEL] as const;
+export const GEMINI_OMNI_1_2_VIDEO_MODEL = 'gemini-omni-1.2-flash';
+/**
+ * Listing supplement only: the Vertex publisher listing does not return these models. Execution routes every
+ * `gemini-omni-*` model through {@link isGeminiOmniVideoModel}, so a model missing here still runs.
+ */
+export const GEMINI_OMNI_VIDEO_MODELS = [
+    GEMINI_OMNI_VIDEO_MODEL,
+    GEMINI_OMNI_1_1_VIDEO_MODEL,
+    GEMINI_OMNI_1_2_VIDEO_MODEL,
+] as const;
 
-export type GeminiOmniVideoModel = (typeof GEMINI_OMNI_VIDEO_MODELS)[number];
+/** A Gemini Omni model ID; any version matched by {@link isGeminiOmniVideoModel}. */
+export type GeminiOmniVideoModel = string;
 
-export function isGeminiOmniVideoModel(model: string): model is GeminiOmniVideoModel {
-    return GEMINI_OMNI_VIDEO_MODELS.some((candidate) => candidate === model);
-}
+export { isGeminiOmniVideoModel };
 
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif']);
 const SUPPORTED_VIDEO_MIME_TYPES = new Set([
@@ -83,6 +93,9 @@ function normalizeOutputPrefix(value: string | undefined): string {
     return value.endsWith('/') ? value : `${value}/`;
 }
 
+/** The resolutions Omni upscales to; a 360p input goes to 720p or 1080p, a 720p input to 1080p or 4k. */
+const UPSCALE_RESOLUTIONS: ReadonlySet<string> = new Set(['720p', '1080p', '4k']);
+
 function resolveTask(
     model: GeminiOmniVideoModel,
     options: VertexAIGeminiOmniVideoOptions | undefined,
@@ -94,10 +107,13 @@ function resolveTask(
     if (!task) {
         throw new OmniVideoRequestError('Gemini Omni video generation with media requires an explicit task');
     }
-    if (task === 'extend' && model !== GEMINI_OMNI_1_1_VIDEO_MODEL) {
+    const isOmni11OrLater = isGeminiOmniVersionGte(model, 1, 1);
+    // Omni 1.2 accepts up to two reference images with the video to edit or extend.
+    const maximumReferenceImages = isGeminiOmniVersionGte(model, 1, 2) ? 2 : 0;
+    if (task === 'extend' && !isOmni11OrLater) {
         throw new OmniVideoRequestError(`${model} does not support extend`);
     }
-    if (options?.resolution && model === GEMINI_OMNI_VIDEO_MODEL && options.resolution !== '720p') {
+    if (options?.resolution && !isOmni11OrLater && options.resolution !== '720p') {
         throw new OmniVideoRequestError(`${model} only supports 720p output`);
     }
 
@@ -106,7 +122,7 @@ function resolveTask(
             if (media.length !== 0) throw new OmniVideoRequestError('text_to_video does not accept media inputs');
             break;
         case 'image_to_video': {
-            const maximumImages = model === GEMINI_OMNI_1_1_VIDEO_MODEL ? 2 : 1;
+            const maximumImages = isOmni11OrLater ? 2 : 1;
             if (videoCount !== 0 || imageCount < 1 || imageCount > maximumImages) {
                 const expected = maximumImages === 1 ? 'exactly one image input' : 'one or two image inputs';
                 throw new OmniVideoRequestError(`image_to_video requires ${expected}`);
@@ -121,13 +137,24 @@ function resolveTask(
             }
             break;
         case 'edit':
-            if (imageCount !== 0 || videoCount !== 1) {
-                throw new OmniVideoRequestError('edit requires exactly one video input');
+        case 'extend':
+            if (imageCount > maximumReferenceImages || videoCount !== 1) {
+                const images = maximumReferenceImages ? ` and at most ${maximumReferenceImages} reference images` : '';
+                throw new OmniVideoRequestError(`${task} requires exactly one video input${images}`);
             }
             break;
-        case 'extend':
+        case 'upscale':
+            // Upscaling starts with Omni 1.2.
+            if (!isGeminiOmniVersionGte(model, 1, 2)) {
+                throw new OmniVideoRequestError(`${model} does not support upscale`);
+            }
             if (imageCount !== 0 || videoCount !== 1) {
-                throw new OmniVideoRequestError('extend requires exactly one video input');
+                throw new OmniVideoRequestError('upscale requires exactly one video input');
+            }
+            // Vertex rejects an upscale without a target resolution, and the driver cannot infer one from the input.
+            // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/upscale-videos
+            if (!options?.resolution || !UPSCALE_RESOLUTIONS.has(options.resolution)) {
+                throw new OmniVideoRequestError('upscale requires a target resolution: 720p, 1080p or 4k');
             }
             break;
     }
@@ -280,7 +307,12 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
             type: 'video' as const,
             delivery: 'uri' as const,
             gcs_uri: outputPrefix,
-            duration: `${modelOptions?.duration_seconds ?? 5}s`,
+            // Compatibility exception: generation requests send a 5-second duration when omitted, because the
+            // documented request bodies always carry one. An upscale keeps the input duration, so it sends only a
+            // caller-supplied value.
+            ...(task !== 'upscale' || modelOptions?.duration_seconds !== undefined
+                ? { duration: `${modelOptions?.duration_seconds ?? 5}s` }
+                : {}),
             ...(modelOptions?.aspect_ratio ? { aspect_ratio: modelOptions.aspect_ratio } : {}),
             ...(modelOptions?.resolution ? { resolution: modelOptions.resolution } : {}),
         } satisfies Interactions.VideoResponseFormat;
@@ -288,7 +320,10 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
             model: this.modelId,
             input: [{ type: 'text' as const, text: prompt.text }, ...prompt.media],
             response_format: [responseFormat],
-            generation_config: { video_config: { task } },
+            generation_config: {
+                video_config: { task },
+                ...(modelOptions?.seed !== undefined ? { seed: modelOptions.seed } : {}),
+            },
         } satisfies Interactions.CreateModelInteractionParamsNonStreaming;
         const response = await driver
             .getFetchClientForRegion('global', 'v1beta1')

@@ -1,6 +1,6 @@
 import { AnthropicFoundry } from '@anthropic-ai/foundry-sdk';
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
-import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
+import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
 import {
     type AIModel,
     type Completion,
@@ -60,6 +60,7 @@ import {
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { azureFoundryScope } from './entra-scope.js';
+import { withoutKeyRedirects } from './key-redirect.js';
 
 export type { AzureFoundryDriverOptions } from '../driver-options.js';
 
@@ -67,9 +68,19 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 function resourceInferenceURL(baseURL: string): string {
     const url = new URL(baseURL);
-    // Images and embeddings use the resource endpoint, rather than the project proxy.
-    url.pathname = url.pathname.replace(/\/api\/projects\/[^/]+\/openai\/v1\/?$/, '/openai/v1');
+    // Images, embeddings and key-authenticated inference use the resource endpoint, rather than the project proxy. A
+    // project URL configured with a trailing slash leaves an empty segment (`/project//openai/v1`), so repeated
+    // slashes are collapsed first.
+    url.pathname = url.pathname.replace(/\/{2,}/g, '/').replace(/\/api\/projects\/[^/]+\/openai\/v1\/?$/, '/openai/v1');
     return url.toString();
+}
+
+/** The project endpoint without trailing slashes, from which the project client builds its routes. */
+function trimTrailingSlashes(endpoint: string): string {
+    // A scan rather than a `/\/+$/` regex, which backtracks quadratically on a long run of slashes.
+    let end = endpoint.length;
+    while (end > 0 && endpoint[end - 1] === '/') end--;
+    return endpoint.slice(0, end);
 }
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
@@ -85,6 +96,12 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     }
 
     private imageService?: OpenAI;
+    private keyFetch?: typeof fetch;
+
+    protected override getDriverFetch(): typeof fetch {
+        this.keyFetch ??= withoutKeyRedirects(super.getDriverFetch());
+        return this.keyFetch;
+    }
 
     getImageService(): OpenAI {
         this.imageService ??= this.service.withOptions({
@@ -193,6 +210,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private readonly deploymentProtocols = new Map<string, FoundryProtocol>();
     private readonly deploymentSources = new Map<string, string>();
     private anthropicClient?: AnthropicFoundry;
+    private keyFetch?: typeof fetch;
     private readonly endpoint: string;
     /** Entra scope of the endpoint's cloud: `ai.azure.us` for Azure Government, else `ai.azure.com`. */
     private readonly scope: string;
@@ -226,8 +244,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return super.stream(segments, options, signal);
     }
 
-    OPENAI_API_VERSION = '2025-01-01-preview';
-
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
 
@@ -235,28 +251,33 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             throw new Error('Azure AI Foundry endpoint is required');
         }
 
-        this.endpoint = opts.endpoint;
-        this.scope = azureFoundryScope(opts.endpoint);
+        this.endpoint = trimTrailingSlashes(opts.endpoint);
+        this.scope = azureFoundryScope(this.endpoint);
 
+        let credential: TokenCredential;
         try {
-            if (!opts.azureADTokenProvider) {
-                // Using Microsoft Entra ID (Azure AD) for authentication
-                opts.azureADTokenProvider = new DefaultAzureCredential();
-            }
+            // Microsoft Entra ID (Azure AD) authenticates inference unless an API key is set. Deployment listing and
+            // discovery go through the Foundry project client, which takes Entra credentials only, so it keeps one.
+            credential = opts.azureADTokenProvider ?? new DefaultAzureCredential();
+            if (!opts.apiKey) opts.azureADTokenProvider = credential;
         } catch (error) {
             this.logger.error({ error }, 'Failed to initialize Azure AD token provider:');
             throw new Error('Failed to initialize Azure AD token provider');
         }
 
         if (opts.apiVersion) {
-            this.OPENAI_API_VERSION = opts.apiVersion;
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
         // The SDK defaults to the public-cloud scope.
-        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider, {
+        this.service = new AIProjectClient(this.endpoint, credential, {
             credentials: { scopes: [this.scope] },
         });
+    }
+
+    protected override getDriverFetch(): typeof fetch {
+        this.keyFetch ??= withoutKeyRedirects(super.getDriverFetch());
+        return this.keyFetch;
     }
 
     /**
@@ -280,12 +301,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     ): Promise<FoundryProtocol> {
         signal?.throwIfAborted();
         const { deploymentName } = parseAzureFoundryModelId(model);
-        const cached = this.deploymentProtocols.get(deploymentName);
-        if (cached) return cached;
         if (resolveModelProfile(this.getSourceModel(model), this.provider).family === 'claude') {
             this.deploymentProtocols.set(deploymentName, 'messages');
             return 'messages';
         }
+        if (this.isApiKeyOnly()) {
+            // Without an Entra credential the project API cannot describe the deployment, so the protocol follows the
+            // source model: the composite ID, the `sourceModel` option, or else the deployment name. It is derived on
+            // every call, so a later composite ID overrides a protocol guessed from the bare deployment name.
+            const protocol = inferProtocolFromSourceModel(this.getSourceModel(model));
+            this.deploymentProtocols.set(deploymentName, protocol);
+            return protocol;
+        }
+        const cached = this.deploymentProtocols.get(deploymentName);
+        if (cached) return cached;
         const deployment = (await this.service.deployments.get(deploymentName, {
             ...(signal ? { abortSignal: signal } : {}),
             requestOptions: { timeout: this.getDriverRequestTimeoutMs(httpTimeout) },
@@ -335,12 +364,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             url.pathname = '/anthropic/';
             url.search = '';
             url.hash = '';
+            const apiKey = this.options.apiKey;
             this.anthropicClient = new AnthropicFoundry({
                 baseURL: url.toString(),
-                azureADTokenProvider: getBearerTokenProvider(
-                    this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
-                    this.scope,
-                ),
+                // The SDK sends an API key as `x-api-key` and rejects it alongside a token provider.
+                ...(apiKey
+                    ? { apiKey }
+                    : {
+                          azureADTokenProvider: getBearerTokenProvider(
+                              this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
+                              this.scope,
+                          ),
+                      }),
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
                 maxRetries: 0,
@@ -368,13 +403,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private getInferenceClient(): OpenAI {
         if (!this.inferenceClient) {
             const configured = this.service.getOpenAIClient();
-            // Projects resolves the project URL; inference uses our current SDK independently.
+            const apiKey = this.options.apiKey;
+            // Projects resolves the project URL; inference uses our current SDK independently. API keys authenticate
+            // the resource endpoint (`<resource>/openai/v1`), so key-based inference goes there instead of the project.
             this.inferenceClient = new OpenAI({
-                baseURL: configured.baseURL,
-                apiKey: getBearerTokenProvider(
-                    this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
-                    this.scope,
-                ),
+                baseURL: apiKey ? resourceInferenceURL(configured.baseURL) : configured.baseURL,
+                apiKey:
+                    apiKey ??
+                    getBearerTokenProvider(
+                        this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
+                        this.scope,
+                    ),
+                defaultHeaders: apiKey ? { 'api-key': apiKey, Authorization: null } : undefined,
                 defaultQuery: this.options.apiVersion ? { 'api-version': this.options.apiVersion } : undefined,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
@@ -570,7 +610,23 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return super.formatLlumiverseError(error, context);
     }
 
+    /** True when inference uses an API key and no Entra credential was supplied for the project API. */
+    private isApiKeyOnly(): boolean {
+        return !!this.options.apiKey && !this.options.azureADTokenProvider;
+    }
+
     async validateConnection(): Promise<boolean> {
+        if (this.options.apiKey) {
+            try {
+                // Inference uses the key, which the project API does not accept: check it against the resource's v1
+                // model list.
+                await this.getResourceClient().models.list({ timeout: this.getDriverRequestTimeoutMs() });
+            } catch (error) {
+                this.logger.error({ error }, 'Microsoft Foundry API key validation failed:');
+                return false;
+            }
+            if (this.isApiKeyOnly()) return true;
+        }
         try {
             // Test the AI Projects client by listing deployments
             const deploymentsIterable = this.service.deployments.list({
@@ -674,6 +730,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async _listModels(filter?: (m: ModelDeployment) => boolean): Promise<AIModel[]> {
+        if (this.isApiKeyOnly()) {
+            throw new Error(
+                'Listing Microsoft Foundry deployments requires Microsoft Entra ID: the project client authenticates ' +
+                    'with Entra tokens only. Pass azureADTokenProvider alongside apiKey, or address deployments by ID.',
+            );
+        }
         let deploymentsIterable: ReturnType<typeof this.service.deployments.list>;
         try {
             // List all deployments in the Azure AI Foundry project
@@ -781,6 +843,19 @@ function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: st
             ? toAzureFoundryChatPrompt(options.conversation as ResponseInputItem[])
             : options.conversation,
     };
+}
+
+/**
+ * The protocol of a deployment whose publisher is unknown. OpenAI models other than gpt-oss use the Responses API,
+ * Claude uses Messages, and every other model uses Chat Completions, as the publisher-based routing would choose.
+ */
+function inferProtocolFromSourceModel(sourceModel: string): FoundryProtocol {
+    const profile = resolveModelProfile(sourceModel, Providers.azure_foundry);
+    if (profile.family === 'claude') return 'messages';
+    const normalized = sourceModel.toLowerCase();
+    if (/(?:^|[-_.:/])codex(?:[-_.:/]|$)/.test(normalized)) return 'responses';
+    if (profile.source_provider === 'openai' && !normalized.includes('gpt-oss')) return 'responses';
+    return 'chat_completions';
 }
 
 function parseCapabilityFlag(value: unknown): boolean | undefined {

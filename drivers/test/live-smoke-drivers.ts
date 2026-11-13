@@ -6,6 +6,7 @@ import type { AbstractDriver } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import {
+    AzureFoundryDriver,
     AzureOpenAIDriver,
     BedrockDriver,
     BedrockMantleDriver,
@@ -99,6 +100,29 @@ if (process.env.AZURE_OPENAI_KEY && process.env.AZURE_OPENAI_ENDPOINT) {
     });
 } else {
     console.warn('Azure OpenAI tests are skipped: AZURE_OPENAI_KEY environment variable is not set');
+}
+
+// Microsoft Foundry addresses models by deployment. List them as `deployment::model` (for example
+// `gpt-6-luna::gpt-6-luna,claude-haiku-5-5::claude-haiku-5-5`) so routing does not depend on the project API.
+// AZURE_FOUNDRY_API_KEY selects key authentication; otherwise DefaultAzureCredential provides an Entra token.
+const AZURE_FOUNDRY_MODELS = (process.env.AZURE_FOUNDRY_MODELS ?? '')
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+if (process.env.AZURE_FOUNDRY_ENDPOINT && AZURE_FOUNDRY_MODELS.length > 0) {
+    drivers.push({
+        name: 'azure-foundry',
+        driver: new AzureFoundryDriver({
+            endpoint: process.env.AZURE_FOUNDRY_ENDPOINT,
+            apiKey: process.env.AZURE_FOUNDRY_API_KEY || undefined,
+        }),
+        models: AZURE_FOUNDRY_MODELS,
+    });
+} else {
+    console.warn(
+        'Microsoft Foundry tests are skipped: AZURE_FOUNDRY_ENDPOINT and AZURE_FOUNDRY_MODELS environment variables are not set',
+    );
 }
 
 if (process.env.BEDROCK_REGION) {

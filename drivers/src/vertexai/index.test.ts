@@ -28,6 +28,7 @@ class TestVertexAIDriver extends VertexAIDriver {
                             { name: 'publishers/google/models/gemini-4-future' },
                             { name: 'publishers/google/models/gemini-omni-flash-preview' },
                             { name: 'publishers/google/models/gemini-omni-1.1-flash-preview' },
+                            { name: 'publishers/google/models/gemini-omni-1.3-flash' },
                             { name: 'publishers/google/models/gemini-live-future' },
                             { name: 'publishers/google/models/gemini-robotics-er-2-preview-info' },
                             { name: 'publishers/google/models/gemini-3.5-live-translate-preview' },
@@ -67,16 +68,25 @@ describe('VertexAIDriver listModels', () => {
         const models = await new TestVertexAIDriver().listModels();
         const omniModels = models.filter((model) => model.id.includes('gemini-omni'));
 
-        expect(omniModels).toEqual([
-            expect.objectContaining({
-                id: 'locations/global/publishers/google/models/gemini-omni-1.1-flash-preview',
-                name: 'Global gemini-omni-1.1-flash-preview',
-            }),
-            expect.objectContaining({
-                id: 'locations/global/publishers/google/models/gemini-omni-flash-preview',
-                name: 'Global gemini-omni-flash-preview',
-            }),
-        ]);
+        expect(omniModels).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'locations/global/publishers/google/models/gemini-omni-1.2-flash',
+                    name: 'Global gemini-omni-1.2-flash',
+                    output_modalities: ['text', 'video'],
+                }),
+                expect.objectContaining({
+                    id: 'locations/global/publishers/google/models/gemini-omni-1.1-flash-preview',
+                    name: 'Global gemini-omni-1.1-flash-preview',
+                }),
+                // A later Omni release is global-only like the known ones, without a catalog entry.
+                expect.objectContaining({
+                    id: 'locations/global/publishers/google/models/gemini-omni-1.3-flash',
+                    output_modalities: ['text', 'video'],
+                }),
+            ]),
+        );
+        for (const model of omniModels) expect(model.id).toMatch(/^locations\/global\//);
     });
 
     it('lists Gemini 4+ only with its global location id', async () => {

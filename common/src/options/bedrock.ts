@@ -22,6 +22,7 @@ import {
     buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
     buildClaudeThinkingModeOption,
+    buildNativeCompactionOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import {
@@ -404,6 +405,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     ...buildClaudeIncludeThoughtsOption(model),
                     ...buildClaudeCacheOptions(),
                     ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),
+                    ...buildNativeCompactionOption(),
                 ],
             };
         } else if (model.includes('amazon')) {

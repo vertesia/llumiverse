@@ -39,7 +39,9 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 async function startLongDecodeServer(hops: Hop[] = HOPS) {
     const bodies: Record<string, unknown>[] = [];
+    const urls: string[] = [];
     const server = createServer((req, res) => {
+        urls.push(req.url ?? '');
         void readBody(req).then((body) => {
             bodies.push(body);
             const hop = body.continuationToken === 'tok-1' ? hops[1] : hops[0];
@@ -67,7 +69,7 @@ async function startLongDecodeServer(hops: Hop[] = HOPS) {
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     };
-    return { bodies, port: (server.address() as AddressInfo).port, close };
+    return { bodies, urls, port: (server.address() as AddressInfo).port, close };
 }
 
 function connectDriver(port: number) {
@@ -89,7 +91,28 @@ function connectDriver(port: number) {
 }
 
 describe('Gemini long decode', () => {
-    afterEach(() => vi.restoreAllMocks());
+    afterEach(() => {
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+    });
+
+    it('stays on v1beta1 when GOOGLE_GENAI_API_VERSION selects another version', async () => {
+        // continuation_token works only on v1beta1, so the environment must not move the Vertex client off it.
+        vi.stubEnv('GOOGLE_GENAI_API_VERSION', 'v1');
+        const { urls, port, close } = await startLongDecodeServer();
+        const { driver } = connectDriver(port);
+        try {
+            await driver.execute([{ role: PromptRole.user, content: 'Write a long proof.' }], {
+                model: MODEL,
+                model_options: { _option_id: 'vertexai-gemini' as const, max_tokens: 200_000 },
+            });
+            expect(urls).toHaveLength(2);
+            for (const url of urls) expect(url).toMatch(/^\/v1beta1\//);
+        } finally {
+            driver.destroy();
+            await close();
+        }
+    });
 
     it.each(['execute', 'stream'] as const)('continues across requests on %s', async (mode) => {
         const { bodies, port, close } = await startLongDecodeServer();

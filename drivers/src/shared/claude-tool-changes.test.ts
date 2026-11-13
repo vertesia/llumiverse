@@ -191,12 +191,12 @@ describe('append-only Claude tool changes', () => {
         expect(getClaudeToolState(final.conversation)?.visible).toEqual(['a']);
     });
 
-    it('sends tools the old way and strips tool changes where they are not supported', async () => {
+    it('sends tools the old way and strips tool changes on models that do not support them', async () => {
         const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'));
         const t2 = await turn(toolResult('c1'), [tool('a'), tool('b')], t1.conversation, assistantToolUse('c2', 'b'));
 
         for (const [provider, model] of [
-            ['azure_foundry', MODEL],
+            ['azure_foundry', 'claude-sonnet-5'],
             ['anthropic', 'claude-sonnet-5'],
         ]) {
             const legacy = await turn(
@@ -529,7 +529,10 @@ describe('canUseClaudeToolChanges', () => {
         [Providers.vertexai, 'claude-sonnet-5-5@20260901', true],
         [Providers.bedrock, 'global.anthropic.claude-sonnet-5-5', true],
         [Providers.bedrock_mantle, 'anthropic.claude-opus-5-5', true],
-        [Providers.azure_foundry, MODEL, false],
+        [Providers.azure_foundry, MODEL, true],
+        [Providers.azure_foundry, 'claude-opus-5-5-fast', true],
+        [Providers.azure_foundry, 'claude-sonnet-5', false],
+        [Providers.azure_foundry, 'claude-mythos-preview', false],
         [Providers.anthropic, 'claude-sonnet-5', false],
         [Providers.bedrock, 'us.anthropic.claude-sonnet-4-6', false],
     ])('%s with %s: %s', (provider, model, expected) => {

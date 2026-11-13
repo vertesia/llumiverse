@@ -130,6 +130,7 @@ describe('Bedrock Converse closed-weight GPT options', () => {
         'us.openai.gpt-5.6-sol',
         'global.openai.gpt-6-luna',
         'us.openai.gpt-6.1-sol',
+        'us.openai.gpt-daybreak-blue-5.6-sol',
         'arn:aws:bedrock:us-east-1:000000000000:inference-profile/global.openai.gpt-6-luna',
     ])('transports effort and strict output together for %s', (model) => {
         const driver = new BedrockDriver({ region: 'us-east-1' });

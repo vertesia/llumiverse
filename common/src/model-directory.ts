@@ -1,5 +1,5 @@
 import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
-import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
+import { getAzureFoundryModelLimits, getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
 import { getBedrockModelCapabilities, getBedrockModelKnowledge } from './capability/bedrock-models.js';
 import { getMistralModelKnowledge } from './capability/mistral.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
@@ -17,6 +17,7 @@ import {
     isModelFamilyVersionGTE,
     isQwenVersionGte,
     isSingleDigitGrokVersionGte,
+    supportsGeminiXHighThinking,
 } from './options/version-parsing.js';
 import type { ModelCapabilities } from './types.js';
 import { Providers } from './types.js';
@@ -458,6 +459,7 @@ function applyProviderOverlay(
                 ? capabilities
                 : providerCapabilities,
             ...getCanonicalLimits(sourceModel, family),
+            ...getAzureFoundryModelLimits(sourceModel),
         };
     }
 
@@ -509,6 +511,7 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     }
     if (family === 'gemini' && isOpenAICompatibleTransport(provider) && isGeminiModelVersionGte(model, '3.5')) {
         // Sampling-restricted generations (Flash 3.7+, Gemini 4+) reject `minimal`, matching native Vertex metadata.
+        if (supportsGeminiXHighThinking(model)) return ['low', 'medium', 'high', 'xhigh'];
         if (hasGeminiSamplingRestriction(model)) return ['low', 'medium', 'high'];
         return ['minimal', 'low', 'medium', 'high'];
     }
@@ -521,9 +524,9 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         return ['low', 'high', 'max'];
     }
     if (isOpenAICompatibleTransport(provider) && family === 'muse') {
-        // Muse models always reason; Spark 1.3+ and Wonder add max. https://openrouter.ai/meta
+        // Muse models always reason; Spark 1.3+, Wonder and Ember add max. https://openrouter.ai/meta
         if (model.includes('glimmer')) return ['low', 'medium', 'high', 'xhigh'];
-        if (model.includes('wonder') || isModelFamilyVersionGTE(model, 'muse-spark-', 1, 3)) {
+        if (/muse-(?:wonder|ember)/.test(model) || isModelFamilyVersionGTE(model, 'muse-spark-', 1, 3)) {
             return ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
         }
         return ['minimal', 'low', 'medium', 'high', 'xhigh'];

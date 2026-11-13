@@ -68,8 +68,11 @@ describe('Azure image deployment routing', () => {
             model: 'chat',
             model_options: { image_generation: { model: 'garden::gpt-image-2.5-flare' } },
         });
-        expect(String(fetchMock.mock.calls[0][0])).toContain(
-            `/openai/responses?api-version=${apiVersion ?? '2024-10-21'}`,
+        // Text Responses use the version-less v1 API unless the caller pins an api-version.
+        expect(String(fetchMock.mock.calls[0][0])).toBe(
+            apiVersion
+                ? `https://example.openai.azure.com/openai/responses?api-version=${apiVersion}`
+                : 'https://example.openai.azure.com/openai/v1/responses',
         );
         expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('x-ms-oai-image-generation-deployment')).toBe(
             false,
