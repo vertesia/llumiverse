@@ -5,7 +5,8 @@
     "description": "Public types, enums and options used by Llumiverse API.",
     "files": [
         "lib",
-        "src"
+        "src",
+        "json-schema"
     ],
     "keywords": [
         "llm",
@@ -37,7 +38,8 @@
         "./schemas": {
             "types": "./lib/schemas/index.d.ts",
             "default": "./lib/schemas/index.js"
-        }
+        },
+        "./json-schema": "./json-schema/llumiverse.schema.json"
     },
     "scripts": {
         "lint": "biome lint src",
@@ -45,7 +47,8 @@
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
         "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
         "clean": "rimraf ./lib tsconfig.tsbuildinfo",
-        "test:unit": "vitest run --exclude '**/*.live.test.ts'"
+        "test:unit": "vitest run --exclude '**/*.live.test.ts'",
+        "gen:json-schema": "vitest run src/schemas/json-schema-document.test.ts --update"
     },
     "author": "Llumiverse",
     "license": "Apache-2.0",

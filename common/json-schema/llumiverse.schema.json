@@ -1,0 +1,2855 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://github.com/vertesia/llumiverse/common/json-schema/llumiverse.schema.json",
+    "title": "Llumiverse common types",
+    "description": "Generated from the Zod schemas exported by @llumiverse/common/schemas. Do not edit: run `pnpm --filter @llumiverse/common gen:json-schema`.",
+    "$defs": {
+        "AIModel": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/$defs/ModelType"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/$defs/AIModelStatus"
+                },
+                "can_stream": {
+                    "type": "boolean"
+                },
+                "is_custom": {
+                    "type": "boolean"
+                },
+                "is_multimodal": {
+                    "type": "boolean"
+                },
+                "input_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "output_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tool_support": {
+                    "type": "boolean"
+                },
+                "environment": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "id",
+                "name",
+                "provider"
+            ],
+            "additionalProperties": false
+        },
+        "AIModelArray": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/AIModel"
+            }
+        },
+        "AIModelStatus": {
+            "type": "string",
+            "enum": [
+                "available",
+                "pending",
+                "stopped",
+                "unavailable",
+                "unknown",
+                "legacy"
+            ]
+        },
+        "AnthropicClaudeOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "anthropic-claude"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "thinking_mode": {
+                    "type": "string",
+                    "enum": [
+                        "adaptive",
+                        "between_tools"
+                    ],
+                    "description": "Thinking mode override. Sonnet 5.5 supports between_tools at low, medium, or high effort. It omits display and budget fields; keep effort fixed during the conversation. When unset, existing model-specific thinking behavior is preserved."
+                },
+                "thinking_budget_tokens": {
+                    "type": "number"
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "cache_enabled": {
+                    "type": "boolean"
+                },
+                "cache_ttl": {
+                    "type": "string",
+                    "enum": [
+                        "5m",
+                        "1h"
+                    ]
+                },
+                "speed": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "fast"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "AudioResult": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "audio"
+                },
+                "value": {
+                    "type": "string",
+                    "pattern": "^(?:gs|s3):\\/\\/[^/]+\\/.+|^artifact:.+"
+                },
+                "mime_type": {
+                    "type": "string",
+                    "format": "starts_with",
+                    "pattern": "^audio\\/.*"
+                },
+                "container": {
+                    "type": "string"
+                },
+                "codec": {
+                    "type": "string"
+                },
+                "sample_rate": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                },
+                "channels": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                },
+                "sample_encoding": {
+                    "type": "string"
+                },
+                "byte_order": {
+                    "type": "string",
+                    "enum": [
+                        "little",
+                        "big"
+                    ]
+                }
+            },
+            "required": [
+                "type",
+                "value",
+                "mime_type"
+            ],
+            "additionalProperties": false
+        },
+        "AzureFoundryChatOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "azure-foundry-chat"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "seed": {
+                    "type": "number"
+                },
+                "image_detail": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high",
+                        "auto"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockAI21Options": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-ai21"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockClaudeOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-claude"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "thinking_mode": {
+                    "type": "string",
+                    "enum": [
+                        "adaptive",
+                        "between_tools"
+                    ],
+                    "description": "Thinking mode override. Sonnet 5.5 supports between_tools at low, medium, or high effort. It omits display and budget fields; keep effort fixed during the conversation. When unset, existing model-specific thinking behavior is preserved."
+                },
+                "thinking_budget_tokens": {
+                    "type": "number"
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "cache_enabled": {
+                    "type": "boolean"
+                },
+                "cache_ttl": {
+                    "type": "string",
+                    "enum": [
+                        "5m",
+                        "1h"
+                    ]
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockCohereCommandOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-cohere-command"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockConverseOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-converse"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "reasoning_effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockGptOssOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-gpt-oss"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reasoning_effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockMantleChatCompletionsOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-mantle-chat-completions"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "reasoning_effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockMantleClaudeOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-mantle-claude"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "thinking_mode": {
+                    "type": "string",
+                    "enum": [
+                        "adaptive",
+                        "between_tools"
+                    ],
+                    "description": "Thinking mode override. Sonnet 5.5 supports between_tools at low, medium, or high effort. It omits display and budget fields; keep effort fixed during the conversation. When unset, existing model-specific thinking behavior is preserved."
+                },
+                "thinking_budget_tokens": {
+                    "type": "number"
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "cache_enabled": {
+                    "type": "boolean"
+                },
+                "cache_ttl": {
+                    "type": "string",
+                    "enum": [
+                        "5m",
+                        "1h"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockMantleResponsesOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-mantle-responses"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "reasoning_effort": {
+                    "type": "string",
+                    "enum": [
+                        "none",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "image_detail": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high",
+                        "auto"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockMistralOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-mistral"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockNovaOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-nova"
+                },
+                "effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "BedrockPalmyraOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-palmyra"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "min_tokens": {
+                    "type": "number"
+                },
+                "seed": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "CompletionResult": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/TextResult"
+                },
+                {
+                    "$ref": "#/$defs/ThoughtsResult"
+                },
+                {
+                    "$ref": "#/$defs/JsonResult"
+                },
+                {
+                    "$ref": "#/$defs/ImageResult"
+                },
+                {
+                    "$ref": "#/$defs/VideoResult"
+                },
+                {
+                    "$ref": "#/$defs/AudioResult"
+                }
+            ],
+            "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                    "text": "#/$defs/TextResult",
+                    "thoughts": "#/$defs/ThoughtsResult",
+                    "json": "#/$defs/JsonResult",
+                    "image": "#/$defs/ImageResult",
+                    "video": "#/$defs/VideoResult",
+                    "audio": "#/$defs/AudioResult"
+                }
+            },
+            "type": "object",
+            "required": [
+                "type"
+            ]
+        },
+        "DataSource": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "mime_type": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "mime_type"
+            ],
+            "additionalProperties": false
+        },
+        "EmbeddingOutput": {
+            "type": "object",
+            "properties": {
+                "values": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "modality": {
+                    "type": "string",
+                    "enum": [
+                        "text",
+                        "image",
+                        "video",
+                        "audio"
+                    ],
+                    "description": "Which modality this vector represents (useful for joint-multimodal results)."
+                },
+                "start_sec": {
+                    "type": "number",
+                    "description": "Segment start time for video/audio."
+                },
+                "end_sec": {
+                    "type": "number",
+                    "description": "Segment end time for video/audio."
+                },
+                "embedding_option": {
+                    "type": "string",
+                    "description": "TwelveLabs Marengo: which view of the segment this vector represents."
+                }
+            },
+            "required": [
+                "values"
+            ],
+            "additionalProperties": false
+        },
+        "EmbeddingResultItem": {
+            "type": "object",
+            "properties": {
+                "outputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/EmbeddingOutput"
+                    },
+                    "description": "One or more vectors produced for this input. Single vector for text/image; multiple for segmented video/audio or joint-multimodal models that return per-modality vectors."
+                },
+                "input_tokens": {
+                    "type": "number",
+                    "description": "Token count attributed to this input, when reported by the provider."
+                }
+            },
+            "required": [
+                "outputs"
+            ],
+            "additionalProperties": false
+        },
+        "EmbeddingTaskType": {
+            "type": "string",
+            "enum": [
+                "query",
+                "document"
+            ],
+            "description": "Semantic task type for embedding models. Drivers map these to provider- specific values (e.g. \"RETRIEVAL_QUERY\" for Vertex, \"search_query\" for Cohere).\n- \"query\"    — a search query to find relevant documents\n- \"document\" — a document to be indexed and retrieved"
+        },
+        "EmbeddingsResult": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/EmbeddingResultItem"
+                    },
+                    "description": "One result item per input, in the same order as EmbeddingsOptions.inputs."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "The provider model id that produced the result."
+                },
+                "usage": {
+                    "description": "Aggregate token usage when reported by the provider.",
+                    "$ref": "#/$defs/EmbeddingsTokenUsage"
+                }
+            },
+            "required": [
+                "results",
+                "model"
+            ],
+            "additionalProperties": false
+        },
+        "EmbeddingsTokenUsage": {
+            "type": "object",
+            "properties": {
+                "input_tokens": {
+                    "type": "number"
+                },
+                "input_text_tokens": {
+                    "type": "number"
+                },
+                "input_image_tokens": {
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false
+        },
+        "ExecutionTokenUsage": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "number"
+                },
+                "result": {
+                    "type": "number"
+                },
+                "total": {
+                    "type": "number"
+                },
+                "prompt_cached": {
+                    "type": "number",
+                    "description": "Number of input tokens read from prompt cache (discounted rate)."
+                },
+                "prompt_cache_write": {
+                    "type": "number",
+                    "description": "Number of input tokens written to prompt cache."
+                },
+                "prompt_cache_write_1h": {
+                    "type": "number",
+                    "description": "Of `prompt_cache_write`, the tokens written with a one-hour cache lifetime, when the provider reports it. The remainder used the default (five-minute) lifetime."
+                },
+                "prompt_new": {
+                    "type": "number"
+                },
+                "result_image": {
+                    "type": "number",
+                    "description": "Of `result`, the tokens of generated images, when the provider reports them. Image output is priced separately from text output."
+                },
+                "provider_cost_usd": {
+                    "type": "number",
+                    "description": "Amount the provider reported charging for this request, in USD, when the provider returns it (e.g. OpenRouter). Absent for bring-your-own-key requests."
+                }
+            },
+            "additionalProperties": false
+        },
+        "GroqOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "groq-deepseek-thinking"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reasoning_format": {
+                    "type": "string",
+                    "enum": [
+                        "parsed",
+                        "raw",
+                        "hidden"
+                    ]
+                }
+            },
+            "required": [
+                "reasoning_format"
+            ],
+            "additionalProperties": false
+        },
+        "HttpTimeoutOptions": {
+            "type": "object",
+            "properties": {
+                "headersTimeout": {
+                    "description": "Time (ms) to wait for the first response byte after the request is sent.",
+                    "type": "number"
+                },
+                "bodyTimeout": {
+                    "description": "Time (ms) between body chunks once streaming has started.",
+                    "type": "number"
+                },
+                "connectTimeout": {
+                    "description": "TCP/TLS connect timeout (ms).",
+                    "type": "number"
+                },
+                "keepAliveTimeout": {
+                    "description": "Idle socket reuse timeout (ms).",
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false,
+            "description": "HTTP timeouts applied to a driver's upstream LLM-provider calls.\n\nAll values are in milliseconds. Drivers should map these onto whatever HTTP client their SDK uses; the defaults applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   900_000   - bodyTimeout:      900_000   - connectTimeout:   60_000   - keepAliveTimeout: 300_000\n\nThe response defaults are deliberately longer than the hosting request boundary. Application-level cancellation should end user work first; driver timeouts are bounded-resource safety nets."
+        },
+        "ImageResult": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "image"
+                },
+                "value": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type",
+                "value"
+            ],
+            "additionalProperties": false
+        },
+        "ImagenMaskMode": {
+            "type": "string",
+            "enum": [
+                "MASK_MODE_USER_PROVIDED",
+                "MASK_MODE_BACKGROUND",
+                "MASK_MODE_FOREGROUND",
+                "MASK_MODE_SEMANTIC"
+            ]
+        },
+        "ImagenOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "vertexai-imagen"
+                },
+                "number_of_images": {
+                    "type": "number"
+                },
+                "seed": {
+                    "type": "number"
+                },
+                "person_generation": {
+                    "type": "string",
+                    "enum": [
+                        "dont_allow",
+                        "allow_adults",
+                        "allow_all",
+                        "allow_adult"
+                    ]
+                },
+                "safety_setting": {
+                    "type": "string",
+                    "enum": [
+                        "block_none",
+                        "block_only_high",
+                        "block_medium_and_above",
+                        "block_low_and_above"
+                    ]
+                },
+                "image_file_type": {
+                    "type": "string",
+                    "enum": [
+                        "image/jpeg",
+                        "image/png"
+                    ]
+                },
+                "jpeg_compression_quality": {
+                    "type": "number"
+                },
+                "aspect_ratio": {
+                    "type": "string",
+                    "enum": [
+                        "1:1",
+                        "4:3",
+                        "3:4",
+                        "16:9",
+                        "9:16"
+                    ]
+                },
+                "add_watermark": {
+                    "type": "boolean"
+                },
+                "enhance_prompt": {
+                    "type": "boolean"
+                },
+                "edit_mode": {
+                    "$ref": "#/$defs/ImagenTaskType"
+                },
+                "guidance_scale": {
+                    "type": "number"
+                },
+                "edit_steps": {
+                    "type": "number"
+                },
+                "mask_mode": {
+                    "$ref": "#/$defs/ImagenMaskMode"
+                },
+                "mask_dilation": {
+                    "type": "number"
+                },
+                "mask_class": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "controlType": {
+                    "type": "string",
+                    "enum": [
+                        "CONTROL_TYPE_FACE_MESH",
+                        "CONTROL_TYPE_CANNY",
+                        "CONTROL_TYPE_SCRIBBLE"
+                    ]
+                },
+                "controlImageComputation": {
+                    "type": "boolean"
+                },
+                "subjectType": {
+                    "type": "string",
+                    "enum": [
+                        "SUBJECT_TYPE_PERSON",
+                        "SUBJECT_TYPE_ANIMAL",
+                        "SUBJECT_TYPE_PRODUCT",
+                        "SUBJECT_TYPE_DEFAULT"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "ImagenTaskType": {
+            "type": "string",
+            "enum": [
+                "TEXT_IMAGE",
+                "EDIT_MODE_INPAINT_REMOVAL",
+                "EDIT_MODE_INPAINT_INSERTION",
+                "EDIT_MODE_BGSWAP",
+                "EDIT_MODE_OUTPAINT",
+                "CUSTOMIZATION_SUBJECT",
+                "CUSTOMIZATION_STYLE",
+                "CUSTOMIZATION_CONTROLLED",
+                "CUSTOMIZATION_INSTRUCT"
+            ]
+        },
+        "JSONObject": {
+            "type": "object",
+            "additionalProperties": {
+                "$ref": "#/$defs/JSONValue"
+            }
+        },
+        "JSONSchema": {
+            "type": "object",
+            "properties": {
+                "type": {},
+                "description": {
+                    "type": "string"
+                },
+                "properties": {
+                    "$ref": "#/$defs/JSONSchemaProperties"
+                },
+                "items": {
+                    "$ref": "#/$defs/JSONSchema"
+                },
+                "format": {
+                    "type": "string"
+                },
+                "editor": {},
+                "default": {},
+                "additionalProperties": {
+                    "anyOf": [
+                        {
+                            "type": "boolean"
+                        },
+                        {
+                            "$ref": "#/$defs/JSONSchema"
+                        }
+                    ]
+                },
+                "required": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            },
+            "additionalProperties": true
+        },
+        "JSONSchemaProperties": {
+            "type": "object",
+            "additionalProperties": {
+                "$ref": "#/$defs/JSONSchema"
+            }
+        },
+        "JSONValue": {},
+        "JsonResult": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "json"
+                },
+                "value": {
+                    "$ref": "#/$defs/JSONValue"
+                }
+            },
+            "required": [
+                "type",
+                "value"
+            ],
+            "additionalProperties": false
+        },
+        "MistralTextOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "mistral-text"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "random_seed": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                },
+                "safe_prompt": {
+                    "type": "boolean"
+                },
+                "parallel_tool_calls": {
+                    "type": "boolean"
+                },
+                "tool_choice": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "none",
+                        "any",
+                        "required"
+                    ]
+                },
+                "prompt_mode": {
+                    "type": "string",
+                    "const": "reasoning"
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                }
+            },
+            "additionalProperties": false
+        },
+        "Modalities": {
+            "type": "string",
+            "enum": [
+                "text",
+                "image"
+            ]
+        },
+        "ModelOptions": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/TextFallbackOptions"
+                },
+                {
+                    "$ref": "#/$defs/AzureFoundryChatOptions"
+                },
+                {
+                    "$ref": "#/$defs/ImagenOptions"
+                },
+                {
+                    "$ref": "#/$defs/VertexAIClaudeOptions"
+                },
+                {
+                    "$ref": "#/$defs/VertexAIGeminiOptions"
+                },
+                {
+                    "$ref": "#/$defs/VertexAIGeminiOmniVideoOptions"
+                },
+                {
+                    "$ref": "#/$defs/VertexAIGrokOptions"
+                },
+                {
+                    "$ref": "#/$defs/NovaCanvasOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockConverseOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockNovaOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockMistralOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockAI21Options"
+                },
+                {
+                    "$ref": "#/$defs/BedrockCohereCommandOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockClaudeOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockPalmyraOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockGptOssOptions"
+                },
+                {
+                    "$ref": "#/$defs/TwelvelabsPegasusOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockMantleResponsesOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockMantleChatCompletionsOptions"
+                },
+                {
+                    "$ref": "#/$defs/BedrockMantleClaudeOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiThinkingOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiTextOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenRouterTextOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiDalleOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiGptImageOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiTranscriptionOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiSpeechOptions"
+                },
+                {
+                    "$ref": "#/$defs/OpenAiAudioOptions"
+                },
+                {
+                    "$ref": "#/$defs/XAIGrokImageOptions"
+                },
+                {
+                    "$ref": "#/$defs/GroqOptions"
+                },
+                {
+                    "$ref": "#/$defs/MistralTextOptions"
+                },
+                {
+                    "$ref": "#/$defs/AnthropicClaudeOptions"
+                }
+            ],
+            "type": "object"
+        },
+        "ModelSearchPayload": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/$defs/ModelType"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "owner": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
+        "ModelType": {
+            "type": "string",
+            "enum": [
+                "classifier",
+                "regressor",
+                "clustering",
+                "anomaly-detection",
+                "time-series",
+                "text",
+                "image",
+                "audio",
+                "video",
+                "embedding",
+                "chat",
+                "code",
+                "nlp",
+                "multi-modal",
+                "test",
+                "other",
+                "unknown"
+            ]
+        },
+        "NovaCanvasOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-nova-canvas"
+                },
+                "taskType": {
+                    "type": "string",
+                    "enum": [
+                        "TEXT_IMAGE",
+                        "TEXT_IMAGE_WITH_IMAGE_CONDITIONING",
+                        "COLOR_GUIDED_GENERATION",
+                        "IMAGE_VARIATION",
+                        "INPAINTING",
+                        "OUTPAINTING",
+                        "BACKGROUND_REMOVAL"
+                    ]
+                },
+                "width": {
+                    "type": "number"
+                },
+                "height": {
+                    "type": "number"
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "premium"
+                    ]
+                },
+                "cfgScale": {
+                    "type": "number"
+                },
+                "seed": {
+                    "type": "number"
+                },
+                "numberOfImages": {
+                    "type": "number"
+                },
+                "controlMode": {
+                    "type": "string",
+                    "enum": [
+                        "CANNY_EDGE",
+                        "SEGMENTATION"
+                    ]
+                },
+                "controlStrength": {
+                    "type": "number"
+                },
+                "colors": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "similarityStrength": {
+                    "type": "number"
+                },
+                "outPaintingMode": {
+                    "type": "string",
+                    "enum": [
+                        "DEFAULT",
+                        "PRECISE"
+                    ]
+                }
+            },
+            "required": [
+                "taskType"
+            ],
+            "additionalProperties": false
+        },
+        "OpenAiAudioOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-audio"
+                },
+                "voice": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": [
+                        "wav",
+                        "mp3",
+                        "flac",
+                        "opus",
+                        "pcm16"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiDalleOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-dalle"
+                },
+                "size": {
+                    "type": "string",
+                    "enum": [
+                        "256x256",
+                        "512x512",
+                        "1024x1024",
+                        "1792x1024",
+                        "1024x1792"
+                    ]
+                },
+                "image_quality": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "hd"
+                    ]
+                },
+                "style": {
+                    "type": "string",
+                    "enum": [
+                        "vivid",
+                        "natural"
+                    ]
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": [
+                        "url",
+                        "b64_json"
+                    ]
+                },
+                "n": {
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiGptImageOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-gpt-image"
+                },
+                "size": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "number"
+                },
+                "height": {
+                    "type": "number"
+                },
+                "image_quality": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max",
+                        "auto"
+                    ]
+                },
+                "background": {
+                    "type": "string",
+                    "enum": [
+                        "transparent",
+                        "opaque",
+                        "auto"
+                    ]
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": [
+                        "png",
+                        "webp",
+                        "jpeg",
+                        "gif",
+                        "svg"
+                    ]
+                },
+                "n": {
+                    "type": "number"
+                },
+                "output_compression": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                },
+                "moderation": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "low"
+                    ]
+                },
+                "input_fidelity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high"
+                    ]
+                },
+                "partial_images": {
+                    "type": "number"
+                },
+                "complexity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "frame_count": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                },
+                "frame_duration_ms": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                },
+                "svg": {
+                    "$ref": "#/$defs/OpenAiImageSvgOptions"
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiImageGenerationMask": {
+            "type": "object",
+            "properties": {
+                "file_id": {
+                    "type": "string"
+                },
+                "image_url": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiImageGenerationOptions": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string"
+                },
+                "force": {
+                    "type": "boolean"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "generate",
+                        "edit"
+                    ]
+                },
+                "size": {
+                    "type": "string"
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "background": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "opaque",
+                        "transparent"
+                    ]
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": [
+                        "png",
+                        "jpeg",
+                        "webp",
+                        "gif",
+                        "svg"
+                    ]
+                },
+                "output_compression": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                },
+                "moderation": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "low"
+                    ]
+                },
+                "input_fidelity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high"
+                    ]
+                },
+                "partial_images": {
+                    "type": "number"
+                },
+                "complexity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "frame_count": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                },
+                "frame_duration_ms": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                },
+                "input_image_mask": {
+                    "$ref": "#/$defs/OpenAiImageGenerationMask"
+                }
+            },
+            "required": [
+                "model"
+            ],
+            "additionalProperties": false
+        },
+        "OpenAiImageSvgOptions": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "reasoning": {
+                    "type": "object",
+                    "properties": {
+                        "effort": {
+                            "$ref": "#/$defs/ReasoningEffort"
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiPromptCacheTtl": {
+            "type": "string",
+            "enum": [
+                "30m",
+                "12h",
+                "in_memory",
+                "24h"
+            ]
+        },
+        "OpenAiSpeechOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-speech"
+                },
+                "voice": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": [
+                        "mp3",
+                        "wav",
+                        "opus",
+                        "aac",
+                        "flac",
+                        "pcm"
+                    ]
+                },
+                "speed": {
+                    "type": "number",
+                    "minimum": 0.25,
+                    "maximum": 4
+                },
+                "instructions": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiTextOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-text"
+                },
+                "image_generation": {
+                    "$ref": "#/$defs/OpenAiImageGenerationOptions"
+                },
+                "seed": {
+                    "type": "number"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "tool_choice": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "none",
+                        "any",
+                        "required"
+                    ]
+                },
+                "effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "reasoning_effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "image_detail": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high",
+                        "auto"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                },
+                "cache_ttl": {
+                    "$ref": "#/$defs/OpenAiPromptCacheTtl"
+                },
+                "extra_body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Additional provider-specific fields merged into the OpenAI-compatible request body."
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiThinkingOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-thinking"
+                },
+                "image_generation": {
+                    "$ref": "#/$defs/OpenAiImageGenerationOptions"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "tool_choice": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "none",
+                        "any",
+                        "required"
+                    ]
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "reasoning_effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "reasoning_context": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "current_turn",
+                        "all_turns"
+                    ]
+                },
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "image_detail": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high",
+                        "auto"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                },
+                "cache_ttl": {
+                    "$ref": "#/$defs/OpenAiPromptCacheTtl"
+                },
+                "extra_body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Additional provider-specific fields merged into the OpenAI-compatible request body."
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenAiTranscriptionOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "openai-transcription"
+                },
+                "language": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
+        "OpenRouterTextOptions": {
+            "type": "object",
+            "properties": {
+                "seed": {
+                    "type": "number"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "tool_choice": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "none",
+                        "any",
+                        "required"
+                    ]
+                },
+                "effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "reasoning_effort": {
+                    "$ref": "#/$defs/ReasoningEffort"
+                },
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "image_detail": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "high",
+                        "auto"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                },
+                "_option_id": {
+                    "type": "string",
+                    "const": "openrouter-text"
+                },
+                "provider_sort": {
+                    "type": "string",
+                    "enum": [
+                        "price",
+                        "throughput",
+                        "latency",
+                        "exacto"
+                    ]
+                },
+                "provider_order": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "provider_only": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "provider_ignore": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "provider_allow_fallbacks": {
+                    "type": "boolean"
+                },
+                "provider_require_parameters": {
+                    "type": "boolean"
+                },
+                "provider_data_collection": {
+                    "type": "string",
+                    "enum": [
+                        "allow",
+                        "deny"
+                    ]
+                },
+                "provider_zdr": {
+                    "type": "boolean"
+                },
+                "provider_quantizations": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "int4",
+                            "int8",
+                            "fp4",
+                            "mxfp4",
+                            "nvfp4",
+                            "fp6",
+                            "fp8",
+                            "mxfp8",
+                            "fp16",
+                            "bf16",
+                            "fp32",
+                            "unknown"
+                        ]
+                    }
+                }
+            },
+            "additionalProperties": false
+        },
+        "PromptCacheDiagnostic": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "$ref": "#/$defs/PromptCachePath"
+                },
+                "explicit_cache_used": {
+                    "type": "boolean"
+                },
+                "content_hash_prefix": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "cacheable_part_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                },
+                "preparation_latency_ms": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "wait_latency_ms": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "provider_status": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                }
+            },
+            "required": [
+                "path",
+                "explicit_cache_used",
+                "model",
+                "preparation_latency_ms"
+            ],
+            "additionalProperties": false,
+            "description": "Safe diagnostic for one provider-side explicit prompt-cache attempt. It never contains prompt contents, images, credentials, or full provider resource names."
+        },
+        "PromptCacheMode": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "off",
+                "required"
+            ]
+        },
+        "PromptCachePath": {
+            "type": "string",
+            "enum": [
+                "disabled",
+                "no_key",
+                "local_memo_hit",
+                "distributed_registry_hit",
+                "provider_list_recovery",
+                "created",
+                "waited_for_creator",
+                "refreshed",
+                "fallback_quota",
+                "fallback_provider_error",
+                "fallback_coordination_unavailable",
+                "fallback_wait_timeout",
+                "minimum_token_rejection",
+                "unusable_resource_recreated",
+                "unsupported_model"
+            ]
+        },
+        "PromptRole": {
+            "type": "string",
+            "enum": [
+                "safety",
+                "system",
+                "user",
+                "assistant",
+                "negative",
+                "mask",
+                "tool"
+            ]
+        },
+        "PromptSegment": {
+            "type": "object",
+            "properties": {
+                "role": {
+                    "$ref": "#/$defs/PromptRole"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "tool_use_id": {
+                    "type": "string",
+                    "description": "The tool use id if the segment is a tool response"
+                },
+                "thought_signature": {
+                    "type": "string",
+                    "description": "Gemini thinking models require thought_signature to be passed back with tool results. This should be copied from the ToolUse.thought_signature when sending tool responses."
+                },
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/DataSource"
+                    }
+                }
+            },
+            "required": [
+                "role",
+                "content"
+            ],
+            "additionalProperties": false
+        },
+        "ReasoningEffort": {
+            "type": "string",
+            "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+            ]
+        },
+        "StatelessExecutionOptions": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string"
+                },
+                "result_schema": {
+                    "$ref": "#/$defs/JSONSchema"
+                },
+                "prompt_cache_schema_suffix": {
+                    "type": "boolean",
+                    "description": "Provider-specific opt-in to put the result schema after the cached prompt prefix instead of including it in native structured-output configuration. The returned JSON is still validated against result_schema by Llumiverse."
+                },
+                "include_original_response": {
+                    "type": "boolean",
+                    "description": "If set to true the original response from the target LLM will be included in the response under the original_response field. This is useful for debugging and for some advanced use cases. It is ignored on streaming requests"
+                },
+                "model_options": {
+                    "$ref": "#/$defs/ModelOptions"
+                },
+                "prompt_cache_key": {
+                    "type": "string",
+                    "description": "Stable identity for prompt caching. Providers with cache routing keys receive the value directly; providers with cache breakpoints use its presence to cache the stable prefix before the final dynamic block. Providers with fully implicit caching still require an identical prompt prefix."
+                },
+                "prompt_cache_mode": {
+                    "description": "Controls provider-side explicit caches — cache resources the driver creates and reuses (e.g. Vertex cachedContents). \"auto\" (default) caches the static prefix whenever prompt_cache_key is set; \"off\" never creates or uses a cache resource and leaves the provider payload unchanged; \"required\" behaves like auto but surfaces cache preparation failures instead of falling back. Implicit caching and cache breakpoints are unaffected.",
+                    "$ref": "#/$defs/PromptCacheMode"
+                },
+                "prompt_cache_ttl_seconds": {
+                    "type": "integer",
+                    "minimum": 60,
+                    "maximum": 9007199254740991,
+                    "description": "Lifetime, in seconds, of a provider-side cache resource created for this execution. Defaults to 1800 (30 minutes) and must be at least 60 seconds. Ignored by providers without an explicit cache API."
+                },
+                "httpTimeout": {
+                    "description": "Per-call HTTP timeouts for upstream LLM-provider calls. These override the driver's default `DriverOptions.httpTimeout` for this execution only.",
+                    "$ref": "#/$defs/HttpTimeoutOptions"
+                },
+                "output_modality": {
+                    "description": "Deprecated: This is deprecated. Use CompletionResult.type information instead.",
+                    "deprecated": true,
+                    "x-deprecated-message": "This is deprecated. Use CompletionResult.type information instead.",
+                    "$ref": "#/$defs/Modalities"
+                }
+            },
+            "required": [
+                "model"
+            ],
+            "additionalProperties": false
+        },
+        "TextFallbackOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "text-fallback"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "tool_choice": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "none",
+                        "any",
+                        "required"
+                    ]
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                }
+            },
+            "additionalProperties": false
+        },
+        "TextResult": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "text"
+                },
+                "value": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type",
+                "value"
+            ],
+            "additionalProperties": false
+        },
+        "ThinkingLevel": {
+            "type": "string",
+            "enum": [
+                "HIGH",
+                "MEDIUM",
+                "LOW",
+                "MINIMAL",
+                "THINKING_LEVEL_UNSPECIFIED"
+            ]
+        },
+        "ThoughtsResult": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "thoughts"
+                },
+                "value": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type",
+                "value"
+            ],
+            "additionalProperties": false
+        },
+        "ToolDefinition": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "input_schema": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            },
+            "required": [
+                "name",
+                "input_schema"
+            ],
+            "additionalProperties": false,
+            "description": "Tool definition for LLM tool use. The input_schema uses a permissive type to support both:\n- AJV's JSONSchemaType<T> for type-safe schema generation\n- Plain object schemas for simpler cases"
+        },
+        "ToolUse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "tool_name": {
+                    "type": "string"
+                },
+                "tool_input": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/JSONObject"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
+                "thought_signature": {
+                    "type": "string",
+                    "description": "Gemini thinking models require thought_signature to be passed back with tool results. This preserves the model's reasoning state during multi-turn tool use."
+                }
+            },
+            "required": [
+                "id",
+                "tool_name",
+                "tool_input"
+            ],
+            "additionalProperties": false,
+            "description": "A tool use instance represents a call to a tool. The id property is used to identify the tool call."
+        },
+        "TwelvelabsPegasusOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "bedrock-twelvelabs-pegasus"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                }
+            },
+            "additionalProperties": false
+        },
+        "VertexAIClaudeOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "vertexai-claude"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                    ]
+                },
+                "thinking_mode": {
+                    "type": "string",
+                    "enum": [
+                        "adaptive",
+                        "between_tools"
+                    ],
+                    "description": "Thinking mode override. Sonnet 5.5 supports between_tools at low, medium, or high effort. It omits display and budget fields; keep effort fixed during the conversation. When unset, existing model-specific thinking behavior is preserved."
+                },
+                "thinking_budget_tokens": {
+                    "type": "number"
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "cache_enabled": {
+                    "type": "boolean"
+                },
+                "cache_ttl": {
+                    "type": "string",
+                    "enum": [
+                        "5m",
+                        "1h"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "VertexAIGeminiOmniVideoOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "vertexai-gemini-omni-video"
+                },
+                "task": {
+                    "type": "string",
+                    "enum": [
+                        "text_to_video",
+                        "image_to_video",
+                        "reference_to_video",
+                        "edit",
+                        "extend"
+                    ]
+                },
+                "aspect_ratio": {
+                    "type": "string",
+                    "enum": [
+                        "16:9",
+                        "9:16"
+                    ]
+                },
+                "duration_seconds": {
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 10
+                },
+                "resolution": {
+                    "type": "string",
+                    "enum": [
+                        "360p",
+                        "720p",
+                        "1080p",
+                        "4k"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "VertexAIGeminiOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "vertexai-gemini"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "top_k": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "presence_penalty": {
+                    "type": "number"
+                },
+                "frequency_penalty": {
+                    "type": "number"
+                },
+                "seed": {
+                    "type": "number"
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": [
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high"
+                    ]
+                },
+                "include_thoughts": {
+                    "type": "boolean"
+                },
+                "thinking_budget_tokens": {
+                    "type": "number"
+                },
+                "thinking_level": {
+                    "$ref": "#/$defs/ThinkingLevel"
+                },
+                "service_tier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility."
+                },
+                "flex": {
+                    "type": "boolean",
+                    "description": "Deprecated: Use service_tier=\"flex\" instead.",
+                    "deprecated": true,
+                    "x-deprecated-message": "Use service_tier=\"flex\" instead."
+                },
+                "speech_voice": {
+                    "type": "string"
+                },
+                "speech_language": {
+                    "type": "string"
+                },
+                "transcription_language_codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "transcription_diarization": {
+                    "type": "boolean"
+                },
+                "transcription_word_timestamps": {
+                    "type": "boolean"
+                },
+                "transcription_vocabulary": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "image_aspect_ratio": {
+                    "type": "string",
+                    "enum": [
+                        "1:1",
+                        "2:3",
+                        "3:2",
+                        "3:4",
+                        "4:3",
+                        "9:16",
+                        "16:9",
+                        "21:9"
+                    ]
+                },
+                "image_size": {
+                    "type": "string",
+                    "enum": [
+                        "1K",
+                        "2K",
+                        "4K"
+                    ]
+                },
+                "person_generation": {
+                    "type": "string",
+                    "enum": [
+                        "ALLOW_ALL",
+                        "ALLOW_ADULT",
+                        "ALLOW_NONE"
+                    ]
+                },
+                "prominent_people": {
+                    "type": "string",
+                    "enum": [
+                        "PROMINENT_PEOPLE_UNSPECIFIED",
+                        "ALLOW_PROMINENT_PEOPLE",
+                        "BLOCK_PROMINENT_PEOPLE"
+                    ]
+                },
+                "output_mime_type": {
+                    "type": "string",
+                    "enum": [
+                        "image/png",
+                        "image/jpeg"
+                    ]
+                },
+                "output_compression_quality": {
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false
+        },
+        "VertexAIGrokOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "vertexai-grok"
+                },
+                "max_tokens": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "top_p": {
+                    "type": "number"
+                },
+                "stop_sequence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            },
+            "additionalProperties": false
+        },
+        "VideoResult": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "video"
+                },
+                "value": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "type",
+                "value"
+            ],
+            "additionalProperties": false
+        },
+        "XAIGrokImageOptions": {
+            "type": "object",
+            "properties": {
+                "_option_id": {
+                    "type": "string",
+                    "const": "xai-grok-image"
+                },
+                "aspect_ratio": {
+                    "type": "string",
+                    "enum": [
+                        "1:1",
+                        "16:9",
+                        "9:16",
+                        "4:3",
+                        "3:4",
+                        "3:2",
+                        "2:3",
+                        "2:1",
+                        "1:2",
+                        "19.5:9",
+                        "9:19.5",
+                        "20:9",
+                        "9:20",
+                        "auto"
+                    ]
+                },
+                "resolution": {
+                    "type": "string",
+                    "enum": [
+                        "1k",
+                        "2k"
+                    ]
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium"
+                    ]
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": [
+                        "url",
+                        "b64_json"
+                    ]
+                },
+                "n": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10
+                }
+            },
+            "additionalProperties": false
+        }
+    }
+}
