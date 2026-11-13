@@ -109,6 +109,38 @@ export function hasGeminiSamplingRestriction(model: string): boolean {
 }
 
 /**
+ * Gemini Omni video models run only on the Vertex Interactions API. `gemini-omni-flash-preview` is version 1.0; later
+ * releases carry a version before the tier (`gemini-omni-1.1-flash-preview`, `gemini-omni-1.2-flash`).
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash
+ */
+export function getGeminiOmniVersion(model: string): { major: number; minor: number } | undefined {
+    const name = model.toLowerCase().split('/').pop() ?? '';
+    const match = /^gemini-omni(?:-(\d+)(?:\.(\d+))?)?-[a-z][a-z0-9]*(?:-.+)?$/.exec(name);
+    if (!match) return undefined;
+    return { major: Number(match[1] ?? 1), minor: Number(match[2] ?? 0) };
+}
+
+export function isGeminiOmniVideoModel(model: string): boolean {
+    return getGeminiOmniVersion(model) !== undefined;
+}
+
+export function isGeminiOmniVersionGte(model: string, major: number, minor: number): boolean {
+    const version = getGeminiOmniVersion(model);
+    if (!version) return false;
+    return version.major > major || (version.major === major && version.minor >= minor);
+}
+
+/**
+ * Model-specific exception: Gemini 4 Hydrogen adds the XHIGH thinking level, which Gemini 4 Argon and Carbon do not
+ * offer, so it follows the Hydrogen tier rather than a version. The tier is matched on any generation and suffix
+ * (`gemini-4-hydrogen`, `google/gemini-4-hydrogen:batch`) so later Hydrogen releases keep it.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen
+ */
+export function supportsGeminiXHighThinking(model: string): boolean {
+    return /(?:^|[/.])gemini-\d+(?:\.\d+)?-hydrogen(?:$|[^a-z0-9])/.test(model.toLowerCase());
+}
+
+/**
  * Gemini 4+ chat models support long decodes on Vertex generateContent: output continues across requests up to the
  * unified 1,048,576-token input-plus-output limit. Specialised image, speech, live, audio and robotics variants do not.
  * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon

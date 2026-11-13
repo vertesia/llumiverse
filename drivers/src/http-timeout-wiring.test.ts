@@ -286,10 +286,12 @@ describe('driver HTTP timeout wiring', () => {
         }>(driver);
 
         expect(internals.getGoogleGenAIHttpOptions()).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
         });
         expect(internals.getGoogleGenAIHttpOptions('flex')).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
             headers: {
@@ -298,6 +300,7 @@ describe('driver HTTP timeout wiring', () => {
             },
         });
         expect(internals.getGoogleGenAIHttpOptions('future-tier')).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
             headers: {
@@ -306,6 +309,7 @@ describe('driver HTTP timeout wiring', () => {
             },
         });
         expect(internals.getGoogleGenAIHttpOptions('default')).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 3_000,
             fetch: driverFetch(driver),
         });
@@ -315,6 +319,7 @@ describe('driver HTTP timeout wiring', () => {
                 bodyTimeout: 20_000,
             }),
         ).toEqual({
+            apiVersion: 'v1beta1',
             timeout: 20_000,
             fetch: driverFetch(driver),
         });

@@ -590,7 +590,7 @@ export const VertexAIGeminiOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         seed: z.number().optional(),
-        effort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+        effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
         include_thoughts: z.boolean().optional(),
         thinking_budget_tokens: z.number().optional(),
         thinking_level: ThinkingLevelSchema.optional(),
@@ -624,10 +624,11 @@ export const VertexAIGeminiOptionsSchema = z
 export const VertexAIGeminiOmniVideoOptionsSchema = z
     .strictObject({
         _option_id: z.literal('vertexai-gemini-omni-video').optional(),
-        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend']).optional(),
+        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend', 'upscale']).optional(),
         aspect_ratio: z.enum(['16:9', '9:16']).optional(),
-        duration_seconds: z.number().int().min(3).max(10).optional(),
+        duration_seconds: z.number().int().min(3).max(15).optional(),
         resolution: z.enum(['360p', '720p', '1080p', '4k']).optional(),
+        seed: z.number().int().optional(),
     })
     .meta({ id: 'VertexAIGeminiOmniVideoOptions' });
 

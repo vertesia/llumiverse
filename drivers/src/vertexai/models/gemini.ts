@@ -106,8 +106,31 @@ const geminiFinishReasonHandling: Partial<Record<FinishReason, GeminiFinishReaso
         message: 'Gemini blocked the generated image because it may reproduce protected source material.',
         retryable: false,
     },
+    // Model Armor, escalation rules and Prohibited Use Policy limits are policy decisions; retrying does not help.
+    [FinishReason.MODEL_ARMOR]: {
+        message: 'Gemini blocked the response through a Model Armor policy.',
+        retryable: false,
+    },
+    [FinishReason.ESCALATION]: {
+        message: 'Gemini filtered the request through an escalation rule.',
+        retryable: false,
+    },
+    [FinishReason.PUP_LIMITED_DISABLED]: {
+        message: 'Gemini stopped because the account is limited or disabled for Prohibited Use Policy violations.',
+        retryable: false,
+    },
+    // The request itself lacks a thought signature, so resending it unchanged fails the same way.
+    [FinishReason.MISSING_THOUGHT_SIGNATURE]: {
+        message: 'Gemini rejected the request because a thought signature is missing from the conversation.',
+        retryable: false,
+    },
     [FinishReason.MALFORMED_FUNCTION_CALL]: {
         message: 'Gemini generated an invalid function call.',
+        retryable: true,
+    },
+    // A malformed generation, like a malformed function call, may succeed on another attempt.
+    [FinishReason.MALFORMED_RESPONSE]: {
+        message: 'Gemini generated a malformed response.',
         retryable: true,
     },
     [FinishReason.NO_IMAGE]: { message: 'Gemini did not generate the requested image.', retryable: true },
@@ -734,6 +757,8 @@ function geminiThinkingLevelForEffort(effort: VertexAIGeminiOptions['effort']): 
             return ThinkingLevel.MEDIUM;
         case 'high':
             return ThinkingLevel.HIGH;
+        case 'xhigh':
+            return ThinkingLevel.XHIGH;
         default:
             return undefined;
     }

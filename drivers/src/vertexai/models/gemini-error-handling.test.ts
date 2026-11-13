@@ -85,14 +85,24 @@ describe('GeminiModelDefinition Error Handling', () => {
             FinishReason.IMAGE_SAFETY,
             FinishReason.IMAGE_PROHIBITED_CONTENT,
             FinishReason.IMAGE_RECITATION,
+            FinishReason.MODEL_ARMOR,
+            FinishReason.ESCALATION,
+            FinishReason.PUP_LIMITED_DISABLED,
         ])('classifies policy finish reason %s as non-retryable', async (finishReason) => {
             const error = await formatFinishReasonError(finishReason);
             expect(error.retryable).toBe(false);
             expect(error.name).toBe(finishReason);
         });
 
+        it('classifies a missing thought signature as a non-retryable request defect', async () => {
+            const error = await formatFinishReasonError(FinishReason.MISSING_THOUGHT_SIGNATURE);
+            expect(error.retryable).toBe(false);
+            expect(error.message).toContain('thought signature is missing');
+        });
+
         it.each([
             FinishReason.MALFORMED_FUNCTION_CALL,
+            FinishReason.MALFORMED_RESPONSE,
             FinishReason.NO_IMAGE,
             FinishReason.IMAGE_OTHER,
             FinishReason.OTHER,

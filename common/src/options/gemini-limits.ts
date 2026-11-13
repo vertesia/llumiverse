@@ -1,4 +1,4 @@
-import { isGeminiModelVersionGte } from './version-parsing.js';
+import { isGeminiModelVersionGte, isGeminiOmniVersionGte } from './version-parsing.js';
 
 interface GeminiModelLimits {
     context_window?: number;
@@ -11,6 +11,8 @@ export function getGeminiModelLimits(model: string): GeminiModelLimits {
     // Special-purpose APIs do not inherit chat limits. Transcribe publishes no token limits.
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe
     if (/(?:transcribe|live|robotics|tts|embedding)/.test(name)) return {};
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash
+    if (isGeminiOmniVersionGte(name, 1, 2)) return { context_window: 131_072, max_output_tokens: 260_640 };
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash
     if (name.includes('gemini-omni-')) return { context_window: 131_072, max_output_tokens: 57_920 };
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/nano-banana-2-1
