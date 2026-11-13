@@ -95,13 +95,21 @@ function azureOpenAIV1BaseURL(endpoint: string): string {
 /** The service an Azure OpenAI driver uses: the v1 client, or the legacy dated-API `AzureOpenAI` client. */
 export type AzureOpenAIService = AzureOpenAI | AzureOpenAIV1Client;
 
+/** A dated Azure OpenAI API version, such as `2024-10-21` or `2025-04-01-preview`. */
+export type AzureOpenAIDatedApiVersion = `${number}-${string}`;
+
 /**
- * Construction arguments for a driver whose service type is `S`. Selecting the legacy client type requires a pinned
- * `apiVersion`, the setting that makes the driver build one.
+ * Construction arguments for a driver whose service type is `S`, constrained to the options that build that client:
+ * the legacy client needs a dated `apiVersion`, and the v1 client an endpoint and no `apiVersion`. Without a selected
+ * type, any options are accepted and `service` is either client.
  */
 export type AzureOpenAIDriverArgs<S extends AzureOpenAIService> =
     | S
-    | ([S] extends [AzureOpenAI] ? AzureOpenAIDriverOptions & { apiVersion: string } : AzureOpenAIDriverOptions);
+    | ([S] extends [AzureOpenAI]
+          ? AzureOpenAIDriverOptions & { apiVersion: AzureOpenAIDatedApiVersion }
+          : [S] extends [AzureOpenAIV1Client]
+            ? AzureOpenAIDriverOptions & { endpoint: `http${string}`; apiVersion?: undefined }
+            : AzureOpenAIDriverOptions);
 
 /**
  * Azure OpenAI driver. `service` is typed by how the driver was built: an injected `AzureOpenAI` client infers
@@ -139,7 +147,7 @@ export class AzureOpenAIDriver<S extends AzureOpenAIService = AzureOpenAIService
 
         if (opts.endpoint && !opts.apiVersion) {
             // The v1 API is GA, needs no api-version, and is where Azure ships the Responses API.
-            // S is the v1 client or the union here: the argument type requires apiVersion for the legacy type.
+            // S is the v1 client or the union here: the argument type requires a dated apiVersion for the legacy type.
             this.service = new AzureOpenAIV1Client({
                 baseURL: azureOpenAIV1BaseURL(opts.endpoint),
                 apiKey: opts.azureADTokenProvider ?? opts.apiKey,
@@ -205,12 +213,14 @@ export class AzureOpenAIDriver<S extends AzureOpenAIService = AzureOpenAIService
     }
 
     /**
-     * The model whose prompt-cache support applies. A bare deployment name is only an alias, which may look like
-     * another model's ID, so a configured `sourceModel` describes it; a composite ID names its source model last.
+     * The model whose prompt-cache support applies. A composite ID names its source model last. A configured
+     * `sourceModel` describes the configured deployment, whose name is only an alias and may look like another model's
+     * ID; it applies to that deployment alone, or to any bare name when no deployment is configured.
      */
     override getPromptCacheSourceModel(model: string): string {
         if (model.includes('::')) return model.split('::').pop() ?? model;
-        return this.sourceModel ?? model;
+        if (!this.sourceModel) return model;
+        return !this.deploymentName || model === this.deploymentName ? this.sourceModel : model;
     }
 
     getResponsesService(options: ExecutionOptions): OpenAI {

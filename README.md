@@ -84,7 +84,8 @@ without reading the deployment.
 The Azure OpenAI driver (`azure_openai`) uses the GA v1 API (`<endpoint>/openai/v1`, no `api-version`). Setting
 `apiVersion` keeps the dated `/openai/...?api-version=` API. Its `service` is therefore typed as either client
 (`AzureOpenAIService`). An injected `AzureOpenAI` client keeps the `AzureOpenAI` type, and a pinned version can select
-it explicitly: `new AzureOpenAIDriver<AzureOpenAI>({ endpoint, apiVersion: '2024-10-21' })`.
+it explicitly: `new AzureOpenAIDriver<AzureOpenAI>({ endpoint, apiVersion: '2024-10-21' })`. Selecting
+`AzureOpenAIV1Client` requires an endpoint and no `apiVersion`.
 
 ## Installation
 

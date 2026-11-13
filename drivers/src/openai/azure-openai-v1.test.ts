@@ -223,8 +223,22 @@ describe('Azure OpenAI v1 API', () => {
             apiVersion: '2025-04-01-preview',
             deployment: 'production',
         });
-        // @ts-expect-error The legacy client type needs the pinned apiVersion that builds it.
-        new AzureOpenAIDriver<AzureOpenAI>({ endpoint: 'https://example.openai.azure.com', apiKey: 'test-key' });
+        const endpoint = 'https://example.openai.azure.com';
+        // Compile-time checks only: these constructions are type errors, and one would throw without an endpoint.
+        const mismatchedClientTypes = () => {
+            // @ts-expect-error The legacy client type needs the pinned apiVersion that builds it.
+            new AzureOpenAIDriver<AzureOpenAI>({ endpoint, apiKey: 'test-key' });
+            // @ts-expect-error An empty apiVersion builds the v1 client, not the legacy one.
+            new AzureOpenAIDriver<AzureOpenAI>({ endpoint, apiKey: 'test-key', apiVersion: '' });
+            // @ts-expect-error A dated apiVersion builds the legacy client, not the v1 one.
+            new AzureOpenAIDriver<AzureOpenAIV1Client>({ endpoint, apiKey: 'test-key', apiVersion: '2024-10-21' });
+            // @ts-expect-error Without an endpoint the driver builds the legacy client from AZURE_OPENAI_ENDPOINT.
+            new AzureOpenAIDriver<AzureOpenAIV1Client>({ apiKey: 'test-key' });
+        };
+        expectTypeOf(mismatchedClientTypes).toBeFunction();
+        const selectedV1 = new AzureOpenAIDriver<AzureOpenAIV1Client>({ endpoint, apiKey: 'test-key' });
+        expect(selectedV1.service).toBeInstanceOf(AzureOpenAIV1Client);
+        expectTypeOf(selectedV1.service.apiVersion).toEqualTypeOf<undefined>();
         const v1 = new AzureOpenAIDriver({
             endpoint: 'https://example.openai.azure.com',
             apiKey: 'test-key',
@@ -297,6 +311,42 @@ describe('Azure OpenAI v1 API', () => {
             expect(body).toMatchObject({ model: 'gpt-6-luna', prompt_cache_retention: '24h' });
             expect(body.prompt_cache_options).toBeUndefined();
             expect(JSON.stringify(body.input)).not.toContain('prompt_cache_breakpoint');
+        } finally {
+            await driver.destroy();
+        }
+    });
+
+    it('applies sourceModel to the configured deployment only', async () => {
+        const driver = new AzureOpenAIDriver({
+            endpoint: 'https://example.openai.azure.com',
+            apiKey: 'test-key',
+            deployment: 'primary',
+            sourceModel: 'gpt-5.6-luna',
+        });
+        const requests = capture(driver);
+        const conversation = [
+            { role: PromptRole.user, content: 'First question' },
+            { role: PromptRole.assistant, content: 'First answer' },
+            { role: PromptRole.user, content: 'Second question' },
+        ];
+        try {
+            for (const [model, cache_ttl] of [
+                ['gpt-5.4', '24h'],
+                ['primary', '12h'],
+            ] as const) {
+                await driver.execute(conversation, {
+                    model,
+                    prompt_cache_key: 'key',
+                    model_options: { _option_id: 'openai-thinking', cache_ttl },
+                });
+            }
+            const [other, primary] = requests.map((request) => request.body ?? {});
+            // Another deployment keeps its own model's cache parameters.
+            expect(other).toMatchObject({ model: 'gpt-5.4', prompt_cache_retention: '24h' });
+            expect(other.prompt_cache_options).toBeUndefined();
+            expect(JSON.stringify(other.input)).not.toContain('prompt_cache_breakpoint');
+            // The configured deployment follows its sourceModel.
+            expect(primary).toMatchObject({ model: 'primary', prompt_cache_options: { mode: 'explicit', ttl: '12h' } });
         } finally {
             await driver.destroy();
         }
