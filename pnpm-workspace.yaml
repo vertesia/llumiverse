@@ -73,6 +73,9 @@ overrides:
   # GHSA-qv5m-9pm6-hqp3 (WebSocket-upgrade ECONNRESET crash) and GHSA-jpvv-r467-5p4w (backslash path
   # separator bypassing proxy path rules). Reached via @modelcontextprotocol/sdk.
   "@hono/node-server@>=2.0.0 <2.1.6": 2.1.6
+  # GHSA-3gg2-335m-rxc6, GHSA-46wx-v44x-9hh2, GHSA-4h7h-rv7c-7m2v, GHSA-4m76-xfj5-7975 and
+  # GHSA-h7mg-cq63-vhpq (middleware bypasses and css helper injection). Peer of @hono/node-server.
+  "hono@<4.13.16": 4.13.16
 
 # Share package directories across local worktrees.
 virtualStoreType: global
