@@ -234,13 +234,13 @@ function configureOpenAIPromptCaching(
  */
 function getPromptCacheRequestOptions(
     model: string,
-    provider: string,
+    provider: Providers,
     cacheTtl: OpenAIPromptCacheTtl | undefined,
     options: OpenAIPromptCacheConfig['options'],
     logger?: Logger,
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
     if (!cacheTtl) return { prompt_cache_options: options };
-    if (provider !== Providers.openai || !getOpenAIPromptCacheTtls(model).includes(cacheTtl)) {
+    if (!getOpenAIPromptCacheTtls(model, provider).includes(cacheTtl)) {
         logModelOptionException(logger, model, { cache_ttl: cacheTtl }, ['cache_ttl'], 'openai_cache_ttl_unsupported');
         return { prompt_cache_options: options };
     }

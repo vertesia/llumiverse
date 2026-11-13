@@ -898,40 +898,47 @@ describe('OpenAI Responses reasoning', () => {
     });
 
     it.each([
-        ['gpt-6-astra', '12h', { prompt_cache_options: { ttl: '12h' } }],
-        ['gpt-5.6-sol', '30m', { prompt_cache_options: { ttl: '30m' } }],
-        ['gpt-5.1', 'in_memory', { prompt_cache_retention: 'in_memory' }],
-        ['gpt-4.1-2025-04-14', '24h', { prompt_cache_retention: '24h' }],
-    ] as const)('sends %s cache_ttl=%s in the parameter the model takes', async (model, cache_ttl, expected) => {
-        for (const streaming of [false, true]) {
-            const create = vi.fn(async (request: unknown) =>
-                (request as { stream?: boolean }).stream
-                    ? (async function* () {
-                          yield { type: 'response.completed', sequence_number: 1, response: response() };
-                      })()
-                    : response(),
-            );
-            const driver = new TestResponsesDriver(create);
-            const warn = vi.fn();
-            driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
-            const options = { model, model_options: { _option_id: 'openai-thinking' as const, cache_ttl } };
-            const prompt = [{ type: 'message' as const, role: 'user' as const, content: 'question' }];
-            if (streaming) {
-                for await (const _chunk of await driver.requestTextCompletionStream(prompt, options)) {
-                    // Consume the provider stream.
+        ['gpt-6-astra', '12h', { prompt_cache_options: { ttl: '12h' } }, Providers.openai],
+        ['gpt-5.6-sol', '30m', { prompt_cache_options: { ttl: '30m' } }, Providers.openai],
+        ['gpt-5.1', 'in_memory', { prompt_cache_retention: 'in_memory' }, Providers.openai],
+        ['gpt-4.1-2025-04-14', '24h', { prompt_cache_retention: '24h' }, Providers.openai],
+        ['gpt-6-astra', '12h', { prompt_cache_options: { ttl: '12h' } }, Providers.azure_openai],
+        ['gpt-5.3-codex', '24h', { prompt_cache_retention: '24h' }, Providers.azure_openai],
+        ['deployment::gpt-5.6-sol', '12h', { prompt_cache_options: { ttl: '12h' } }, Providers.azure_foundry],
+        ['deployment::gpt-5.4', 'in_memory', { prompt_cache_retention: 'in_memory' }, Providers.azure_foundry],
+    ] as const)(
+        'sends %s cache_ttl=%s in the parameter the model takes on %s',
+        async (model, cache_ttl, expected, provider) => {
+            for (const streaming of [false, true]) {
+                const create = vi.fn(async (request: unknown) =>
+                    (request as { stream?: boolean }).stream
+                        ? (async function* () {
+                              yield { type: 'response.completed', sequence_number: 1, response: response() };
+                          })()
+                        : response(),
+                );
+                const driver = new TestResponsesDriver(create, provider);
+                const warn = vi.fn();
+                driver.logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+                const options = { model, model_options: { _option_id: 'openai-thinking' as const, cache_ttl } };
+                const prompt = [{ type: 'message' as const, role: 'user' as const, content: 'question' }];
+                if (streaming) {
+                    for await (const _chunk of await driver.requestTextCompletionStream(prompt, options)) {
+                        // Consume the provider stream.
+                    }
+                } else {
+                    await driver.requestTextCompletion(prompt, options);
                 }
-            } else {
-                await driver.requestTextCompletion(prompt, options);
-            }
 
-            const request = create.mock.calls[0][0] as Record<string, unknown>;
-            expect({
-                prompt_cache_options: request.prompt_cache_options,
-                prompt_cache_retention: request.prompt_cache_retention,
-            }).toEqual(expected);
-            expect(warn).not.toHaveBeenCalled();
-        }
-    });
+                const request = create.mock.calls[0][0] as Record<string, unknown>;
+                expect({
+                    prompt_cache_options: request.prompt_cache_options,
+                    prompt_cache_retention: request.prompt_cache_retention,
+                }).toEqual(expected);
+                expect(warn).not.toHaveBeenCalled();
+            }
+        },
+    );
 
     it('keeps the explicit breakpoint mode when a GPT-5.6+ cache_ttl is set', async () => {
         const create = vi.fn(async (_request: unknown) => response());
@@ -964,7 +971,9 @@ describe('OpenAI Responses reasoning', () => {
         ['gpt-6-astra', 'in_memory', Providers.openai],
         ['gpt-5.1', '12h', Providers.openai],
         ['gpt-4o', '24h', Providers.openai],
-        ['gpt-6-astra', '12h', Providers.azure_openai],
+        ['gpt-6-astra', '12h', Providers.openai_compatible],
+        ['gpt-5.5', '24h', Providers.azure_openai],
+        ['gpt-5.1-chat-latest', '24h', Providers.azure_foundry],
     ] as const)('drops %s cache_ttl=%s on %s with a warning', async (model, cache_ttl, provider) => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create, provider);
