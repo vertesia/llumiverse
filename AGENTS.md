@@ -229,6 +229,18 @@ When adding new features:
 2. Update the `AbstractDriver` class in `core/src/Driver.ts` if needed
 3. Implement the feature in the relevant drivers
 
+## JSON Schema Document
+
+`common/json-schema/llumiverse.schema.json` is the JSON Schema of every Zod schema exported from
+`@llumiverse/common/schemas`, one `$defs` entry each, published as `@llumiverse/common/json-schema`. It is generated
+output: [llumiverse-go](https://github.com/vertesia/llumiverse-go) generates its Go types from it, so the two clients
+share one definition. After editing a schema in `common/src/schemas/`, run `pnpm --filter @llumiverse/common
+gen:json-schema` and commit the result; `json-schema-document.test.ts` fails when the committed file is stale.
+
+The document applies the same shape normalization as the Vertesia API contract (`@vertesia/common`), so a type it
+shares with that contract is identical apart from `additionalProperties: false`, which the API sets per request or
+response.
+
 ## Callable Driver Behavior
 
 Driver refactors must preserve callable behavior inherited or exposed by existing drivers. Do not remove methods or
