@@ -364,31 +364,48 @@ describe('current reasoning model options', () => {
         });
     });
 
-    it('offers fast mode on the Claude API only, for the models that support it', () => {
-        for (const model of [
-            'claude-opus-4-8',
-            'claude-opus-5',
-            'claude-opus-5-5',
-            'claude-fable-5-2',
-            'claude-mythos-5-2',
-        ]) {
+    it('offers fast mode on the Claude API for the models that support it', () => {
+        for (const model of ['claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-2', 'claude-mythos-5-2']) {
             expect(speedOption(model, Providers.anthropic)).toMatchObject({
                 type: OptionType.enum,
                 default: 'standard',
                 enum: { Standard: 'standard', Fast: 'fast' },
             });
         }
+        // Fast mode on Opus 4.8 is removed on 2026-11-30.
+        expect(speedOption('claude-opus-4-8', Providers.anthropic)).toBeUndefined();
         expect(speedOption('claude-opus-4-7', Providers.anthropic)).toBeUndefined();
         expect(speedOption('claude-sonnet-5', Providers.anthropic)).toBeUndefined();
         expect(speedOption('claude-fable-5-1', Providers.anthropic)).toBeUndefined();
         // Vertex AI does not serve fast mode for Opus.
-        expect(speedOption('claude-opus-5-5', Providers.vertexai)).toBeUndefined();
+        for (const model of ['claude-opus-5', 'claude-opus-5-5', 'claude-opus-6']) {
+            expect(
+                speedOption(`locations/global/publishers/anthropic/models/${model}`, Providers.vertexai),
+            ).toBeUndefined();
+        }
         // Microsoft Foundry (a separate `-fast` model) and Amazon Bedrock don't take the `speed` field.
         for (const model of ['claude-opus-5-5', 'claude-fable-5-2']) {
             expect(speedOption(`deployment::${model}`, Providers.azure_foundry)).toBeUndefined();
             expect(speedOption(`deployment::${model}-fast`, Providers.azure_foundry)).toBeUndefined();
             expect(speedOption(`anthropic.${model}`, Providers.bedrock_mantle)).toBeUndefined();
             expect(speedOption(`global.anthropic.${model}`, Providers.bedrock)).toBeUndefined();
+        }
+    });
+
+    it('offers generally available fast mode on Vertex AI for Fable and Mythos 5.2 and later', () => {
+        for (const model of ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-fable-5-3', 'claude-mythos-6']) {
+            const option = speedOption(`locations/global/publishers/anthropic/models/${model}`, Providers.vertexai);
+            expect(option, model).toMatchObject({
+                type: OptionType.enum,
+                default: 'standard',
+                enum: { Standard: 'standard', Fast: 'fast' },
+            });
+            expect(option?.description, model).not.toContain('research preview');
+        }
+        for (const model of ['claude-fable-5-1', 'claude-mythos-5', 'claude-sonnet-5-5']) {
+            expect(
+                speedOption(`locations/global/publishers/anthropic/models/${model}`, Providers.vertexai),
+            ).toBeUndefined();
         }
     });
 
