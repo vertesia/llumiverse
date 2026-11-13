@@ -3,10 +3,13 @@ import {
     getAvailableEffortLevels,
     getClaudeFastModeStatus,
     getGeminiModelVersion,
+    getGeminiOmniVersion,
     getOpenAIReasoningEffortLevels,
     isClaudeVersionGTE,
     isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
+    isGeminiOmniVersionGte,
+    isGeminiOmniVideoModel,
     isOpenAIGptVersionGTE,
     isQwenVersionGte,
     keepsClaudePriorTurnThinking,
@@ -16,6 +19,7 @@ import {
     supportsClaudeFastMode,
     supportsClaudeForcedToolChoice,
     supportsEffort,
+    supportsGeminiXHighThinking,
     supportsMidConversationToolChanges,
     supportsVertexAIClaudeFastMode,
 } from './version-parsing.js';
@@ -123,6 +127,9 @@ describe('OpenAI GPT model version parsing', () => {
         ['gpt-deployment::gpt-5', { major: 5, minor: 0 }],
         ['gpt-6', { major: 6, minor: 0 }],
         ['gpt-6-astra', { major: 6, minor: 0 }],
+        ['openai.gpt-daybreak-blue-5.6-sol', { major: 5, minor: 6 }],
+        ['global.openai.gpt-daybreak-blue-5.6-sol', { major: 5, minor: 6 }],
+        ['gpt-daybreak-red-6', { major: 6, minor: 0 }],
     ] as const)('parses %s', (model, expected) => {
         expect(parseOpenAIGptVersion(model)).toEqual(expected);
     });
@@ -364,6 +371,44 @@ describe('Claude fast mode on Vertex AI', () => {
         ['gemini-3-pro', false],
     ] as const)('classifies %s as %s', (model, supported) => {
         expect(supportsVertexAIClaudeFastMode(model)).toBe(supported);
+    });
+});
+
+describe('Gemini Omni versions', () => {
+    it.each([
+        ['gemini-omni-flash-preview', { major: 1, minor: 0 }],
+        ['gemini-omni-1.1-flash-preview', { major: 1, minor: 1 }],
+        ['locations/global/publishers/google/models/gemini-omni-1.2-flash', { major: 1, minor: 2 }],
+        ['gemini-omni-1.3-flash', { major: 1, minor: 3 }],
+        ['gemini-omni-2-flash', { major: 2, minor: 0 }],
+        ['gemini-3.5-flash', undefined],
+        ['gemini-omnia-flash', undefined],
+    ])('%s -> %o', (model, expected) => {
+        expect(getGeminiOmniVersion(model)).toEqual(expected);
+        expect(isGeminiOmniVideoModel(model)).toBe(expected !== undefined);
+    });
+
+    it('compares versions so later releases inherit the latest behavior', () => {
+        expect(isGeminiOmniVersionGte('gemini-omni-1.2-flash', 1, 2)).toBe(true);
+        expect(isGeminiOmniVersionGte('gemini-omni-2-flash', 1, 2)).toBe(true);
+        expect(isGeminiOmniVersionGte('gemini-omni-1.1-flash-preview', 1, 2)).toBe(false);
+        expect(isGeminiOmniVersionGte('gemini-omni-flash-preview', 1, 1)).toBe(false);
+        expect(isGeminiOmniVersionGte('gemini-3.5-flash', 1, 0)).toBe(false);
+    });
+});
+
+describe('Gemini XHIGH thinking', () => {
+    it.each([
+        ['gemini-4-hydrogen', true],
+        ['publishers/google/models/gemini-4-hydrogen', true],
+        ['google/gemini-4-hydrogen:batch', true],
+        ['gemini-4.5-hydrogen-preview', true],
+        ['gemini-4-argon', false],
+        ['gemini-4-carbon', false],
+        ['gemini-4-flash', false],
+        ['gemini-4-hydrogenx', false],
+    ])('%s -> %s', (model, expected) => {
+        expect(supportsGeminiXHighThinking(model)).toBe(expected);
     });
 });
 

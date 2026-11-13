@@ -27,6 +27,7 @@ import {
     buildClaudeSpeedOption,
     buildClaudeThinkingBudgetOption,
     buildClaudeThinkingModeOption,
+    buildNativeCompactionOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import {
@@ -34,7 +35,10 @@ import {
     hasSamplingParameterRestriction,
     isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
+    isGeminiOmniVersionGte,
+    isGeminiOmniVideoModel,
     isModelFamilyVersionGTE,
+    supportsGeminiXHighThinking,
     supportsVertexAIClaudeFastMode,
 } from './version-parsing.js';
 
@@ -87,6 +91,7 @@ export enum ThinkingLevel {
     MEDIUM = 'MEDIUM',
     LOW = 'LOW',
     MINIMAL = 'MINIMAL',
+    XHIGH = 'XHIGH',
     THINKING_LEVEL_UNSPECIFIED = 'THINKING_LEVEL_UNSPECIFIED',
 }
 
@@ -111,49 +116,8 @@ export function isFlexSupportedGeminiModel(model: string): boolean {
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
-    const modelName = model.split('/').pop();
-    if (modelName === 'gemini-omni-flash-preview' || modelName === 'gemini-omni-1.1-flash-preview') {
-        const isOmni11 = modelName === 'gemini-omni-1.1-flash-preview';
-        return {
-            _option_id: 'vertexai-gemini-omni-video',
-            options: [
-                {
-                    name: 'task',
-                    type: OptionType.enum,
-                    enum: {
-                        'Text to video': 'text_to_video',
-                        'Image to video': 'image_to_video',
-                        'References to video': 'reference_to_video',
-                        'Edit video': 'edit',
-                        ...(isOmni11 ? { 'Extend video': 'extend' } : {}),
-                    },
-                    description: 'Video generation task. Media inputs require an explicit task.',
-                },
-                {
-                    name: 'aspect_ratio',
-                    type: OptionType.enum,
-                    enum: { Landscape: '16:9', Portrait: '9:16' },
-                    description: 'Aspect ratio of the generated video.',
-                },
-                {
-                    name: 'duration_seconds',
-                    type: OptionType.numeric,
-                    min: 3,
-                    max: 10,
-                    default: 5,
-                    integer: true,
-                    description: 'Duration of the generated video in seconds.',
-                },
-                {
-                    name: 'resolution',
-                    type: OptionType.enum,
-                    enum: isOmni11
-                        ? { '360p': '360p', '720p': '720p', '1080p': '1080p', '4K': '4k' }
-                        : { '720p': '720p' },
-                    description: 'Resolution of the generated video.',
-                },
-            ],
-        };
+    if (isGeminiOmniVideoModel(model)) {
+        return getGeminiOmniVideoOptions(model, option);
     }
     if (model.includes('imagen-')) {
         return getImagenOptions(model, option);
@@ -165,6 +129,81 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getOpenMaaSChatOptions(model);
     }
     return textOptionsFallback;
+}
+
+/**
+ * Gemini Omni video options by version; later versions inherit the newest known behavior.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash
+ */
+function getGeminiOmniVideoOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    const isOmni11OrLater = isGeminiOmniVersionGte(model, 1, 1);
+    const isOmni12OrLater = isGeminiOmniVersionGte(model, 1, 2);
+    const task = (option as VertexAIGeminiOmniVideoOptions | undefined)?.task;
+    const options: ModelOptionInfoItem[] = [
+        {
+            name: 'task',
+            type: OptionType.enum,
+            enum: {
+                'Text to video': 'text_to_video',
+                'Image to video': 'image_to_video',
+                'References to video': 'reference_to_video',
+                'Edit video': 'edit',
+                ...(isOmni11OrLater ? { 'Extend video': 'extend' } : {}),
+                ...(isOmni12OrLater ? { 'Upscale video': 'upscale' } : {}),
+            },
+            description: 'Video generation task. Media inputs require an explicit task.',
+            // The duration limit depends on the task from Omni 1.2.
+            ...(isOmni12OrLater ? { refresh: true } : {}),
+        },
+    ];
+    // Upscaling keeps the input video's duration and aspect ratio.
+    if (task !== 'upscale') {
+        options.push(
+            {
+                name: 'aspect_ratio',
+                type: OptionType.enum,
+                enum: { Landscape: '16:9', Portrait: '9:16' },
+                description: 'Aspect ratio of the generated video.',
+            },
+            {
+                name: 'duration_seconds',
+                type: OptionType.numeric,
+                min: 3,
+                // Omni 1.2 generates and edits up to 15 seconds; extensions and first-and-last-frame interpolation stay
+                // at 10 seconds.
+                max: isOmni12OrLater && task !== 'extend' ? 15 : 10,
+                default: 5,
+                integer: true,
+                description: isOmni12OrLater
+                    ? 'Duration of the generated video in seconds. First-and-last-frame videos are limited to 10 seconds.'
+                    : 'Duration of the generated video in seconds.',
+            },
+        );
+    }
+    options.push({
+        name: 'resolution',
+        type: OptionType.enum,
+        // Upscaling targets 720p, 1080p or 4K only: 360p is an input resolution, never an upscale output.
+        enum:
+            task === 'upscale'
+                ? { '720p': '720p', '1080p': '1080p', '4K': '4k' }
+                : isOmni11OrLater
+                  ? { '360p': '360p', '720p': '720p', '1080p': '1080p', '4K': '4k' }
+                  : { '720p': '720p' },
+        description:
+            task === 'upscale'
+                ? 'Output resolution: 360p input upscales to 720p or 1080p, 720p input to 1080p or 4K.'
+                : 'Resolution of the generated video.',
+    });
+    if (isOmni12OrLater) {
+        options.push({
+            name: SharedOptions.seed,
+            type: OptionType.numeric,
+            integer: true,
+            description: 'Seed for reproducible video generation.',
+        });
+    }
+    return { _option_id: 'vertexai-gemini-omni-video', options };
 }
 
 function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -412,6 +451,9 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
         model.includes('gemini-nano-banana')
     ) {
         return { Minimal: 'minimal', High: 'high' };
+    }
+    if (supportsGeminiXHighThinking(model)) {
+        return { Low: 'low', Medium: 'medium', High: 'high', 'Extra high': 'xhigh' };
     }
     if (hasGeminiSamplingRestriction(model) || (model.includes('pro') && isGeminiModelVersionGte(model, '3.1'))) {
         return { Low: 'low', Medium: 'medium', High: 'high' };
@@ -760,6 +802,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),
             ...(supportsVertexAIClaudeFastMode(model) ? buildClaudeSpeedOption(model) : []),
+            ...buildNativeCompactionOption(),
         ],
     };
 }

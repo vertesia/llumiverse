@@ -1,4 +1,5 @@
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
+import { vi } from 'vitest';
 
 /**
  * Shared helpers for tests in @llumiverse/drivers. These avoid repeated `as unknown` casts
@@ -63,4 +64,18 @@ export function claudeSdkStream(events: RawMessageStreamEvent[], finalMessage: M
             return finalMessage;
         },
     };
+}
+
+/**
+ * Stub the agent-backed fetch that the core driver provides, beneath any `getDriverFetch` override of `driverClass`,
+ * so the override's wrapping still runs. Restore it with `vi.restoreAllMocks()`.
+ */
+export function stubCoreDriverFetch(driverClass: { prototype: object }, fetch: typeof globalThis.fetch): void {
+    // The core definition is the topmost one in the prototype chain.
+    let core: object | undefined;
+    for (let proto: object | null = driverClass.prototype; proto; proto = Object.getPrototypeOf(proto)) {
+        if (Object.hasOwn(proto, 'getDriverFetch')) core = proto;
+    }
+    if (!core) throw new Error('No getDriverFetch in the driver class chain');
+    vi.spyOn(core as { getDriverFetch: () => typeof globalThis.fetch }, 'getDriverFetch').mockReturnValue(fetch);
 }

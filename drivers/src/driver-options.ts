@@ -23,6 +23,13 @@ export interface AzureFoundryDriverOptions extends DriverOptions {
      */
     azureADTokenProvider?: TokenCredential;
 
+    /**
+     * A Microsoft Foundry resource key. When set, inference (Responses, Chat Completions, Claude Messages, images and
+     * embeddings) authenticates with it on the resource endpoint instead of Microsoft Entra ID. Listing deployments
+     * still needs Entra ID, so pass `azureADTokenProvider` too for `listModels()`. Claude Mythos accepts Entra ID only.
+     */
+    apiKey?: string;
+
     endpoint?: string;
 
     apiVersion?: string;

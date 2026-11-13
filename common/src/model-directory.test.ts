@@ -124,6 +124,16 @@ describe('central model directory', () => {
         expect(
             resolveModelProfile('google/gemini-4-argon', Providers.openai_compatible).reasoning_effort_levels,
         ).toEqual(['low', 'medium', 'high']);
+        expect(
+            resolveModelProfile('google/gemini-4-carbon', Providers.openai_compatible).reasoning_effort_levels,
+        ).toEqual(['low', 'medium', 'high']);
+        // https://openrouter.ai/google/gemini-4-hydrogen lists xhigh, high, medium and low.
+        expect(
+            resolveModelProfile('google/gemini-4-hydrogen', Providers.openai_compatible).reasoning_effort_levels,
+        ).toEqual(['low', 'medium', 'high', 'xhigh']);
+        expect(
+            resolveModelProfile('google/gemini-5-hydrogen:batch', Providers.openai_compatible).reasoning_effort_levels,
+        ).toEqual(['low', 'medium', 'high', 'xhigh']);
         expect(resolveModelProfile('anthropic/claude-opus-6', Providers.openai_compatible).family).toBe('claude');
     });
 
@@ -383,6 +393,7 @@ describe('central model directory', () => {
     it.each([
         ['meta/muse-spark-1.3', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
         ['meta/muse-wonder', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+        ['meta/muse-ember', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
         ['meta/muse-spark-1.1', 'muse', 1_048_576, undefined, ['minimal', 'low', 'medium', 'high', 'xhigh']],
         ['meta/muse-glimmer-30b', 'muse', 131_072, undefined, ['low', 'medium', 'high', 'xhigh']],
         ['stepfun/step-5-preview', 'step', 1_048_576, 64_000, ['low', 'medium', 'high']],

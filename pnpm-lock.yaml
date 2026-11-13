@@ -314,8 +314,8 @@ importers:
         specifier: ^7.7.0
         version: 7.7.0
       '@google/genai':
-        specifier: ^2.32.0
-        version: 2.32.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
+        specifier: ^3.3.0
+        version: 3.3.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
       '@huggingface/inference':
         specifier: ^4.13.32
         version: 4.13.32
@@ -712,9 +712,9 @@ packages:
     resolution: {integrity: sha512-40hBnQmTwXfem+kc7UVNPmxEIAPonop80aVsLbEpBTu57qroFFzOdV9r8u+L3/K0EuzuuHdt2ils5avKLsVrtw==}
     engines: {node: '>=22'}
 
-  '@google/genai@2.32.0':
-    resolution: {integrity: sha512-60c79uXpR0a47bmGqDxbXEBuQUalNmwo5mx5kqb91jIW4FoqpsLSt86DeVhRhtH5+s/16Wqxt3sXzFQn2U1OHQ==}
-    engines: {node: '>=20.0.0'}
+  '@google/genai@3.3.0':
+    resolution: {integrity: sha512-XLjXedj0X8UrULZz1GnlTMSQxBDFdr+NCKZkOBaSVVYqmK30C6FCnKW31Ppn0ItO9DpNspCHFui257kPNpumKQ==}
+    engines: {node: '>=22.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
     peerDependenciesMeta:
@@ -3017,7 +3017,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@2.32.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))':
+  '@google/genai@3.3.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))':
     dependencies:
       google-auth-library: 11.3.3
       p-retry: 4.6.2

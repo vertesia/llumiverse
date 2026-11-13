@@ -63,7 +63,9 @@ describe('current reasoning model options', () => {
                 Default: 'default',
                 Priority: 'priority',
             });
-            expect(options.map((option) => option.name)).not.toContain('reasoning_context');
+            // Azure documents reasoning.context, unlike the Fast and Ultrafast tiers.
+            // https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/reasoning
+            expect(options.map((option) => option.name)).toContain('reasoning_context');
         },
     );
 
@@ -221,7 +223,9 @@ describe('current reasoning model options', () => {
         });
         expect(reasoningContext('gpt-6-astra', Providers.openai)).toBeDefined();
         expect(reasoningContext('gpt-5.5', Providers.openai)).toBeUndefined();
-        expect(reasoningContext('gpt-5.6-sol', Providers.azure_openai)).toBeUndefined();
+        expect(reasoningContext('gpt-5.6-sol', Providers.azure_openai)).toBeDefined();
+        expect(reasoningContext('deployment::gpt-6-luna', Providers.azure_foundry)).toBeDefined();
+        expect(reasoningContext('gpt-5.5', Providers.azure_openai)).toBeUndefined();
         expect(reasoningContext('gpt-5.6-sol', Providers.openai_compatible)).toBeUndefined();
     });
 
@@ -241,10 +245,30 @@ describe('current reasoning model options', () => {
         for (const model of ['gpt-5.5', 'gpt-5.5-pro', 'gpt-5-mini', 'gpt-4.1-mini', 'gpt-4o']) {
             expect(cacheTtls(model)).toBeUndefined();
         }
-        // The lifetimes are documented for the OpenAI API only.
-        expect(cacheTtls('gpt-6-astra', Providers.azure_openai)).toBeUndefined();
+        // Other OpenAI-compatible providers document neither lifetime.
         expect(cacheTtls('gpt-6-astra', Providers.openai_compatible)).toBeUndefined();
     });
+
+    it.each([Providers.azure_openai, Providers.azure_foundry])(
+        'advertises the prompt-cache lifetimes Azure documents through %s',
+        (provider) => {
+            const cacheTtls = (model: string) => {
+                const id = provider === Providers.azure_foundry ? `deployment::${model}` : model;
+                const option = getOptions(id, provider).options.find((item) => item.name === 'cache_ttl');
+                return option?.type === OptionType.enum ? Object.values(option.enum) : undefined;
+            };
+            for (const model of ['gpt-5.6-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-7']) {
+                expect(cacheTtls(model)).toEqual(['30m', '12h']);
+            }
+            // Azure's extended-retention list includes gpt-5.3-codex and gpt-5.1-chat, unlike OpenAI's.
+            for (const model of ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.1-chat', 'gpt-4.1']) {
+                expect(cacheTtls(model)).toEqual(['in_memory', '24h']);
+            }
+            for (const model of ['gpt-5.5', 'gpt-5-mini', 'gpt-4o', 'gpt-5.1-chat-latest']) {
+                expect(cacheTtls(model)).toBeUndefined();
+            }
+        },
+    );
 
     it('does not advertise unverified effort for unknown OpenAI-compatible models', () => {
         const options = getOptions('custom-reasoning-model', Providers.openai_compatible).options;

@@ -429,6 +429,9 @@ describe('current Bedrock GPT families', () => {
         ['openai.gpt-6.2-terra', 1_050_000, 128_000, true],
         ['openai.gpt-6.1-luna', 1_050_000, 128_000, true],
         ['openai.gpt-7-sol', 1_000_000, 131_072, false],
+        // Daybreak Blue's card gives 1.05M, unlike plain GPT-5.6 Sol.
+        ['openai.gpt-daybreak-blue-5.6-sol', 1_050_000, 128_000, true],
+        ['openai.gpt-5.6-cyber', 1_050_000, 128_000, true],
     ])('resolves limits and Mantle effort for %s', (model, context_window, max_output_tokens, allowsNone) => {
         for (const id of [model, `us.${model}`, `global.${model}`]) {
             expect(getBedrockModelKnowledge(id)).toMatchObject({ context_window, max_output_tokens });
@@ -452,6 +455,7 @@ describe('Bedrock Converse GPT options', () => {
         'us.openai.gpt-6.1-sol',
         'us.openai.gpt-6.1-terra',
         'global.openai.gpt-6.1-terra',
+        'us.openai.gpt-daybreak-blue-5.6-sol',
     ])('exposes model-specific effort and verbosity for %s', (model) => {
         const runtime = getOptions(model, Providers.bedrock);
         const mantle = getOptions(model, Providers.bedrock_mantle);

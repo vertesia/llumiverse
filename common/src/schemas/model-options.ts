@@ -78,6 +78,7 @@ export const AnthropicClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
         speed: z.enum(['standard', 'fast']).optional(),
     })
     .meta({ id: 'AnthropicClaudeOptions' });
@@ -223,6 +224,7 @@ export const BedrockClaudeOptionsSchema = z
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockClaudeOptions' });
@@ -334,6 +336,7 @@ export const BedrockMantleClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        native_compaction: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMantleClaudeOptions' });
 
@@ -398,6 +401,7 @@ export const OpenAiThinkingOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
         cache_ttl: OpenAiPromptCacheTtlSchema.optional(),
+        native_compaction: z.boolean().optional(),
         extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
@@ -421,6 +425,7 @@ export const OpenAiTextOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
         cache_ttl: OpenAiPromptCacheTtlSchema.optional(),
+        native_compaction: z.boolean().optional(),
         extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
@@ -428,6 +433,7 @@ export const OpenAiTextOptionsSchema = z
 export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({
     _option_id: true,
     cache_ttl: true,
+    native_compaction: true,
     extra_body: true,
     image_generation: true,
 })
@@ -570,6 +576,7 @@ export const VertexAIClaudeOptionsSchema = z
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
         speed: z.enum(['standard', 'fast']).optional(),
+        native_compaction: z.boolean().optional(),
     })
     .meta({ id: 'VertexAIClaudeOptions' });
 
@@ -584,7 +591,7 @@ export const VertexAIGeminiOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         seed: z.number().optional(),
-        effort: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+        effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
         include_thoughts: z.boolean().optional(),
         thinking_budget_tokens: z.number().optional(),
         thinking_level: ThinkingLevelSchema.optional(),
@@ -618,10 +625,11 @@ export const VertexAIGeminiOptionsSchema = z
 export const VertexAIGeminiOmniVideoOptionsSchema = z
     .strictObject({
         _option_id: z.literal('vertexai-gemini-omni-video').optional(),
-        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend']).optional(),
+        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend', 'upscale']).optional(),
         aspect_ratio: z.enum(['16:9', '9:16']).optional(),
-        duration_seconds: z.number().int().min(3).max(10).optional(),
+        duration_seconds: z.number().int().min(3).max(15).optional(),
         resolution: z.enum(['360p', '720p', '1080p', '4k']).optional(),
+        seed: z.number().int().optional(),
     })
     .meta({ id: 'VertexAIGeminiOmniVideoOptions' });
 
