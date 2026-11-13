@@ -528,6 +528,24 @@ describe('formatClaudePrompt', () => {
         },
     );
 
+    it.each(['claude-fable-5-2', 'claude-mythos-5-2'])(
+        'requests fast mode on Vertex AI for %s with the speed field and no fast mode beta header',
+        (model) => {
+            const prompt = { system: [{ type: 'text' as const, text: 'system' }], messages: [] };
+            const options = { _option_id: 'vertexai-claude', speed: 'fast' } as const;
+            const fast = getClaudePayload({ model, model_options: options }, prompt, 'vertexai');
+            expect(fast.payload).toMatchObject({ model, speed: 'fast' });
+            expect(fast.requestOptions?.headers?.['anthropic-beta']).not.toContain('fast-mode');
+
+            const standard = getClaudePayload(
+                { model, model_options: { ...options, speed: 'standard' } },
+                prompt,
+                'vertexai',
+            );
+            expect(standard.payload).not.toHaveProperty('speed');
+        },
+    );
+
     it('builds a Claude Fable 5.2 request with always-on adaptive thinking and automatic tool choice', () => {
         const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
         const { payload, requestOptions } = getClaudePayload(

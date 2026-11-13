@@ -24,6 +24,7 @@ import {
     buildClaudeCacheTtlOptions,
     buildClaudeEffortOptions,
     buildClaudeIncludeThoughtsOption,
+    buildClaudeSpeedOption,
     buildClaudeThinkingBudgetOption,
     buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
@@ -34,6 +35,7 @@ import {
     isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
     isModelFamilyVersionGTE,
+    supportsVertexAIClaudeFastMode,
 } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
@@ -757,6 +759,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),
+            ...(supportsVertexAIClaudeFastMode(model) ? buildClaudeSpeedOption(model) : []),
         ],
     };
 }

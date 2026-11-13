@@ -17,6 +17,7 @@ import {
     supportsClaudeForcedToolChoice,
     supportsEffort,
     supportsMidConversationToolChanges,
+    supportsVertexAIClaudeFastMode,
 } from './version-parsing.js';
 
 describe('Claude model version parsing', () => {
@@ -286,14 +287,16 @@ describe('supportsClaudeForcedToolChoice', () => {
 
 describe('Claude fast mode', () => {
     it.each([
-        ['claude-opus-4-8', 'research_preview'],
         ['claude-opus-5', 'research_preview'],
+        ['claude-opus-5-1', 'research_preview'],
         ['claude-opus-5-5', 'available'],
         ['claude-opus-6', 'available'],
         ['claude-fable-5-2', 'available'],
         ['claude-mythos-5-2', 'available'],
         ['claude-fable-5-3', 'available'],
         ['claude-fable-6', 'available'],
+        // Fast mode on Opus 4.8 is removed on 2026-11-30.
+        ['claude-opus-4-8', undefined],
         ['claude-opus-4-7', undefined],
         ['claude-sonnet-5-5', undefined],
         ['claude-haiku-5-5', undefined],
@@ -343,6 +346,24 @@ describe('Claude fast mode', () => {
                 expect(rank(family[i].bare), family[i].bare).toBeGreaterThanOrEqual(rank(family[i - 1].bare));
             }
         }
+    });
+});
+
+describe('Claude fast mode on Vertex AI', () => {
+    it.each([
+        ['claude-fable-5-2', true],
+        ['claude-mythos-5-2', true],
+        ['claude-fable-5-3', true],
+        ['claude-mythos-6', true],
+        ['locations/global/publishers/anthropic/models/claude-fable-5-2@20261109', true],
+        ['claude-fable-5-1', false],
+        ['claude-mythos-5', false],
+        ['claude-opus-5-5', false],
+        ['claude-opus-6', false],
+        ['claude-sonnet-5-5', false],
+        ['gemini-3-pro', false],
+    ] as const)('classifies %s as %s', (model, supported) => {
+        expect(supportsVertexAIClaudeFastMode(model)).toBe(supported);
     });
 });
 

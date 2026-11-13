@@ -569,6 +569,7 @@ export const VertexAIClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        speed: z.enum(['standard', 'fast']).optional(),
     })
     .meta({ id: 'VertexAIClaudeOptions' });
 

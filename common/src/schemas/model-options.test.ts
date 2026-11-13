@@ -104,6 +104,21 @@ describe('ModelOptionsSchema', () => {
         },
     );
 
+    it('accepts fast mode only on the Claude platforms that take the speed field', () => {
+        for (const _option_id of ['anthropic-claude', 'vertexai-claude']) {
+            const options = { _option_id, speed: 'fast' };
+            expect(ModelOptionsSchema.parse(options)).toEqual(options);
+            expect(ModelOptionsSchema.safeParse({ _option_id, speed: 'turbo' }).success).toBe(false);
+        }
+        for (const _option_id of ['bedrock-claude', 'bedrock-mantle-claude']) {
+            expect(ModelOptionsSchema.safeParse({ _option_id, speed: 'fast' }).success).toBe(false);
+        }
+        expect(emitted.$defs.VertexAIClaudeOptions.properties?.speed).toMatchObject({
+            type: 'string',
+            enum: ['standard', 'fast'],
+        });
+    });
+
     it.each(['AnthropicClaudeOptions', 'BedrockClaudeOptions', 'BedrockMantleClaudeOptions', 'VertexAIClaudeOptions'])(
         'emits thinking mode in the %s JSON Schema',
         (name) => {

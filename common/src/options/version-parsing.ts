@@ -436,11 +436,14 @@ export type ClaudeFastModeStatus = 'research_preview' | 'available';
 
 /**
  * Classify a model's fast mode on the Claude API: generally available on Opus 5.5 and later and on Fable and
- * Mythos 5.2 and later, a research preview on Opus 4.8 and Opus 5, and otherwise absent. Opus 4.7 rejects
- * `speed: "fast"` and Opus 4.6 ignores it. The Opus 4.8 preview is deprecated and ends on 2026-11-30.
+ * Mythos 5.2 and later, a research preview on Opus 5, and otherwise absent. Opus 4.8 is left out: its fast mode
+ * is deprecated and removed on 2026-11-30, after which `speed: "fast"` returns an error. Opus 4.7 rejects
+ * `speed: "fast"` and Opus 4.6 ignores it.
+ * https://platform.claude.com/docs/en/build-with-claude/fast-mode#feature-availability
  *
- * Other platforms differ. Vertex AI takes `speed` for Fable and Mythos 5.2 and later only, Microsoft Foundry serves
- * fast mode as a separate `-fast` model and rejects `speed`, and Amazon Bedrock has no fast mode.
+ * Other platforms differ. Vertex AI takes `speed` for Fable and Mythos 5.2 and later only (see
+ * {@link supportsVertexAIClaudeFastMode}), Microsoft Foundry serves fast mode as a separate `-fast` model and
+ * rejects `speed`, and Amazon Bedrock has no fast mode.
  *
  * @param modelString - The model identifier string
  * @returns the fast mode status, or undefined if the model has no fast mode
@@ -449,7 +452,7 @@ export function getClaudeFastModeStatus(modelString: string): ClaudeFastModeStat
     switch (parseClaudeVersion(modelString)?.variant) {
         case 'opus':
             if (isClaudeVersionGTE(modelString, 5, 5)) return 'available';
-            return isClaudeVersionGTE(modelString, 4, 8) ? 'research_preview' : undefined;
+            return isClaudeVersionGTE(modelString, 5, 0) ? 'research_preview' : undefined;
         case 'fable':
         case 'mythos':
             return isClaudeVersionGTE(modelString, 5, 2) ? 'available' : undefined;
@@ -466,6 +469,19 @@ export function getClaudeFastModeStatus(modelString: string): ClaudeFastModeStat
  */
 export function supportsClaudeFastMode(modelString: string): boolean {
     return getClaudeFastModeStatus(modelString) !== undefined;
+}
+
+/**
+ * Check if Claude on Vertex AI (Claude Models on Google Cloud, Google managed) takes `speed: "fast"`: Fable and
+ * Mythos 5.2 and later, where fast mode is generally available and needs no beta header. Opus fast mode is not
+ * served there.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model supports fast mode on Vertex AI
+ */
+export function supportsVertexAIClaudeFastMode(modelString: string): boolean {
+    const variant = parseClaudeVersion(modelString)?.variant;
+    return (variant === 'fable' || variant === 'mythos') && isClaudeVersionGTE(modelString, 5, 2);
 }
 
 /**
