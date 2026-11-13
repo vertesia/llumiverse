@@ -364,6 +364,7 @@ describe('GeminiOmniVideoModelDefinition', () => {
         [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [video(), image()], 'upscale requires exactly one video'],
         [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [image()], 'upscale requires exactly one video'],
         [GEMINI_OMNI_1_2_VIDEO_MODEL, 'upscale', [video()], 'upscale requires a target resolution'],
+        [GEMINI_OMNI_1_1_VIDEO_MODEL, 'upscale', [video()], 'does not support upscale'],
     ] as const)('rejects invalid %s %s media combinations', async (model, task, files, message) => {
         const configured = options({ model_options: { _option_id: 'vertexai-gemini-omni-video', task } }, model);
 
@@ -392,6 +393,21 @@ describe('GeminiOmniVideoModelDefinition', () => {
                 configured,
             ),
         ).rejects.toThrow(message);
+    });
+
+    it('rejects a 360p upscale target on 1.2', async () => {
+        const configured = options(
+            { model_options: { _option_id: 'vertexai-gemini-omni-video', task: 'upscale', resolution: '360p' } },
+            GEMINI_OMNI_1_2_VIDEO_MODEL,
+        );
+
+        await expect(
+            new GeminiOmniVideoModelDefinition(GEMINI_OMNI_1_2_VIDEO_MODEL).createPrompt(
+                {} as VertexAIDriver,
+                [{ role: PromptRole.user, content: 'prompt', files: [video()] }],
+                configured,
+            ),
+        ).rejects.toThrow('upscale requires a target resolution: 720p, 1080p or 4k');
     });
 
     it('rejects non-720p output on 1.0', async () => {

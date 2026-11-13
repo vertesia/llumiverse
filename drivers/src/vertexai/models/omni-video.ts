@@ -93,6 +93,9 @@ function normalizeOutputPrefix(value: string | undefined): string {
     return value.endsWith('/') ? value : `${value}/`;
 }
 
+/** The resolutions Omni upscales to; a 360p input goes to 720p or 1080p, a 720p input to 1080p or 4k. */
+const UPSCALE_RESOLUTIONS: ReadonlySet<string> = new Set(['720p', '1080p', '4k']);
+
 function resolveTask(
     model: GeminiOmniVideoModel,
     options: VertexAIGeminiOmniVideoOptions | undefined,
@@ -141,12 +144,16 @@ function resolveTask(
             }
             break;
         case 'upscale':
+            // Upscaling starts with Omni 1.2.
+            if (!isGeminiOmniVersionGte(model, 1, 2)) {
+                throw new OmniVideoRequestError(`${model} does not support upscale`);
+            }
             if (imageCount !== 0 || videoCount !== 1) {
                 throw new OmniVideoRequestError('upscale requires exactly one video input');
             }
             // Vertex rejects an upscale without a target resolution, and the driver cannot infer one from the input.
             // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/upscale-videos
-            if (!options?.resolution) {
+            if (!options?.resolution || !UPSCALE_RESOLUTIONS.has(options.resolution)) {
                 throw new OmniVideoRequestError('upscale requires a target resolution: 720p, 1080p or 4k');
             }
             break;
