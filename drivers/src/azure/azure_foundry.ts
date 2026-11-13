@@ -226,8 +226,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return super.stream(segments, options, signal);
     }
 
-    OPENAI_API_VERSION = '2025-01-01-preview';
-
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
 
@@ -249,7 +247,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         if (opts.apiVersion) {
-            this.OPENAI_API_VERSION = opts.apiVersion;
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
