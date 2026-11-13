@@ -235,13 +235,13 @@ function configureOpenAIPromptCaching(
  */
 function getPromptCacheRequestOptions(
     model: string,
-    provider: string,
+    provider: Providers,
     cacheTtl: OpenAIPromptCacheTtl | undefined,
     options: OpenAIPromptCacheConfig['options'],
     logger?: Logger,
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
     if (!cacheTtl) return { prompt_cache_options: options };
-    if (provider !== Providers.openai || !getOpenAIPromptCacheTtls(model).includes(cacheTtl)) {
+    if (!getOpenAIPromptCacheTtls(model, provider).includes(cacheTtl)) {
         logModelOptionException(logger, model, { cache_ttl: cacheTtl }, ['cache_ttl'], 'openai_cache_ttl_unsupported');
         return { prompt_cache_options: options };
     }
@@ -362,14 +362,12 @@ export class OpenAIResponsesProtocol {
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
-        const promptCache = configureOpenAIPromptCaching(
-            conversation,
-            driver.getResponsesRequestModel(options.model),
-            promptCacheKey,
-        );
+        // Prompt-cache support follows the source model, not a deployment alias that names another version.
+        const promptCacheModel = driver.getPromptCacheSourceModel(options.model);
+        const promptCache = configureOpenAIPromptCaching(conversation, promptCacheModel, promptCacheKey);
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
-            options.model,
+            promptCacheModel,
             driver.provider,
             model_options?.cache_ttl,
             promptCache.options,
@@ -502,14 +500,12 @@ export class OpenAIResponsesProtocol {
         const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
-        const promptCache = configureOpenAIPromptCaching(
-            conversation,
-            driver.getResponsesRequestModel(options.model),
-            promptCacheKey,
-        );
+        // Prompt-cache support follows the source model, not a deployment alias that names another version.
+        const promptCacheModel = driver.getPromptCacheSourceModel(options.model);
+        const promptCache = configureOpenAIPromptCaching(conversation, promptCacheModel, promptCacheKey);
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
-            options.model,
+            promptCacheModel,
             driver.provider,
             model_options?.cache_ttl,
             promptCache.options,
@@ -1064,6 +1060,15 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     getImageSourceModel(model: string): string {
         return model;
+    }
+
+    /**
+     * @internal The model whose prompt-cache support applies: the source model of a composite `<deployment>::<model>`
+     * ID or of a configured deployment, rather than the deployment name.
+     */
+    getPromptCacheSourceModel(model: string): string {
+        const source = this.getImageSourceModel(model);
+        return source.split('::').pop() ?? source;
     }
 
     getImageService(): OpenAI {

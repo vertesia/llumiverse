@@ -172,7 +172,7 @@ Claude conversations keep `tools` append-only: tools offered after the first req
 `defer_loading: true`, and additions and removals are announced by `tool_addition` / `tool_removal` blocks in
 `role: "system"` messages (beta `mid-conversation-tool-changes-2026-07-01`). The declared tools are stored in
 `_llumiverse_meta.claude_tools`, so keep `_llumiverse_meta` with the conversation when storing or editing it.
-Unsupported models and providers (Microsoft Foundry) receive `tools` as before, without the tool-change blocks.
+Unsupported models receive `tools` as before, without the tool-change blocks.
 
 ### Server-Side Compaction
 

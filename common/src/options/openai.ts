@@ -79,22 +79,54 @@ const OPENAI_EXTENDED_CACHE_RETENTION_MODELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The prompt-cache lifetimes the OpenAI API accepts for a model, or an empty list when the model offers no choice.
- * GPT-5.6 and later take `prompt_cache_options.ttl`; the earlier models take the legacy `prompt_cache_retention`.
+ * Earlier models that Azure OpenAI documents with extended (`24h`) prompt-cache retention. Azure's list differs from
+ * OpenAI's (it adds gpt-5.3-codex and names the chat model gpt-5.1-chat); GPT-5.5 defaults to extended retention
+ * there too and is left out for the same reason as on OpenAI.
+ * https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/prompt-caching#extended-prompt-cache-retention
  */
-export function getOpenAIPromptCacheTtls(model: string): readonly OpenAIPromptCacheTtl[] {
-    if (isOpenAIGptVersionGTE(model, 5, 6)) return ['30m', '12h'];
-    const modelName = (model.split('/').pop() ?? model)
+const AZURE_EXTENDED_CACHE_RETENTION_MODELS: ReadonlySet<string> = new Set([
+    'gpt-5.4',
+    'gpt-5.3-codex',
+    'gpt-5.2',
+    'gpt-5.1-codex-max',
+    'gpt-5.1',
+    'gpt-5.1-codex',
+    'gpt-5.1-codex-mini',
+    'gpt-5.1-chat',
+    'gpt-5',
+    'gpt-5-codex',
+    'gpt-4.1',
+]);
+
+function isAzureOpenAIProvider(provider: Providers): boolean {
+    return provider === Providers.azure_openai || provider === Providers.azure_foundry;
+}
+
+/**
+ * The prompt-cache lifetimes a model accepts on the OpenAI API, Azure OpenAI or Microsoft Foundry, or an empty list
+ * when the model offers no choice. GPT-5.6 and later take `prompt_cache_options.ttl` (`30m` or `12h` on all three);
+ * the earlier models take the legacy `prompt_cache_retention`. Other OpenAI-compatible providers document neither.
+ * https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/prompt-caching
+ */
+export function getOpenAIPromptCacheTtls(
+    model: string,
+    provider: Providers = Providers.openai,
+): readonly OpenAIPromptCacheTtl[] {
+    const azure = isAzureOpenAIProvider(provider);
+    if (provider !== Providers.openai && !azure) return [];
+    // A composite Azure ID (`<deployment>::<model>`) names the source model last; the deployment name is an alias.
+    const sourceModel = model.split('::').pop() ?? model;
+    if (isOpenAIGptVersionGTE(sourceModel, 5, 6)) return ['30m', '12h'];
+    const modelName = (sourceModel.split('/').pop() ?? sourceModel)
         .toLowerCase()
         .replace(/^openai\./, '')
         .replace(/-\d{4}-\d{2}-\d{2}$/, '');
-    return OPENAI_EXTENDED_CACHE_RETENTION_MODELS.has(modelName) ? ['in_memory', '24h'] : [];
+    const extended = azure ? AZURE_EXTENDED_CACHE_RETENTION_MODELS : OPENAI_EXTENDED_CACHE_RETENTION_MODELS;
+    return extended.has(modelName) ? ['in_memory', '24h'] : [];
 }
 
 function getOpenAIPromptCacheOptions(model: string, provider: Providers): ModelOptionInfoItem[] {
-    // The lifetimes are documented for the OpenAI API only; Azure and compatible endpoints keep their defaults.
-    if (provider !== Providers.openai) return [];
-    const ttls = getOpenAIPromptCacheTtls(model);
+    const ttls = getOpenAIPromptCacheTtls(model, provider);
     if (ttls.includes('12h')) {
         return [
             {
@@ -103,8 +135,11 @@ function getOpenAIPromptCacheOptions(model: string, provider: Providers): ModelO
                 enum: { '30 minutes (default)': '30m', '12 hours': '12h' },
                 default: '30m',
                 description:
-                    'Minimum lifetime of prompt-cache entries. Cache writes cost 1.25× the input rate for 30 minutes ' +
-                    'and 2.5× for 12 hours; cache reads cost the same for both.',
+                    provider === Providers.openai
+                        ? 'Minimum lifetime of prompt-cache entries. Cache writes cost 1.25× the input rate for 30 ' +
+                          'minutes and 2.5× for 12 hours; cache reads cost the same for both.'
+                        : 'Minimum lifetime of prompt-cache entries. Cache writes are billed at a rate that depends ' +
+                          'on the lifetime; see Azure OpenAI pricing.',
             },
         ];
     }
@@ -115,8 +150,11 @@ function getOpenAIPromptCacheOptions(model: string, provider: Providers): ModelO
                 type: OptionType.enum,
                 enum: { 'In memory': 'in_memory', '24 hours': '24h' },
                 description:
-                    'Prompt-cache retention. Leave unset for the organization default: 24 hours, or in memory with ' +
-                    'Zero Data Retention. Cache writes have no extra charge on these models.',
+                    provider === Providers.openai
+                        ? 'Prompt-cache retention. Leave unset for the organization default: 24 hours, or in memory ' +
+                          'with Zero Data Retention. Cache writes have no extra charge on these models.'
+                        : 'Prompt-cache retention. Leave unset for the default, in memory. Cache writes have no ' +
+                          'extra charge on these models.',
             },
         ];
     }
@@ -480,7 +518,7 @@ export function getOpenAiOptions(
                 : [];
 
         const reasoningContextOptions: ModelOptionInfoItem[] =
-            provider === Providers.openai && isOpenAIGptVersionGTE(model, 5, 6)
+            (provider === Providers.openai || isAzureOpenAIProvider(provider)) && isOpenAIGptVersionGTE(model, 5, 6)
                 ? [
                       {
                           name: SharedOptions.reasoning_context,

@@ -24,7 +24,7 @@ It solely focuses on **abstracting the connection and execution protocol**, lett
 | Provider              | Completion | Chat | Streaming | Multimodal | Tool Calling | Embeddings |
 | :-------------------- | :--------: | :--: | :-------: | :--------: | :----------: | :--------: |
 | **AWS Bedrock**       |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
-| **Azure Foundry**     |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
+| **Microsoft Foundry** |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
 | **Azure OpenAI**      |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
 | **Google Vertex AI**  |     ✅     |  ✅  |    ✅     |     ✅     |      ✅      |     ✅     |
 | **Groq**              |     ✅     |  ✅  |    ✅     |    N/A     |      ✅      |    N/A     |
@@ -60,11 +60,11 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 - The OpenAI driver uses OpenAI SDK 7.25.0, whose minimum supported Node.js version is 22.
 - Bun 1.0+ (experimental support)
 
-## Azure Foundry SDKs
+## Microsoft Foundry and Azure OpenAI SDKs
 
-Foundry uses `@azure/ai-projects` for project/deployment discovery, OpenAI SDK 7 for OpenAI-compatible
-inference, and `@anthropic-ai/foundry-sdk` for Anthropic deployments. Claude Messages requests use the
-resource `/anthropic/v1/messages` endpoint and the existing Entra credential. Claude source model IDs
+Microsoft Foundry (the `azure_foundry` provider) uses `@azure/ai-projects` for project/deployment discovery, OpenAI
+SDK 7 for OpenAI-compatible inference, and `@anthropic-ai/foundry-sdk` for Anthropic deployments. Claude Messages
+requests use the resource `/anthropic/v1/messages` endpoint. Claude source model IDs
 select the shared Anthropic options and behavior; the deployment name is sent in the API request.
 Chat Completions, Responses, embeddings, and image requests use the OpenAI v1 endpoint resolved by
 Projects. Projects retains its own declared OpenAI dependency; no dependency override is required.
@@ -73,6 +73,19 @@ and the requested modality; image embedding availability remains deployment-spec
 Azure Responses image tools use v1 requests and a blocking streaming fallback. Microsoft currently
 [documents image streaming and multi-turn image editing as unsupported](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses).
 These callable paths do not establish Azure parity with OpenAI iterative image editing.
+
+Foundry authenticates with Microsoft Entra ID (`azureADTokenProvider`, or `DefaultAzureCredential`) by default.
+Set `apiKey` to authenticate inference with a resource key instead: OpenAI-compatible requests then go to the
+resource's `/openai/v1` endpoint with the `api-key` header, and Claude requests send `x-api-key`. Claude Mythos
+accepts Entra ID only. Listing deployments needs Entra ID, so pass `azureADTokenProvider` as well for `listModels()`;
+with a key alone, address models as `deployment::model` (or set `sourceModel`) so the driver can pick the protocol
+without reading the deployment.
+
+The Azure OpenAI driver (`azure_openai`) uses the GA v1 API (`<endpoint>/openai/v1`, no `api-version`). Setting
+`apiVersion` keeps the dated `/openai/...?api-version=` API. Its `service` is therefore typed as either client
+(`AzureOpenAIService`). An injected `AzureOpenAI` client keeps the `AzureOpenAI` type, and a pinned version can select
+it explicitly: `new AzureOpenAIDriver<AzureOpenAI>({ endpoint, apiVersion: '2024-10-21' })`. Selecting
+`AzureOpenAIV1Client` requires an endpoint and no `apiVersion`.
 
 ## Installation
 
@@ -267,8 +280,20 @@ reports that native streaming is unavailable.
 Live tests run only for providers whose credentials are set, for example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
 `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
 `WATSONX_API_KEY` (with `WATSONX_PROJECT_ID` and `WATSONX_ENDPOINT_URL`), `AZURE_OPENAI_KEY` (with
-`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`), `BEDROCK_REGION`, `BEDROCK_MANTLE_REGION`, and
-`GOOGLE_PROJECT_ID` with `GOOGLE_REGION`. Tests for other providers are skipped.
+`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`), `AZURE_FOUNDRY_ENDPOINT` (with `AZURE_FOUNDRY_MODELS`),
+`BEDROCK_REGION`, `BEDROCK_MANTLE_REGION`, and `GOOGLE_PROJECT_ID` with `GOOGLE_REGION`. Tests for other providers
+are skipped.
+
+Microsoft Foundry live tests (`azure-foundry`) read:
+
+| Variable                 | Value                                                                                                 |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `AZURE_FOUNDRY_ENDPOINT` | The project endpoint, `https://<resource>.services.ai.azure.com/api/projects/<project>`               |
+| `AZURE_FOUNDRY_MODELS`   | Comma-separated `deployment::model` IDs, for example `gpt-6-luna::gpt-6-luna,haiku::claude-haiku-5-5` |
+| `AZURE_FOUNDRY_API_KEY`  | Optional resource key. Without it, `DefaultAzureCredential` provides a Microsoft Entra ID token       |
+
+With Entra ID, the identity needs [Cognitive Services User](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/configure-entra-id)
+on the resource for Claude and partner models (Cognitive Services OpenAI User covers OpenAI models only). Without `AZURE_FOUNDRY_MODELS` the provider is skipped. CI sets none of these yet.
 
 ## Contributing
 

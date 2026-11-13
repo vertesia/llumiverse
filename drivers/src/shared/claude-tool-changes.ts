@@ -37,12 +37,17 @@ export function claudeContinueTurn(): MessageParam {
 
 export const MID_CONVERSATION_TOOL_CHANGES_BETA: AnthropicBeta = 'mid-conversation-tool-changes-2026-07-01';
 
-/** Providers whose Claude endpoint accepts mid-conversation tool changes (not Microsoft Foundry). */
+/**
+ * Providers whose Claude endpoint accepts mid-conversation tool changes. Anthropic lists Microsoft Foundry among the
+ * platforms of `mid-conversation-tool-changes-2026-07-01`:
+ * https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+ */
 const TOOL_CHANGE_PROVIDERS = new Set<string>([
     Providers.anthropic,
     Providers.vertexai,
     Providers.bedrock,
     Providers.bedrock_mantle,
+    Providers.azure_foundry,
 ]);
 
 type ClaudeToolChangeBlock = BetaRequestToolAdditionBlock | BetaRequestToolRemovalBlock;
