@@ -94,11 +94,29 @@ export interface AzureOpenAIDriverOptions extends DriverOptions {
     deployment?: string;
 }
 
+/**
+ * OpenAI regional endpoints selectable without a full base URL; later SDK releases may add regions.
+ * The OpenAI SDK maps each to its host, e.g. `eu` to `https://eu.api.openai.com/v1` and `global` to the default.
+ */
+export type OpenAIDataResidency = 'global' | 'us' | 'eu' | 'ae' | 'au' | 'in' | 'jp' | (string & {});
+
 export interface OpenAIDriverOptions extends DriverOptions {
     /**
      * The OpenAI api key
      */
     apiKey?: string; //type with azure credentials
+
+    /**
+     * Base URL of the OpenAI API, for example a proxy. Defaults to the SDK's resolution (`OPENAI_BASE_URL`,
+     * then `https://api.openai.com/v1`). Cannot be combined with `dataResidency`.
+     */
+    endpoint?: string;
+
+    /**
+     * Regional OpenAI endpoint, such as `eu` for `https://eu.api.openai.com/v1`. The project must be enabled for
+     * the region; the SDK performs no fallback. Cannot be combined with `endpoint`.
+     */
+    dataResidency?: OpenAIDataResidency;
 }
 
 export interface OpenAIChatCompletionsProtocolOptions {

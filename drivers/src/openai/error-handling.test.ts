@@ -61,7 +61,6 @@ describe('OpenAIResponsesDriverBase image generation usage', () => {
             prompt: 50,
             prompt_new: 50,
             result: 1056,
-            result_image: 1056,
             total: 1106,
         });
     });

@@ -66,7 +66,8 @@ describe('image requests', () => {
             output_format: 'webp',
         });
         expect(result.result).toEqual([{ type: 'image', value: 'data:image/jpeg;base64,YWJj' }]);
-        expect(result.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 3, result_image: 3, total: 5 });
+        // Without output_tokens_details the image share of the output tokens is unknown.
+        expect(result.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 3, total: 5 });
     });
 
     it.each([
@@ -221,6 +222,34 @@ describe('image requests', () => {
                 }
             })(),
         ).rejects.toThrow('without a completed image');
+    });
+
+    it('counts the output tokens of a streamed completed image as image tokens', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        driver.service.images.generate = vi.fn().mockResolvedValue(
+            (async function* () {
+                yield {
+                    type: 'image_generation.completed',
+                    b64_json: 'a',
+                    output_format: 'png',
+                    usage: {
+                        input_tokens: 12,
+                        input_tokens_details: { image_tokens: 0, text_tokens: 12 },
+                        output_tokens: 1056,
+                        total_tokens: 1068,
+                    },
+                };
+            })(),
+        );
+        const chunks = [];
+        for await (const chunk of await driver.requestImageStream(input, options)) chunks.push(chunk);
+        expect(chunks[0]?.token_usage).toEqual({
+            prompt: 12,
+            prompt_new: 12,
+            result: 1056,
+            result_image: 1056,
+            total: 1068,
+        });
     });
 
     it('does not disguise provider errors as validation failures', async () => {

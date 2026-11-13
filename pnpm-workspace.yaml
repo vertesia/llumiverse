@@ -14,8 +14,8 @@ blockExoticSubdeps: true
 minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
 minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
-  # GPT Image 2.6 complexity, GIF and SVG output types (Images API).
-  - openai@7.51.0
+  # Responses input_transformations (reasoning inputs the server withheld).
+  - openai@7.56.0
   # ThinkingLevel.XHIGH (Gemini 4 Hydrogen) and the new FinishReason values.
   - '@google/genai@3.3.0'
   - '@vertesia/*'
