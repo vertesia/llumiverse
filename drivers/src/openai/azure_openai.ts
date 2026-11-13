@@ -43,6 +43,8 @@ interface AzureOpenAIV1Options extends ClientOptions {
  */
 export class AzureOpenAIV1Client extends OpenAI {
     readonly deploymentName: string | undefined;
+    /** The v1 API is version-less; set for symmetry with the legacy `AzureOpenAI` client. */
+    readonly apiVersion: undefined = undefined;
 
     constructor(options: AzureOpenAIV1Options) {
         super(options);
@@ -91,8 +93,11 @@ function azureOpenAIV1BaseURL(endpoint: string): string {
 }
 
 export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
-    /** The v1 client by default; the legacy AzureOpenAI client when an apiVersion is set or one is injected. */
-    service: OpenAI;
+    /**
+     * The v1 client by default; the legacy AzureOpenAI client when an apiVersion is set or one is injected. Both expose
+     * `deploymentName` and `apiVersion` (undefined on the version-less v1 API).
+     */
+    service: AzureOpenAI | AzureOpenAIV1Client;
     private imageService?: OpenAI;
     private sourceModel?: string;
     private readonly deploymentName?: string;

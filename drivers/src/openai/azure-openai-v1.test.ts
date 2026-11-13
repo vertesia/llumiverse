@@ -1,6 +1,6 @@
 import { PromptRole } from '@llumiverse/core';
 import { AzureOpenAI, toFile, toStreamingFile } from 'openai';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { stubCoreDriverFetch } from '../../test/__helpers__/test-utils.js';
 import { AzureOpenAIDriver, AzureOpenAIV1Client } from './azure_openai.js';
 
@@ -206,6 +206,64 @@ describe('Azure OpenAI v1 API', () => {
         for (const body of bodies) {
             expect(body).toMatch(/name="model"\r\n\r\ncustom-whisper\r\n/);
             expect(body).not.toMatch(/whisper-1|gpt-image-1/);
+        }
+    });
+
+    it('keeps typed access to the deployment and API version on both clients', () => {
+        const injected = new AzureOpenAI({
+            endpoint: 'https://example.openai.azure.com',
+            apiKey: 'test-key',
+            apiVersion: '2024-10-21',
+            deployment: 'legacy',
+        });
+        const legacy = new AzureOpenAIDriver(injected);
+        const pinned = new AzureOpenAIDriver({
+            endpoint: 'https://example.openai.azure.com',
+            apiKey: 'test-key',
+            apiVersion: '2025-04-01-preview',
+            deployment: 'production',
+        });
+        const v1 = new AzureOpenAIDriver({
+            endpoint: 'https://example.openai.azure.com',
+            apiKey: 'test-key',
+            deployment: 'production',
+        });
+        expectTypeOf(legacy.service.deploymentName).toEqualTypeOf<string | undefined>();
+        expectTypeOf(legacy.service.apiVersion).toEqualTypeOf<string | undefined>();
+        expect(legacy.service).toBe(injected);
+        expect([legacy.service.deploymentName, legacy.service.apiVersion]).toEqual(['legacy', '2024-10-21']);
+        expect([pinned.service.deploymentName, pinned.service.apiVersion]).toEqual([
+            'production',
+            '2025-04-01-preview',
+        ]);
+        expect([v1.service.deploymentName, v1.service.apiVersion]).toEqual(['production', undefined]);
+    });
+
+    it('decides prompt caching by the source model of a composite ID, not the deployment alias', async () => {
+        const driver = new AzureOpenAIDriver({ endpoint: 'https://example.openai.azure.com', apiKey: 'test-key' });
+        const requests = capture(driver);
+        const conversation = [
+            { role: PromptRole.user, content: 'First question' },
+            { role: PromptRole.assistant, content: 'First answer' },
+            { role: PromptRole.user, content: 'Second question' },
+        ];
+        try {
+            for (const cache_ttl of ['12h', '24h'] as const) {
+                await driver.execute(conversation, {
+                    model: 'gpt-6-luna::gpt-5.4',
+                    prompt_cache_key: 'key',
+                    model_options: { _option_id: 'openai-thinking', cache_ttl },
+                });
+            }
+            const [unsupported, supported] = requests.map((request) => request.body ?? {});
+            // GPT-5.4 takes neither the 5.6+ lifetimes nor explicit breakpoints.
+            expect(unsupported.prompt_cache_options).toBeUndefined();
+            expect(unsupported.prompt_cache_retention).toBeUndefined();
+            expect(JSON.stringify(unsupported.input)).not.toContain('prompt_cache_breakpoint');
+            expect(supported).toMatchObject({ model: 'gpt-6-luna', prompt_cache_retention: '24h' });
+            expect(supported.prompt_cache_options).toBeUndefined();
+        } finally {
+            await driver.destroy();
         }
     });
 });

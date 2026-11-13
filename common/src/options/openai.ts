@@ -113,15 +113,15 @@ export function getOpenAIPromptCacheTtls(
 ): readonly OpenAIPromptCacheTtl[] {
     const azure = isAzureOpenAIProvider(provider);
     if (provider !== Providers.openai && !azure) return [];
-    if (isOpenAIGptVersionGTE(model, 5, 6)) return ['30m', '12h'];
-    const modelName = (model.split('/').pop() ?? model)
-        .split('::')
-        .pop()
-        ?.toLowerCase()
+    // A composite Azure ID (`<deployment>::<model>`) names the source model last; the deployment name is an alias.
+    const sourceModel = model.split('::').pop() ?? model;
+    if (isOpenAIGptVersionGTE(sourceModel, 5, 6)) return ['30m', '12h'];
+    const modelName = (sourceModel.split('/').pop() ?? sourceModel)
+        .toLowerCase()
         .replace(/^openai\./, '')
         .replace(/-\d{4}-\d{2}-\d{2}$/, '');
     const extended = azure ? AZURE_EXTENDED_CACHE_RETENTION_MODELS : OPENAI_EXTENDED_CACHE_RETENTION_MODELS;
-    return modelName && extended.has(modelName) ? ['in_memory', '24h'] : [];
+    return extended.has(modelName) ? ['in_memory', '24h'] : [];
 }
 
 function getOpenAIPromptCacheOptions(model: string, provider: Providers): ModelOptionInfoItem[] {
