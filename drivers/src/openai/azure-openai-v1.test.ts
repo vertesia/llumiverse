@@ -387,6 +387,32 @@ describe('Azure OpenAI v1 API', () => {
         expect(fromCustom.service.tag).toBe('custom');
         await fromCustom.destroy();
     });
+
+    it('does not follow redirects for an injected v1 client that sends the api-key', async () => {
+        const inits: RequestInit[] = [];
+        const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+            inits.push(init ?? {});
+            return new Response(JSON.stringify(responsesBody), { headers: { 'content-type': 'application/json' } });
+        });
+        const baseURL = 'https://example.openai.azure.com/openai/v1';
+        const keyed = new AzureOpenAIDriver(
+            new AzureOpenAIV1Client({
+                baseURL,
+                apiKey: 'k',
+                defaultHeaders: { 'api-key': 'k', Authorization: null },
+                fetch,
+            }),
+        );
+        const bearer = new AzureOpenAIDriver(new AzureOpenAIV1Client({ baseURL, apiKey: async () => 'token', fetch }));
+        try {
+            await keyed.execute([{ role: PromptRole.user, content: 'Hello' }], { model: 'chat' });
+            await bearer.execute([{ role: PromptRole.user, content: 'Hello' }], { model: 'chat' });
+            expect(inits.map((init) => init.redirect)).toEqual(['manual', undefined]);
+        } finally {
+            await keyed.destroy();
+            await bearer.destroy();
+        }
+    });
 });
 
 afterEach(() => {

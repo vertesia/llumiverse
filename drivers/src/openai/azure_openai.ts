@@ -61,20 +61,33 @@ export class AzureOpenAIV1Client extends OpenAI {
         }
     }
 
-    override buildRequest(...args: Parameters<OpenAI['buildRequest']>): ReturnType<OpenAI['buildRequest']> {
+    override async buildRequest(...args: Parameters<OpenAI['buildRequest']>): ReturnType<OpenAI['buildRequest']> {
         const [options, props] = args;
         const body = options.body;
-        if (
+        const scoped =
             this.deploymentName &&
             options.method === 'post' &&
             DEPLOYMENT_SCOPED_PATHS.has(options.path) &&
             typeof body === 'object' &&
             body !== null &&
-            Object.getPrototypeOf(body) === Object.prototype
-        ) {
-            return super.buildRequest({ ...options, body: { ...body, model: this.deploymentName } }, props);
-        }
-        return super.buildRequest(options, props);
+            Object.getPrototypeOf(body) === Object.prototype;
+        const built = await super.buildRequest(
+            scoped ? { ...options, body: { ...body, model: this.deploymentName } } : options,
+            props,
+        );
+        // Fetch forwards custom headers across origins on a redirect, so a request that carries the resource key does
+        // not follow one, as on the legacy AzureOpenAI client. https://fetch.spec.whatwg.org/#http-redirect-fetch
+        if (built.req.headers.has('api-key')) built.req.redirect = 'manual';
+        return built;
+    }
+
+    protected override fetchWithAuth(
+        ...args: Parameters<OpenAI['fetchWithAuth']>
+    ): ReturnType<OpenAI['fetchWithAuth']> {
+        const [url, init, ...rest] = args;
+        // The same guard for requests sent without `buildRequest`, as on the legacy AzureOpenAI client.
+        const guarded = new Headers(init.headers).has('api-key') ? { ...init, redirect: 'manual' as const } : init;
+        return super.fetchWithAuth(url, guarded, ...rest);
     }
 }
 
