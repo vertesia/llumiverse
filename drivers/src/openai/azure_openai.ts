@@ -98,18 +98,24 @@ export type AzureOpenAIService = AzureOpenAI | AzureOpenAIV1Client;
 /** A dated Azure OpenAI API version, such as `2024-10-21` or `2025-04-01-preview`. */
 export type AzureOpenAIDatedApiVersion = `${number}-${string}`;
 
+/** True when `S` is exactly `T`, not a subclass that adds members. */
+type IsExactly<S, T> = [S] extends [T] ? ([T] extends [S] ? true : false) : false;
+
 /**
- * Construction arguments for a driver whose service type is `S`, constrained to the options that build that client:
- * the legacy client needs a dated `apiVersion`, and the v1 client an endpoint and no `apiVersion`. Without a selected
- * type, any options are accepted and `service` is either client.
+ * Construction arguments for a driver whose service type is `S`: an injected client of that type, or the options that
+ * build it. The legacy client needs a dated `apiVersion`, and the v1 client an endpoint and no `apiVersion`. Options
+ * build the base classes only, so a subclass type can only be injected. Without a selected type, any options are
+ * accepted and `service` is either client.
  */
 export type AzureOpenAIDriverArgs<S extends AzureOpenAIService> =
     | S
-    | ([S] extends [AzureOpenAI]
-          ? AzureOpenAIDriverOptions & { apiVersion: AzureOpenAIDatedApiVersion }
-          : [S] extends [AzureOpenAIV1Client]
-            ? AzureOpenAIDriverOptions & { endpoint: `http${string}`; apiVersion?: undefined }
-            : AzureOpenAIDriverOptions);
+    | (IsExactly<S, AzureOpenAIService> extends true
+          ? AzureOpenAIDriverOptions
+          : IsExactly<S, AzureOpenAI> extends true
+            ? AzureOpenAIDriverOptions & { apiVersion: AzureOpenAIDatedApiVersion }
+            : IsExactly<S, AzureOpenAIV1Client> extends true
+              ? AzureOpenAIDriverOptions & { endpoint: `http${string}`; apiVersion?: undefined }
+              : never);
 
 /**
  * Azure OpenAI driver. `service` is typed by how the driver was built: an injected `AzureOpenAI` client infers
@@ -128,9 +134,9 @@ export class AzureOpenAIDriver<S extends AzureOpenAIService = AzureOpenAIService
     private keyFetch?: typeof fetch;
     readonly provider = Providers.azure_openai;
 
-    // Accepts an injected AzureOpenAI client, for independent instantiation, or the driver options.
+    // Accepts an injected AzureOpenAI or v1 client, for independent instantiation, or the driver options.
     constructor(serviceOrOpts: AzureOpenAIDriverArgs<S>) {
-        if (serviceOrOpts instanceof AzureOpenAI) {
+        if (serviceOrOpts instanceof AzureOpenAI || serviceOrOpts instanceof AzureOpenAIV1Client) {
             super({});
             this.service = serviceOrOpts as S;
             this.deploymentName = serviceOrOpts.deploymentName;

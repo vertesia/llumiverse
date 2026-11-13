@@ -234,6 +234,10 @@ describe('Azure OpenAI v1 API', () => {
             new AzureOpenAIDriver<AzureOpenAIV1Client>({ endpoint, apiKey: 'test-key', apiVersion: '2024-10-21' });
             // @ts-expect-error Without an endpoint the driver builds the legacy client from AZURE_OPENAI_ENDPOINT.
             new AzureOpenAIDriver<AzureOpenAIV1Client>({ apiKey: 'test-key' });
+            // @ts-expect-error Options build the base AzureOpenAI class, not a subclass.
+            new AzureOpenAIDriver<CustomAzureOpenAI>({ endpoint, apiKey: 'test-key', apiVersion: '2024-10-21' });
+            // @ts-expect-error Options build the base v1 client, not a subclass.
+            new AzureOpenAIDriver<CustomV1Client>({ endpoint, apiKey: 'test-key' });
         };
         expectTypeOf(mismatchedClientTypes).toBeFunction();
         const selectedV1 = new AzureOpenAIDriver<AzureOpenAIV1Client>({ endpoint, apiKey: 'test-key' });
@@ -351,8 +355,48 @@ describe('Azure OpenAI v1 API', () => {
             await driver.destroy();
         }
     });
+
+    it('uses an injected v1 client or client subclass as its service', async () => {
+        const v1Service = new AzureOpenAIV1Client({
+            baseURL: 'https://example.openai.azure.com/openai/v1',
+            apiKey: 'test-key',
+            azureDeployment: 'production',
+        });
+        const fromV1 = new AzureOpenAIDriver(v1Service);
+        expectTypeOf(fromV1.service).toEqualTypeOf<AzureOpenAIV1Client>();
+        expect(fromV1.service).toBe(v1Service);
+        expect(fromV1.getImageService()).toBe(v1Service);
+        const requests = capture(fromV1);
+        try {
+            expect(await fromV1.listModels()).toEqual([expect.objectContaining({ name: 'production' })]);
+            expect(requests[0]).toMatchObject({
+                url: 'https://example.openai.azure.com/openai/v1/chat/completions',
+                body: expect.objectContaining({ model: 'production' }),
+            });
+        } finally {
+            await fromV1.destroy();
+        }
+
+        const custom = new CustomAzureOpenAI({
+            endpoint: 'https://example.openai.azure.com',
+            apiKey: 'test-key',
+            apiVersion: '2024-10-21',
+        });
+        const fromCustom = new AzureOpenAIDriver(custom);
+        expectTypeOf(fromCustom.service).toEqualTypeOf<CustomAzureOpenAI>();
+        expect(fromCustom.service.tag).toBe('custom');
+        await fromCustom.destroy();
+    });
 });
 
 afterEach(() => {
     vi.restoreAllMocks();
 });
+
+class CustomAzureOpenAI extends AzureOpenAI {
+    readonly tag = 'custom';
+}
+
+class CustomV1Client extends AzureOpenAIV1Client {
+    readonly tag = 'custom';
+}
