@@ -521,9 +521,17 @@ export interface OpenAIGptVersion {
     minor: number;
 }
 
-/** Parse GPT family versions from bare IDs, snapshots, or provider-qualified paths. */
+/**
+ * Parse GPT family versions from bare IDs, snapshots, or provider-qualified paths.
+ *
+ * Restricted-access Daybreak models put a `daybreak-<color>-` segment before the version, as in
+ * `openai.gpt-daybreak-blue-5.6-sol`; they belong to the GPT generation that follows it.
+ * https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
+ */
 export function parseOpenAIGptVersion(modelString: string): OpenAIGptVersion | null {
-    const match = modelString.toLowerCase().match(/(?:^|[./:])(?:openai\.)?gpt-(\d+)(?:\.(\d+))?(?:-|[.:@]|$)/);
+    const match = modelString
+        .toLowerCase()
+        .match(/(?:^|[./:])(?:openai\.)?gpt-(?:daybreak-[a-z]+-)?(\d+)(?:\.(\d+))?(?:-|[.:@]|$)/);
     if (!match) return null;
     return { major: Number(match[1]), minor: Number(match[2] ?? '0') };
 }

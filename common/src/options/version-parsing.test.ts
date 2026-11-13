@@ -126,6 +126,9 @@ describe('OpenAI GPT model version parsing', () => {
         ['gpt-deployment::gpt-5', { major: 5, minor: 0 }],
         ['gpt-6', { major: 6, minor: 0 }],
         ['gpt-6-astra', { major: 6, minor: 0 }],
+        ['openai.gpt-daybreak-blue-5.6-sol', { major: 5, minor: 6 }],
+        ['global.openai.gpt-daybreak-blue-5.6-sol', { major: 5, minor: 6 }],
+        ['gpt-daybreak-red-6', { major: 6, minor: 0 }],
     ] as const)('parses %s', (model, expected) => {
         expect(parseOpenAIGptVersion(model)).toEqual(expected);
     });
