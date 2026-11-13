@@ -169,7 +169,10 @@ describe('driver HTTP timeout wiring', () => {
             endpoint: 'https://example.openai.azure.com',
             deployment: 'deployment',
         });
-        expectSdkUsesDriverFetch(azure, azure.service);
+        // Azure wraps the agent-backed fetch so that key-carrying requests do not follow redirects.
+        expect(exposePrivate<SdkFetchHolder>(azure.service)._options?.fetch).toBe(
+            exposePrivate<{ getDriverFetch: () => typeof fetch }>(azure).getDriverFetch(),
+        );
         expectSdkUsesDriverRequestTimeout(azure.service);
         azure.destroy();
 

@@ -410,7 +410,6 @@ interface FoundryPartnerRule {
     tools: boolean;
     /** Image input; a function when only some generations of the family take images. */
     image?: boolean | ((model: string) => boolean);
-    audio?: boolean;
 }
 
 const FOUNDRY_PARTNER_RULES: FoundryPartnerRule[] = [
@@ -439,8 +438,9 @@ const FOUNDRY_PARTNER_RULES: FoundryPartnerRule[] = [
     { matches: (model) => /^(?:cohere-)?command-a(?:[-_.]|$)/.test(model), tools: true },
     // MAI-Thinking is a Chat Completions reasoning model with tool calling.
     { matches: (model) => model.startsWith('mai-thinking'), tools: true },
-    // Phi-4 multimodal takes images and audio; no Phi model is documented with tool calling.
-    { matches: (model) => model.startsWith('phi-4-multimodal'), tools: false, image: true, audio: true },
+    // Phi-4 multimodal also takes audio, but the Chat Completions prompt formatter does not send audio attachments,
+    // so only its image input is advertised. No Phi model is documented with tool calling.
+    { matches: (model) => model.startsWith('phi-4-multimodal'), tools: false, image: true },
 ];
 /** DeepSeek writes minor versions after a dot (`deepseek-v3.2`); a dash starts a date snapshot (`deepseek-v3-0324`). */
 function isDeepSeekV32OrLater(model: string): boolean {
@@ -468,7 +468,6 @@ function applyFoundryPartnerRules(capabilities: ModelCapabilities, model: string
         input: {
             ...capabilities.input,
             ...(image !== undefined ? { image } : {}),
-            ...(rule.audio !== undefined ? { audio: rule.audio } : {}),
         },
         tool_support: rule.tools,
         tool_support_streaming: rule.tools,

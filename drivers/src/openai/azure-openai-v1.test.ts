@@ -1,6 +1,7 @@
 import { PromptRole } from '@llumiverse/core';
-import { AzureOpenAI } from 'openai';
-import { describe, expect, it, vi } from 'vitest';
+import { AzureOpenAI, toFile, toStreamingFile } from 'openai';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubCoreDriverFetch } from '../../test/__helpers__/test-utils.js';
 import { AzureOpenAIDriver, AzureOpenAIV1Client } from './azure_openai.js';
 
 const responsesBody = {
@@ -143,4 +144,72 @@ describe('Azure OpenAI v1 API', () => {
             await driver.destroy();
         }
     });
+
+    it('does not follow redirects on requests that carry the api-key', async () => {
+        const inits: RequestInit[] = [];
+        const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+            inits.push(init ?? {});
+            return new Response(JSON.stringify(responsesBody), { headers: { 'content-type': 'application/json' } });
+        });
+        stubCoreDriverFetch(AzureOpenAIDriver, fetch);
+        const driver = new AzureOpenAIDriver({ endpoint: 'https://example.openai.azure.com', apiKey: 'test-key' });
+        try {
+            await driver.execute([{ role: PromptRole.user, content: 'Hello' }], { model: 'chat' });
+            await driver.getImageService().models.list();
+            expect(inits).toHaveLength(2);
+            for (const init of inits) expect(init.redirect).toBe('manual');
+        } finally {
+            await driver.destroy();
+        }
+    });
+
+    it('keeps the default redirect policy on Entra-authenticated requests', async () => {
+        const inits: RequestInit[] = [];
+        stubCoreDriverFetch(AzureOpenAIDriver, async (_url, init) => {
+            inits.push(init ?? {});
+            return new Response(JSON.stringify(responsesBody), { headers: { 'content-type': 'application/json' } });
+        });
+        const driver = new AzureOpenAIDriver({
+            endpoint: 'https://example.openai.azure.com',
+            azureADTokenProvider: async () => 'entra-token',
+        });
+        try {
+            await driver.execute([{ role: PromptRole.user, content: 'Hello' }], { model: 'chat' });
+            expect(inits[0].redirect).toBeUndefined();
+        } finally {
+            await driver.destroy();
+        }
+    });
+
+    it('sends the configured deployment as the model of multipart uploads', async () => {
+        const bodies: string[] = [];
+        const client = new AzureOpenAIV1Client({
+            baseURL: 'https://example.openai.azure.com/openai/v1',
+            apiKey: 'test-key',
+            azureDeployment: 'custom-whisper',
+            fetch: async (_url, init) => {
+                const text = await new Response(init?.body).text();
+                // The SDK probes FormData support with an empty request first.
+                if (text) bodies.push(text);
+                return Response.json({ text: 'Hello.', created: 1, data: [] });
+            },
+        });
+        const wav = () => new Blob([new Uint8Array([82, 73, 70, 70])]);
+        await client.audio.transcriptions.create({ model: 'whisper-1', file: await toFile(wav(), 'a.wav') });
+        await client.audio.transcriptions.create({
+            model: 'whisper-1',
+            file: toStreamingFile(wav().stream(), 'a.wav', { type: 'audio/wav' }),
+        });
+        await client.audio.translations.create({ model: 'whisper-1', file: await toFile(wav(), 'a.wav') });
+        await client.images.edit({ model: 'gpt-image-1', prompt: 'p', image: await toFile(wav(), 'a.png') });
+        expect(bodies).toHaveLength(4);
+        for (const body of bodies) {
+            expect(body).toMatch(/name="model"\r\n\r\ncustom-whisper\r\n/);
+            expect(body).not.toMatch(/whisper-1|gpt-image-1/);
+        }
+    });
+});
+
+afterEach(() => {
+    vi.restoreAllMocks();
 });

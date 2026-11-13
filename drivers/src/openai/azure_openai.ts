@@ -9,6 +9,7 @@ import {
 } from '@llumiverse/core';
 import OpenAI, { AzureOpenAI, type ClientOptions } from 'openai';
 import { cognitiveServicesScope } from '../azure/entra-scope.js';
+import { withoutKeyRedirects } from '../azure/key-redirect.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
@@ -45,7 +46,17 @@ export class AzureOpenAIV1Client extends OpenAI {
 
     constructor(options: AzureOpenAIV1Options) {
         super(options);
-        this.deploymentName = options.azureDeployment;
+        const deployment = options.azureDeployment;
+        this.deploymentName = deployment;
+        if (deployment) {
+            // Multipart uploads are encoded before `buildRequest`, which then cannot change their model, so the
+            // deployment is set on the upload methods' parameters instead.
+            const transcriptions = this.audio.transcriptions;
+            const translations = this.audio.translations;
+            transcriptions.create = withModel(transcriptions.create.bind(transcriptions), deployment);
+            translations.create = withModel(translations.create.bind(translations), deployment);
+            this.images.edit = withModel(this.images.edit.bind(this.images), deployment);
+        }
     }
 
     override buildRequest(...args: Parameters<OpenAI['buildRequest']>): ReturnType<OpenAI['buildRequest']> {
@@ -65,6 +76,12 @@ export class AzureOpenAIV1Client extends OpenAI {
     }
 }
 
+/** A resource method that sends `model` in place of the model of its parameters. */
+function withModel<M extends (body: never, ...rest: never[]) => unknown>(method: M, model: string): M {
+    const call = method as unknown as (body: object, ...rest: unknown[]) => unknown;
+    return ((body: object, ...rest: unknown[]) => call({ ...body, model }, ...rest)) as unknown as M;
+}
+
 /** The v1 base URL of an Azure OpenAI or Microsoft Foundry resource endpoint. */
 function azureOpenAIV1BaseURL(endpoint: string): string {
     // Trim trailing slashes with a scan: a `/\/+$/` regex backtracks quadratically on a long run of slashes.
@@ -79,6 +96,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
     private imageService?: OpenAI;
     private sourceModel?: string;
     private readonly deploymentName?: string;
+    private keyFetch?: typeof fetch;
     readonly provider = Providers.azure_openai;
 
     //Overload to allow independent instantiation with AzureOpenAI service
@@ -124,7 +142,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
             });
         }
         if (opts.endpoint) {
-            this.imageService = new OpenAI({
+            this.imageService = new AzureOpenAIV1Client({
                 baseURL: azureOpenAIV1BaseURL(opts.endpoint),
                 apiKey: opts.azureADTokenProvider ?? opts.apiKey,
                 defaultHeaders: apiKeyHeaders,
@@ -134,6 +152,11 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
                 timeout: this.getDriverRequestTimeoutMs(),
             });
         }
+    }
+
+    protected override getDriverFetch(): typeof fetch {
+        this.keyFetch ??= withoutKeyRedirects(super.getDriverFetch());
+        return this.keyFetch;
     }
 
     getResponsesRequestModel(model: string): string {

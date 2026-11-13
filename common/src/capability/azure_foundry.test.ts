@@ -79,9 +79,8 @@ describe('Microsoft Foundry partner model capabilities', () => {
         expect(foundry(model).capabilities.input.image).toBe(image);
     });
 
-    it('documents audio input for Phi-4 multimodal only', () => {
-        expect(foundry('Phi-4-multimodal-instruct').capabilities.input.audio).toBe(true);
-        expect(foundry('Phi-4-mini-instruct').capabilities.input.audio).not.toBe(true);
+    it('does not advertise audio input the Chat Completions formatter cannot send', () => {
+        expect(foundry('Phi-4-multimodal-instruct').capabilities.input.audio).not.toBe(true);
     });
 
     it('keeps the OpenAI families on their own capability records', () => {

@@ -1,10 +1,8 @@
 import type { TokenCredential } from '@azure/identity';
 import { PromptRole } from '@llumiverse/core';
-import { describe, expect, it, vi } from 'vitest';
-import { exposePrivate } from '../../test/__helpers__/test-utils.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubCoreDriverFetch } from '../../test/__helpers__/test-utils.js';
 import { AzureFoundryDriver } from './azure_foundry.js';
-
-type Internals = { getDriverFetch: () => typeof fetch };
 
 const ENDPOINT = 'https://foundry.example.test/api/projects/project';
 const segments = [{ role: PromptRole.user, content: 'Hello' }];
@@ -62,18 +60,26 @@ function claudeStream(): Response {
     });
 }
 
-function setup(options: { tokenProvider?: boolean; sourceModel?: string } = {}) {
+function setup(
+    options: { tokenProvider?: boolean; sourceModel?: string; endpoint?: string; modelsStatus?: number } = {},
+) {
     const getToken = vi.fn<TokenCredential['getToken']>(async () => ({
         token: 'test-token',
         expiresOnTimestamp: Date.now() + 3_600_000,
     }));
     const driver = new AzureFoundryDriver({
-        endpoint: ENDPOINT,
+        endpoint: options.endpoint ?? ENDPOINT,
         apiKey: 'test-key',
         ...(options.tokenProvider ? { azureADTokenProvider: { getToken } } : {}),
         sourceModel: options.sourceModel,
     });
-    const requests: { url: string; method: string; body?: Record<string, unknown>; headers: Headers }[] = [];
+    const requests: {
+        url: string;
+        method: string;
+        body?: Record<string, unknown>;
+        headers: Headers;
+        redirect?: RequestRedirect;
+    }[] = [];
     const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
         const target = String(url);
         requests.push({
@@ -81,8 +87,12 @@ function setup(options: { tokenProvider?: boolean; sourceModel?: string } = {}) 
             method: init?.method ?? 'GET',
             body: init?.body ? JSON.parse(String(init.body)) : undefined,
             headers: new Headers(init?.headers),
+            redirect: init?.redirect,
         });
         if (target.includes('/anthropic/')) return claudeStream();
+        if (target.endsWith('/models') && options.modelsStatus) {
+            return new Response(JSON.stringify({ error: { message: 'denied' } }), { status: options.modelsStatus });
+        }
         const body = target.endsWith('/responses')
             ? responsesBody
             : target.endsWith('/models')
@@ -90,7 +100,7 @@ function setup(options: { tokenProvider?: boolean; sourceModel?: string } = {}) 
               : chatBody;
         return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
     });
-    vi.spyOn(exposePrivate<Internals>(driver), 'getDriverFetch').mockReturnValue(fetch);
+    stubCoreDriverFetch(AzureFoundryDriver, fetch);
     const deploymentGet = vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
         type: 'ModelDeployment',
         name: 'chat',
@@ -106,6 +116,10 @@ function expectApiKeyHeaders(headers: Headers) {
     expect(headers.get('api-key')).toBe('test-key');
     expect(headers.has('authorization')).toBe(false);
 }
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
 
 describe('Microsoft Foundry API key authentication', () => {
     it('sends Responses requests to the resource endpoint with the api-key header', async () => {
@@ -204,6 +218,77 @@ describe('Microsoft Foundry API key authentication', () => {
             expect(getToken).not.toHaveBeenCalled();
         } finally {
             driver.destroy();
+        }
+    });
+
+    it('does not follow redirects on requests that carry the key', async () => {
+        const { driver, requests } = setup();
+        try {
+            await driver.execute(segments, { model: 'chat::gpt-6-luna' });
+            await driver.execute(segments, { model: 'deepseek::DeepSeek-V4-Pro' });
+            await driver.execute(segments, {
+                model: 'claude::claude-sonnet-5-5',
+                model_options: { _option_id: 'anthropic-claude' },
+            });
+            await driver.validateConnection();
+            expect(requests).toHaveLength(4);
+            for (const request of requests) expect(request.redirect).toBe('manual');
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('derives the resource endpoint from a project URL with a trailing slash', async () => {
+        const { driver, requests } = setup({ endpoint: `${ENDPOINT}/` });
+        try {
+            await driver.execute(segments, { model: 'chat::gpt-6-luna' });
+            await driver.validateConnection();
+            expect(requests.map((request) => request.url)).toEqual([
+                'https://foundry.example.test/openai/v1/responses',
+                'https://foundry.example.test/openai/v1/models',
+            ]);
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('lets a composite model ID override the protocol guessed from the bare deployment', async () => {
+        const { driver, requests } = setup();
+        try {
+            await driver.execute(segments, { model: 'production' });
+            await driver.execute(segments, { model: 'production::gpt-6-luna' });
+            expect(requests.map((request) => request.url)).toEqual([
+                'https://foundry.example.test/openai/v1/chat/completions',
+                'https://foundry.example.test/openai/v1/responses',
+            ]);
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('checks the key as well as the project API when both credentials are set', async () => {
+        const rejected = setup({ tokenProvider: true, modelsStatus: 401 });
+        const deploymentsList = vi.spyOn(rejected.driver.service.deployments, 'list');
+        try {
+            await expect(rejected.driver.validateConnection()).resolves.toBe(false);
+            expect(rejected.requests[0].url).toBe('https://foundry.example.test/openai/v1/models');
+            expect(deploymentsList).not.toHaveBeenCalled();
+        } finally {
+            rejected.driver.destroy();
+        }
+
+        const accepted = setup({ tokenProvider: true });
+        const listed = vi
+            .spyOn(accepted.driver.service.deployments, 'list')
+            .mockReturnValue(
+                (async function* () {})() as unknown as ReturnType<typeof accepted.driver.service.deployments.list>,
+            );
+        try {
+            await expect(accepted.driver.validateConnection()).resolves.toBe(true);
+            expectApiKeyHeaders(accepted.requests[0].headers);
+            expect(listed).toHaveBeenCalledOnce();
+        } finally {
+            accepted.driver.destroy();
         }
     });
 });

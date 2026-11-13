@@ -60,6 +60,7 @@ import {
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { azureFoundryScope } from './entra-scope.js';
+import { withoutKeyRedirects } from './key-redirect.js';
 
 export type { AzureFoundryDriverOptions } from '../driver-options.js';
 
@@ -67,9 +68,19 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 function resourceInferenceURL(baseURL: string): string {
     const url = new URL(baseURL);
-    // Images and embeddings use the resource endpoint, rather than the project proxy.
-    url.pathname = url.pathname.replace(/\/api\/projects\/[^/]+\/openai\/v1\/?$/, '/openai/v1');
+    // Images, embeddings and key-authenticated inference use the resource endpoint, rather than the project proxy. A
+    // project URL configured with a trailing slash leaves an empty segment (`/project//openai/v1`), so repeated
+    // slashes are collapsed first.
+    url.pathname = url.pathname.replace(/\/{2,}/g, '/').replace(/\/api\/projects\/[^/]+\/openai\/v1\/?$/, '/openai/v1');
     return url.toString();
+}
+
+/** The project endpoint without trailing slashes, from which the project client builds its routes. */
+function trimTrailingSlashes(endpoint: string): string {
+    // A scan rather than a `/\/+$/` regex, which backtracks quadratically on a long run of slashes.
+    let end = endpoint.length;
+    while (end > 0 && endpoint[end - 1] === '/') end--;
+    return endpoint.slice(0, end);
 }
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
@@ -85,6 +96,12 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     }
 
     private imageService?: OpenAI;
+    private keyFetch?: typeof fetch;
+
+    protected override getDriverFetch(): typeof fetch {
+        this.keyFetch ??= withoutKeyRedirects(super.getDriverFetch());
+        return this.keyFetch;
+    }
 
     getImageService(): OpenAI {
         this.imageService ??= this.service.withOptions({
@@ -193,6 +210,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private readonly deploymentProtocols = new Map<string, FoundryProtocol>();
     private readonly deploymentSources = new Map<string, string>();
     private anthropicClient?: AnthropicFoundry;
+    private keyFetch?: typeof fetch;
     private readonly endpoint: string;
     /** Entra scope of the endpoint's cloud: `ai.azure.us` for Azure Government, else `ai.azure.com`. */
     private readonly scope: string;
@@ -233,8 +251,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             throw new Error('Azure AI Foundry endpoint is required');
         }
 
-        this.endpoint = opts.endpoint;
-        this.scope = azureFoundryScope(opts.endpoint);
+        this.endpoint = trimTrailingSlashes(opts.endpoint);
+        this.scope = azureFoundryScope(this.endpoint);
 
         let credential: TokenCredential;
         try {
@@ -252,9 +270,14 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         // The SDK defaults to the public-cloud scope.
-        this.service = new AIProjectClient(opts.endpoint, credential, {
+        this.service = new AIProjectClient(this.endpoint, credential, {
             credentials: { scopes: [this.scope] },
         });
+    }
+
+    protected override getDriverFetch(): typeof fetch {
+        this.keyFetch ??= withoutKeyRedirects(super.getDriverFetch());
+        return this.keyFetch;
     }
 
     /**
@@ -278,19 +301,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     ): Promise<FoundryProtocol> {
         signal?.throwIfAborted();
         const { deploymentName } = parseAzureFoundryModelId(model);
-        const cached = this.deploymentProtocols.get(deploymentName);
-        if (cached) return cached;
         if (resolveModelProfile(this.getSourceModel(model), this.provider).family === 'claude') {
             this.deploymentProtocols.set(deploymentName, 'messages');
             return 'messages';
         }
         if (this.isApiKeyOnly()) {
             // Without an Entra credential the project API cannot describe the deployment, so the protocol follows the
-            // source model: the composite ID, the `sourceModel` option, or else the deployment name.
+            // source model: the composite ID, the `sourceModel` option, or else the deployment name. It is derived on
+            // every call, so a later composite ID overrides a protocol guessed from the bare deployment name.
             const protocol = inferProtocolFromSourceModel(this.getSourceModel(model));
             this.deploymentProtocols.set(deploymentName, protocol);
             return protocol;
         }
+        const cached = this.deploymentProtocols.get(deploymentName);
+        if (cached) return cached;
         const deployment = (await this.service.deployments.get(deploymentName, {
             ...(signal ? { abortSignal: signal } : {}),
             requestOptions: { timeout: this.getDriverRequestTimeoutMs(httpTimeout) },
@@ -592,15 +616,16 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async validateConnection(): Promise<boolean> {
-        if (this.isApiKeyOnly()) {
+        if (this.options.apiKey) {
             try {
-                // The project API needs Entra ID; check the key against the resource's v1 model list instead.
+                // Inference uses the key, which the project API does not accept: check it against the resource's v1
+                // model list.
                 await this.getResourceClient().models.list({ timeout: this.getDriverRequestTimeoutMs() });
-                return true;
             } catch (error) {
                 this.logger.error({ error }, 'Microsoft Foundry API key validation failed:');
                 return false;
             }
+            if (this.isApiKeyOnly()) return true;
         }
         try {
             // Test the AI Projects client by listing deployments
