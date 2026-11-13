@@ -314,8 +314,8 @@ export const BedrockMantleChatCompletionsOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-        effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
-        reasoning_effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        effort: z.enum(['low', 'medium', 'high']).optional(),
+        reasoning_effort: z.enum(['low', 'medium', 'high']).optional(),
         include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMantleChatCompletionsOptions' });

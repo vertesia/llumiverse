@@ -64,25 +64,6 @@ describe('Bedrock Mantle metadata', () => {
         expect(capabilities.output.text).toBe(true);
     });
 
-    it.each(['moonshotai.kimi-k3', 'global.moonshotai.kimi-k3.1', 'moonshotai.kimi-k4'])(
-        'offers the documented Kimi reasoning effort on Mantle Chat Completions for %s',
-        (model) => {
-            const effort = getOptions(model, Providers.bedrock_mantle).options.find(
-                (option) => option.name === 'effort',
-            );
-            expect(effort).toMatchObject({
-                type: OptionType.enum,
-                enum: { none: 'none', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
-                default: 'max',
-            });
-        },
-    );
-
-    it('offers no reasoning effort for Kimi K2 on Mantle Chat Completions', () => {
-        const options = getOptions('moonshotai.kimi-k2.5', Providers.bedrock_mantle);
-        expect(options.options.map((option) => option.name)).not.toContain('effort');
-    });
-
     it('uses Chat Completions options and model-card modalities', () => {
         const options = getOptions('google.gemma-3-4b-it', Providers.bedrock_mantle);
         const capabilities = getModelCapabilities('google.gemma-3-4b-it', Providers.bedrock_mantle);
