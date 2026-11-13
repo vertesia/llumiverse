@@ -37,11 +37,7 @@ export function buildLlumiverseJsonSchema(): Record<string, unknown> {
         const { $schema: _schema, $id: _id, ...definition } = defs[name] as JsonObject;
         sorted[name] = definition;
     }
-    for (const definition of Object.values(sorted)) {
-        // A definition root that only says "any extra key" adds nothing a consumer can type.
-        if (isEmptyObject(definition.additionalProperties)) delete definition.additionalProperties;
-        normalize(definition, sorted);
-    }
+    normalizeDefinitions(sorted);
     return {
         $schema: 'https://json-schema.org/draft/2020-12/schema',
         $id: LLUMIVERSE_JSON_SCHEMA_ID,
@@ -53,7 +49,7 @@ export function buildLlumiverseJsonSchema(): Record<string, unknown> {
     };
 }
 
-type JsonObject = Record<string, unknown>;
+export type JsonObject = Record<string, unknown>;
 
 const DEF_PREFIX = '#/$defs/';
 
@@ -75,23 +71,56 @@ function isEmptyObject(value: unknown): boolean {
  * - a union of objects that share a required literal property gets an OpenAPI `discriminator`.
  *
  * Strictness (`additionalProperties: false`) is left as Zod writes it: the Vertesia contract opens or
- * closes objects per request or response, which is an API policy, not a shape.
+ * closes objects per request or response, which is an API policy, not a shape. An open object stays
+ * open, at a definition root too: the API-contract adapter drops a root's `{}`, which a validator reads
+ * the same way, but a code generator reads the missing keyword as a closed object and then discards the
+ * keys it does not declare. `JSONSchema` is open precisely so that it carries `enum`, `oneOf`,
+ * `minimum` and the other keywords it does not list.
  */
-function normalize(node: unknown, defs: Record<string, JsonObject>): void {
-    if (Array.isArray(node)) {
-        for (const child of node) normalize(child, defs);
-        return;
-    }
-    if (!isPlainObject(node)) return;
+export function normalizeDefinitions(defs: Record<string, JsonObject>): void {
+    for (const definition of Object.values(defs)) normalize(definition, defs);
+}
+
+function normalize(node: JsonObject, defs: Record<string, JsonObject>): void {
     if (isEmptyObject(node.properties)) delete node.properties;
     if (isEmptyObject(node.additionalProperties)) {
         node.additionalProperties = true;
-        if (isPlainObject(node.propertyNames) && node.propertyNames.type === 'string') {
-            if (Object.keys(node.propertyNames).length === 1) delete node.propertyNames;
-        }
+        if (isPlainObject(node.propertyNames) && isOnlyStringType(node.propertyNames)) delete node.propertyNames;
     }
     synthesizeDiscriminator(node, defs);
-    for (const child of Object.values(node)) normalize(child, defs);
+    eachSubschema(node, (child) => normalize(child, defs));
+}
+
+/**
+ * Visits every subschema of a node, and nothing else. `properties` maps property NAMES to subschemas, so
+ * its keys are data: a walk over every nested object would read a property named `additionalProperties`
+ * or `propertyNames` as that keyword and rewrite or delete it. Mirrors `eachSubschema` in
+ * `@vertesia/common/src/api-schemas/adapter.ts`.
+ */
+function eachSubschema(node: JsonObject, visit: (child: JsonObject) => void): void {
+    for (const keyword of ['items', 'additionalProperties', 'propertyNames', 'contains', 'not', 'if', 'then', 'else']) {
+        const child = node[keyword];
+        if (isPlainObject(child)) visit(child);
+    }
+    for (const keyword of ['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas']) {
+        const map = node[keyword];
+        if (!isPlainObject(map)) continue;
+        for (const child of Object.values(map)) {
+            if (isPlainObject(child)) visit(child);
+        }
+    }
+    for (const keyword of ['anyOf', 'oneOf', 'allOf', 'prefixItems']) {
+        const list = node[keyword];
+        if (!Array.isArray(list)) continue;
+        for (const child of list) {
+            if (isPlainObject(child)) visit(child);
+        }
+    }
+}
+
+function isOnlyStringType(schema: JsonObject): boolean {
+    const keys = Object.keys(schema);
+    return keys.length === 1 && keys[0] === 'type' && schema.type === 'string';
 }
 
 /**

@@ -2,7 +2,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import * as schemas from './index.js';
-import { buildLlumiverseJsonSchema, LLUMIVERSE_JSON_SCHEMA_PATH } from './json-schema-document.js';
+import {
+    buildLlumiverseJsonSchema,
+    type JsonObject,
+    LLUMIVERSE_JSON_SCHEMA_PATH,
+    normalizeDefinitions,
+} from './json-schema-document.js';
 
 const committedPath = fileURLToPath(new URL(`../../${LLUMIVERSE_JSON_SCHEMA_PATH}`, import.meta.url));
 
@@ -37,5 +42,38 @@ describe('llumiverse JSON Schema document', () => {
         for (const ref of refs) {
             expect(defs).toHaveProperty(ref.slice('"$ref":"#/$defs/'.length, -1));
         }
+    });
+
+    it('keeps JSONSchema open, so generated types keep the keywords it does not list', () => {
+        expect(defs.JSONSchema.additionalProperties).toBe(true);
+    });
+});
+
+describe('normalizeDefinitions', () => {
+    it('leaves alone properties named after schema keywords', () => {
+        const fields = {
+            additionalProperties: {},
+            propertyNames: { type: 'string' },
+            properties: {},
+            oneOf: { type: 'array', items: { type: 'string' } },
+        };
+        const defs: Record<string, JsonObject> = {
+            Fields: { type: 'object', properties: structuredClone(fields), additionalProperties: false },
+        };
+        normalizeDefinitions(defs);
+        expect(defs.Fields.properties).toEqual(fields);
+    });
+
+    it('still spells a nested unconstrained record as additionalProperties: true', () => {
+        const defs: Record<string, JsonObject> = {
+            Tagged: {
+                type: 'object',
+                properties: {
+                    labels: { type: 'object', propertyNames: { type: 'string' }, additionalProperties: {} },
+                },
+            },
+        };
+        normalizeDefinitions(defs);
+        expect(defs.Tagged.properties).toEqual({ labels: { type: 'object', additionalProperties: true } });
     });
 });

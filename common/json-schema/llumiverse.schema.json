@@ -1217,7 +1217,8 @@
                         "type": "string"
                     }
                 }
-            }
+            },
+            "additionalProperties": true
         },
         "JSONSchemaProperties": {
             "type": "object",
