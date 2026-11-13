@@ -238,8 +238,13 @@ share one definition. After editing a schema in `common/src/schemas/`, run `pnpm
 gen:json-schema` and commit the result; `json-schema-document.test.ts` fails when the committed file is stale.
 
 The document applies the same shape normalization as the Vertesia API contract (`@vertesia/common`), so a type it
-shares with that contract is identical apart from `additionalProperties: false`, which the API sets per request or
-response.
+shares with that contract is identical apart from `additionalProperties`:
+
+- `additionalProperties: false`, which the API sets per request or response, is left as Zod writes it.
+- An open object keeps `additionalProperties: true` at its definition root, where the API contract leaves the
+  keyword out. `JSONSchema` is the one such definition today. A validator reads both the same way, but a code
+  generator reads a missing keyword as a closed object and drops the keywords `JSONSchema` does not declare
+  (`enum`, `oneOf`, `minimum`, ...).
 
 ## Callable Driver Behavior
 
