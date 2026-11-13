@@ -23,7 +23,11 @@ function includesAny(model: string, patterns: string[]): boolean {
 function isFamilyVersionGte(model: string, family: string, targetMajor: number, targetMinor = 0): boolean {
     const familyIndex = model.indexOf(family);
     if (familyIndex === -1) return false;
-    const match = model.slice(familyIndex + family.length).match(/^(\d+)(?:[.-](\d+))?/);
+    const rest = model.slice(familyIndex + family.length);
+    // Daybreak GPT models carry a `daybreak-<color>-` segment before the GPT version
+    // (`openai.gpt-daybreak-blue-5.6-sol`); see parseOpenAIGptVersion.
+    const versioned = family === 'openai.gpt-' ? rest.replace(/^daybreak-[a-z]+-/, '') : rest;
+    const match = versioned.match(/^(\d+)(?:[.-](\d+))?/);
     if (!match) return false;
     const major = Number(match[1]);
     const minor = Number(match[2] ?? 0);
@@ -208,6 +212,8 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         // The GPT-5.6 and GPT-6.1+ Sol cards specify 1M (6.1+ with a 131,072 output limit); every other variant,
         // GPT-6 Sol included, specifies 1.05M.
         // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html
+        // Daybreak Blue: GPT-5.6 Sol is not a plain Sol model: its card specifies 1.05M, so isSol stays false for it.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
         const isSol = /^openai\.gpt-[\d.]+-sol(?:[-:]|$)/.test(model);
         if (isSol && isFamilyVersionGte(model, 'openai.gpt-', 6, 1)) {
             return { context_window: 1_000_000, max_output_tokens: 131_072 };
