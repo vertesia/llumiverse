@@ -5,6 +5,8 @@ import type {
     PromptCacheModeSchema,
     PromptCachePathSchema,
     StatelessExecutionOptionsSchema,
+    ToolTokenUsageSchema,
+    ToolUsageSchema,
 } from './schemas/completion.js';
 import type {
     EmbeddingOutputSchema,
@@ -886,6 +888,9 @@ export interface PromptSegment {
 }
 
 export type ExecutionTokenUsage = z.infer<typeof ExecutionTokenUsageSchema>;
+/** Usage billed apart from the main model: hosted tools and auxiliary models. */
+export type ToolUsage = z.infer<typeof ToolUsageSchema>;
+export type ToolTokenUsage = z.infer<typeof ToolTokenUsageSchema>;
 
 /**
  * @deprecated This is deprecated. Use CompletionResult.type information instead.

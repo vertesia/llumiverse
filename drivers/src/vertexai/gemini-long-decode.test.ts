@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GoogleGenAI } from '@google/genai';
-import { type HttpTimeoutOptions, PromptRole } from '@llumiverse/core';
+import { type ExecutionTokenUsage, type HttpTimeoutOptions, PromptRole } from '@llumiverse/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from './index.js';
 import { applyGeminiLongDecodeStreamTimeout } from './models/gemini.js';
@@ -102,7 +102,7 @@ describe('Gemini long decode', () => {
         try {
             let text = '';
             let finishReason: string | undefined;
-            let tokenUsage: Record<string, number | undefined> | undefined;
+            let tokenUsage: ExecutionTokenUsage | undefined;
             if (mode === 'execute') {
                 const response = await driver.execute(prompt, options);
                 text = response.result.map((part) => (part.type === 'text' ? part.value : '')).join('');

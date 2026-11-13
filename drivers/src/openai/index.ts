@@ -12,7 +12,6 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
-    type ExecutionTokenUsage,
     getConversationMeta,
     getOpenAIPromptCacheTtls,
     incrementConversationTurn,
@@ -62,10 +61,11 @@ import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
+import { logOpenAIInputTransformations } from './input-transformations.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
-import { openAIPromptUsage } from './usage.js';
+import { mapOpenAIImageUsage, mapOpenAIResponsesUsage } from './usage.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -123,14 +123,6 @@ function asOpenAIResponseServiceTier(serviceTier?: string): OpenAIResponseServic
 }
 
 type OpenAIErrorWithStatus = Error & { status?: unknown };
-type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
-    cached_tokens?: number | null;
-    cache_write_tokens?: number | null;
-    prompt_tokens_details?: {
-        cached_tokens?: number | null;
-        cache_write_tokens?: number | null;
-    } | null;
-};
 type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
 type MutableInputImagePart = { type: string; detail?: string };
 type OpenAIFunctionItem = ResponseInputItem & {
@@ -660,7 +652,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
         assertOpenAIResponseSucceeded(result);
-        const tokenInfo = mapUsage(result.usage);
+        const tokenInfo = mapOpenAIResponsesUsage(result.usage, result.tool_usage);
+        logOpenAIInputTransformations(this.logger, result.input_transformations, {
+            provider: this.provider,
+            model: _options.model,
+        });
 
         // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
         // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
@@ -992,7 +988,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                       ? [{ type: 'image', value: image.url }]
                       : [],
             ),
-            token_usage: imageUsage(response.usage),
+            token_usage: mapOpenAIImageUsage(response.usage, response.svg_usage),
             original_response: options.include_original_response ? response : undefined,
         };
     }
@@ -1050,7 +1046,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                                 value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
                             },
                         ],
-                        token_usage: imageUsage(event.usage),
+                        token_usage: mapOpenAIImageUsage(event.usage),
                     } satisfies CompletionChunkObject;
                 }
                 if (!completed) throw new Error('Image stream ended without a completed image');
@@ -1082,23 +1078,6 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
         model: job.fine_tuned_model || undefined,
         status,
         details,
-    };
-}
-
-function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionTokenUsage | undefined {
-    if (!usage) {
-        return undefined;
-    }
-    const cachedTokens =
-        usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
-    const cacheWriteTokens =
-        usage.input_tokens_details?.cache_write_tokens ??
-        usage.prompt_tokens_details?.cache_write_tokens ??
-        usage.cache_write_tokens;
-    return {
-        ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
-        result: usage.output_tokens,
-        total: usage.total_tokens,
     };
 }
 
@@ -1343,6 +1322,12 @@ export function mapResponseStream(
                     event.type === 'response.failed'
                 ) {
                     finalResponse = event.response;
+                    if (refusalLog) {
+                        logOpenAIInputTransformations(refusalLog.logger, event.response.input_transformations, {
+                            provider: refusalLog.provider,
+                            model: refusalLog.model,
+                        });
+                    }
                     const missedArguments = event.response.output.flatMap((item, index) => {
                         if (item.type !== 'function_call') return [];
                         const toolUse = completedCallArguments(
@@ -1375,7 +1360,7 @@ export function mapResponseStream(
                             return results;
                         }),
                         finish_reason,
-                        token_usage: mapUsage(event.response.usage),
+                        token_usage: mapOpenAIResponsesUsage(event.response.usage, event.response.tool_usage),
                         service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
                     // Preserve provider usage even when the terminal response is failed/incomplete;
@@ -1832,22 +1817,6 @@ function safeJsonParse(value: unknown): unknown {
     } catch {
         return value;
     }
-}
-
-function imageUsage(usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens: number;
-}): ExecutionTokenUsage | undefined {
-    return usage
-        ? {
-              prompt: usage.input_tokens,
-              prompt_new: usage.input_tokens,
-              result: usage.output_tokens,
-              result_image: usage.output_tokens,
-              total: usage.total_tokens,
-          }
-        : undefined;
 }
 
 function responseTools(

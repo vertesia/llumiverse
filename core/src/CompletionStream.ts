@@ -403,6 +403,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let promptCacheWriteTokens: number | undefined;
         let promptNewTokens: number | undefined;
         let promptCacheWrite1hTokens: number | undefined;
+        let promptCacheWrite12hTokens: number | undefined;
+        let toolUsage: ExecutionTokenUsage['tool_usage'];
         let providerCostUsd: number | undefined;
         let resultImageTokens: number | undefined;
         // Undefined until the provider reports token data. resultTokens === 0 is valid (e.g. empty output with stop).
@@ -417,6 +419,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                       ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
                       ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
                       ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
+                      ...(promptCacheWrite12hTokens != null && { prompt_cache_write_12h: promptCacheWrite12hTokens }),
+                      ...(toolUsage != null && { tool_usage: toolUsage }),
                       ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
                       ...(resultImageTokens != null && { result_image: resultImageTokens }),
                   };
@@ -467,6 +471,10 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                             if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
                             if (chunk.token_usage.prompt_cache_write_1h != null)
                                 promptCacheWrite1hTokens = chunk.token_usage.prompt_cache_write_1h;
+                            if (chunk.token_usage.prompt_cache_write_12h != null)
+                                promptCacheWrite12hTokens = chunk.token_usage.prompt_cache_write_12h;
+                            // Reported whole with the final usage, like the counts above.
+                            if (chunk.token_usage.tool_usage != null) toolUsage = chunk.token_usage.tool_usage;
                             if (chunk.token_usage.result_image != null)
                                 resultImageTokens = chunk.token_usage.result_image;
                             // The provider reports the call's cost once, with the final usage.

@@ -43,10 +43,13 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
                         token_usage: {
                             prompt: 10,
                             prompt_cached: 4,
-                            prompt_new: 6,
+                            prompt_cache_write: 3,
+                            prompt_cache_write_12h: 1,
+                            prompt_new: 3,
                             result: 2,
                             result_image: 2,
                             total: 12,
+                            tool_usage: { image_generation: { prompt: 5, result: 7, total: 12 } },
                         },
                     };
                     throw new Error('provider failed after usage');
@@ -113,10 +116,13 @@ describe('DefaultCompletionStream thoughts', () => {
         expect(stream.completion?.token_usage).toEqual({
             prompt: 10,
             prompt_cached: 4,
-            prompt_new: 6,
+            prompt_cache_write: 3,
+            prompt_cache_write_12h: 1,
+            prompt_new: 3,
             result: 2,
             result_image: 2,
             total: 12,
+            tool_usage: { image_generation: { prompt: 5, result: 7, total: 12 } },
         });
     });
 

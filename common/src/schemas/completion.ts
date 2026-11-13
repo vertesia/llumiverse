@@ -188,6 +188,40 @@ export const CompletionResultSchema = z
     ])
     .meta({ id: 'CompletionResult' });
 
+export const ToolTokenUsageSchema = z
+    .strictObject({
+        model: z.string().optional(),
+        prompt: z.number().optional(),
+        prompt_cached: z.number().optional(),
+        result: z.number().optional(),
+        result_image: z
+            .number()
+            .meta({ description: 'Of `result`, the tokens of generated images, when the provider reports them.' })
+            .optional(),
+        total: z.number().optional(),
+    })
+    .meta({ id: 'ToolTokenUsage' });
+
+export const ToolUsageSchema = z
+    .strictObject({
+        image_generation: ToolTokenUsageSchema.meta({
+            description: 'Tokens of the hosted image generation tool (OpenAI Responses `tool_usage.image_gen`).',
+        }).optional(),
+        web_search_requests: z
+            .number()
+            .meta({ description: 'Billable web search requests (OpenAI Responses `tool_usage.web_search`).' })
+            .optional(),
+        svg: ToolTokenUsageSchema.meta({
+            description: 'Tokens of the model that authored SVG output (OpenAI Images API `svg_usage`).',
+        }).optional(),
+    })
+    .meta({
+        id: 'ToolUsage',
+        description:
+            'Usage billed apart from the main model: hosted tools and auxiliary models. Not included in ' +
+            '`prompt`, `result` or `total`. A tool with no reported usage is absent.',
+    });
+
 export const ExecutionTokenUsageSchema = z
     .strictObject({
         prompt: z.number().optional(),
@@ -209,6 +243,14 @@ export const ExecutionTokenUsageSchema = z
                     'provider reports it. The remainder used the default (five-minute) lifetime.',
             })
             .optional(),
+        prompt_cache_write_12h: z
+            .number()
+            .meta({
+                description:
+                    'Of `prompt_cache_write`, the tokens written with a 12-hour cache retention, when the ' +
+                    'provider reports it (OpenAI). The remainder used the default (30-minute) retention.',
+            })
+            .optional(),
         prompt_new: z.number().optional(),
         result_image: z
             .number()
@@ -226,6 +268,7 @@ export const ExecutionTokenUsageSchema = z
                     'returns it (e.g. OpenRouter). Absent for bring-your-own-key requests.',
             })
             .optional(),
+        tool_usage: ToolUsageSchema.optional(),
     })
     .meta({ id: 'ExecutionTokenUsage' });
 
