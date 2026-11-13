@@ -317,6 +317,21 @@ describe('BedrockMantleDriver protocol execution', () => {
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
     });
 
+    it('sends Kimi reasoning effort through Chat Completions', async () => {
+        const model = 'global.moonshotai.kimi-k3.1';
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const create = vi.fn<ChatCreate>(async () => createChatCompletion(model));
+        Reflect.set(driver, 'service', { chat: { completions: { create } } });
+        const prompt = await driver.createPrompt(promptSegments, { model });
+
+        await driver.requestTextCompletion(prompt, {
+            model,
+            model_options: { _option_id: 'bedrock-mantle-chat-completions', effort: 'xhigh' },
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ model, reasoning_effort: 'xhigh' }));
+    });
+
     it('uses response_format for Chat Completions schema requests', async () => {
         for (const model of [
             'google.gemma-3-4b-it',

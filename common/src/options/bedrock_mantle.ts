@@ -8,7 +8,7 @@ import type {
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType, Providers } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { textOptionsFallback } from './fallback.js';
-import { getOpenAIReasoningEffortLevels, isModelFamilyVersionGTE } from './version-parsing.js';
+import { getOpenAIReasoningEffortLevels, isKimiVersionGte, isModelFamilyVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -225,6 +225,16 @@ function getChatCompletionsOptions(model: string): ModelOptionsInfo {
             type: OptionType.enum,
             enum: { low: 'low', medium: 'medium', high: 'high' },
             default: 'medium',
+            description: 'Controls how much reasoning the model performs before responding',
+        });
+    } else if (isKimiVersionGte(model.toLowerCase(), 3, 0)) {
+        // Kimi K3 and later take `reasoning_effort` on Chat Completions and reason at `max` when it is omitted.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3-1-highspeed.html
+        options.push({
+            name: 'effort',
+            type: OptionType.enum,
+            enum: { none: 'none', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+            default: 'max',
             description: 'Controls how much reasoning the model performs before responding',
         });
     }
