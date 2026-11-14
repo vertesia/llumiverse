@@ -72,7 +72,11 @@ import {
     trimClaudeConversationToCompaction,
 } from './claude-compaction.js';
 import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
-import { CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS, usesClaudeNativeResultSchema } from './claude-structured-output.js';
+import {
+    CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS,
+    endsWithClaudePrefill,
+    usesClaudeNativeResultSchema,
+} from './claude-structured-output.js';
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import {
     applyClaudeToolChanges,
@@ -573,6 +577,34 @@ async function collectFileBlocks(
 // Prompt formatting (PromptSegment[] → ClaudePrompt)
 // ============================================================================
 
+/** The prompt text that asks Claude for JSON matching the result schema. */
+function claudeSchemaInstructions(options: Pick<ExecutionOptions, 'result_schema' | 'tools'>): string {
+    return options.tools && options.tools.length > 0
+        ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`
+        : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`;
+}
+
+/** Whether a text block of the system prompt or of a turn already carries the schema instructions. */
+function hasClaudeSchemaInstructions(system: TextBlockParam[] | undefined, messages: MessageParam[]): boolean {
+    const carries = (text: string) =>
+        text.includes(JSON_SCHEMA_INSTRUCTION_PREFIX) || text.includes(TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX);
+    if (system?.some((block) => carries(block.text))) return true;
+    return messages.some((message) =>
+        typeof message.content === 'string'
+            ? carries(message.content)
+            : message.content.some((block) => block.type === 'text' && carries(block.text)),
+    );
+}
+
+/** How a Claude request may send its result schema. */
+export interface ClaudeResultSchemaOptions {
+    /**
+     * False sends the schema as prompt instructions even when the request qualifies for `output_config.format`,
+     * for instance after the provider refused structured outputs for the model.
+     */
+    allowNativeResultSchema?: boolean;
+}
+
 export async function formatClaudePrompt(
     segments: PromptSegment[],
     options: ExecutionOptions,
@@ -586,10 +618,7 @@ export async function formatClaudePrompt(
     let schemaText: string | undefined;
     // A schema the provider enforces natively (output_config.format) needs no prompt instructions.
     if (options.result_schema && !nativeResultSchema) {
-        schemaText =
-            options.tools && options.tools.length > 0
-                ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`
-                : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`;
+        schemaText = claudeSchemaInstructions(options);
         if (options.prompt_cache_key === undefined) {
             system.push({ text: schemaText, type: 'text' as const });
         }
@@ -980,6 +1009,7 @@ export function getClaudePayload(
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
     logger?: Logger,
+    { allowNativeResultSchema = true }: ClaudeResultSchemaOptions = {},
 ): { payload: ClaudeMessageCreateParams; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -1053,7 +1083,22 @@ export function getClaudePayload(
     sanitizedMessages = mergeConsecutiveUserMessages(placeSystemMessagesAfterUserTurns(sanitizedMessages));
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
-    const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
+    let sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
+    // Bedrock and Vertex AI enforce the result schema for recent Claude models; formatClaudePrompt left it out of the
+    // prompt. A request that ends with a prefill, or whose provider refused structured outputs, keeps the prompt path:
+    // when formatClaudePrompt left the instructions out for it, add them to the system prompt, ahead of the cache
+    // breakpoints.
+    const qualifiesForNativeFormat =
+        CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS.has(provider) &&
+        options.result_schema !== undefined &&
+        usesClaudeNativeResultSchema(options);
+    const nativeFormat =
+        qualifiesForNativeFormat && allowNativeResultSchema && !endsWithClaudePrefill(sanitizedMessages)
+            ? { format: { type: 'json_schema' as const, schema: options.result_schema as Record<string, unknown> } }
+            : undefined;
+    if (qualifiesForNativeFormat && !nativeFormat && !hasClaudeSchemaInstructions(sanitizedSystem, sanitizedMessages)) {
+        sanitizedSystem = [...(sanitizedSystem ?? []), { type: 'text', text: claudeSchemaInstructions(options) }];
+    }
     const sanitizedTools = toolState
         ? renderClaudeTools(toolState)
         : hasTools
@@ -1127,14 +1172,6 @@ export function getClaudePayload(
         hasSamplingRestriction,
     } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1], logger);
     betas.push(...thinkingBetas);
-    // Bedrock and Vertex AI enforce the result schema for recent Claude models; formatClaudePrompt left it out of the
-    // prompt.
-    const nativeFormat =
-        CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS.has(provider) &&
-        options.result_schema &&
-        usesClaudeNativeResultSchema(options)
-            ? { format: { type: 'json_schema' as const, schema: options.result_schema as Record<string, unknown> } }
-            : undefined;
     const forcedToolChoice = model_options?.required_tool_name
         ? ({ type: 'tool', name: model_options.required_tool_name } as const)
         : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
@@ -1506,12 +1543,20 @@ export async function executeClaudeCompletion(
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout' | 'headers'>,
     requestModel?: string,
+    resultSchemaOptions?: ClaudeResultSchemaOptions,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
     const conversation = prepareClaudeConversation(options, prompt, provider);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', logger);
+    const { payload, requestOptions } = getClaudePayload(
+        options,
+        conversation,
+        provider,
+        'execute',
+        logger,
+        resultSchemaOptions,
+    );
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1576,11 +1621,19 @@ export async function streamClaudeCompletion(
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout' | 'headers'>,
     requestModel?: string,
+    resultSchemaOptions?: ClaudeResultSchemaOptions,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = prepareClaudeConversation(options, prompt, provider);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', logger);
+    const { payload, requestOptions } = getClaudePayload(
+        options,
+        conversation,
+        provider,
+        'stream',
+        logger,
+        resultSchemaOptions,
+    );
     const streamingPayload: MessageStreamParams = { ...payload, model: requestModel ?? payload.model, stream: true };
 
     const response_stream = await streamClaudeMessages(

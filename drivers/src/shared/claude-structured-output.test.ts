@@ -5,6 +5,9 @@ import type { VertexAIDriver } from '../vertexai/index.js';
 import { ClaudeModelDefinition } from '../vertexai/models/claude.js';
 import { formatClaudePrompt, getClaudePayload } from './claude-messages.js';
 import {
+    ClaudeStructuredOutputDenials,
+    endsWithClaudePrefill,
+    isClaudeStructuredOutputPolicyDenial,
     isClaudeStructuredOutputSchema,
     supportsClaudeNativeResultSchema,
     usesClaudeNativeResultSchema,
@@ -81,6 +84,21 @@ describe('isClaudeStructuredOutputSchema', () => {
         ['minItems above 1', { properties: { l: { type: 'array', items: { type: 'string' }, minItems: 2 } } }],
         ['a non-primitive enum value', { properties: { e: { enum: [{ a: 1 }] } } }],
         ['oneOf', { properties: { o: { oneOf: [{ type: 'string' }, { type: 'number' }] } } }],
+        ['maxItems', { properties: { l: { type: 'array', items: { type: 'string' }, maxItems: 3 } } }],
+        ['uniqueItems', { properties: { l: { type: 'array', items: { type: 'string' }, uniqueItems: true } } }],
+        ['contains', { properties: { l: { type: 'array', items: { type: 'string' }, contains: { const: 'a' } } } }],
+        ['maxProperties', { maxProperties: 3 }],
+        ['propertyNames', { propertyNames: { pattern: '^[a-z]+$' } }],
+        ['a backreference in a pattern', { properties: { p: { type: 'string', pattern: '^(a)\\1$' } } }],
+        ['a lookahead in a pattern', { properties: { p: { type: 'string', pattern: '^(?=a).*$' } } }],
+        ['a word boundary in a pattern', { properties: { p: { type: 'string', pattern: '\\bword\\b' } } }],
+        [
+            'an allOf $ref branch',
+            {
+                properties: { a: { allOf: [{ $ref: '#/$defs/Place' }] } },
+                $defs: { Place: { type: 'object', properties: {}, additionalProperties: false } },
+            },
+        ],
         ['an external $ref', { properties: { r: { $ref: 'https://example.com/schema.json' } } }],
         ['a $ref to the root', { properties: { self: { $ref: '#' } } }],
         ['a $ref to a missing definition', { properties: { r: { $ref: '#/$defs/Missing' } } }],
@@ -99,6 +117,14 @@ describe('isClaudeStructuredOutputSchema', () => {
         ],
     ])('rejects %s', (_label, extra) => {
         expect(isClaudeStructuredOutputSchema(schema(extra))).toBe(false);
+    });
+
+    it('accepts a simple pattern', () => {
+        expect(
+            isClaudeStructuredOutputSchema(
+                schema({ properties: { p: { type: 'string', pattern: '^[A-Z]{2}\\d{3}$' } }, required: ['p'] }),
+            ),
+        ).toBe(true);
     });
 
     it('rejects more than 12 optional properties', () => {
@@ -189,6 +215,62 @@ describe('Claude native result schema on Bedrock and Vertex AI', () => {
         expect(payload.output_config?.format).toBeUndefined();
     });
 
+    it('keeps a closed schema with maxItems on the prompt path, with its instructions', async () => {
+        const bounded: ExecutionOptions = {
+            model: MODEL,
+            result_schema: schema({
+                properties: { tags: { type: 'array', items: { type: 'string' }, maxItems: 3 } },
+                required: ['tags'],
+            }),
+        };
+        const prompt = await formatClaudePrompt(segments, bounded, undefined, {
+            nativeResultSchema: usesClaudeNativeResultSchema(bounded),
+        });
+        const { payload } = getClaudePayload(bounded, prompt, 'vertexai');
+
+        expect(usesClaudeNativeResultSchema(bounded)).toBe(false);
+        expect(JSON.stringify(prompt.system)).toContain('JSON Schema');
+        expect(payload.output_config?.format).toBeUndefined();
+    });
+
+    it.each(['bedrock', 'vertexai'])(
+        'keeps a request that ends with an assistant prefill on the prompt path on %s',
+        async (provider) => {
+            const prefilled: PromptSegment[] = [...segments, { role: PromptRole.assistant, content: '{"name":' }];
+            // Claude 4.5 continues a trailing assistant turn as a prefill; 4.6+ gets a continuation turn instead.
+            const haiku: ExecutionOptions = { model: 'claude-haiku-4-5', result_schema: schema() };
+            const prompt = await formatClaudePrompt(prefilled, haiku, undefined, {
+                nativeResultSchema: usesClaudeNativeResultSchema(haiku),
+            });
+            const { payload } = getClaudePayload(haiku, prompt, provider);
+
+            expect(payload.messages.at(-1)?.role).toBe('assistant');
+            expect(payload.output_config?.format).toBeUndefined();
+            expect(JSON.stringify(payload.system)).toContain('JSON Schema');
+        },
+    );
+
+    it('adds the instructions only once when the prompt already carries them', async () => {
+        const prefilled: PromptSegment[] = [...segments, { role: PromptRole.assistant, content: '{' }];
+        const haiku: ExecutionOptions = { model: 'claude-haiku-4-5', result_schema: schema() };
+        const prompt = await formatClaudePrompt(prefilled, haiku);
+        const { payload } = getClaudePayload(haiku, prompt, 'bedrock');
+
+        expect(JSON.stringify(payload.system).split('JSON Schema').length - 1).toBe(
+            JSON.stringify(prompt.system).split('JSON Schema').length - 1,
+        );
+    });
+
+    it('sends the schema as instructions when the native format is not allowed', async () => {
+        const prompt = await formatClaudePrompt(segments, options, undefined, { nativeResultSchema: true });
+        const { payload } = getClaudePayload(options, prompt, 'vertexai', 'execute', undefined, {
+            allowNativeResultSchema: false,
+        });
+
+        expect(payload.output_config?.format).toBeUndefined();
+        expect(JSON.stringify(payload.system)).toContain('JSON Schema');
+    });
+
     it('makes the same decision in the Bedrock prompt as in the payload', async () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const native = await driver.createPrompt(segments, options);
@@ -203,7 +285,10 @@ describe('Claude native result schema on Bedrock and Vertex AI', () => {
 
     it('makes the same decision in the Vertex AI prompt as in the payload', async () => {
         const definition = new ClaudeModelDefinition('claude-haiku-4-5');
-        const driver = { logger: undefined } as unknown as VertexAIDriver;
+        const driver = {
+            logger: undefined,
+            options: { project: 'p', region: 'us-central1' },
+        } as unknown as VertexAIDriver;
         const native = await definition.createPrompt(driver, segments, {
             model: 'locations/global/publishers/anthropic/models/claude-haiku-4-5',
             result_schema: schema(),
@@ -220,5 +305,54 @@ describe('Claude native result schema on Bedrock and Vertex AI', () => {
         expect(JSON.stringify(native)).not.toContain('JSON Schema');
         expect(JSON.stringify(legacy)).toContain('JSON Schema');
         expect(JSON.stringify(unsupported)).toContain('JSON Schema');
+    });
+});
+
+describe('endsWithClaudePrefill', () => {
+    it('is true only when the last non-system turn is the assistant', () => {
+        const user = { role: 'user' as const, content: 'hi' };
+        const assistant = { role: 'assistant' as const, content: '{' };
+        expect(endsWithClaudePrefill([user, assistant])).toBe(true);
+        expect(endsWithClaudePrefill([assistant, user])).toBe(false);
+        expect(endsWithClaudePrefill([])).toBe(false);
+    });
+});
+
+describe('isClaudeStructuredOutputPolicyDenial', () => {
+    const denial = (status: number, message: string) => ({ status, message });
+
+    it('matches the 400 FAILED_PRECONDITION policy refusal of structured_outputs', () => {
+        expect(
+            isClaudeStructuredOutputPolicyDenial(
+                denial(
+                    400,
+                    '400 [{"error":{"code":400,"message":"Organization Policy constraint constraints/vertexai.allowedPartnerModelFeatures violated for a disallowed feature structured_outputs","status":"FAILED_PRECONDITION"}}]',
+                ),
+            ),
+        ).toBe(true);
+    });
+
+    it.each([
+        ['another 400', denial(400, 'max_tokens: too large')],
+        [
+            'a policy refusal of another feature',
+            denial(400, 'FAILED_PRECONDITION allowedPartnerModelFeatures web_search'),
+        ],
+        ['another status', denial(403, 'FAILED_PRECONDITION allowedPartnerModelFeatures structured_outputs')],
+        ['a non-object', 'FAILED_PRECONDITION allowedPartnerModelFeatures structured_outputs'],
+    ])('does not match %s', (_label, error) => {
+        expect(isClaudeStructuredOutputPolicyDenial(error)).toBe(false);
+    });
+});
+
+describe('ClaudeStructuredOutputDenials', () => {
+    it('remembers a bounded number of denials, dropping the oldest', () => {
+        const denials = new ClaudeStructuredOutputDenials();
+        const first = ClaudeStructuredOutputDenials.key('p', 'global', 'm0');
+        denials.add(first);
+        for (let i = 1; i <= 256; i++) denials.add(ClaudeStructuredOutputDenials.key('p', 'global', `m${i}`));
+
+        expect(denials.has(first)).toBe(false);
+        expect(denials.has(ClaudeStructuredOutputDenials.key('p', 'global', 'm256'))).toBe(true);
     });
 });

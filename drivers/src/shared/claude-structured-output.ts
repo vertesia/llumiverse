@@ -1,3 +1,5 @@
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+import type { CompletionChunkObject, DriverCompletionStream } from '@llumiverse/common';
 import { type ExecutionOptions, isClaudeVersionGTE, type JSONSchema } from '@llumiverse/core';
 
 /**
@@ -27,6 +29,19 @@ const UNSUPPORTED_KEYWORDS = [
     'multipleOf',
     'minLength',
     'maxLength',
+    // Array constraints beyond `minItems` of 0 or 1.
+    'maxItems',
+    'uniqueItems',
+    'contains',
+    'minContains',
+    'maxContains',
+    'additionalItems',
+    // Object constraints other than `required` and `additionalProperties: false`.
+    'minProperties',
+    'maxProperties',
+    'propertyNames',
+    'dependentRequired',
+    'dependencies',
     // Not in the supported list, so a schema using them keeps the prompt path.
     'oneOf',
     'not',
@@ -38,6 +53,9 @@ const UNSUPPORTED_KEYWORDS = [
     'unevaluatedProperties',
     'prefixItems',
 ] as const;
+
+/** Regex features the platforms reject in `pattern`: backreferences, lookaround assertions and word boundaries. */
+const UNSUPPORTED_PATTERN = /\\[1-9]|\\k<|\(\?<?[=!]|\\[bB]/;
 
 /** Claude 4.5 and later accept structured outputs. */
 export function supportsClaudeNativeResultSchema(model: string): boolean {
@@ -105,6 +123,11 @@ function checkNode(node: unknown, stats: SchemaStats): boolean {
         }
     }
     if (typeof node.$ref === 'string' && !node.$ref.startsWith('#/')) return false;
+    if ('pattern' in node && (typeof node.pattern !== 'string' || UNSUPPORTED_PATTERN.test(node.pattern))) return false;
+    // `allOf` does not support `$ref` branches.
+    if (Array.isArray(node.allOf) && node.allOf.some((branch) => isSchemaNode(branch) && '$ref' in branch)) {
+        return false;
+    }
 
     const isObject = node.type === 'object' || (Array.isArray(node.type) && node.type.includes('object'));
     if (isObject || 'properties' in node) {
@@ -171,4 +194,97 @@ function hasRecursiveReference(schema: SchemaNode, definitions: Record<string, u
         return false;
     };
     return Object.keys(definitions).some(visit);
+}
+
+/**
+ * Whether a request ends with an assistant turn, which Claude continues as a prefill. Structured outputs reject a
+ * prefill, so such a request keeps the schema instructions in the prompt.
+ */
+export function endsWithClaudePrefill(messages: readonly MessageParam[]): boolean {
+    return messages.findLast((message) => (message.role as string) !== 'system')?.role === 'assistant';
+}
+
+/**
+ * Whether an error is Vertex AI refusing structured outputs because an organization policy
+ * (`constraints/vertexai.allowedPartnerModelFeatures`) does not allow the `structured_outputs` feature for the model.
+ * Vertex AI answers 400 FAILED_PRECONDITION; any other 400 is a different problem and is not matched.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/structured-outputs#control_access_to_structured_outputs
+ */
+export function isClaudeStructuredOutputPolicyDenial(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    const { status, message, error: body } = error as { status?: unknown; message?: unknown; error?: unknown };
+    if (status !== 400) return false;
+    let text = typeof message === 'string' ? message : '';
+    if (body !== undefined) {
+        try {
+            text += ` ${JSON.stringify(body)}`;
+        } catch {
+            // An unserializable body adds nothing to match.
+        }
+    }
+    return (
+        text.includes('FAILED_PRECONDITION') &&
+        text.includes('allowedPartnerModelFeatures') &&
+        text.includes('structured_outputs')
+    );
+}
+
+/** At most this many denied project, region and model combinations are remembered; the oldest is dropped first. */
+const MAX_REMEMBERED_DENIALS = 256;
+
+/**
+ * Project, region and model combinations whose structured outputs a policy denied, so later requests in this
+ * process go straight to the prompt path instead of failing once each.
+ */
+export class ClaudeStructuredOutputDenials {
+    private readonly denied = new Set<string>();
+
+    static key(project: string | undefined, region: string, model: string): string {
+        return `${project ?? ''}|${region}|${model}`;
+    }
+
+    has(key: string): boolean {
+        return this.denied.has(key);
+    }
+
+    add(key: string): void {
+        this.denied.delete(key);
+        this.denied.add(key);
+        if (this.denied.size > MAX_REMEMBERED_DENIALS) {
+            const oldest = this.denied.values().next().value;
+            if (oldest !== undefined) this.denied.delete(oldest);
+        }
+    }
+}
+
+/**
+ * A stream that runs `fallback` instead when `primary` fails with a structured-output policy denial before its first
+ * chunk. A denial is a 400, so it always arrives before any chunk. The conversation finalizer follows the stream that
+ * ran.
+ */
+export function withClaudeStructuredOutputFallback(
+    primary: DriverCompletionStream,
+    fallback: () => Promise<DriverCompletionStream>,
+    onDenied: (error: unknown) => void,
+): DriverCompletionStream {
+    let active = primary;
+    async function* chunks(): AsyncGenerator<CompletionChunkObject> {
+        let started = false;
+        try {
+            for await (const chunk of primary) {
+                started = true;
+                yield chunk;
+            }
+        } catch (error) {
+            if (started || !isClaudeStructuredOutputPolicyDenial(error)) throw error;
+            onDenied(error);
+            active = await fallback();
+            yield* active;
+        }
+    }
+    return {
+        [Symbol.asyncIterator]: () => chunks(),
+        finalizeConversation: () => active.finalizeConversation?.(),
+        finalizePromptCacheDiagnostic: () => active.finalizePromptCacheDiagnostic?.(),
+    };
 }
