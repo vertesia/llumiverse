@@ -1,5 +1,6 @@
 import { BadRequestError } from '@anthropic-ai/sdk/error';
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/index.js';
+import { JSON_SCHEMA_INSTRUCTION_PREFIX } from '@llumiverse/common';
 import type { CompletionChunkObject, ExecutionOptions, JSONSchema } from '@llumiverse/core';
 import { PromptRole } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
@@ -127,6 +128,27 @@ describe('Vertex AI Claude structured outputs denied by an organization policy',
         expect(payloads[1].output_config).toBeUndefined();
         expect(schemaInstructionsIn(payloads[1])).toBe(true);
         expect(warnings).toHaveLength(1);
+    });
+
+    it("retries a continuation with the current schema's instructions, not an earlier turn's", async () => {
+        const definition = new ClaudeModelDefinition('claude-haiku-4-5');
+        const { driver, payloads } = fakeVertex('continuation-denied', [policyDenial()]);
+        const previous = { ...schema, properties: { title: { type: 'string' } }, required: ['title'] };
+        const prompt = await definition.createPrompt(driver, segments, options);
+        prompt.messages = [
+            {
+                role: 'user',
+                content: [{ type: 'text', text: `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(previous)}` }],
+            },
+            { role: 'assistant', content: [{ type: 'text', text: '{"title":"Earlier"}' }] },
+            ...prompt.messages,
+        ];
+
+        await definition.requestTextCompletion(driver, prompt, options);
+
+        expect(payloads).toHaveLength(2);
+        const retrySystem = (payloads[1].system as { text: string }[]).map((block) => block.text).join('\n');
+        expect(retrySystem).toContain(`${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(schema)}`);
     });
 
     it('retries a stream once on the prompt path', async () => {

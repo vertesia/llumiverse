@@ -54,6 +54,20 @@ const UNSUPPORTED_KEYWORDS = [
     'prefixItems',
 ] as const;
 
+/** The only string `format` values the platforms accept for Claude structured outputs. */
+const SUPPORTED_STRING_FORMATS: ReadonlySet<unknown> = new Set([
+    'date-time',
+    'time',
+    'date',
+    'duration',
+    'email',
+    'hostname',
+    'uri',
+    'ipv4',
+    'ipv6',
+    'uuid',
+]);
+
 /** Regex features the platforms reject in `pattern`: backreferences, lookaround assertions and word boundaries. */
 const UNSUPPORTED_PATTERN = /\\[1-9]|\\k<|\(\?<?[=!]|\\[bB]/;
 
@@ -91,8 +105,9 @@ function isSchemaNode(value: unknown): value is SchemaNode {
 
 /**
  * Whether a JSON schema stays within what the platforms accept for Claude structured outputs: an object at the root,
- * `additionalProperties: false` on every object, none of the unsupported keywords, `minItems` of 0 or 1, primitive
- * `enum` values, only internal non-recursive `$ref`s, and the optional-property and union limits.
+ * `additionalProperties: false` on every object, none of the unsupported keywords, `minItems` of 0 or 1, supported
+ * string formats, primitive `enum` values, only internal non-recursive `$ref`s, and the optional-property and union
+ * limits.
  */
 export function isClaudeStructuredOutputSchema(schema: JSONSchema): boolean {
     if (!isSchemaNode(schema) || schema.type !== 'object') return false;
@@ -123,6 +138,7 @@ function checkNode(node: unknown, stats: SchemaStats): boolean {
         }
     }
     if (typeof node.$ref === 'string' && !node.$ref.startsWith('#/')) return false;
+    if ('format' in node && !SUPPORTED_STRING_FORMATS.has(node.format)) return false;
     if ('pattern' in node && (typeof node.pattern !== 'string' || UNSUPPORTED_PATTERN.test(node.pattern))) return false;
     // `allOf` does not support `$ref` branches.
     if (Array.isArray(node.allOf) && node.allOf.some((branch) => isSchemaNode(branch) && '$ref' in branch)) {

@@ -1,3 +1,4 @@
+import { JSON_SCHEMA_INSTRUCTION_PREFIX } from '@llumiverse/common';
 import { type ExecutionOptions, type JSONSchema, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import { BedrockDriver } from '../bedrock/index.js';
@@ -119,6 +120,24 @@ describe('isClaudeStructuredOutputSchema', () => {
         expect(isClaudeStructuredOutputSchema(schema(extra))).toBe(false);
     });
 
+    it.each(['date-time', 'time', 'date', 'duration', 'email', 'hostname', 'uri', 'ipv4', 'ipv6', 'uuid'])(
+        'accepts the supported string format %s',
+        (format) => {
+            expect(isClaudeStructuredOutputSchema(schema({ properties: { v: { type: 'string', format } } }))).toBe(
+                true,
+            );
+        },
+    );
+
+    it.each(['uri-reference', 'iri', 'regex', 'json-pointer', 'idn-email'])(
+        'rejects the unsupported string format %s',
+        (format) => {
+            expect(isClaudeStructuredOutputSchema(schema({ properties: { v: { type: 'string', format } } }))).toBe(
+                false,
+            );
+        },
+    );
+
     it('accepts a simple pattern', () => {
         expect(
             isClaudeStructuredOutputSchema(
@@ -233,6 +252,24 @@ describe('Claude native result schema on Bedrock and Vertex AI', () => {
         expect(payload.output_config?.format).toBeUndefined();
     });
 
+    it('keeps a closed schema with an unsupported string format on the prompt path, with its instructions', async () => {
+        const linked: ExecutionOptions = {
+            model: MODEL,
+            result_schema: schema({
+                properties: { link: { type: 'string', format: 'uri-reference' } },
+                required: ['link'],
+            }),
+        };
+        const prompt = await formatClaudePrompt(segments, linked, undefined, {
+            nativeResultSchema: usesClaudeNativeResultSchema(linked),
+        });
+        const { payload } = getClaudePayload(linked, prompt, 'vertexai');
+
+        expect(usesClaudeNativeResultSchema(linked)).toBe(false);
+        expect(JSON.stringify(prompt.system)).toContain('JSON Schema');
+        expect(payload.output_config?.format).toBeUndefined();
+    });
+
     it.each(['bedrock', 'vertexai'])(
         'keeps a request that ends with an assistant prefill on the prompt path on %s',
         async (provider) => {
@@ -259,6 +296,28 @@ describe('Claude native result schema on Bedrock and Vertex AI', () => {
         expect(JSON.stringify(payload.system).split('JSON Schema').length - 1).toBe(
             JSON.stringify(prompt.system).split('JSON Schema').length - 1,
         );
+    });
+
+    it("adds the current schema's instructions when an earlier turn carries another schema's", async () => {
+        const previous = schema({ properties: { title: { type: 'string' } }, required: ['title'] });
+        const current: ExecutionOptions = { model: MODEL, result_schema: schema() };
+        const prompt = await formatClaudePrompt(segments, current, undefined, { nativeResultSchema: true });
+        // A continuation: an earlier turn asked for the previous schema, the current request for another one.
+        prompt.messages = [
+            {
+                role: 'user',
+                content: [{ type: 'text', text: `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(previous)}` }],
+            },
+            { role: 'assistant', content: [{ type: 'text', text: '{"title":"An earlier answer"}' }] },
+            ...prompt.messages,
+        ];
+        const { payload } = getClaudePayload(current, prompt, 'vertexai', 'execute', undefined, {
+            allowNativeResultSchema: false,
+        });
+
+        expect(payload.output_config?.format).toBeUndefined();
+        const systemText = (payload.system as { text: string }[]).map((block) => block.text).join('\n');
+        expect(systemText).toContain(`${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(current.result_schema)}`);
     });
 
     it('sends the schema as instructions when the native format is not allowed', async () => {

@@ -584,10 +584,20 @@ function claudeSchemaInstructions(options: Pick<ExecutionOptions, 'result_schema
         : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`;
 }
 
-/** Whether a text block of the system prompt or of a turn already carries the schema instructions. */
-function hasClaudeSchemaInstructions(system: TextBlockParam[] | undefined, messages: MessageParam[]): boolean {
-    const carries = (text: string) =>
-        text.includes(JSON_SCHEMA_INSTRUCTION_PREFIX) || text.includes(TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX);
+/**
+ * Whether a text block of the system prompt or of a turn already carries the instructions for this request's schema.
+ * An earlier turn of a continuation may carry the instructions of another schema, which do not count.
+ */
+function hasClaudeSchemaInstructions(
+    options: Pick<ExecutionOptions, 'result_schema'>,
+    system: TextBlockParam[] | undefined,
+    messages: MessageParam[],
+): boolean {
+    const schemaText = JSON.stringify(options.result_schema);
+    const instructions = [JSON_SCHEMA_INSTRUCTION_PREFIX, TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX].map(
+        (prefix) => `${prefix}\n${schemaText}`,
+    );
+    const carries = (text: string) => instructions.some((instruction) => text.includes(instruction));
     if (system?.some((block) => carries(block.text))) return true;
     return messages.some((message) =>
         typeof message.content === 'string'
@@ -1096,7 +1106,11 @@ export function getClaudePayload(
         qualifiesForNativeFormat && allowNativeResultSchema && !endsWithClaudePrefill(sanitizedMessages)
             ? { format: { type: 'json_schema' as const, schema: options.result_schema as Record<string, unknown> } }
             : undefined;
-    if (qualifiesForNativeFormat && !nativeFormat && !hasClaudeSchemaInstructions(sanitizedSystem, sanitizedMessages)) {
+    if (
+        qualifiesForNativeFormat &&
+        !nativeFormat &&
+        !hasClaudeSchemaInstructions(options, sanitizedSystem, sanitizedMessages)
+    ) {
         sanitizedSystem = [...(sanitizedSystem ?? []), { type: 'text', text: claudeSchemaInstructions(options) }];
     }
     const sanitizedTools = toolState
