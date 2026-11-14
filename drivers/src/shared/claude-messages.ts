@@ -72,7 +72,7 @@ import {
     trimClaudeConversationToCompaction,
 } from './claude-compaction.js';
 import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
-import { usesClaudeNativeResultSchema } from './claude-structured-output.js';
+import { CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS, usesClaudeNativeResultSchema } from './claude-structured-output.js';
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
 import {
     applyClaudeToolChanges,
@@ -1127,9 +1127,12 @@ export function getClaudePayload(
         hasSamplingRestriction,
     } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1], logger);
     betas.push(...thinkingBetas);
-    // Bedrock enforces the result schema for recent Claude models; formatClaudePrompt left it out of the prompt.
+    // Bedrock and Vertex AI enforce the result schema for recent Claude models; formatClaudePrompt left it out of the
+    // prompt.
     const nativeFormat =
-        provider === 'bedrock' && options.result_schema && usesClaudeNativeResultSchema(options)
+        CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS.has(provider) &&
+        options.result_schema &&
+        usesClaudeNativeResultSchema(options)
             ? { format: { type: 'json_schema' as const, schema: options.result_schema as Record<string, unknown> } }
             : undefined;
     const forcedToolChoice = model_options?.required_tool_name

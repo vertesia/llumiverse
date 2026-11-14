@@ -1,20 +1,24 @@
 import { type ExecutionOptions, isClaudeVersionGTE, type JSONSchema } from '@llumiverse/core';
 
 /**
- * Native Claude structured outputs (`output_config.format`) on Amazon Bedrock.
+ * Native Claude structured outputs (`output_config.format`) on Amazon Bedrock and Google Vertex AI.
  *
- * Bedrock constrains Claude's answer to a JSON schema, but it accepts only a subset of JSON Schema and returns a 400
- * for anything else. A request uses the native format only when the model and the schema both qualify; every other
- * request keeps the schema instructions in the prompt, as before.
+ * Both platforms constrain Claude's answer to a JSON schema, but they accept only a subset of JSON Schema and return a
+ * 400 for anything else. A request uses the native format only when the model and the schema both qualify; every
+ * other request keeps the schema instructions in the prompt, as before.
  * https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/structured-outputs
  */
 
-/** Bedrock rejects a schema with more optional properties than this, counted across nested objects. */
+/** Providers that receive the result schema as `output_config.format` when the request qualifies. */
+export const CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS: ReadonlySet<string> = new Set(['bedrock', 'vertexai']);
+
+/** The platforms reject a schema with more optional properties than this, counted across nested objects. */
 const MAX_OPTIONAL_PROPERTIES = 12;
-/** Bedrock rejects a schema with more union-typed properties (type arrays or `anyOf`) than this. */
+/** The platforms reject a schema with more union-typed properties (type arrays or `anyOf`) than this. */
 const MAX_UNION_PROPERTIES = 16;
 
-/** Keywords Bedrock does not support for Claude structured outputs. */
+/** Keywords the platforms do not support for Claude structured outputs. */
 const UNSUPPORTED_KEYWORDS = [
     'minimum',
     'maximum',
@@ -23,7 +27,7 @@ const UNSUPPORTED_KEYWORDS = [
     'multipleOf',
     'minLength',
     'maxLength',
-    // Not in Bedrock's supported list, so a schema using them keeps the prompt path.
+    // Not in the supported list, so a schema using them keeps the prompt path.
     'oneOf',
     'not',
     'if',
@@ -35,15 +39,15 @@ const UNSUPPORTED_KEYWORDS = [
     'prefixItems',
 ] as const;
 
-/** Claude 4.5 and later accept structured outputs on Bedrock. */
+/** Claude 4.5 and later accept structured outputs. */
 export function supportsClaudeNativeResultSchema(model: string): boolean {
     return isClaudeVersionGTE(model, 4, 5);
 }
 
 /**
- * Whether a Claude request on Bedrock sends its result schema as `output_config.format` instead of prompt text.
- * Requests with tools keep the prompt path: agent tool loops carry the schema on every turn, and how Bedrock combines
- * a constrained answer with tool calls is not documented.
+ * Whether a Claude request sends its result schema as `output_config.format` instead of prompt text, on the
+ * providers in {@link CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS}. Requests with tools keep the prompt path: agent tool
+ * loops carry the schema on every turn, and how a constrained answer combines with tool calls is not documented.
  */
 export function usesClaudeNativeResultSchema(
     options: Pick<ExecutionOptions, 'model' | 'result_schema' | 'tools'>,
@@ -68,7 +72,7 @@ function isSchemaNode(value: unknown): value is SchemaNode {
 }
 
 /**
- * Whether a JSON schema stays within what Bedrock accepts for Claude structured outputs: an object at the root,
+ * Whether a JSON schema stays within what the platforms accept for Claude structured outputs: an object at the root,
  * `additionalProperties: false` on every object, none of the unsupported keywords, `minItems` of 0 or 1, primitive
  * `enum` values, only internal non-recursive `$ref`s, and the optional-property and union limits.
  */

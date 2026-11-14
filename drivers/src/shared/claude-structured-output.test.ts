@@ -1,6 +1,8 @@
 import { type ExecutionOptions, type JSONSchema, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import { BedrockDriver } from '../bedrock/index.js';
+import type { VertexAIDriver } from '../vertexai/index.js';
+import { ClaudeModelDefinition } from '../vertexai/models/claude.js';
 import { formatClaudePrompt, getClaudePayload } from './claude-messages.js';
 import {
     isClaudeStructuredOutputSchema,
@@ -137,17 +139,20 @@ describe('usesClaudeNativeResultSchema', () => {
     });
 });
 
-describe('Claude native result schema on Bedrock', () => {
+describe('Claude native result schema on Bedrock and Vertex AI', () => {
     const options: ExecutionOptions = { model: MODEL, result_schema: schema() };
 
-    it('sends output_config.format and keeps the schema out of the prompt', async () => {
-        const prompt = await formatClaudePrompt(segments, options, undefined, { nativeResultSchema: true });
-        const { payload } = getClaudePayload(options, prompt, 'bedrock');
+    it.each(['bedrock', 'vertexai'])(
+        'sends output_config.format on %s and keeps the schema out of the prompt',
+        async (provider) => {
+            const prompt = await formatClaudePrompt(segments, options, undefined, { nativeResultSchema: true });
+            const { payload } = getClaudePayload(options, prompt, provider);
 
-        expect(JSON.stringify(prompt)).not.toContain('JSON Schema');
-        expect(payload.output_config).toEqual({ format: { type: 'json_schema', schema: options.result_schema } });
-        expect(payload.messages.at(-1)?.role).toBe('user');
-    });
+            expect(JSON.stringify(prompt)).not.toContain('JSON Schema');
+            expect(payload.output_config).toEqual({ format: { type: 'json_schema', schema: options.result_schema } });
+            expect(payload.messages.at(-1)?.role).toBe('user');
+        },
+    );
 
     it('keeps the effort setting next to the format', async () => {
         const withEffort: ExecutionOptions = {
@@ -164,16 +169,13 @@ describe('Claude native result schema on Bedrock', () => {
         });
     });
 
-    it.each(['anthropic', 'vertexai', 'azure_foundry'])(
-        'leaves the %s provider on the prompt path',
-        async (provider) => {
-            const prompt = await formatClaudePrompt(segments, options);
-            const { payload } = getClaudePayload(options, prompt, provider);
+    it.each(['anthropic', 'azure_foundry'])('leaves the %s provider on the prompt path', async (provider) => {
+        const prompt = await formatClaudePrompt(segments, options);
+        const { payload } = getClaudePayload(options, prompt, provider);
 
-            expect(JSON.stringify(prompt.system)).toContain('JSON Schema');
-            expect(payload.output_config?.format).toBeUndefined();
-        },
-    );
+        expect(JSON.stringify(prompt.system)).toContain('JSON Schema');
+        expect(payload.output_config?.format).toBeUndefined();
+    });
 
     it('leaves an unsupported schema on the prompt path', async () => {
         const unsupported: ExecutionOptions = {
@@ -197,5 +199,26 @@ describe('Claude native result schema on Bedrock', () => {
 
         expect(JSON.stringify(native)).not.toContain('JSON Schema');
         expect(JSON.stringify(legacy)).toContain('JSON Schema');
+    });
+
+    it('makes the same decision in the Vertex AI prompt as in the payload', async () => {
+        const definition = new ClaudeModelDefinition('claude-haiku-4-5');
+        const driver = { logger: undefined } as unknown as VertexAIDriver;
+        const native = await definition.createPrompt(driver, segments, {
+            model: 'locations/global/publishers/anthropic/models/claude-haiku-4-5',
+            result_schema: schema(),
+        });
+        const legacy = await definition.createPrompt(driver, segments, {
+            model: 'locations/us-east5/publishers/anthropic/models/claude-sonnet-4',
+            result_schema: schema(),
+        });
+        const unsupported = await definition.createPrompt(driver, segments, {
+            model: 'locations/global/publishers/anthropic/models/claude-haiku-4-5',
+            result_schema: schema({ additionalProperties: true }),
+        });
+
+        expect(JSON.stringify(native)).not.toContain('JSON Schema');
+        expect(JSON.stringify(legacy)).toContain('JSON Schema');
+        expect(JSON.stringify(unsupported)).toContain('JSON Schema');
     });
 });

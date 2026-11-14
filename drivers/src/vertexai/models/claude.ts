@@ -18,6 +18,7 @@ import {
     isClaudeErrorRetryable,
     streamClaudeCompletion,
 } from '../../shared/claude-messages.js';
+import { usesClaudeNativeResultSchema } from '../../shared/claude-structured-output.js';
 
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -92,7 +93,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         segments: PromptSegment[],
         options: ExecutionOptions,
     ): Promise<ClaudePrompt> {
-        return formatClaudePrompt(segments, options, _driver.logger);
+        // Same decision as getClaudePayload, which sees the model name without its location path.
+        const { options: resolvedOptions } = resolveVertexAIModelPath(options);
+        return formatClaudePrompt(segments, options, _driver.logger, {
+            nativeResultSchema: usesClaudeNativeResultSchema(resolvedOptions),
+        });
     }
 
     async requestTextCompletion(
