@@ -18,6 +18,12 @@ import {
     isClaudeErrorRetryable,
     streamClaudeCompletion,
 } from '../../shared/claude-messages.js';
+import {
+    ClaudeStructuredOutputDenials,
+    isClaudeStructuredOutputPolicyDenial,
+    usesClaudeNativeResultSchema,
+    withClaudeStructuredOutputFallback,
+} from '../../shared/claude-structured-output.js';
 
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -74,6 +80,27 @@ function resolveVertexAIModelPath(options: ExecutionOptions): {
     return { modelName, region, options: { ...options, model: modelName } };
 }
 
+/**
+ * Project, region and model combinations where an organization policy refused Claude structured outputs. Shared by
+ * every model definition in the process, so each combination fails once and then uses the prompt path.
+ */
+export const claudeStructuredOutputDenials = new ClaudeStructuredOutputDenials();
+
+function structuredOutputDenialKey(driver: VertexAIDriver, region: string | undefined, model: string): string {
+    return ClaudeStructuredOutputDenials.key(
+        driver.options.project,
+        resolveAnthropicVertexRegion(region, driver.options.region, model),
+        model,
+    );
+}
+
+function logStructuredOutputDenial(driver: VertexAIDriver, model: string, error: unknown): void {
+    driver.logger.warn(
+        { model, error: error instanceof Error ? error.message : String(error) },
+        '[VertexAI] Claude structured outputs are not allowed for this model; using the prompt-based result schema',
+    );
+}
+
 export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     model: AIModel;
 
@@ -92,7 +119,13 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         segments: PromptSegment[],
         options: ExecutionOptions,
     ): Promise<ClaudePrompt> {
-        return formatClaudePrompt(segments, options, _driver.logger);
+        // Same decision as getClaudePayload, which sees the model name without its location path.
+        const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
+        return formatClaudePrompt(segments, options, _driver.logger, {
+            nativeResultSchema:
+                usesClaudeNativeResultSchema(resolvedOptions) &&
+                !claudeStructuredOutputDenials.has(structuredOutputDenialKey(_driver, region, resolvedOptions.model)),
+        });
     }
 
     async requestTextCompletion(
@@ -111,14 +144,28 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(
-            client,
-            prompt,
-            resolvedOptions,
-            driver.logger,
-            driver.provider,
-            signal ? { signal } : undefined,
-        );
+        const execute = (allowNativeResultSchema: boolean) =>
+            executeClaudeCompletion(
+                client,
+                prompt,
+                resolvedOptions,
+                driver.logger,
+                driver.provider,
+                signal ? { signal } : undefined,
+                undefined,
+                { allowNativeResultSchema },
+            );
+        if (!usesClaudeNativeResultSchema(resolvedOptions)) return execute(false);
+        const denialKey = structuredOutputDenialKey(driver, region, resolvedOptions.model);
+        if (claudeStructuredOutputDenials.has(denialKey)) return execute(false);
+        try {
+            return await execute(true);
+        } catch (error) {
+            if (!isClaudeStructuredOutputPolicyDenial(error)) throw error;
+            claudeStructuredOutputDenials.add(denialKey);
+            logStructuredOutputDenial(driver, resolvedOptions.model, error);
+            return execute(false);
+        }
     }
 
     async requestTextCompletionStream(
@@ -137,13 +184,27 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return streamClaudeCompletion(
-            client,
-            prompt,
-            resolvedOptions,
-            driver.logger,
-            driver.provider,
-            signal ? { signal } : undefined,
+        const stream = (allowNativeResultSchema: boolean) =>
+            streamClaudeCompletion(
+                client,
+                prompt,
+                resolvedOptions,
+                driver.logger,
+                driver.provider,
+                signal ? { signal } : undefined,
+                undefined,
+                { allowNativeResultSchema },
+            );
+        if (!usesClaudeNativeResultSchema(resolvedOptions)) return stream(false);
+        const denialKey = structuredOutputDenialKey(driver, region, resolvedOptions.model);
+        if (claudeStructuredOutputDenials.has(denialKey)) return stream(false);
+        return withClaudeStructuredOutputFallback(
+            await stream(true),
+            () => stream(false),
+            (error) => {
+                claudeStructuredOutputDenials.add(denialKey);
+                logStructuredOutputDenial(driver, resolvedOptions.model, error);
+            },
         );
     }
 
