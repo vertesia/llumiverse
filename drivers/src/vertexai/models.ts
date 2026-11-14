@@ -47,6 +47,10 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
     formatLlumiverseError?(driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError;
 }
 
+function isBareClaudeId(modelName: string): boolean {
+    return modelName.startsWith('claude-');
+}
+
 export function getModelDefinition(model: string): ModelDefinition {
     const splits = model.split('/');
 
@@ -81,7 +85,12 @@ export function getModelDefinition(model: string): ModelDefinition {
         });
     }
 
-    if (publisher?.includes('anthropic')) {
+    // A bare Claude id ("claude-opus-5-5") names no publisher. Without this, the Gemini fallback below sends it to
+    // publishers/google, where Vertex answers 404. The Claude definition resolves its region from the driver's.
+    if (
+        publisher?.includes('anthropic') ||
+        (publisherIndex === -1 && splits.length === 1 && isBareClaudeId(modelName))
+    ) {
         return new ClaudeModelDefinition(modelName);
     } else {
         const openMaaSModel = getVertexOpenMaaSRequestModel(publisher, modelName);
