@@ -101,6 +101,7 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
                 const metadata = resolveModelListingMetadata(model.id, this.provider, {
                     input_modalities: model.architecture.inputModalities,
                     output_modalities: model.architecture.outputModalities,
+                    retirement_date: model.expirationDate,
                 });
                 return {
                     id: model.id,

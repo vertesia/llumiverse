@@ -1642,7 +1642,9 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                     (!isDedicatedInferenceModel(model.id, this.provider) || !!openAIAudioTask(model.id)),
             )
             .map((model) => {
-                const modelMetadata = resolveModelListingMetadata(model.id, this.provider);
+                const modelMetadata = resolveModelListingMetadata(model.id, this.provider, {
+                    retirement_date: model.shutdown_date,
+                });
                 return {
                     id: model.id,
                     name: model.id,

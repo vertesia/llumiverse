@@ -2355,6 +2355,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const modelMetadata = resolveModelListingMetadata(m.modelArn ?? m.modelId, this.provider, {
                 input_modalities: m.inputModalities,
                 output_modalities: m.outputModalities,
+                // Bedrock reports when a model entered Legacy and its end of life; for legacy models only.
+                deprecation_date: m.modelLifecycle?.legacyTime,
+                retirement_date: m.modelLifecycle?.endOfLifeTime,
             });
 
             const model: AIModel = {

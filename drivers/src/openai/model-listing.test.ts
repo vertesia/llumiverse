@@ -54,3 +54,16 @@ it('discovers aliases, snapshots, qualified image IDs and future generations wit
         expect(model.output_modalities).toEqual(['image']);
     }
 });
+
+it('reports the shutdown date OpenAI lists as the retirement date', async () => {
+    const driver = new OpenAIDriver({ apiKey: 'test-key' });
+    driver.service.models.list = vi.fn().mockResolvedValue({
+        data: [
+            { id: 'gpt-5', owned_by: 'system', shutdown_date: '2026-12-11' },
+            { id: 'gpt-6.1-sol', owned_by: 'system', shutdown_date: null },
+        ],
+    });
+    const models = await driver.listModels();
+    expect(models.find((model) => model.id === 'gpt-5')).toMatchObject({ retirement_date: '2026-12-11' });
+    expect(models.find((model) => model.id === 'gpt-6.1-sol')).not.toHaveProperty('retirement_date');
+});

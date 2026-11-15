@@ -113,6 +113,49 @@ describe('Bedrock Converse model discovery', () => {
         }
     });
 
+    it('reports the Legacy and end-of-life dates AWS lists, and the curated dates for inference profiles', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const service = createMockService();
+        const foundationModels = {
+            $metadata: {},
+            modelSummaries: [
+                {
+                    ...foundationModel('anthropic.claude-opus-4-1-20250805-v1:0'),
+                    modelLifecycle: {
+                        status: 'LEGACY',
+                        legacyTime: new Date('2026-07-08T00:00:00Z'),
+                        endOfLifeTime: new Date('2027-01-08T00:00:00Z'),
+                    },
+                },
+                { ...foundationModel('anthropic.claude-haiku-5-5'), modelLifecycle: { status: 'ACTIVE' } },
+            ],
+        } satisfies ListFoundationModelsCommandOutput;
+        const inferenceProfiles = {
+            $metadata: {},
+            inferenceProfileSummaries: [
+                {
+                    inferenceProfileId: 'us.anthropic.claude-opus-4-1-20250805-v1:0',
+                    inferenceProfileArn:
+                        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0',
+                    inferenceProfileName: 'US Anthropic Claude Opus 4.1',
+                    models: [],
+                    status: 'ACTIVE',
+                    type: 'SYSTEM_DEFINED',
+                },
+            ],
+        } satisfies ListInferenceProfilesCommandOutput;
+        mockModelListingMethods(service, foundationModels, emptyCustomModels, inferenceProfiles);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        const models = await driver.listModels();
+        const lifecycle = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
+        expect(models.find((model) => model.id === 'anthropic.claude-opus-4-1-20250805-v1:0')).toMatchObject(lifecycle);
+        expect(
+            models.find((model) => model.id.endsWith('inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')),
+        ).toMatchObject(lifecycle);
+        expect(models.find((model) => model.id === 'anthropic.claude-haiku-5-5')).not.toHaveProperty('retirement_date');
+    });
+
     it('uses the AWS model name without repeating the publisher', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
         const service = createMockService();

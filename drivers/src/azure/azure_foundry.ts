@@ -767,7 +767,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 // Create composite ID: deployment_name::base_model
                 const compositeId = `${model.name}::${model.modelName}`;
 
-                const modelMetadata = resolveModelListingMetadata(model.modelName, Providers.azure_foundry);
+                const modelMetadata = resolveModelListingMetadata(model.modelName, Providers.azure_foundry, {
+                    version: model.modelVersion,
+                });
                 return {
                     id: compositeId,
                     name: model.name,
