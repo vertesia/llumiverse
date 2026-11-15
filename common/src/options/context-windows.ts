@@ -7,6 +7,8 @@ import {
     isModelFamilyVersionGTE,
     isOpenAIGptProModel,
     isOpenAIGptVersionGTE,
+    isQwenVersionGte,
+    isSingleDigitGrokVersionGte,
     parseClaudeVersion,
     parseOpenAIGptVersion,
 } from './version-parsing.js';
@@ -29,6 +31,20 @@ function getClaudeLimits(model: string): { context_window: number; max_output_to
     else if (atLeast(3, 5)) max_output_tokens = 8_192;
     else if (model.includes('opus-')) max_output_tokens = 32_000; // Preserve the legacy undated-Opus metadata.
     return { context_window: isLongContext ? 1_000_000 : 200_000, max_output_tokens };
+}
+
+/**
+ * Qwen's hosted commercial tiers (`qwen3.7-plus`, `qwen3.8-max-0902`, `qwen3.6-flash`), as opposed to open-weight
+ * sizes (`qwen3.8-27b`). From Qwen 3.5 they have a 1M context window.
+ * https://www.alibabacloud.com/help/en/model-studio/qwen3-7-plus
+ */
+function isHostedQwenTier(model: string): boolean {
+    return /qwen\d+(?:\.\d+)?-(?:plus|flash|max)(?:[-_.:]|$)/.test(model) && isQwenVersionGte(model, 3, 5);
+}
+
+/** GLM text models from 4.6 (`glm-4.6`, `glm-5-turbo`); vision variants (`glm-4.5v`, `glm-5v-turbo`) are excluded. */
+function isGlmTextVersionGte(model: string, major: number, minor: number): boolean {
+    return isModelFamilyVersionGTE(model, 'glm-', major, minor) && !/glm-\d+(?:\.\d+)?v/.test(model);
 }
 
 /**
@@ -67,6 +83,7 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (isDeepSeekVersionGte(model, 3, 2)) return 65_536;
     if (model.includes('deepseek')) return 128_000;
     // Qwen
+    if (isHostedQwenTier(model)) return isQwenVersionGte(model, 3, 7) ? 131_072 : 65_536;
     if (model.includes('qwen3-next')) return 262_144;
     if (model.includes('qwen3-coder')) return 65_536;
     if (model.includes('qwen')) return 32_768;
@@ -77,6 +94,8 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (model.includes('minimax-m2')) return 196_608;
     // ZAI GLM
     if (isModelFamilyVersionGTE(model, 'glm-', 5, 3)) return 131_072;
+    // GLM 4.6 to 5.2 publish 128K of output. https://docs.z.ai/guides/llm/glm-5.1
+    if (isGlmTextVersionGte(model, 4, 6)) return 128_000;
     if (model.includes('glm-')) return 32_768;
     // Xiaomi MiMo and StepFun Step, as published for their OpenRouter listings
     if (isModelFamilyVersionGTE(model, 'mimo-v', 2, 6)) return 131_072;
@@ -124,7 +143,9 @@ export function getContextWindowSize(model: string): number | undefined {
     if (model.includes('gpt-4-turbo') || model.includes('gpt-4o')) return 128_000;
     if (model.includes('gpt-4')) return 8_000;
     if (model.includes('gpt-3.5')) return 16_000;
-    // Grok
+    // Grok: 4.5 and later single-digit releases are 500K, 4.3 and the 4.20 line 1M. https://docs.x.ai/docs/models
+    if (isSingleDigitGrokVersionGte(model, 4, 5)) return 500_000;
+    if (model.includes('grok-build')) return 256_000;
     if (isModelFamilyVersionGTE(model, 'grok-', 4, 3)) return 1_000_000;
     if (model.includes('grok-4.1') || model.includes('grok-4-1')) return 256_000;
     if (model.includes('grok')) return 131_072;
@@ -140,6 +161,7 @@ export function getContextWindowSize(model: string): number | undefined {
     if (model.includes('deepseek-r1-0528')) return 163_840;
     if (model.includes('deepseek')) return 128_000;
     // Qwen
+    if (isHostedQwenTier(model) || model.includes('qwen3-coder-flash')) return 1_000_000;
     if (model.includes('qwen3-next')) return 262_144;
     if (model.includes('qwen3-coder')) return 262_144;
     if (model.includes('qwen')) return 262_144;
@@ -151,7 +173,9 @@ export function getContextWindowSize(model: string): number | undefined {
     if (isModelFamilyVersionGTE(model, 'minimax-m', 3, 0)) return 1_048_576;
     if (model.includes('minimax-m2')) return 196_608;
     // ZAI GLM
-    if (isModelFamilyVersionGTE(model, 'glm-', 5, 3)) return 1_000_000;
+    // GLM 5.2 and later are 1M, 4.6 to 5.1 are 200K. https://docs.z.ai/guides/llm/glm-5.2
+    if (isGlmTextVersionGte(model, 5, 2) || isModelFamilyVersionGTE(model, 'glm-', 5, 3)) return 1_000_000;
+    if (isGlmTextVersionGte(model, 4, 6)) return 200_000;
     if (model.includes('glm-')) return 128_000;
     // Meta Muse (Glimmer is the small 128K model), Xiaomi MiMo and StepFun Step
     if (model.includes('muse-glimmer')) return 131_072;
