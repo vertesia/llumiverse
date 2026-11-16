@@ -113,7 +113,7 @@ describe('Bedrock Converse model discovery', () => {
         }
     });
 
-    it('reports the Legacy and end-of-life dates AWS lists, and the curated dates for inference profiles', async () => {
+    it('reports the Legacy and end-of-life dates AWS lists, and gives inference profiles their base model dates', async () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const service = createMockService();
         const foundationModels = {
@@ -138,6 +138,62 @@ describe('Bedrock Converse model discovery', () => {
                     inferenceProfileArn:
                         'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0',
                     inferenceProfileName: 'US Anthropic Claude Opus 4.1',
+                    models: [
+                        {
+                            modelArn:
+                                'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-1-20250805-v1:0',
+                        },
+                        {
+                            modelArn:
+                                'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-1-20250805-v1:0',
+                        },
+                    ],
+                    status: 'ACTIVE',
+                    type: 'SYSTEM_DEFINED',
+                },
+            ],
+        } satisfies ListInferenceProfilesCommandOutput;
+        const customModels = {
+            $metadata: {},
+            modelSummaries: [
+                {
+                    modelArn: 'arn:aws:bedrock:us-east-1:123456789012:custom-model/opus-41-tuned',
+                    modelName: 'opus-41-tuned',
+                    creationTime: new Date('2026-08-01T00:00:00Z'),
+                    baseModelArn: 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-1-20250805-v1:0',
+                    baseModelName: 'anthropic.claude-opus-4-1-20250805-v1:0',
+                },
+            ],
+        } satisfies ListCustomModelsCommandOutput;
+        mockModelListingMethods(service, foundationModels, customModels, inferenceProfiles);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        const models = await driver.listModels();
+        const lifecycle = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
+        expect(models.find((model) => model.id.endsWith('custom-model/opus-41-tuned'))).toMatchObject(lifecycle);
+        expect(models.find((model) => model.id === 'anthropic.claude-opus-4-1-20250805-v1:0')).toMatchObject(lifecycle);
+        expect(
+            models.find((model) => model.id.endsWith('inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')),
+        ).toMatchObject(lifecycle);
+        expect(models.find((model) => model.id === 'anthropic.claude-haiku-5-5')).not.toHaveProperty('retirement_date');
+    });
+
+    it('reports no lifecycle dates for a model that is active in the listed region', async () => {
+        // AWS retires MiniMax M2 in some regions only; a Frankfurt listing reports it as active.
+        const driver = new BedrockDriver({ region: 'eu-central-1' });
+        const service = createMockService();
+        const foundationModels = {
+            $metadata: {},
+            modelSummaries: [{ ...foundationModel('minimax.minimax-m2'), modelLifecycle: { status: 'ACTIVE' } }],
+        } satisfies ListFoundationModelsCommandOutput;
+        const inferenceProfiles = {
+            $metadata: {},
+            inferenceProfileSummaries: [
+                {
+                    inferenceProfileId: 'eu.minimax.minimax-m2',
+                    inferenceProfileArn:
+                        'arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.minimax.minimax-m2',
+                    inferenceProfileName: 'EU MiniMax M2',
                     models: [],
                     status: 'ACTIVE',
                     type: 'SYSTEM_DEFINED',
@@ -147,13 +203,10 @@ describe('Bedrock Converse model discovery', () => {
         mockModelListingMethods(service, foundationModels, emptyCustomModels, inferenceProfiles);
         vi.spyOn(driver, 'getService').mockReturnValue(service);
 
-        const models = await driver.listModels();
-        const lifecycle = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
-        expect(models.find((model) => model.id === 'anthropic.claude-opus-4-1-20250805-v1:0')).toMatchObject(lifecycle);
-        expect(
-            models.find((model) => model.id.endsWith('inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')),
-        ).toMatchObject(lifecycle);
-        expect(models.find((model) => model.id === 'anthropic.claude-haiku-5-5')).not.toHaveProperty('retirement_date');
+        for (const model of await driver.listModels()) {
+            expect(model).not.toHaveProperty('deprecation_date');
+            expect(model).not.toHaveProperty('retirement_date');
+        }
     });
 
     it('uses the AWS model name without repeating the publisher', async () => {

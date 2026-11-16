@@ -121,6 +121,8 @@ describe('Grok, GLM and Qwen context window limits', () => {
         ['qwen3.7-max', 1_000_000, 131_072],
         ['qwen/qwen3.8-max-0902', 1_000_000, 131_072],
         ['qwen3.9-plus', 1_000_000, 131_072],
+        // https://www.alibabacloud.com/help/en/model-studio/qwen3-8-omni-flash
+        ['qwen/qwen3.8-omni-flash', 1_000_000, 131_072],
         // Open-weight sizes and earlier hosted tiers keep the open-weight window.
         ['qwen/qwen3.8-27b', 262_144, 32_768],
         ['qwen3-max', 262_144, 32_768],

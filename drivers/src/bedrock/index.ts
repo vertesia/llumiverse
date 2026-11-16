@@ -2347,6 +2347,24 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         foundationModels = foundationModels.filter((m) => shouldIncludeModel(m.modelId, m.providerName));
 
+        // Bedrock lifecycle dates differ by region, and this listing is for one region. Inference profiles and custom
+        // models report no lifecycle, so they take their base model's dates from this same regional listing.
+        const lifecycleByModelId = new Map<string, BedrockLifecycleDates>();
+        for (const m of foundationModelsList.modelSummaries) {
+            if (!m.modelId || !m.modelLifecycle) continue;
+            lifecycleByModelId.set(m.modelId.toLowerCase(), {
+                deprecation_date: m.modelLifecycle.legacyTime,
+                retirement_date: m.modelLifecycle.endOfLifeTime,
+            });
+        }
+        const baseModelLifecycle = (modelIds: (string | undefined)[]): BedrockLifecycleDates => {
+            for (const modelId of modelIds) {
+                const lifecycle = modelId ? lifecycleByModelId.get(bedrockBaseModelId(modelId)) : undefined;
+                if (lifecycle) return lifecycle;
+            }
+            return {};
+        };
+
         const aiModels: AIModel[] = foundationModels.map((m) => {
             if (!m.modelId) {
                 throw new Error('modelId not found');
@@ -2381,7 +2399,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
                 const capabilityModelId = m.baseModelName ?? m.modelArn;
                 if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
-                const modelMetadata = resolveModelListingMetadata(capabilityModelId, this.provider);
+                const modelMetadata = resolveModelListingMetadata(
+                    capabilityModelId,
+                    this.provider,
+                    baseModelLifecycle([m.baseModelArn]),
+                );
 
                 const model: AIModel = {
                     id: m.modelArn,
@@ -2417,9 +2439,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     }
                 }
 
+                // Prefer the profile's model in this region; the profile ID names the same base model.
+                const profileModelArns = (p.models ?? []).map((model) => model.modelArn);
                 const modelMetadata = resolveModelListingMetadata(
                     p.inferenceProfileArn ?? p.inferenceProfileId,
                     this.provider,
+                    baseModelLifecycle([
+                        ...profileModelArns.filter((arn) => arn?.includes(`:${this.options.region}:`)),
+                        p.inferenceProfileId,
+                        ...profileModelArns,
+                    ]),
                 );
 
                 if (
@@ -2465,6 +2494,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Its credential resolver and fetch belong to the resources released above.
         this._anthropicService = undefined;
     }
+}
+
+type BedrockLifecycleDates = { deprecation_date?: Date; retirement_date?: Date };
+
+/** The foundation model ID behind a model ARN or a cross-region inference profile ID (`us.anthropic.…`). */
+function bedrockBaseModelId(modelId: string): string {
+    const id = modelId.toLowerCase();
+    return id.slice(id.lastIndexOf('/') + 1).replace(/^(?:[a-z]{2}(?:-gov)?|apac|global)\./, '');
 }
 
 function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): TrainingJob {

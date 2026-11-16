@@ -2,6 +2,8 @@ import { isModelDirectoryEmbedding, resolveModelProfile } from './model-director
 import { isGeminiOmniVideoModel } from './options/version-parsing.js';
 import type { ModelCapabilities, ModelModalities, Providers } from './types.js';
 
+const CHAT_COMPLETIONS_PROVIDERS: readonly string[] = ['openai_compatible', 'openrouter', 'groq', 'togetherai'];
+
 export function getModelCapabilities(model: string, provider: Providers): ModelCapabilities {
     //Check for locations/<location>/ prefix and remove it
     if (model.startsWith('locations/')) {
@@ -21,10 +23,18 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
     }
     const profile = resolveModelProfile(model, provider);
     const capabilities = profile.capabilities;
+    // Advertise only the inputs the driver can send. The Chat Completions drivers send images and text files but no
+    // video, and OpenRouter's request conversion rejects audio parts.
+    const sendsVideo = !CHAT_COMPLETIONS_PROVIDERS.includes(provider);
+    const sendsAudio = provider !== 'openrouter';
     // Advertise speech output only for implemented file synthesis transports.
     return {
         ...capabilities,
-        input: { ...capabilities.input },
+        input: {
+            ...capabilities.input,
+            ...(sendsVideo ? {} : { video: false }),
+            ...(sendsAudio ? {} : { audio: false }),
+        },
         output: {
             ...capabilities.output,
             audio:

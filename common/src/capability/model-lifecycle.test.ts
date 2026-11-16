@@ -23,14 +23,7 @@ describe('curated model lifecycle table', () => {
 
     it('covers only providers whose model listing has no lifecycle data', () => {
         expect(Object.keys(CURATED_MODEL_LIFECYCLE).sort()).toEqual(
-            [
-                Providers.azure_foundry,
-                Providers.azure_openai,
-                Providers.bedrock,
-                Providers.bedrock_mantle,
-                Providers.vertexai,
-                Providers.xai,
-            ].sort(),
+            [Providers.azure_foundry, Providers.azure_openai, Providers.vertexai, Providers.xai].sort(),
         );
     });
 });
@@ -51,19 +44,10 @@ describe('getModelLifecycleDates', () => {
         expect(getModelLifecycleDates('gemini-3.8-flash', Providers.vertexai)).toBeUndefined();
     });
 
-    it('matches Bedrock model IDs, ARNs and cross-region inference profiles', () => {
-        const opus41 = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
-        expect(getModelLifecycleDates('anthropic.claude-opus-4-1-20250805-v1:0', Providers.bedrock)).toEqual(opus41);
-        expect(getModelLifecycleDates('us.anthropic.claude-opus-4-1-20250805-v1:0', Providers.bedrock)).toEqual(opus41);
-        expect(
-            getModelLifecycleDates(
-                'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-1-20250805-v1:0',
-                Providers.bedrock,
-            ),
-        ).toEqual(opus41);
-        expect(getModelLifecycleDates('moonshotai.kimi-k2-thinking', Providers.bedrock_mantle)?.retirement_date).toBe(
-            '2027-03-30',
-        );
+    it('leaves Bedrock to its regional listing', () => {
+        // Bedrock dates differ by region, so a region-blind table would date models in regions AWS does not list.
+        expect(getModelLifecycleDates('minimax.minimax-m2', Providers.bedrock)).toBeUndefined();
+        expect(getModelLifecycleDates('moonshotai.kimi-k2-thinking', Providers.bedrock_mantle)).toBeUndefined();
     });
 
     it('resolves Azure models by name and version', () => {

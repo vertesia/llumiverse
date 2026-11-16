@@ -63,8 +63,8 @@ describe('model listing lifecycle dates', () => {
 
     it('fills dates from the curated table when the provider reports none', () => {
         expect(
-            resolveModelListingMetadata('us.anthropic.claude-opus-4-1-20250805-v1:0', Providers.bedrock),
-        ).toMatchObject({ deprecation_date: '2026-07-08', retirement_date: '2027-01-08' });
+            resolveModelListingMetadata('publishers/google/models/gemini-3.6-flash', Providers.vertexai),
+        ).toMatchObject({ retirement_date: '2026-11-19' });
         expect(resolveModelListingMetadata('gpt-4o', Providers.azure_foundry, { version: '2024-05-13' })).toMatchObject(
             { retirement_date: '2027-01-14' },
         );

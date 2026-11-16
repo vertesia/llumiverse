@@ -85,6 +85,35 @@ describe('Gemini Omni video capabilities', () => {
     });
 });
 
+describe('transport input capabilities', () => {
+    it('advertises only the inputs the Chat Completions drivers can send', () => {
+        // The source model takes all four inputs; OpenRouter's request conversion sends text and images only.
+        expect(getModelCapabilities('qwen/qwen3.8-omni-flash', Providers.openrouter).input).toMatchObject({
+            text: true,
+            image: true,
+            video: false,
+            audio: false,
+        });
+        expect(getModelCapabilities('qwen3.8-omni-flash', Providers.openai_compatible).input).toMatchObject({
+            image: true,
+            video: false,
+            audio: true,
+        });
+        expect(getModelCapabilities('google/gemma-4-31b-it', Providers.togetherai).input.video).toBe(false);
+        expect(getModelCapabilities('google/gemini-3.5-flash', Providers.openrouter).input).toMatchObject({
+            video: false,
+            audio: false,
+        });
+    });
+
+    it('keeps video and audio for drivers that send them', () => {
+        expect(getModelCapabilities('gemini-3.5-flash', Providers.vertexai).input).toMatchObject({
+            video: true,
+            audio: true,
+        });
+    });
+});
+
 describe('supportsToolUse streaming default', () => {
     it('falls back to tool_support when tool_support_streaming is unset', () => {
         // Vertex Grok records tool_support but not tool_support_streaming

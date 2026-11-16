@@ -1,5 +1,4 @@
 import { Providers } from '../types.js';
-import { normalizeBedrockModelId } from './bedrock-models.js';
 
 /**
  * Announced deprecation and retirement dates of a model, as `YYYY-MM-DD` calendar dates.
@@ -24,6 +23,9 @@ export interface ModelLifecycleEntry extends ModelLifecycleDates {
 // OpenAI (`shutdown_date`), Amazon Bedrock (`modelLifecycle`) and OpenRouter (`expiration_date`) report their dates
 // when listing models; those drivers read them and use this table only as a fallback.
 //
+// Amazon Bedrock has no entries: its lifecycle dates differ by region, and the regional `ListFoundationModels`
+// response is the only source that knows which region a listing is for. Bedrock Mantle lists no dates.
+//
 // Rules for entries:
 // - Only dates the provider announced. Tentative "no sooner than" dates are left out: they are floors, not dates.
 // - Exact model IDs, because a retirement date belongs to one model version; this table never decides whether a
@@ -47,46 +49,6 @@ const VERTEXAI_LIFECYCLE: readonly ModelLifecycleEntry[] = [
     { id: 'text-multilingual-embedding-002', retirement_date: '2027-04-01' },
     { id: 'multimodalembedding@001', retirement_date: '2027-04-01' },
     { id: 'claude-sonnet-4-5', deprecation_date: '2026-09-29', retirement_date: '2026-11-30' },
-];
-
-// https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html (us-east-1 dates).
-// `deprecation_date` is the date the model entered the Legacy state. Bedrock Mantle IDs share these dates.
-const BEDROCK_LIFECYCLE: readonly ModelLifecycleEntry[] = [
-    { id: 'ai21.jamba-1-5-large-v1:0', deprecation_date: '2026-05-26', retirement_date: '2026-11-26' },
-    { id: 'ai21.jamba-1-5-mini-v1:0', deprecation_date: '2026-05-26', retirement_date: '2026-11-26' },
-    { id: 'anthropic.claude-sonnet-4-20250514-v1:0', deprecation_date: '2026-04-14', retirement_date: '2026-10-14' },
-    { id: 'anthropic.claude-sonnet-4-5-20250929-v1:0', deprecation_date: '2026-10-08', retirement_date: '2027-04-08' },
-    { id: 'anthropic.claude-opus-4-1-20250805-v1:0', deprecation_date: '2026-07-08', retirement_date: '2027-01-08' },
-    { id: 'deepseek.r1-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'google.gemma-3-4b-it', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'google.gemma-3-12b-it', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'google.gemma-3-27b-it', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama3-8b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama3-70b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama3-1-8b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama3-1-70b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama3-3-70b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama4-maverick-17b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'meta.llama4-scout-17b-instruct-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'minimax.minimax-m2', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'minimax.minimax-m2.1', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'mistral.devstral-2-123b', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'mistral.mistral-7b-instruct-v0:2', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'mistral.mixtral-8x7b-instruct-v0:1', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'mistral.voxtral-mini-3b-2507', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'mistral.voxtral-small-24b-2507', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'moonshot.kimi-k2-thinking', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'moonshotai.kimi-k2-thinking', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'nvidia.nemotron-nano-9b-v2', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'nvidia.nemotron-nano-12b-v2', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'qwen.qwen3-coder-30b-a3b-v1:0', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'qwen.qwen3-coder-30b-a3b-instruct', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'twelvelabs.marengo-embed-2-7-v1:0', deprecation_date: '2026-05-29', retirement_date: '2026-11-30' },
-    { id: 'twelvelabs.pegasus-1-2-v1:0', deprecation_date: '2026-09-22', retirement_date: '2027-03-22' },
-    { id: 'writer.palmyra-x4-v1:0', deprecation_date: '2026-09-09', retirement_date: '2027-03-09' },
-    { id: 'writer.palmyra-x5-v1:0', deprecation_date: '2026-09-21', retirement_date: '2027-03-21' },
-    { id: 'zai.glm-4.7', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
-    { id: 'zai.glm-4.7-flash', deprecation_date: '2026-09-30', retirement_date: '2027-03-30' },
 ];
 
 // https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule
@@ -233,15 +195,12 @@ const XAI_LIFECYCLE: readonly ModelLifecycleEntry[] = [
 /** The curated table, by provider. Exported for consistency checks; use `getModelLifecycleDates` to look up a model. */
 export const CURATED_MODEL_LIFECYCLE: Partial<Record<Providers, readonly ModelLifecycleEntry[]>> = {
     [Providers.vertexai]: VERTEXAI_LIFECYCLE,
-    [Providers.bedrock]: BEDROCK_LIFECYCLE,
-    [Providers.bedrock_mantle]: BEDROCK_LIFECYCLE,
     [Providers.azure_openai]: AZURE_LIFECYCLE,
     [Providers.azure_foundry]: AZURE_LIFECYCLE,
     [Providers.xai]: XAI_LIFECYCLE,
 };
 
-function lifecycleLookupId(model: string, provider: Providers): string {
-    if (provider === Providers.bedrock || provider === Providers.bedrock_mantle) return normalizeBedrockModelId(model);
+function lifecycleLookupId(model: string): string {
     // Vertex AI resource names (`locations/global/publishers/google/models/gemini-3.7-flash`) end with the model ID.
     return (model.split('/').pop() ?? model).toLowerCase();
 }
@@ -264,7 +223,7 @@ export function getModelLifecycleDates(
 ): ModelLifecycleDates | undefined {
     const entries = CURATED_MODEL_LIFECYCLE[provider];
     if (!entries) return undefined;
-    const id = lifecycleLookupId(model, provider);
+    const id = lifecycleLookupId(model);
     // Vertex AI publisher model versions (`claude-sonnet-4-5@20250929`) share the dates of the model.
     const unversionedId = id.includes('@') ? id.slice(0, id.indexOf('@')) : id;
 

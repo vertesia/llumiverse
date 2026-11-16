@@ -39,7 +39,7 @@ function getClaudeLimits(model: string): { context_window: number; max_output_to
  * https://www.alibabacloud.com/help/en/model-studio/qwen3-7-plus
  */
 function isHostedQwenTier(model: string): boolean {
-    return /qwen\d+(?:\.\d+)?-(?:plus|flash|max)(?:[-_.:]|$)/.test(model) && isQwenVersionGte(model, 3, 5);
+    return /qwen\d+(?:\.\d+)?-(?:omni-)?(?:plus|flash|max)(?:[-_.:]|$)/.test(model) && isQwenVersionGte(model, 3, 5);
 }
 
 /** GLM text models from 4.6 (`glm-4.6`, `glm-5-turbo`); vision variants (`glm-4.5v`, `glm-5v-turbo`) are excluded. */
