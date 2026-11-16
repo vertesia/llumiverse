@@ -170,11 +170,11 @@ Turn counting is automatic via `_llumiverse_meta.turnNumber` in the conversation
 
 Claude conversations keep `tools` as the first request sent it: additions and removals are announced by
 `tool_addition` / `tool_removal` blocks in `role: "system"` messages. On the Claude API (beta
-`inline-tools-2026-09-15`), a new or changed tool can be defined by value in its `tool_addition` block. Writing those
-definitions is off (`claudeInlineToolWrites`) until a release that reads them is deployed, because an earlier release
-cannot resume such a conversation; a conversation that already holds them keeps using them. Elsewhere, and on the
-Claude API until then (beta `mid-conversation-tool-changes-2026-07-01`), a new tool is appended to `tools` with
-`defer_loading: true` and added by name, and a changed tool is replaced in place. The tool state is stored in
+`inline-tools-2026-09-15`), a new or changed tool is defined by value in its `tool_addition` block. A release without
+the inline-tools reader cannot resume such a conversation; `claudeInlineToolWrites` turns writing off again while a
+conversation that already holds definitions keeps using them. Elsewhere (beta
+`mid-conversation-tool-changes-2026-07-01`), a new tool is appended to `tools` with `defer_loading: true` and added
+by name, and a changed tool is replaced in place. The tool state is stored in
 `_llumiverse_meta.claude_tools`, so keep `_llumiverse_meta` with the conversation when storing or editing it.
 Unsupported models receive `tools` as before, without the tool-change blocks.
 

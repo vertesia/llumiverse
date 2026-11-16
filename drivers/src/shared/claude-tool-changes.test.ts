@@ -907,7 +907,14 @@ const defined = (definition: ToolDefinition) => ({
 const betas = (requestOptions: { headers?: Record<string, string> } | undefined) =>
     requestOptions?.headers?.['anthropic-beta']?.split(',') ?? [];
 
-describe('inline Claude tool definitions before writes are enabled', () => {
+describe('inline Claude tool definitions with writes off', () => {
+    beforeEach(() => {
+        claudeInlineToolWrites.enabled = false;
+    });
+    afterEach(() => {
+        claudeInlineToolWrites.enabled = true;
+    });
+
     it('changes tools by reference on the Claude API for a conversation without inline definitions', async () => {
         const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
         const changed = tool('a', 'refreshed schema');
@@ -1194,11 +1201,8 @@ describe('inline Claude tool definitions before writes are enabled', () => {
 });
 
 describe('inline Claude tool definitions', () => {
-    beforeEach(() => {
-        claudeInlineToolWrites.enabled = true;
-    });
-    afterEach(() => {
-        claudeInlineToolWrites.enabled = false;
+    it('writes inline definitions by default', () => {
+        expect(claudeInlineToolWrites.enabled).toBe(true);
     });
 
     it.each([
