@@ -1112,6 +1112,41 @@ describe('inline Claude tool definitions before writes are enabled', () => {
             expect(getClaudeToolState(stored)?.inline).toEqual({ a: v3, b: tool('b') });
         });
 
+        it('replays a signed tool_changes field and later definitions on a fallback model without tool changes', async () => {
+            const v2 = tool('a', 'v2');
+            const v3 = tool('a', 'v3');
+            const stored = compacted([defined(v2)], { a: v3 }, [{ role: 'system', content: [defined(v3)] }]);
+            const fallback = await turn(
+                userText('again'),
+                [v3],
+                stored,
+                assistantToolUse('c1', 'a'),
+                INLINE,
+                'claude-sonnet-5',
+            );
+            expect(fallback.payload.tools).toEqual([tool('a')]);
+            expect(systemMessages(fallback.payload.messages)).toEqual([{ role: 'system', content: [defined(v3)] }]);
+            expect(betas(fallback.requestOptions)).toContain(INLINE_TOOLS_BETA);
+            expect(getClaudeToolState(fallback.conversation)?.inline).toEqual({ a: v3 });
+
+            // Back on a model with tool changes, the same history is replayed: v3 still follows the signed v2.
+            const back = await turn(toolResult('c1'), [v3], fallback.conversation, assistantToolUse('c2', 'a'), INLINE);
+            expect(JSON.stringify(back.payload.tools)).toBe(JSON.stringify(fallback.payload.tools));
+            // The stored conversation starts at the compaction block, which replaces what came before it.
+            const fromCompaction = (messages: MessageParam[]) =>
+                messages.slice(
+                    messages.findIndex(
+                        (m) => Array.isArray(m.content) && m.content.some((b) => b.type === ('compaction' as never)),
+                    ),
+                );
+            const replayed = fromCompaction(fallback.payload.messages);
+            expect(replayed.length).toBeGreaterThan(2);
+            expect(withoutCacheControl(fromCompaction(back.payload.messages).slice(0, replayed.length))).toEqual(
+                withoutCacheControl(replayed),
+            );
+            expect(systemMessages(back.payload.messages)).toEqual([{ role: 'system', content: [defined(v3)] }]);
+        });
+
         it('sends the inline-tools beta for a signed tool_changes field to a model without tool changes', () => {
             const { requestOptions } = getClaudePayload(
                 { model: 'claude-sonnet-5', tools: [tool('a')] },

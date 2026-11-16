@@ -110,6 +110,17 @@ export function canUseClaudeToolChanges(model: string, provider: string): boolea
     return TOOL_CHANGE_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
 }
 
+/**
+ * Whether this request keeps the conversation's tool state and tool-change blocks. A conversation with a signed
+ * compaction `tool_changes` field keeps them on any model: the block is replayed with the inline-tools beta anyway
+ * (see usesClaudeInlineTools), and stripping the later changes would leave the tools the block signed in effect.
+ */
+export function tracksClaudeToolChanges(model: string, provider: string, conversation: unknown): boolean {
+    if (canUseClaudeToolChanges(model, provider)) return true;
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    return Array.isArray(messages) && containsSignedClaudeToolChanges(messages);
+}
+
 /** Whether the platform accepts tools defined by value. The beta covers the models of tool changes. */
 export function canUseClaudeInlineTools(model: string, provider: string): boolean {
     return INLINE_TOOL_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);

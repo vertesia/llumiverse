@@ -82,7 +82,6 @@ import {
     applyClaudeToolChanges,
     type ClaudeConversationMeta,
     canUseClaudeInlineTools,
-    canUseClaudeToolChanges,
     claudeContinueTurn,
     claudeToolChangeName,
     clearClaudeToolState,
@@ -96,6 +95,7 @@ import {
     referenceInlineToolChanges,
     renderClaudeTools,
     stripClaudeToolChanges,
+    tracksClaudeToolChanges,
     usesClaudeInlineTools,
 } from './claude-tool-changes.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
@@ -191,7 +191,7 @@ function isPlainUserTurn(message: MessageParam): boolean {
  *   written: a request may read nothing, not even an unchanged system prompt, or read an entry from two requests
  *   earlier. After that every request reads the previous one. It happens with byte-identical prefixes, so don't
  *   chase it in the request layout; misses that continue after the first few requests point at a real prefix change.
- * - Models without mid-conversation tool changes (see canUseClaudeToolChanges) resend the whole tool list when a
+ * - Models without mid-conversation tool changes (see tracksClaudeToolChanges) resend the whole tool list when a
  *   tool is added, which invalidates the cache from the tools onward. Expect one full write per tool unlock there.
  * - Bedrock reads reliably on the 5.5 models. On some earlier models served through cross-region inference profiles
  *   a request can read an older entry, or none, even when the prefix is unchanged; that is provider-side too.
@@ -1047,7 +1047,7 @@ export function getClaudePayload(
     // Append-only tool changes (see claude-tool-changes.ts). Where they are not supported, send this request's
     // tools the old way and leave out any tool-change blocks recorded while the conversation ran elsewhere.
     // Where tools cannot be defined by value, tool definitions stored by an inline-tools request go in `tools`.
-    const toolState = canUseClaudeToolChanges(modelName, provider) ? getClaudeToolState(prompt) : undefined;
+    const toolState = tracksClaudeToolChanges(modelName, provider, prompt) ? getClaudeToolState(prompt) : undefined;
     const inlineTools = usesClaudeInlineTools(modelName, provider, prompt);
     const promptMessages = !toolState
         ? stripClaudeToolChanges(prompt.messages)
@@ -1559,7 +1559,7 @@ function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudeProm
     if (isClaudeVersionGTE(options.model, 4, 6) && lastTurn?.role === 'assistant') {
         conversation = { ...conversation, messages: [...conversation.messages, claudeContinueTurn()] };
     }
-    return canUseClaudeToolChanges(options.model, provider)
+    return tracksClaudeToolChanges(options.model, provider, conversation)
         ? applyClaudeToolChanges(
               conversation,
               options.tools as Tool[] | undefined,
