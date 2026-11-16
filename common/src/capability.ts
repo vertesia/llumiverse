@@ -4,6 +4,17 @@ import type { ModelCapabilities, ModelModalities, Providers } from './types.js';
 
 const CHAT_COMPLETIONS_PROVIDERS: readonly string[] = ['openai_compatible', 'openrouter', 'groq', 'togetherai'];
 
+/**
+ * Whether a provider's driver can send an input modality. The Chat Completions drivers send images and text files
+ * but no video, and OpenRouter's request conversion rejects audio parts. Listings, whether from the catalog or from
+ * the provider's own metadata, advertise only the inputs that pass this check.
+ */
+export function canSendInputModality(provider: Providers | string, modality: string): boolean {
+    if (modality === 'video') return !CHAT_COMPLETIONS_PROVIDERS.includes(provider);
+    if (modality === 'audio') return provider !== 'openrouter';
+    return true;
+}
+
 export function getModelCapabilities(model: string, provider: Providers): ModelCapabilities {
     //Check for locations/<location>/ prefix and remove it
     if (model.startsWith('locations/')) {
@@ -23,10 +34,8 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
     }
     const profile = resolveModelProfile(model, provider);
     const capabilities = profile.capabilities;
-    // Advertise only the inputs the driver can send. The Chat Completions drivers send images and text files but no
-    // video, and OpenRouter's request conversion rejects audio parts.
-    const sendsVideo = !CHAT_COMPLETIONS_PROVIDERS.includes(provider);
-    const sendsAudio = provider !== 'openrouter';
+    const sendsVideo = canSendInputModality(provider, 'video');
+    const sendsAudio = canSendInputModality(provider, 'audio');
     // Advertise speech output only for implemented file synthesis transports.
     return {
         ...capabilities,

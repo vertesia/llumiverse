@@ -2347,8 +2347,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         foundationModels = foundationModels.filter((m) => shouldIncludeModel(m.modelId, m.providerName));
 
-        // Bedrock lifecycle dates differ by region, and this listing is for one region. Inference profiles and custom
-        // models report no lifecycle, so they take their base model's dates from this same regional listing.
+        // Bedrock lifecycle dates differ by region, and this listing is for one region. Custom models and
+        // single-region inference profiles report no lifecycle, so they take their base model's dates from it.
         const lifecycleByModelId = new Map<string, BedrockLifecycleDates>();
         for (const m of foundationModelsList.modelSummaries) {
             if (!m.modelId || !m.modelLifecycle) continue;
@@ -2439,16 +2439,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     }
                 }
 
-                // Prefer the profile's model in this region; the profile ID names the same base model.
+                // A cross-region profile routes to regions whose dates this listing does not know, so it gets a date
+                // only when every model it routes to is in this region.
                 const profileModelArns = (p.models ?? []).map((model) => model.modelArn);
+                const singleRegion =
+                    profileModelArns.length > 0 &&
+                    profileModelArns.every((arn) => arn?.includes(`:${this.options.region}:`));
                 const modelMetadata = resolveModelListingMetadata(
                     p.inferenceProfileArn ?? p.inferenceProfileId,
                     this.provider,
-                    baseModelLifecycle([
-                        ...profileModelArns.filter((arn) => arn?.includes(`:${this.options.region}:`)),
-                        p.inferenceProfileId,
-                        ...profileModelArns,
-                    ]),
+                    singleRegion ? baseModelLifecycle(profileModelArns) : {},
                 );
 
                 if (

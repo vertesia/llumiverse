@@ -51,6 +51,18 @@ describe('model listing metadata precedence', () => {
     });
 });
 
+describe('uncatalogued model inputs', () => {
+    it('drops provider-listed inputs the driver cannot send', () => {
+        const runtime = { input_modalities: ['text', 'image', 'audio', 'video'], output_modalities: ['text'] };
+        expect(
+            resolveModelListingMetadata('perceptron/perceptron-mk1.5', Providers.openrouter, runtime).input_modalities,
+        ).toEqual(['text', 'image']);
+        expect(
+            resolveModelListingMetadata('perceptron-mk1.5', Providers.openai_compatible, runtime).input_modalities,
+        ).toEqual(['text', 'image', 'audio']);
+    });
+});
+
 describe('model listing lifecycle dates', () => {
     it('prefers dates reported by the provider over the curated table', () => {
         expect(

@@ -113,7 +113,7 @@ describe('Bedrock Converse model discovery', () => {
         }
     });
 
-    it('reports the Legacy and end-of-life dates AWS lists, and gives inference profiles their base model dates', async () => {
+    it('reports the Legacy and end-of-life dates AWS lists, and gives single-region models their base model dates', async () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const service = createMockService();
         const foundationModels = {
@@ -151,6 +151,20 @@ describe('Bedrock Converse model discovery', () => {
                     status: 'ACTIVE',
                     type: 'SYSTEM_DEFINED',
                 },
+                {
+                    inferenceProfileId: 'opus-41-app',
+                    inferenceProfileArn:
+                        'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opus-41-app',
+                    inferenceProfileName: 'Anthropic Claude Opus 4.1 app profile',
+                    models: [
+                        {
+                            modelArn:
+                                'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-1-20250805-v1:0',
+                        },
+                    ],
+                    status: 'ACTIVE',
+                    type: 'APPLICATION',
+                },
             ],
         } satisfies ListInferenceProfilesCommandOutput;
         const customModels = {
@@ -172,9 +186,16 @@ describe('Bedrock Converse model discovery', () => {
         const lifecycle = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
         expect(models.find((model) => model.id.endsWith('custom-model/opus-41-tuned'))).toMatchObject(lifecycle);
         expect(models.find((model) => model.id === 'anthropic.claude-opus-4-1-20250805-v1:0')).toMatchObject(lifecycle);
-        expect(
-            models.find((model) => model.id.endsWith('inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0')),
-        ).toMatchObject(lifecycle);
+        expect(models.find((model) => model.id.endsWith('application-inference-profile/opus-41-app'))).toMatchObject(
+            lifecycle,
+        );
+        // The US profile also routes to us-west-2, whose dates this us-east-1 listing does not know.
+        const crossRegion = models.find((model) =>
+            model.id.endsWith('inference-profile/us.anthropic.claude-opus-4-1-20250805-v1:0'),
+        );
+        expect(crossRegion).toBeDefined();
+        expect(crossRegion).not.toHaveProperty('retirement_date');
+        expect(crossRegion).not.toHaveProperty('deprecation_date');
         expect(models.find((model) => model.id === 'anthropic.claude-haiku-5-5')).not.toHaveProperty('retirement_date');
     });
 

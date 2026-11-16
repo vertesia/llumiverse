@@ -1,5 +1,6 @@
 import type { ModelLifecycleDates, Providers } from '@llumiverse/core';
 import {
+    canSendInputModality,
     getModelCapabilities,
     getModelLifecycleDates,
     modelModalitiesToArray,
@@ -86,8 +87,11 @@ export function resolveModelListingMetadata(
     }
 
     // Unknown models stay usable. Prefer explicit provider metadata, then use conservative text inference defaults.
+    // Provider metadata describes the model, so inputs the driver cannot send are dropped as for catalog models.
     return {
-        input_modalities: normalizeRuntimeModalities(runtime.input_modalities) ?? ['text'],
+        input_modalities: (normalizeRuntimeModalities(runtime.input_modalities) ?? ['text']).filter((modality) =>
+            canSendInputModality(provider, modality),
+        ),
         output_modalities: normalizeRuntimeModalities(runtime.output_modalities) ?? ['text'],
         ...lifecycle,
     };
