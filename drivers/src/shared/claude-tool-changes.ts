@@ -36,7 +36,7 @@ import {
     setConversationMeta,
     supportsMidConversationToolChanges,
 } from '@llumiverse/core';
-import { isClaudeCompactionBlock } from './claude-compaction.js';
+import { isClaudeCompactionBlock, isClaudeCompactionSummary } from './claude-compaction.js';
 
 /**
  * The user turn added after a trailing assistant turn, which Claude 4.6+ would otherwise treat as prefill. A new
@@ -334,23 +334,28 @@ export function containsClaudeToolChanges(messages: MessageParam[]): boolean {
     return messages.some(
         (message) =>
             Array.isArray(message.content) &&
-            message.content.some((block) => isClaudeToolChangeBlock(block) || compactionToolChanges(block).length > 0),
+            message.content.some((block) => isClaudeToolChangeBlock(block) || hasSignedToolChanges(block)),
     );
 }
 
 /**
- * Whether the messages define a tool by value, in a tool-change block or in the `tool_changes` of a compaction
- * block. Either needs the inline-tools beta.
+ * Whether a compaction block carries a `tool_changes` field, even an empty one. The API returns that field when the
+ * compaction request sent the inline-tools beta, and the block must be replayed with that beta on every request:
+ * https://platform.claude.com/docs/en/build-with-claude/compaction-thinking-blocks#change-the-system-prompt-or-tools
  */
-export function containsClaudeToolDefinitions(messages: MessageParam[]): boolean {
+function hasSignedToolChanges(block: unknown): boolean {
+    return isClaudeCompactionBlock(block) && Array.isArray((block as { tool_changes?: unknown }).tool_changes);
+}
+
+/**
+ * Whether the messages need the inline-tools beta: a tool defined by value in a tool-change block, or a compaction
+ * block whose `tool_changes` field is replayed (see hasSignedToolChanges), whatever the field holds.
+ */
+export function needsClaudeInlineToolsBeta(messages: MessageParam[]): boolean {
     return messages.some(
         (message) =>
             Array.isArray(message.content) &&
-            message.content.some(
-                (block) =>
-                    isClaudeToolDefinitionBlock(block) ||
-                    compactionToolChanges(block).some(isClaudeToolDefinitionBlock),
-            ),
+            message.content.some((block) => isClaudeToolDefinitionBlock(block) || hasSignedToolChanges(block)),
     );
 }
 
@@ -392,9 +397,10 @@ export function referenceInlineToolChanges(messages: MessageParam[], state: Clau
                 }
                 continue;
             }
-            if (isClaudeCompactionBlock(block)) {
+            if (isClaudeCompactionSummary(block)) {
                 // A compaction block is sent back unchanged. Its tool changes take the request's tools to the tool
-                // set at the end of the range it replaces, so later changes apply to that set.
+                // set at the end of the range it replaces, so later changes apply to that set. The API ignores a
+                // failed compaction (no summary), so the changes before it still stand.
                 visible = new Set(loaded);
                 for (const change of compactionToolChanges(block)) applyToolChange(visible, change);
             }

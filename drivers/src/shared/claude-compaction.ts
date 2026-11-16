@@ -96,7 +96,7 @@ export function isClaudeCompactionBlock(block: unknown): boolean {
 }
 
 /** A compaction block that carries a summary. A block with null content is a failed compaction, which the API ignores. */
-function isClaudeCompactionSummary(block: unknown): boolean {
+export function isClaudeCompactionSummary(block: unknown): boolean {
     const content = (block as { content?: unknown }).content;
     return isClaudeCompactionBlock(block) && typeof content === 'string' && content.length > 0;
 }

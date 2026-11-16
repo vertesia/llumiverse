@@ -1017,13 +1017,52 @@ describe('inline Claude tool definitions before writes are enabled', () => {
             expect(betas(requestOptions as never)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
         });
 
-        it('sends the by-reference beta for compacted changes of a conversation without inline definitions', () => {
+        it.each([
+            ['a removal-only', [removal('a')]],
+            ['an empty', []],
+        ])('sends the inline-tools beta for %s tool_changes field without inline definitions', (_kind, changes) => {
+            // E.g. back on the Claude API after a by-reference platform moved the inline definitions into tools.
             const { requestOptions } = getClaudePayload(
                 { model: MODEL, tools: [tool('a')] },
-                compacted([removal('a')]),
-                BY_REFERENCE,
+                compacted(changes),
+                INLINE,
             );
-            expect(betas(requestOptions as never)).toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+            expect(betas(requestOptions as never)).toContain(INLINE_TOOLS_BETA);
+            expect(betas(requestOptions as never)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        });
+
+        it('keeps a withdrawal from before a failed compaction when converting to references', () => {
+            const changed = tool('a', 'v2');
+            const prompt = {
+                messages: [
+                    { role: 'user', content: 'start' },
+                    { role: 'system', content: [removal('a')] },
+                    {
+                        role: 'assistant',
+                        content: [
+                            { type: 'compaction', content: null, tool_changes: [] },
+                            { type: 'text', text: 'Done.' },
+                        ],
+                    },
+                    { role: 'user', content: 'next' },
+                    { role: 'system', content: [defined(changed)] },
+                ],
+                _llumiverse_meta: {
+                    claude_tools: {
+                        declared: [{ definition: tool('a'), deferred: false }],
+                        visible: ['a'],
+                        inline: { a: changed },
+                    },
+                },
+            } as unknown as ClaudePrompt & { messages: MessageParam[] };
+            const { payload } = getClaudePayload({ model: MODEL, tools: [changed] }, prompt, BY_REFERENCE);
+            const expected = [
+                { role: 'system', content: [removal('a')] },
+                { role: 'system', content: [addition('a')] },
+            ];
+            expect(payload.messages.filter((m) => m.role === 'system')).toEqual(expected);
+            const stored = applyClaudeToolChanges(prompt, [changed as Tool]);
+            expect(stored.messages.filter((m) => m.role === 'system')).toEqual(expected);
         });
 
         it('keeps a re-offer of a tool that a compaction withdrew when converting to references', () => {

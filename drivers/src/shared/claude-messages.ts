@@ -86,12 +86,12 @@ import {
     claudeToolChangeName,
     clearClaudeToolState,
     containsClaudeToolChanges,
-    containsClaudeToolDefinitions,
     getClaudeToolState,
     INLINE_TOOLS_BETA,
     isClaudeToolChangeBlock,
     isClaudeToolDefinitionBlock,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
+    needsClaudeInlineToolsBeta,
     referenceInlineToolChanges,
     renderClaudeTools,
     stripClaudeToolChanges,
@@ -1084,10 +1084,13 @@ export function getClaudePayload(
     const changesTools =
         toolState !== undefined &&
         (toolState.declared.some((tool) => tool.deferred) || containsClaudeToolChanges(sanitizedMessages));
-    // A conversation that defines tools by value replays every tool change, compacted ones included, under the
-    // inline-tools beta: a change may name a tool defined only in the messages. The beta also covers changes by
-    // reference, so the by-reference beta is not sent with it.
-    if (toolState && (containsClaudeToolDefinitions(sanitizedMessages) || (inlineTools && changesTools))) {
+    // A conversation that defines tools by value replays every tool change under the inline-tools beta: a change may
+    // name a tool defined only in the messages. A compaction block's `tool_changes` needs it whatever it holds, even
+    // after the inline definitions moved into `tools`. The beta also covers changes by reference, so the
+    // by-reference beta is not sent with it.
+    const needsInlineBeta =
+        canUseClaudeToolChanges(modelName, provider) && needsClaudeInlineToolsBeta(sanitizedMessages);
+    if (needsInlineBeta || (inlineTools && changesTools)) {
         betas.push(INLINE_TOOLS_BETA);
     } else if (changesTools) {
         betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
