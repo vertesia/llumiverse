@@ -60,14 +60,22 @@ import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeT
 import {
     applyClaudeToolChanges,
     type ClaudeConversationMeta,
-    canUseClaudeToolChanges,
+    canUseClaudeInlineTools,
     claudeContinueTurn,
+    claudeToolChangeName,
     clearClaudeToolState,
+    containsClaudeToolChanges,
     getClaudeToolState,
+    INLINE_TOOLS_BETA,
     isClaudeToolChangeBlock,
+    isClaudeToolDefinitionBlock,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
+    needsClaudeInlineToolsBeta,
+    referenceInlineToolChanges,
     renderClaudeTools,
     stripClaudeToolChanges,
+    tracksClaudeToolChanges,
+    usesClaudeInlineTools,
 } from './claude-tool-changes.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
@@ -162,7 +170,7 @@ function isPlainUserTurn(message: MessageParam): boolean {
  *   written: a request may read nothing, not even an unchanged system prompt, or read an entry from two requests
  *   earlier. After that every request reads the previous one. It happens with byte-identical prefixes, so don't
  *   chase it in the request layout; misses that continue after the first few requests point at a real prefix change.
- * - Models without mid-conversation tool changes (see canUseClaudeToolChanges) resend the whole tool list when a
+ * - Models without mid-conversation tool changes (see tracksClaudeToolChanges) resend the whole tool list when a
  *   tool is added, which invalidates the cache from the tools onward. Expect one full write per tool unlock there.
  * - Bedrock reads reliably on the 5.5 models. On some earlier models served through cross-region inference profiles
  *   a request can read an older entry, or none, even when the prefix is unchanged; that is provider-side too.
@@ -969,8 +977,14 @@ export function getClaudePayload(
 
     // Append-only tool changes (see claude-tool-changes.ts). Where they are not supported, send this request's
     // tools the old way and leave out any tool-change blocks recorded while the conversation ran elsewhere.
-    const toolState = canUseClaudeToolChanges(modelName, provider) ? getClaudeToolState(prompt) : undefined;
-    const promptMessages = toolState ? prompt.messages : stripClaudeToolChanges(prompt.messages);
+    // Where tools cannot be defined by value, tool definitions stored by an inline-tools request go in `tools`.
+    const toolState = tracksClaudeToolChanges(modelName, provider, prompt) ? getClaudeToolState(prompt) : undefined;
+    const inlineTools = usesClaudeInlineTools(modelName, provider, prompt);
+    const promptMessages = !toolState
+        ? stripClaudeToolChanges(prompt.messages)
+        : inlineTools
+          ? prompt.messages
+          : referenceInlineToolChanges(prompt.messages, toolState);
 
     // Merge first so parallel tool results split across user messages are recombined
     // into the single user turn after their assistant tool_use message; then fix both
@@ -999,7 +1013,22 @@ export function getClaudePayload(
     if (toolState && !hasRequestedTools && model_options?.tool_choice !== 'none') {
         logModelOptionException(logger, modelName, model_options, ['tool_choice'], 'claude_declared_tools');
     }
-    if (toolState && (toolState.declared.some((tool) => tool.deferred) || containsToolChanges(sanitizedMessages))) {
+    const changesTools =
+        toolState !== undefined &&
+        (toolState.declared.some((tool) => tool.deferred) || containsClaudeToolChanges(sanitizedMessages));
+    // A conversation that defines tools by value replays every tool change under the inline-tools beta: a change may
+    // name a tool defined only in the messages. A compaction block's `tool_changes` needs it whatever it holds, on
+    // any target: the signed block cannot be rewritten, so the request carries the beta it requires and the platform
+    // decides. The beta also covers changes by reference, so the by-reference beta is not sent with it.
+    if (needsClaudeInlineToolsBeta(sanitizedMessages) || (inlineTools && changesTools)) {
+        betas.push(INLINE_TOOLS_BETA);
+        if (!canUseClaudeInlineTools(modelName, provider)) {
+            logger?.warn(
+                { model: modelName, provider },
+                '[Claude] Sending the inline-tools beta that a stored compaction block requires to a platform or model not documented to support it',
+            );
+        }
+    } else if (changesTools) {
         betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
     }
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
@@ -1026,7 +1055,7 @@ export function getClaudePayload(
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
     const sanitizedTools = toolState
-        ? renderClaudeTools(toolState)
+        ? renderClaudeTools(toolState, inlineTools)
         : hasTools
           ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
           : undefined;
@@ -1226,24 +1255,35 @@ function placeSystemMessagesAfterUserTurns(messages: MessageParam[]): MessagePar
 }
 
 /**
- * One system message for several pending ones. Each stored change was a real change when it was made, so the
- * changes to one tool alternate between addition and removal: an even number cancels out, an odd number leaves
- * the last one.
+ * One system message for several pending ones. Each stored change by reference was a real change when it was
+ * made, so those changes to one tool alternate between addition and removal: an even number cancels out, an odd
+ * number leaves the last one. A tool defined by value keeps its last definition, which may also redefine a tool
+ * the model can already call, and a removal that follows it.
  */
 function mergeToolChangeMessages(messages: MessageParam[]): MessageParam {
     const blocks = messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []));
-    const changes = new Map<string, { count: number; last: unknown }>();
+    const changes = new Map<string, { count: number; last: unknown; lastDefinition?: unknown }>();
     for (const block of blocks) {
-        const name = isClaudeToolChangeBlock(block) ? (block as { tool?: { name?: string } }).tool?.name : undefined;
-        if (name) changes.set(name, { count: (changes.get(name)?.count ?? 0) + 1, last: block });
+        const name = claudeToolChangeName(block);
+        if (!name) continue;
+        const previous = changes.get(name);
+        changes.set(name, {
+            count: (previous?.count ?? 0) + 1,
+            last: block,
+            lastDefinition: isClaudeToolDefinitionBlock(block) ? block : previous?.lastDefinition,
+        });
     }
-    const kept = new Set([...changes.values()].filter((change) => change.count % 2 === 1).map((change) => change.last));
+    const kept = new Set<unknown>();
+    for (const change of changes.values()) {
+        if (change.lastDefinition) {
+            kept.add(change.lastDefinition);
+            kept.add(change.last);
+        } else if (change.count % 2 === 1) {
+            kept.add(change.last);
+        }
+    }
     const content = blocks.filter((block) => !isClaudeToolChangeBlock(block) || kept.has(block));
     return { role: 'system', content } as MessageParam;
-}
-
-function containsToolChanges(messages: MessageParam[]): boolean {
-    return messages.some((message) => Array.isArray(message.content) && message.content.some(isClaudeToolChangeBlock));
 }
 
 // ============================================================================
@@ -1420,8 +1460,12 @@ function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudeProm
     if (isClaudeVersionGTE(options.model, 4, 6) && lastTurn?.role === 'assistant') {
         conversation = { ...conversation, messages: [...conversation.messages, claudeContinueTurn()] };
     }
-    return canUseClaudeToolChanges(options.model, provider)
-        ? applyClaudeToolChanges(conversation, options.tools as Tool[] | undefined)
+    return tracksClaudeToolChanges(options.model, provider, conversation)
+        ? applyClaudeToolChanges(
+              conversation,
+              options.tools as Tool[] | undefined,
+              usesClaudeInlineTools(options.model, provider, conversation),
+          )
         : clearClaudeToolState(conversation);
 }
 

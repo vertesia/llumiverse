@@ -1,6 +1,6 @@
 import type { Message, MessageParam, RawMessageStreamEvent, Tool } from '@anthropic-ai/sdk/resources/messages.js';
 import { type ExecutionOptions, Providers, type ToolDefinition } from '@llumiverse/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
@@ -10,13 +10,19 @@ import {
 } from './claude-messages.js';
 import {
     applyClaudeToolChanges,
+    canUseClaudeInlineTools,
     canUseClaudeToolChanges,
+    claudeInlineToolWrites,
     getClaudeToolState,
+    INLINE_TOOLS_BETA,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
     stripClaudeToolChanges,
+    usesClaudeInlineTools,
 } from './claude-tool-changes.js';
 
 const MODEL = 'claude-sonnet-5-5';
+/** A platform that takes tool changes by reference only (no inline tools). */
+const BY_REFERENCE = Providers.vertexai;
 const schema = { type: 'object', properties: { q: { type: 'string' } } } as const;
 const tool = (name: string, description = `${name} tool`): ToolDefinition => ({
     name,
@@ -60,7 +66,7 @@ async function turn(
     tools: ToolDefinition[] | undefined,
     conversation: unknown,
     response: Message,
-    provider = 'anthropic',
+    provider: string = BY_REFERENCE,
     model = MODEL,
     extra: Partial<ExecutionOptions> = {},
 ) {
@@ -571,11 +577,13 @@ async function streamTurn(
         finalMessage: async () => final,
         abort() {},
     }));
-    const completion = await streamClaudeCompletion({ messages: { stream } } as never, prompt, {
-        model: MODEL,
-        tools,
-        conversation,
-    });
+    const completion = await streamClaudeCompletion(
+        { messages: { stream } } as never,
+        prompt,
+        { model: MODEL, tools, conversation },
+        undefined,
+        BY_REFERENCE,
+    );
     const toolNames: string[] = [];
     for await (const chunk of completion) {
         if (typeof chunk === 'object') toolNames.push(...(chunk.tool_use ?? []).map((t) => t.tool_name));
@@ -625,7 +633,7 @@ describe('Claude tool changes on the streaming path', () => {
             [],
             [{ id: 'c2', tool_name: 'b', tool_input: { q: 'x' } }],
             options,
-            'anthropic',
+            BY_REFERENCE,
         );
         const executed = await turn(toolResult('c1'), options.tools, t1.conversation, assistantToolUse('c2', 'b'));
 
@@ -775,7 +783,7 @@ describe('Claude tool changes across turns', () => {
             [tool('a')],
             undefined,
             assistantToolUse('c1', 'a'),
-            'anthropic',
+            BY_REFERENCE,
             MODEL,
             cleanup,
         );
@@ -796,7 +804,7 @@ describe('Claude tool changes across turns', () => {
             [tool('a'), tool('list_items')],
             t1.conversation,
             assistantReply([{ type: 'text', text: 'Listed.' }]),
-            'anthropic',
+            BY_REFERENCE,
             MODEL,
             cleanup,
         );
@@ -820,7 +828,7 @@ describe('Claude tool changes across turns', () => {
             [tool('a'), tool('list_items')],
             t2.conversation,
             assistantToolUse('c3', 'a'),
-            'anthropic',
+            BY_REFERENCE,
             MODEL,
             cleanup,
         );
@@ -885,5 +893,504 @@ describe('Claude cache breakpoints around tool changes', () => {
         const marked = (markedTurn.content as { text: string }[])[0];
         expect(marked).toMatchObject({ cache_control: { type: 'ephemeral' } });
         expect({ prompt, tools }).toEqual(before);
+    });
+});
+
+const INLINE = Providers.anthropic;
+const defined = (definition: ToolDefinition) => ({
+    type: 'tool_addition',
+    tool: { type: 'tool_definition', definition },
+});
+const betas = (requestOptions: { headers?: Record<string, string> } | undefined) =>
+    requestOptions?.headers?.['anthropic-beta']?.split(',') ?? [];
+
+describe('inline Claude tool definitions before writes are enabled', () => {
+    it('changes tools by reference on the Claude API for a conversation without inline definitions', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const changed = tool('a', 'refreshed schema');
+        const t2 = await turn(
+            toolResult('c1'),
+            [changed, tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+        expect(t2.payload.tools).toEqual([changed, { ...tool('b'), defer_loading: true }]);
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [addition('b')] });
+        expect(betas(t2.requestOptions)).toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(betas(t2.requestOptions)).not.toContain(INLINE_TOOLS_BETA);
+        expect(getClaudeToolState(t2.conversation)?.inline).toBeUndefined();
+    });
+
+    it('keeps defining tools by value in a conversation that already holds inline definitions', async () => {
+        // A conversation stored by a release with inline writes on, resumed by one with them off.
+        claudeInlineToolWrites.enabled = true;
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+        claudeInlineToolWrites.enabled = false;
+
+        const t3 = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('b'), tool('c')],
+            t2.conversation,
+            assistantToolUse('c3', 'c'),
+            INLINE,
+        );
+        expect(JSON.stringify(t3.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(withoutCacheControl(t3.payload.messages.slice(0, t2.payload.messages.length))).toEqual(
+            withoutCacheControl(t2.payload.messages),
+        );
+        expect(t3.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('c'))] });
+        expect(betas(t3.requestOptions)).toContain(INLINE_TOOLS_BETA);
+    });
+
+    it('sends the inline-tools beta for a tool defined in the tool changes of a compaction block', () => {
+        const prompt = {
+            messages: [
+                { role: 'user', content: 'start' },
+                {
+                    role: 'assistant',
+                    content: [
+                        { type: 'compaction', content: 'Summary.', tool_changes: [defined(tool('b'))] },
+                        { type: 'text', text: 'Done.' },
+                    ],
+                },
+                { role: 'user', content: 'next' },
+            ],
+            _llumiverse_meta: {
+                claude_tools: {
+                    declared: [{ definition: tool('a'), deferred: false }],
+                    visible: ['a', 'b'],
+                    inline: { b: tool('b') },
+                },
+            },
+        } as unknown as ClaudePrompt;
+        const { payload, requestOptions } = getClaudePayload(
+            { model: MODEL, tools: [tool('a'), tool('b')] },
+            prompt,
+            INLINE,
+        );
+        expect(betas(requestOptions as never)).toContain(INLINE_TOOLS_BETA);
+        expect(betas(requestOptions as never)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(payload.tools).toEqual([tool('a')]);
+    });
+
+    describe('compacted tool changes', () => {
+        const compacted = (toolChanges: unknown[], inline?: Record<string, ToolDefinition>, later: unknown[] = []) =>
+            ({
+                messages: [
+                    { role: 'user', content: 'start' },
+                    {
+                        role: 'assistant',
+                        content: [
+                            { type: 'compaction', content: 'Summary.', signature: 'sig', tool_changes: toolChanges },
+                            { type: 'text', text: 'Done.' },
+                        ],
+                    },
+                    { role: 'user', content: 'next' },
+                    ...later,
+                ],
+                _llumiverse_meta: {
+                    claude_tools: {
+                        declared: [{ definition: tool('a'), deferred: false }],
+                        visible: ['a'],
+                        ...(inline && { inline }),
+                    },
+                },
+            }) as unknown as ClaudePrompt;
+
+        it('sends the inline-tools beta for reference-only compacted changes of an inline conversation', () => {
+            const { requestOptions } = getClaudePayload(
+                { model: MODEL, tools: [tool('a')] },
+                compacted([removal('b')], { b: tool('b') }),
+                INLINE,
+            );
+            expect(betas(requestOptions as never)).toContain(INLINE_TOOLS_BETA);
+            expect(betas(requestOptions as never)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        });
+
+        it.each([
+            ['a removal-only', [removal('a')]],
+            ['an empty', []],
+        ])('sends the inline-tools beta for %s tool_changes field without inline definitions', (_kind, changes) => {
+            // E.g. back on the Claude API after a by-reference platform moved the inline definitions into tools.
+            const { requestOptions } = getClaudePayload(
+                { model: MODEL, tools: [tool('a')] },
+                compacted(changes),
+                INLINE,
+            );
+            expect(betas(requestOptions as never)).toContain(INLINE_TOOLS_BETA);
+            expect(betas(requestOptions as never)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        });
+
+        /** A conversation that withdrew `a`, then hit a compaction block, then re-offered `a` (v2) by value. */
+        const withCompaction = (compaction: Record<string, unknown>, later: unknown[]) =>
+            ({
+                messages: [
+                    { role: 'user', content: 'start' },
+                    { role: 'system', content: [removal('a')] },
+                    { role: 'assistant', content: [compaction, { type: 'text', text: 'Done.' }] },
+                    { role: 'user', content: 'next' },
+                    ...later,
+                ],
+                _llumiverse_meta: {
+                    claude_tools: {
+                        declared: [{ definition: tool('a'), deferred: false }],
+                        visible: ['a'],
+                        inline: { a: tool('a', 'v2') },
+                    },
+                },
+            }) as unknown as ClaudePrompt & { messages: MessageParam[] };
+        const systemMessages = (messages: MessageParam[]) => messages.filter((m) => m.role === 'system');
+
+        it('keeps a withdrawal from before a failed compaction when converting to references', () => {
+            const v2 = tool('a', 'v2');
+            const prompt = withCompaction({ type: 'compaction', content: null }, [
+                { role: 'system', content: [defined(v2)] },
+            ]);
+            const expected = [
+                { role: 'system', content: [removal('a')] },
+                { role: 'system', content: [addition('a')] },
+            ];
+            const { payload } = getClaudePayload({ model: MODEL, tools: [v2] }, prompt, BY_REFERENCE);
+            expect(systemMessages(payload.messages)).toEqual(expected);
+            expect(systemMessages(applyClaudeToolChanges(prompt, [v2 as Tool]).messages)).toEqual(expected);
+        });
+
+        it('drops a re-offer of a tool that a summary without tool_changes made callable again', () => {
+            // Without the field the API applies no changes: the tools in `tools` are callable after the summary.
+            const v2 = tool('a', 'v2');
+            const prompt = withCompaction({ type: 'compaction', content: 'Summary.' }, [
+                { role: 'system', content: [defined(v2)] },
+            ]);
+            const { payload } = getClaudePayload({ model: MODEL, tools: [v2] }, prompt, BY_REFERENCE);
+            expect(payload.tools).toEqual([v2]);
+            expect(systemMessages(payload.messages)).toEqual([{ role: 'system', content: [removal('a')] }]);
+        });
+
+        it('replays a conversation with a signed tool_changes field as stored on a by-reference platform', () => {
+            // The block signs v2; a later message redefines the tool as v3. Converting would move v3 into `tools`,
+            // where the signed v2 definition would override it.
+            const v2 = tool('a', 'v2');
+            const v3 = tool('a', 'v3');
+            const prompt = compacted([defined(v2)], { a: v3 }, [{ role: 'system', content: [defined(v3)] }]);
+            const warn = vi.fn();
+            const { payload, requestOptions } = getClaudePayload(
+                { model: MODEL, tools: [v3] },
+                prompt,
+                BY_REFERENCE,
+                'stream',
+                { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as never,
+            );
+            expect(payload.tools).toEqual([tool('a')]);
+            expect(systemMessages(payload.messages)).toEqual([{ role: 'system', content: [defined(v3)] }]);
+            expect(betas(requestOptions as never)).toContain(INLINE_TOOLS_BETA);
+            expect(warn).toHaveBeenCalledWith(
+                { model: MODEL, provider: BY_REFERENCE },
+                expect.stringContaining('inline-tools beta'),
+            );
+
+            // A turn there stores the conversation unconverted, and defines new tools by value too.
+            const stored = applyClaudeToolChanges(
+                prompt as ClaudePrompt & { messages: MessageParam[] },
+                [v3 as Tool, tool('b') as Tool],
+                usesClaudeInlineTools(MODEL, BY_REFERENCE, prompt),
+            );
+            expect(systemMessages(stored.messages)).toEqual([
+                { role: 'system', content: [defined(v3)] },
+                { role: 'system', content: [defined(tool('b'))] },
+            ]);
+            expect(getClaudeToolState(stored)?.inline).toEqual({ a: v3, b: tool('b') });
+        });
+
+        it('replays a signed tool_changes field and later definitions on a fallback model without tool changes', async () => {
+            const v2 = tool('a', 'v2');
+            const v3 = tool('a', 'v3');
+            const stored = compacted([defined(v2)], { a: v3 }, [{ role: 'system', content: [defined(v3)] }]);
+            const fallback = await turn(
+                userText('again'),
+                [v3],
+                stored,
+                assistantToolUse('c1', 'a'),
+                INLINE,
+                'claude-sonnet-5',
+            );
+            expect(fallback.payload.tools).toEqual([tool('a')]);
+            expect(systemMessages(fallback.payload.messages)).toEqual([{ role: 'system', content: [defined(v3)] }]);
+            expect(betas(fallback.requestOptions)).toContain(INLINE_TOOLS_BETA);
+            expect(getClaudeToolState(fallback.conversation)?.inline).toEqual({ a: v3 });
+
+            // Back on a model with tool changes, the same history is replayed: v3 still follows the signed v2.
+            const back = await turn(toolResult('c1'), [v3], fallback.conversation, assistantToolUse('c2', 'a'), INLINE);
+            expect(JSON.stringify(back.payload.tools)).toBe(JSON.stringify(fallback.payload.tools));
+            // The stored conversation starts at the compaction block, which replaces what came before it.
+            const fromCompaction = (messages: MessageParam[]) =>
+                messages.slice(
+                    messages.findIndex(
+                        (m) => Array.isArray(m.content) && m.content.some((b) => b.type === ('compaction' as never)),
+                    ),
+                );
+            const replayed = fromCompaction(fallback.payload.messages);
+            expect(replayed.length).toBeGreaterThan(2);
+            expect(withoutCacheControl(fromCompaction(back.payload.messages).slice(0, replayed.length))).toEqual(
+                withoutCacheControl(replayed),
+            );
+            expect(systemMessages(back.payload.messages)).toEqual([{ role: 'system', content: [defined(v3)] }]);
+        });
+
+        it('sends the inline-tools beta for a signed tool_changes field to a model without tool changes', () => {
+            const { requestOptions } = getClaudePayload(
+                { model: 'claude-sonnet-5', tools: [tool('a')] },
+                compacted([]),
+                INLINE,
+            );
+            expect(betas(requestOptions as never)).toContain(INLINE_TOOLS_BETA);
+        });
+    });
+
+    it.each([
+        ['by reference', BY_REFERENCE],
+        ['by value', INLINE],
+    ])('adds a tool named like an Object property %s', async (_mode, provider) => {
+        claudeInlineToolWrites.enabled = true;
+        try {
+            const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), provider);
+            const t2 = await turn(
+                toolResult('c1'),
+                [tool('a'), tool('constructor'), tool('__proto__')],
+                t1.conversation,
+                assistantToolUse('c2', 'constructor'),
+                provider,
+            );
+            const changes = t2.payload.messages.at(-1)?.content;
+            if (provider === INLINE) {
+                expect(t2.payload.tools).toEqual([tool('a')]);
+                expect(changes).toEqual([defined(tool('constructor')), defined(tool('__proto__'))]);
+                expect(Object.keys(getClaudeToolState(t2.conversation)?.inline ?? {})).toEqual([
+                    'constructor',
+                    '__proto__',
+                ]);
+            } else {
+                expect(t2.payload.tools).toEqual([
+                    tool('a'),
+                    { ...tool('constructor'), defer_loading: true },
+                    { ...tool('__proto__'), defer_loading: true },
+                ]);
+                expect(changes).toEqual([addition('constructor'), addition('__proto__')]);
+            }
+        } finally {
+            claudeInlineToolWrites.enabled = false;
+        }
+    });
+});
+
+describe('inline Claude tool definitions', () => {
+    beforeEach(() => {
+        claudeInlineToolWrites.enabled = true;
+    });
+    afterEach(() => {
+        claudeInlineToolWrites.enabled = false;
+    });
+
+    it.each([
+        [Providers.anthropic, MODEL, true],
+        [Providers.anthropic, 'claude-fable-5-2', true],
+        [Providers.anthropic, 'claude-fable-7', true],
+        [Providers.azure_foundry, 'claude-opus-5-5', false],
+        [Providers.azure_foundry, 'claude-fable-5-2', false],
+        [Providers.vertexai, 'claude-sonnet-5-5@20260901', false],
+        [Providers.bedrock, 'global.anthropic.claude-sonnet-5-5', false],
+        [Providers.bedrock_mantle, 'anthropic.claude-opus-5-5', false],
+        [Providers.anthropic, 'claude-sonnet-5', false],
+        [Providers.anthropic, 'claude-opus-4-7', false],
+    ])('canUseClaudeInlineTools: %s with %s: %s', (provider, model, expected) => {
+        expect(canUseClaudeInlineTools(model, provider)).toBe(expected);
+    });
+
+    it('defines a new tool by value and leaves tools as sent', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+
+        expect(JSON.stringify(t2.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('b'))] });
+        expect(betas(t2.requestOptions)).toContain(INLINE_TOOLS_BETA);
+        expect(betas(t2.requestOptions)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(getClaudeToolState(t2.conversation)).toEqual({
+            declared: [{ definition: tool('a'), deferred: false }],
+            visible: ['a', 'b'],
+            inline: { b: tool('b') },
+        });
+
+        // Replayed verbatim; nothing new to announce.
+        const t3 = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('b')],
+            t2.conversation,
+            assistantToolUse('c3', 'a'),
+            INLINE,
+        );
+        expect(JSON.stringify(t3.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+        expect(withoutCacheControl(t3.payload.messages.slice(0, t2.payload.messages.length))).toEqual(
+            withoutCacheControl(t2.payload.messages),
+        );
+    });
+
+    it('redefines a changed tool in place of replacing it in tools', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const changed = tool('a', 'refreshed schema');
+        const t2 = await turn(toolResult('c1'), [changed], t1.conversation, assistantToolUse('c2', 'a'), INLINE);
+
+        expect(JSON.stringify(t2.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(changed)] });
+        expect(getClaudeToolState(t2.conversation)?.inline).toEqual({ a: changed });
+
+        const t3 = await turn(toolResult('c2'), [changed], t2.conversation, assistantToolUse('c3', 'a'), INLINE);
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+    });
+
+    it('re-offers an inline tool by value and a declared tool by reference', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(toolResult('c1'), [tool('b')], t1.conversation, assistantToolUse('c2', 'b'), INLINE);
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('b')), removal('a')] });
+
+        const t3 = await turn(toolResult('c2'), [tool('a')], t2.conversation, assistantToolUse('c3', 'a'), INLINE);
+        expect(t3.payload.messages.at(-1)).toEqual({ role: 'system', content: [addition('a'), removal('b')] });
+
+        const t4 = await turn(toolResult('c3'), [tool('b')], t3.conversation, assistantToolUse('c4', 'b'), INLINE);
+        expect(t4.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('b')), removal('a')] });
+        expect(JSON.stringify(t4.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+    });
+
+    it('sends inline definitions in tools and by reference on a platform without inline tools', async () => {
+        const changed = tool('a', 'refreshed schema');
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [changed, tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+        const t3 = await turn(
+            toolResult('c2'),
+            [changed, tool('b'), tool('c')],
+            t2.conversation,
+            assistantToolUse('c3', 'c'),
+            BY_REFERENCE,
+        );
+
+        expect(t3.payload.tools).toEqual([
+            changed,
+            { ...tool('b'), defer_loading: true },
+            { ...tool('c'), defer_loading: true },
+        ]);
+        // The redefinition of a callable tool adds nothing by reference; the new tool becomes a reference.
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toEqual([
+            { role: 'system', content: [addition('b')] },
+            { role: 'system', content: [addition('c')] },
+        ]);
+        expect(betas(t3.requestOptions)).toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(betas(t3.requestOptions)).not.toContain(INLINE_TOOLS_BETA);
+        // The inline definitions now live in tools, so later by-reference requests replay the same tools.
+        expect(getClaudeToolState(t3.conversation)?.inline).toBeUndefined();
+
+        const t4 = await turn(
+            toolResult('c3'),
+            [changed, tool('b'), tool('c')],
+            t3.conversation,
+            assistantToolUse('c4', 'a'),
+            Providers.bedrock,
+            'global.anthropic.claude-sonnet-5-5',
+        );
+        expect(JSON.stringify(t4.payload.tools)).toBe(JSON.stringify(t3.payload.tools));
+        expect(JSON.stringify(t4.payload.messages.slice(0, t3.payload.messages.length))).toBe(
+            JSON.stringify(t3.payload.messages),
+        );
+
+        // Back on an inline platform, the conversation is replayed as the by-reference requests sent it.
+        const t5 = await turn(
+            toolResult('c4'),
+            [changed, tool('b'), tool('c')],
+            t4.conversation,
+            assistantToolUse('c5', 'a'),
+            INLINE,
+        );
+        expect(JSON.stringify(t5.payload.tools)).toBe(JSON.stringify(t4.payload.tools));
+        expect(JSON.stringify(t5.payload.messages.slice(0, t4.payload.messages.length))).toBe(
+            JSON.stringify(t4.payload.messages),
+        );
+    });
+
+    it('drops the definitions of a conversation sent to a model without tool changes', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+        const t3 = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('b')],
+            t2.conversation,
+            assistantToolUse('c3', 'b'),
+            INLINE,
+            'claude-sonnet-5',
+        );
+        expect(t3.payload.tools).toEqual([tool('a'), tool('b')]);
+        expect(t3.payload.messages.some((m) => m.role === 'system')).toBe(false);
+        expect(betas(t3.requestOptions)).not.toContain(INLINE_TOOLS_BETA);
+    });
+
+    describe('pending changes merged into one system message', () => {
+        const declaredA = {
+            claude_tools: { declared: [{ definition: tool('a'), deferred: false }], visible: ['a'] },
+        };
+        const pending = (...content: unknown[][]): ClaudePrompt =>
+            ({
+                messages: [
+                    { role: 'user', content: 'start' },
+                    ...content.map((blocks) => ({ role: 'system', content: blocks })),
+                ],
+                _llumiverse_meta: declaredA,
+            }) as unknown as ClaudePrompt;
+        const systemOf = (prompt: ClaudePrompt) =>
+            getClaudePayload({ model: MODEL, tools: [tool('a')] }, prompt, INLINE).payload.messages.filter(
+                (m) => m.role === 'system',
+            );
+
+        it('keeps a redefinition that follows a removal', () => {
+            const changed = tool('a', 'v2');
+            expect(systemOf(pending([removal('a')], [defined(changed)]))).toEqual([
+                { role: 'system', content: [defined(changed)] },
+            ]);
+        });
+
+        it('keeps a definition and the removal that follows it', () => {
+            expect(systemOf(pending([defined(tool('b'))], [removal('b')]))).toEqual([
+                { role: 'system', content: [defined(tool('b')), removal('b')] },
+            ]);
+        });
+
+        it('keeps only the last definition of a tool', () => {
+            const v2 = tool('b', 'v2');
+            expect(systemOf(pending([defined(tool('b'))], [removal('b')], [defined(v2)]))).toEqual([
+                { role: 'system', content: [defined(v2)] },
+            ]);
+        });
     });
 });
