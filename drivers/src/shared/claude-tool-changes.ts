@@ -115,8 +115,15 @@ export function canUseClaudeInlineTools(model: string, provider: string): boolea
     return INLINE_TOOL_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
 }
 
-/** Whether this request defines new and changed tools by value (see claudeInlineToolWrites). */
+/**
+ * Whether this request defines new and changed tools by value (see claudeInlineToolWrites). Always true for a
+ * conversation with a signed compaction `tool_changes` field: that block needs the inline-tools beta on every target
+ * and cannot be rewritten, so the rest of the conversation is replayed as stored rather than converted to references,
+ * which would lose a definition made after the compaction to the one the block signed.
+ */
 export function usesClaudeInlineTools(model: string, provider: string, conversation: unknown): boolean {
+    const messages = (conversation as { messages?: unknown } | null | undefined)?.messages;
+    if (Array.isArray(messages) && containsSignedClaudeToolChanges(messages)) return true;
     if (!canUseClaudeInlineTools(model, provider)) return false;
     return claudeInlineToolWrites.enabled || inlineToolMap(getClaudeToolState(conversation)).size > 0;
 }
@@ -345,6 +352,11 @@ export function containsClaudeToolChanges(messages: MessageParam[]): boolean {
  */
 function hasSignedToolChanges(block: unknown): boolean {
     return isClaudeCompactionBlock(block) && Array.isArray((block as { tool_changes?: unknown }).tool_changes);
+}
+
+/** Whether a compaction block in the messages carries a signed `tool_changes` field (see hasSignedToolChanges). */
+export function containsSignedClaudeToolChanges(messages: MessageParam[]): boolean {
+    return messages.some((message) => Array.isArray(message.content) && message.content.some(hasSignedToolChanges));
 }
 
 /**
