@@ -85,6 +85,7 @@ import {
     claudeContinueTurn,
     claudeToolChangeName,
     clearClaudeToolState,
+    containsClaudeToolChanges,
     containsClaudeToolDefinitions,
     getClaudeToolState,
     INLINE_TOOLS_BETA,
@@ -1080,13 +1081,15 @@ export function getClaudePayload(
     if (toolState && !hasRequestedTools && model_options?.tool_choice !== 'none') {
         logModelOptionException(logger, modelName, model_options, ['tool_choice'], 'claude_declared_tools');
     }
-    if (toolState && containsClaudeToolDefinitions(sanitizedMessages)) {
-        // Also covers changes by reference, so the by-reference beta is not sent with it.
+    const changesTools =
+        toolState !== undefined &&
+        (toolState.declared.some((tool) => tool.deferred) || containsClaudeToolChanges(sanitizedMessages));
+    // A conversation that defines tools by value replays every tool change, compacted ones included, under the
+    // inline-tools beta: a change may name a tool defined only in the messages. The beta also covers changes by
+    // reference, so the by-reference beta is not sent with it.
+    if (toolState && (containsClaudeToolDefinitions(sanitizedMessages) || (inlineTools && changesTools))) {
         betas.push(INLINE_TOOLS_BETA);
-    } else if (
-        toolState &&
-        (toolState.declared.some((tool) => tool.deferred) || containsToolChanges(sanitizedMessages))
-    ) {
+    } else if (changesTools) {
         betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
     }
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
@@ -1370,10 +1373,6 @@ function mergeToolChangeMessages(messages: MessageParam[]): MessageParam {
     }
     const content = blocks.filter((block) => !isClaudeToolChangeBlock(block) || kept.has(block));
     return { role: 'system', content } as MessageParam;
-}
-
-function containsToolChanges(messages: MessageParam[]): boolean {
-    return messages.some((message) => Array.isArray(message.content) && message.content.some(isClaudeToolChangeBlock));
 }
 
 // ============================================================================

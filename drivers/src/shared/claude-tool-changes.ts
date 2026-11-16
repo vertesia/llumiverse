@@ -327,6 +327,18 @@ function compactionToolChanges(block: unknown): unknown[] {
 }
 
 /**
+ * Whether the messages change tools, in a tool-change block or in the `tool_changes` of a compaction block. Either
+ * needs a tool-change beta to be replayed.
+ */
+export function containsClaudeToolChanges(messages: MessageParam[]): boolean {
+    return messages.some(
+        (message) =>
+            Array.isArray(message.content) &&
+            message.content.some((block) => isClaudeToolChangeBlock(block) || compactionToolChanges(block).length > 0),
+    );
+}
+
+/**
  * Whether the messages define a tool by value, in a tool-change block or in the `tool_changes` of a compaction
  * block. Either needs the inline-tools beta.
  */
@@ -363,25 +375,37 @@ export function referenceInlineToolChanges(messages: MessageParam[], state: Clau
     }
     // Stored tool changes all follow the first declaration (applyClaudeToolChanges strips older ones), whose tools
     // are the ones loaded up front.
-    const visible = new Set(state.declared.filter((tool) => !tool.deferred).map((tool) => tool.definition.name));
+    const loaded = state.declared.filter((tool) => !tool.deferred).map((tool) => tool.definition.name);
+    let visible = new Set(loaded);
     const result: MessageParam[] = [];
     for (const message of messages) {
-        if (!Array.isArray(message.content) || !message.content.some(isClaudeToolChangeBlock)) {
+        if (!Array.isArray(message.content)) {
             result.push(message);
             continue;
         }
         const content: unknown[] = [];
         for (const block of message.content as unknown[]) {
             const name = claudeToolChangeName(block);
-            if (name === undefined) {
-                // A compaction block is sent back unchanged; its tool changes still change what the model can call.
-                for (const change of compactionToolChanges(block)) applyToolChange(visible, change);
-                content.push(block);
-            } else if (applyToolChange(visible, block)) {
-                content.push(isClaudeToolDefinitionBlock(block) ? referenceAddition(name) : block);
+            if (name !== undefined) {
+                if (applyToolChange(visible, block)) {
+                    content.push(isClaudeToolDefinitionBlock(block) ? referenceAddition(name) : block);
+                }
+                continue;
             }
+            if (isClaudeCompactionBlock(block)) {
+                // A compaction block is sent back unchanged. Its tool changes take the request's tools to the tool
+                // set at the end of the range it replaces, so later changes apply to that set.
+                visible = new Set(loaded);
+                for (const change of compactionToolChanges(block)) applyToolChange(visible, change);
+            }
+            content.push(block);
         }
-        if (content.length > 0) result.push({ ...message, content } as MessageParam);
+        // Keep untouched messages as they were, so the rest of the history is replayed byte for byte.
+        if (content.length === message.content.length && content.every((block, i) => block === message.content[i])) {
+            result.push(message);
+        } else if (content.length > 0) {
+            result.push({ ...message, content } as MessageParam);
+        }
     }
     return result;
 }
