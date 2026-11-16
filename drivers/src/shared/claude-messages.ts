@@ -81,11 +81,11 @@ import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeT
 import {
     applyClaudeToolChanges,
     type ClaudeConversationMeta,
-    canUseClaudeInlineTools,
     canUseClaudeToolChanges,
     claudeContinueTurn,
     claudeToolChangeName,
     clearClaudeToolState,
+    containsClaudeToolDefinitions,
     getClaudeToolState,
     INLINE_TOOLS_BETA,
     isClaudeToolChangeBlock,
@@ -94,6 +94,7 @@ import {
     referenceInlineToolChanges,
     renderClaudeTools,
     stripClaudeToolChanges,
+    usesClaudeInlineTools,
 } from './claude-tool-changes.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
@@ -1045,7 +1046,7 @@ export function getClaudePayload(
     // tools the old way and leave out any tool-change blocks recorded while the conversation ran elsewhere.
     // Where tools cannot be defined by value, tool definitions stored by an inline-tools request go in `tools`.
     const toolState = canUseClaudeToolChanges(modelName, provider) ? getClaudeToolState(prompt) : undefined;
-    const inlineTools = canUseClaudeInlineTools(modelName, provider);
+    const inlineTools = usesClaudeInlineTools(modelName, provider, prompt);
     const promptMessages = !toolState
         ? stripClaudeToolChanges(prompt.messages)
         : inlineTools
@@ -1079,7 +1080,7 @@ export function getClaudePayload(
     if (toolState && !hasRequestedTools && model_options?.tool_choice !== 'none') {
         logModelOptionException(logger, modelName, model_options, ['tool_choice'], 'claude_declared_tools');
     }
-    if (toolState && containsToolDefinitions(sanitizedMessages)) {
+    if (toolState && containsClaudeToolDefinitions(sanitizedMessages)) {
         // Also covers changes by reference, so the by-reference beta is not sent with it.
         betas.push(INLINE_TOOLS_BETA);
     } else if (
@@ -1375,12 +1376,6 @@ function containsToolChanges(messages: MessageParam[]): boolean {
     return messages.some((message) => Array.isArray(message.content) && message.content.some(isClaudeToolChangeBlock));
 }
 
-function containsToolDefinitions(messages: MessageParam[]): boolean {
-    return messages.some(
-        (message) => Array.isArray(message.content) && message.content.some(isClaudeToolDefinitionBlock),
-    );
-}
-
 // ============================================================================
 // Streaming conversation builder (called after stream completes)
 // ============================================================================
@@ -1561,7 +1556,7 @@ function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudeProm
         ? applyClaudeToolChanges(
               conversation,
               options.tools as Tool[] | undefined,
-              canUseClaudeInlineTools(options.model, provider),
+              usesClaudeInlineTools(options.model, provider, conversation),
           )
         : clearClaudeToolState(conversation);
 }

@@ -16,6 +16,8 @@
  * A conversation can move between the two: a by-reference request moves the inline definitions into `tools` and
  * stores the `tool_definition` blocks as references (see applyClaudeToolChanges).
  *
+ * New inline definitions are written only once claudeInlineToolWrites is enabled; until then this module reads them.
+ *
  * Platforms and models: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
  */
 
@@ -34,6 +36,7 @@ import {
     setConversationMeta,
     supportsMidConversationToolChanges,
 } from '@llumiverse/core';
+import { isClaudeCompactionBlock } from './claude-compaction.js';
 
 /**
  * The user turn added after a trailing assistant turn, which Claude 4.6+ would otherwise treat as prefill. A new
@@ -68,6 +71,14 @@ const TOOL_CHANGE_PROVIDERS = new Set<string>([
  */
 const INLINE_TOOL_PROVIDERS = new Set<string>([Providers.anthropic]);
 
+/**
+ * Whether a request may start defining tools by value. Off until a release that reads inline definitions is deployed
+ * wherever conversations are resumed: an earlier release sends a stored `tool_definition` block under the
+ * by-reference beta, which the API rejects. Until then, only a conversation that already holds inline definitions
+ * (stored by a release with writes on) keeps defining tools by value; every other one changes tools by reference.
+ */
+export const claudeInlineToolWrites = { enabled: false };
+
 type ClaudeToolChangeBlock = BetaRequestToolAdditionBlock | BetaRequestToolRemovalBlock;
 
 interface DeclaredClaudeTool {
@@ -99,13 +110,24 @@ export function canUseClaudeToolChanges(model: string, provider: string): boolea
     return TOOL_CHANGE_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
 }
 
-/** Whether new and changed tools can be defined by value. The beta covers the models of tool changes. */
+/** Whether the platform accepts tools defined by value. The beta covers the models of tool changes. */
 export function canUseClaudeInlineTools(model: string, provider: string): boolean {
     return INLINE_TOOL_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
 }
 
+/** Whether this request defines new and changed tools by value (see claudeInlineToolWrites). */
+export function usesClaudeInlineTools(model: string, provider: string, conversation: unknown): boolean {
+    if (!canUseClaudeInlineTools(model, provider)) return false;
+    return claudeInlineToolWrites.enabled || inlineToolMap(getClaudeToolState(conversation)).size > 0;
+}
+
 export function getClaudeToolState(conversation: unknown): ClaudeToolState | undefined {
     return (getConversationMeta(conversation) as ClaudeConversationMeta).claude_tools;
+}
+
+/** The stored inline definitions by name. A Map, so a tool named like an Object property (`constructor`) is not found on the prototype. */
+function inlineToolMap(state: ClaudeToolState | undefined): Map<string, Tool> {
+    return new Map(state?.inline ? Object.entries(state.inline) : []);
 }
 
 function withoutRequestFields(tool: Tool): Tool {
@@ -152,10 +174,10 @@ export function clearClaudeToolState<T extends object>(conversation: T): T {
  * `tools`; returns the state itself when nothing is inline.
  */
 function withInlineToolsDeclared(state: ClaudeToolState): ClaudeToolState {
-    if (!state.inline || Object.keys(state.inline).length === 0) return state;
+    if (!state.inline) return state;
     const declared = [...state.declared];
     const declaredIndex = new Map(declared.map((tool, index) => [tool.definition.name, index]));
-    for (const definition of Object.values(state.inline)) {
+    for (const definition of inlineToolMap(state).values()) {
         const index = declaredIndex.get(definition.name);
         if (index === undefined) {
             declaredIndex.set(definition.name, declared.length);
@@ -222,17 +244,17 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
 
     const declared = [...state.declared];
     const declaredIndex = new Map(declared.map((tool, index) => [tool.definition.name, index]));
-    const inline: Record<string, Tool> = { ...state.inline };
+    const inline = inlineToolMap(state);
     const visible = new Set(state.visible);
     const additions: BetaRequestToolAdditionBlock[] = [];
     for (const definition of requested) {
         const { name } = definition;
         const index = declaredIndex.get(name);
-        const current = inline[name] ?? (index === undefined ? undefined : declared[index].definition);
+        const current = inline.get(name) ?? (index === undefined ? undefined : declared[index].definition);
         const changed = current !== undefined && !sameDefinition(current, definition);
         if (inlineTools && (current === undefined || changed)) {
             // A new tool, or a new definition that replaces the earlier one from here on: `tools` stays as sent.
-            inline[name] = definition;
+            inline.set(name, definition);
             additions.push(definitionAddition(definition));
             continue;
         }
@@ -248,7 +270,8 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
         if (!visible.has(name)) {
             // Re-offer an inline tool by value: a tool_addition that defined it may have cancelled out with a
             // removal before it was sent (see mergeToolChangeMessages). An identical definition is a no-op.
-            additions.push(name in inline ? definitionAddition(inline[name]) : referenceAddition(name));
+            const inlineDefinition = inline.get(name);
+            additions.push(inlineDefinition ? definitionAddition(inlineDefinition) : referenceAddition(name));
         }
     }
     const requestedNames = new Set(requested.map((tool) => tool.name));
@@ -259,7 +282,8 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     const nextState: ClaudeToolState = {
         declared,
         visible: [...requestedNames],
-        ...(Object.keys(inline).length > 0 && { inline }),
+        // Object.fromEntries defines own properties, so a tool named `__proto__` is stored like any other.
+        ...(inline.size > 0 && { inline: Object.fromEntries(inline) }),
     };
     if (additions.length === 0 && removals.length === 0) {
         return setClaudeToolState(conversation, nextState);
@@ -295,6 +319,29 @@ export function isClaudeToolDefinitionBlock(block: unknown): boolean {
     return change?.type === 'tool_addition' && change.tool?.type === 'tool_definition';
 }
 
+/** The `tool_changes` a compaction block carries: the changes of the range it summarizes, sent back unchanged. */
+function compactionToolChanges(block: unknown): unknown[] {
+    if (!isClaudeCompactionBlock(block)) return [];
+    const changes = (block as { tool_changes?: unknown }).tool_changes;
+    return Array.isArray(changes) ? changes : [];
+}
+
+/**
+ * Whether the messages define a tool by value, in a tool-change block or in the `tool_changes` of a compaction
+ * block. Either needs the inline-tools beta.
+ */
+export function containsClaudeToolDefinitions(messages: MessageParam[]): boolean {
+    return messages.some(
+        (message) =>
+            Array.isArray(message.content) &&
+            message.content.some(
+                (block) =>
+                    isClaudeToolDefinitionBlock(block) ||
+                    compactionToolChanges(block).some(isClaudeToolDefinitionBlock),
+            ),
+    );
+}
+
 /** The name of the tool a tool-change block adds or removes, by reference or by value. */
 export function claudeToolChangeName(block: unknown): string | undefined {
     if (!isClaudeToolChangeBlock(block)) return undefined;
@@ -327,18 +374,29 @@ export function referenceInlineToolChanges(messages: MessageParam[], state: Clau
         for (const block of message.content as unknown[]) {
             const name = claudeToolChangeName(block);
             if (name === undefined) {
+                // A compaction block is sent back unchanged; its tool changes still change what the model can call.
+                for (const change of compactionToolChanges(block)) applyToolChange(visible, change);
                 content.push(block);
-            } else if ((block as { type: string }).type === 'tool_removal') {
-                visible.delete(name);
-                content.push(block);
-            } else if (!visible.has(name)) {
-                visible.add(name);
+            } else if (applyToolChange(visible, block)) {
                 content.push(isClaudeToolDefinitionBlock(block) ? referenceAddition(name) : block);
             }
         }
         if (content.length > 0) result.push({ ...message, content } as MessageParam);
     }
     return result;
+}
+
+/** Apply a tool change to the callable names. False for an addition of a tool that is already callable. */
+function applyToolChange(visible: Set<string>, change: unknown): boolean {
+    const name = claudeToolChangeName(change);
+    if (name === undefined) return true;
+    if ((change as { type: string }).type === 'tool_removal') {
+        visible.delete(name);
+        return true;
+    }
+    if (visible.has(name)) return false;
+    visible.add(name);
+    return true;
 }
 
 /**
