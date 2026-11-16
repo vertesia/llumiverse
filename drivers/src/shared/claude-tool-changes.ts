@@ -16,7 +16,7 @@
  * A conversation can move between the two: a by-reference request moves the inline definitions into `tools` and
  * stores the `tool_definition` blocks as references (see applyClaudeToolChanges).
  *
- * New inline definitions are written only once claudeInlineToolWrites is enabled; until then this module reads them.
+ * New inline definitions are written while claudeInlineToolWrites is enabled (the default).
  *
  * Platforms and models: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
  */
@@ -72,12 +72,12 @@ const TOOL_CHANGE_PROVIDERS = new Set<string>([
 const INLINE_TOOL_PROVIDERS = new Set<string>([Providers.anthropic]);
 
 /**
- * Whether a request may start defining tools by value. Off until a release that reads inline definitions is deployed
- * wherever conversations are resumed: an earlier release sends a stored `tool_definition` block under the
- * by-reference beta, which the API rejects. Until then, only a conversation that already holds inline definitions
- * (stored by a release with writes on) keeps defining tools by value; every other one changes tools by reference.
+ * Whether a request may start defining tools by value. A release that reads inline definitions must be deployed
+ * wherever conversations are resumed before this is on: an earlier release sends a stored `tool_definition` block
+ * under the by-reference beta, which the API rejects. When off, only a conversation that already holds inline
+ * definitions keeps defining tools by value; every other one changes tools by reference.
  */
-export const claudeInlineToolWrites = { enabled: false };
+export const claudeInlineToolWrites = { enabled: true };
 
 type ClaudeToolChangeBlock = BetaRequestToolAdditionBlock | BetaRequestToolRemovalBlock;
 
