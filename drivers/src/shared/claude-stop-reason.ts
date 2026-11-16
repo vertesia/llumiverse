@@ -1,6 +1,9 @@
 import type { Logger } from '@llumiverse/core';
 import { logModelRefusal, type RefusalLogContext } from './refusal-log.js';
 
+/** Claude stop reasons that can end a response in the middle of its last content block. */
+export const CLAUDE_CUT_OFF_STOP_REASONS = new Set(['max_tokens', 'model_context_window_exceeded', 'refusal']);
+
 export function claudeFinishReason(reason: string | undefined): string | undefined {
     if (!reason) return undefined;
     switch (reason) {

@@ -763,6 +763,18 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      * Takes precedence over `compaction`, which providers do not accept on the same request.
      */
     compact_conversation?: CompactConversationOptions;
+    /**
+     * Keep the conversation on the provider between requests (Claude message threads, beta), so a request sends only
+     * the turns added since the previous response. This means fewer request bytes and a lower time to first token;
+     * pricing and rate limits are unchanged, and the model still reads the whole conversation.
+     *
+     * The returned `conversation` stays complete and remains the source of truth: when the provider no longer holds
+     * the thread (it expires after a few idle minutes) or rejects it, the full conversation is sent instead. Threads
+     * are not eligible for zero data retention. Ignored by providers and models without threads, and on requests with
+     * `compaction` or `compact_conversation`, which cannot be combined with a thread.
+     * - undefined / false (default): every request sends the full conversation
+     */
+    message_thread?: boolean;
 }
 
 /** On-demand conversation compaction. Omitted fields leave the provider's defaults in place. */
