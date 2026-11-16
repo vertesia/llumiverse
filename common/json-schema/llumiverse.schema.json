@@ -61,6 +61,12 @@
                 "tool_support": {
                     "type": "boolean"
                 },
+                "deprecation_date": {
+                    "type": "string"
+                },
+                "retirement_date": {
+                    "type": "string"
+                },
                 "environment": {
                     "type": "string"
                 }

@@ -50,3 +50,43 @@ describe('model listing metadata precedence', () => {
         });
     });
 });
+
+describe('uncatalogued model inputs', () => {
+    it('drops provider-listed inputs the driver cannot send', () => {
+        const runtime = { input_modalities: ['text', 'image', 'audio', 'video'], output_modalities: ['text'] };
+        expect(
+            resolveModelListingMetadata('perceptron/perceptron-mk1.5', Providers.openrouter, runtime).input_modalities,
+        ).toEqual(['text', 'image']);
+        expect(
+            resolveModelListingMetadata('perceptron-mk1.5', Providers.openai_compatible, runtime).input_modalities,
+        ).toEqual(['text', 'image', 'audio']);
+    });
+});
+
+describe('model listing lifecycle dates', () => {
+    it('prefers dates reported by the provider over the curated table', () => {
+        expect(
+            resolveModelListingMetadata('anthropic.claude-opus-4-1-20250805-v1:0', Providers.bedrock, {
+                deprecation_date: new Date('2026-07-09T00:00:00Z'),
+                retirement_date: new Date('2027-01-09T00:00:00Z'),
+            }),
+        ).toMatchObject({ deprecation_date: '2026-07-09', retirement_date: '2027-01-09' });
+    });
+
+    it('fills dates from the curated table when the provider reports none', () => {
+        expect(
+            resolveModelListingMetadata('publishers/google/models/gemini-3.6-flash', Providers.vertexai),
+        ).toMatchObject({ retirement_date: '2026-11-19' });
+        expect(resolveModelListingMetadata('gpt-4o', Providers.azure_foundry, { version: '2024-05-13' })).toMatchObject(
+            { retirement_date: '2027-01-14' },
+        );
+    });
+
+    it('omits lifecycle keys when no date is known', () => {
+        const metadata = resolveModelListingMetadata('gemini-3.8-flash', Providers.vertexai, {
+            retirement_date: null,
+        });
+        expect(metadata).not.toHaveProperty('retirement_date');
+        expect(metadata).not.toHaveProperty('deprecation_date');
+    });
+});

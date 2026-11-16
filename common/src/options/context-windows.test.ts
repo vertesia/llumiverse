@@ -85,3 +85,49 @@ describe('open-model context window limits', () => {
         expect(getContextWindowSize('future-provider/new-capability-v1')).toBeUndefined();
     });
 });
+
+describe('Grok, GLM and Qwen context window limits', () => {
+    it.each([
+        ['grok-4.7', 500_000],
+        ['x-ai/grok-4.6', 500_000],
+        ['grok-4.5', 500_000],
+        ['grok-4.3', 1_000_000],
+        // The 4.20 line is not ordered after the single-digit releases.
+        ['grok-4.20-0309-reasoning', 1_000_000],
+        ['grok-build-0.1', 256_000],
+    ])('uses the published xAI context window for %s', (model, contextWindow) => {
+        expect(getContextWindowSize(model)).toBe(contextWindow);
+    });
+
+    it.each([
+        ['glm-4.5', 128_000, 32_768],
+        ['z-ai/glm-4.6', 200_000, 128_000],
+        ['glm-4.7-flash', 200_000, 128_000],
+        ['glm-5-turbo', 200_000, 128_000],
+        ['glm-5.1', 200_000, 128_000],
+        ['glm-5.2', 1_000_000, 128_000],
+        ['glm-5.3', 1_000_000, 131_072],
+        // Vision variants keep the earlier rule until their limits are published.
+        ['glm-4.5v', 128_000, 32_768],
+        ['glm-5v-turbo', 128_000, 32_768],
+    ])('uses the published Z.ai limits for %s', (model, contextWindow, maxOutput) => {
+        expect(getContextWindowSize(model)).toBe(contextWindow);
+        expect(getMaxOutputTokens(model)).toBe(maxOutput);
+    });
+
+    it.each([
+        ['qwen3.5-plus', 1_000_000, 65_536],
+        ['qwen/qwen3.6-flash', 1_000_000, 65_536],
+        ['qwen3.7-max', 1_000_000, 131_072],
+        ['qwen/qwen3.8-max-0902', 1_000_000, 131_072],
+        ['qwen3.9-plus', 1_000_000, 131_072],
+        // https://www.alibabacloud.com/help/en/model-studio/qwen3-8-omni-flash
+        ['qwen/qwen3.8-omni-flash', 1_000_000, 131_072],
+        // Open-weight sizes and earlier hosted tiers keep the open-weight window.
+        ['qwen/qwen3.8-27b', 262_144, 32_768],
+        ['qwen3-max', 262_144, 32_768],
+    ])('uses the published Qwen hosted-tier limits for %s', (model, contextWindow, maxOutput) => {
+        expect(getContextWindowSize(model)).toBe(contextWindow);
+        expect(getMaxOutputTokens(model)).toBe(maxOutput);
+    });
+});

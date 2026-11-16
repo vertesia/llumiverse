@@ -47,7 +47,9 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         (!isDedicatedInferenceModel(m.id, this.provider) || this.isFileAudioModel(m.id)),
                 )
                 .map((m) => {
-                    const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
+                    const modelMetadata = resolveModelListingMetadata(m.id, this.provider, {
+                        retirement_date: m.shutdown_date,
+                    });
                     let owner = m.owned_by;
                     if (owner === 'system') {
                         owner = 'unknown';

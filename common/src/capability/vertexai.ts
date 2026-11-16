@@ -1,4 +1,4 @@
-import { isModelFamilyVersionGTE } from '../options/version-parsing.js';
+import { isGeminiOmniVideoModel, isModelFamilyVersionGTE } from '../options/version-parsing.js';
 import type { ModelModalities } from '../types.js';
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
@@ -50,6 +50,11 @@ const RECORD_FAMILY_CAPABILITIES: Record<
         input: { text: true, image: true, video: true, audio: true, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: true,
+    },
+    'gemini-omni': {
+        input: { text: true, image: true, video: true, audio: false, embed: false },
+        output: { text: true, image: false, video: true, audio: false, embed: false },
+        tool_support: false,
     },
     'gemini-nano-banana': {
         input: { text: true, image: true, video: true, audio: false, embed: false },
@@ -265,6 +270,9 @@ export function getModelCapabilitiesVertexAI(model: string): {
         // is documented above.
         return RECORD_FAMILY_CAPABILITIES['llama-4'];
     }
+    // Gemini Omni takes text, image and video but not audio, and generates video.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash
+    if (isGeminiOmniVideoModel(normalized)) return RECORD_FAMILY_CAPABILITIES['gemini-omni'];
     // Dedicated Gemini variants must not inherit the general chat model's modalities or tools.
     if (/^gemini-\d+(?:\.\d+)?-transcribe(?:-|$)/.test(normalized))
         return RECORD_FAMILY_CAPABILITIES['gemini-transcribe'];

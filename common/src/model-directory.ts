@@ -222,7 +222,11 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             return {
                 input: {
                     text: true,
-                    image: model.includes('vision') || isModelFamilyVersionGTE(model, 'grok-', 4, 3),
+                    // https://docs.x.ai/developers/models/grok-build-0.1 lists "text, image → text".
+                    image:
+                        model.includes('vision') ||
+                        model.includes('grok-build') ||
+                        isModelFamilyVersionGTE(model, 'grok-', 4, 3),
                 },
                 output: { text: true },
                 tool_support: true,
@@ -231,7 +235,14 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             return {
                 // Future Llama generations inherit the newest known family behavior until a provider documents
                 // a narrower exception.
-                input: { text: true, image: model.includes('vision') || isLlamaVersionGte(model, 4) },
+                // Llama Guard 4 takes mixed text-and-image prompts. https://huggingface.co/meta-llama/Llama-Guard-4-12B
+                input: {
+                    text: true,
+                    image:
+                        model.includes('vision') ||
+                        isLlamaVersionGte(model, 4) ||
+                        isModelFamilyVersionGTE(model, 'llama-guard-', 4, 0),
+                },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
@@ -243,8 +254,14 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                     !normalized.includes('gemma-3-1b') &&
                     !normalized.includes('gemma-3-270m')) ||
                 normalized.includes('gemma-4');
+            // Gemma 4 takes video; audio only on the E2B, E4B and 12B sizes. https://ai.google.dev/gemma/docs/core
             return {
-                input: { text: true, image },
+                input: {
+                    text: true,
+                    image,
+                    video: normalized.includes('gemma-4'),
+                    audio: /gemma-4-(?:e2b|e4b|12b)(?:[-_.:]|$)/.test(normalized),
+                },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
@@ -252,8 +269,17 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
         }
         case 'qwen': {
             const normalized = model.toLowerCase();
+            // From Qwen 3.5 the hosted tiers and open-weight models take image and video
+            // (https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash). Exceptions: the current Qwen3.7-Max is
+            // text-only (https://www.alibabacloud.com/help/en/model-studio/qwen3-7-max), OpenRouter lists the 2.4T
+            // open-weight model as text-only, and coder models stay text-only.
+            const qwenMultimodal =
+                isQwenVersionGte(normalized, 3, 5) &&
+                !normalized.includes('coder') &&
+                !/qwen3\.7-max(?![-_]2026-06-08)/.test(normalized) &&
+                !/qwen\d+(?:\.\d+)?-\d+(?:\.\d+)?t(?:[-_.:]|$)/.test(normalized);
             const qwenVision =
-                normalized.includes('qwen3.5') ||
+                qwenMultimodal ||
                 ['qwen2.5', 'qwen3'].some((familyPrefix) => {
                     const familyIndex = normalized.indexOf(familyPrefix);
                     if (familyIndex === -1) return false;
@@ -261,7 +287,13 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                     return suffix.includes('-vl') || suffix.includes('.vl');
                 });
             return {
-                input: { text: true, image: qwenVision },
+                input: {
+                    text: true,
+                    image: qwenVision,
+                    video: qwenMultimodal,
+                    // https://www.alibabacloud.com/help/en/model-studio/qwen3-8-omni-flash
+                    audio: qwenMultimodal && normalized.includes('-omni'),
+                },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
@@ -272,7 +304,9 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 // DeepSeek V4.1 Flash adds image input; earlier and non-Flash DeepSeek models remain text-only.
                 input: {
                     text: true,
-                    image: isModelFamilyVersionGTE(model, 'deepseek-v', 4, 1) && model.includes('flash'),
+                    image:
+                        (isModelFamilyVersionGTE(model, 'deepseek-v', 4, 1) && model.includes('flash')) ||
+                        model.includes('vision'),
                 },
                 output: { text: true },
                 tool_support: true,
@@ -280,14 +314,25 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             };
         case 'kimi':
             return {
-                // Kimi K2.5 added image input; later generations keep it.
-                input: { text: true, image: isKimiVersionGte(model, 2, 5) },
+                // Kimi K2.5 added image input and K3 video. https://platform.kimi.ai/docs/overview
+                input: { text: true, image: isKimiVersionGte(model, 2, 5), video: isKimiVersionGte(model, 3, 0) },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
             };
-        case 'glm':
-            return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
+        case 'glm': {
+            // The GLM vision models (`glm-4.6v`, `glm-5v-turbo`) and the GLM-5.3 Flash tier take image and video; the
+            // other GLM models are text-only. https://docs.z.ai/guides/llm/glm-5.3-flash
+            const vision =
+                /glm-\d+(?:\.\d+)?v(?:[-_.:]|$)/.test(model) ||
+                (isModelFamilyVersionGTE(model, 'glm-', 5, 3) && model.includes('-flash'));
+            return {
+                input: { text: true, image: vision, video: vision },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        }
         case 'minimax': {
             // MiniMax M3 adds image and video input. https://openrouter.ai/minimax/minimax-m3
             const isM3OrLater = isModelFamilyVersionGTE(model, 'minimax-m', 3, 0);
@@ -311,13 +356,16 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support: true,
                 tool_support_streaming: true,
             };
-        case 'mimo':
+        case 'mimo': {
+            // MiMo-V2.5-Pro is a text-only language model. https://huggingface.co/XiaomiMiMo/MiMo-V2.5-Pro
+            const multimodal = !model.includes('mimo-v2.5-pro');
             return {
-                input: { text: true, image: true, video: true, audio: true },
+                input: { text: true, image: multimodal, video: multimodal, audio: multimodal },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
             };
+        }
         case 'step':
             return {
                 input: { text: true, image: true, video: true },
@@ -325,13 +373,23 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support: true,
                 tool_support_streaming: true,
             };
-        case 'nemotron':
+        case 'nemotron': {
+            // https://build.nvidia.com/nvidia/nemotron-3.5-super-vl-120b-a12b (text, image, video),
+            // nemotron-3-nano-omni-30b-a3b-reasoning (video, audio, image, text) and
+            // nemotron-3.5-content-safety (text, image).
+            const omni = model.includes('-omni');
+            const video = omni || /-vl(?:[-_.:]|$)/.test(model);
+            const image =
+                video ||
+                model.includes('nemotron-nano-12b') ||
+                (model.includes('content-safety') && isModelFamilyVersionGTE(model, 'nemotron-', 3, 5));
             return {
-                input: { text: true, image: model.includes('nemotron-nano-12b') },
+                input: { text: true, image, video, audio: omni },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
             };
+        }
         case 'mistral':
             return getMistralModelKnowledge(model).capabilities;
         default:

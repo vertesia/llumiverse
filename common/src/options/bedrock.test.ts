@@ -246,7 +246,8 @@ describe('Bedrock Mantle metadata', () => {
         expect(capabilities.tool_support).toBe(true);
         expect(capabilities.tool_support_streaming).toBe(true);
         expect(getContextWindowSize('xai.grok-4.3')).toBe(1_000_000);
-        expect(getContextWindowSize('xai.grok-5.0')).toBe(1_000_000);
+        // Later generations inherit the newest single-digit release's 500K window (Grok 4.5 to 4.7).
+        expect(getContextWindowSize('xai.grok-5.0')).toBe(500_000);
     });
 
     it('inherits the latest DeepSeek limits for later versions and publisher-style IDs', () => {

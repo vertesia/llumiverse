@@ -370,6 +370,31 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(list).toHaveBeenCalledWith({ limit: 1_000 });
     });
 
+    it('reports the expiration date OpenRouter lists as the retirement date', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const models = [
+            openRouterModel({
+                id: 'openai/gpt-5',
+                name: 'GPT-5',
+                inputModalities: ['text', 'image'],
+                outputModalities: ['text'],
+                expirationDate: '2026-12-11',
+            }),
+            openRouterModel({
+                id: 'future-lab/chat-v2',
+                name: 'Chat v2',
+                inputModalities: ['text'],
+                outputModalities: ['text'],
+                expirationDate: null,
+            }),
+        ];
+        setService(driver, { models: { list: vi.fn(async () => ({ result: { data: models } })) } });
+
+        const listed = await driver.listModels();
+        expect(listed.find((model) => model.id === 'openai/gpt-5')).toMatchObject({ retirement_date: '2026-12-11' });
+        expect(listed.find((model) => model.id === 'future-lab/chat-v2')).not.toHaveProperty('retirement_date');
+    });
+
     it('uses the native embeddings transport and preserves input order', async () => {
         const driver = new OpenRouterDriver({ apiKey: 'test-key' });
         const generate = vi.fn(async () => ({
@@ -441,6 +466,7 @@ interface OpenRouterModelFixture {
     inputModalities: string[];
     outputModalities: string[];
     supportedParameters?: string[];
+    expirationDate?: string | null;
 }
 
 function openRouterModel(fixture: OpenRouterModelFixture): Record<string, unknown> {
@@ -453,5 +479,6 @@ function openRouterModel(fixture: OpenRouterModelFixture): Record<string, unknow
             outputModalities: fixture.outputModalities,
         },
         supportedParameters: fixture.supportedParameters ?? [],
+        ...(fixture.expirationDate !== undefined ? { expirationDate: fixture.expirationDate } : {}),
     };
 }

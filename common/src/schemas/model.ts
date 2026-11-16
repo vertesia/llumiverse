@@ -40,6 +40,11 @@ export const AIModelSchema = z
         input_modalities: z.array(z.string()).optional(),
         output_modalities: z.array(z.string()).optional(),
         tool_support: z.boolean().optional(),
+        // `YYYY-MM-DD` dates the provider announced: when the model was deprecated (or moved to legacy), and when
+        // requests to it stop being served. Read from the provider's model listing when it reports them, otherwise
+        // from llumiverse's curated table; absent when no date is announced.
+        deprecation_date: z.string().optional(),
+        retirement_date: z.string().optional(),
         environment: z.string().optional(),
     })
     .meta({ id: 'AIModel' });

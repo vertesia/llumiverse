@@ -18,6 +18,7 @@ import OpenAI from 'openai';
 import type { xAiDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
+import { resolveModelLifecycleDates } from '../shared/model-listing.js';
 
 export type { xAiDriverOptions } from '../driver-options.js';
 
@@ -172,6 +173,7 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
                     name: model.id,
                     description: `${model.id} by ${model.owned_by}`,
                     is_multimodal: capabilities.input.image === true,
+                    ...resolveModelLifecycleDates(model.id, this.provider),
                     input_modalities: inputModalities,
                     output_modalities: outputModalities,
                     tool_support: capabilities.tool_support,
@@ -194,6 +196,7 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
                 version: model.version,
                 owner: model.owned_by,
                 type: ModelType.Image,
+                ...resolveModelLifecycleDates(model.id, this.provider),
                 can_stream: false,
                 is_multimodal: inputModalities.length > 1,
                 input_modalities: inputModalities,

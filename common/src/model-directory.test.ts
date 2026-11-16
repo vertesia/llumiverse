@@ -458,6 +458,43 @@ describe('central model directory', () => {
         expect(!!resolveModelProfile(model, Providers.openai_compatible).capabilities.input.audio).toBe(audio);
     });
 
+    // Each row is the input list the model's maker publishes.
+    it.each([
+        ['qwen/qwen3.5-plus-02-15', 'text,image,video'],
+        ['qwen/qwen3.6-27b', 'text,image,video'],
+        ['qwen/qwen3.7-plus', 'text,image,video'],
+        ['qwen/qwen3.7-max', 'text'],
+        ['qwen3.7-max-2026-06-08', 'text,image,video'],
+        ['qwen/qwen3.8-flash', 'text,image,video'],
+        ['qwen/qwen3.8-omni-flash', 'text,image,video,audio'],
+        ['qwen/qwen3.8-2.4t-a95b', 'text'],
+        ['qwen/qwen3-coder-next', 'text'],
+        ['qwen/qwen3-vl-8b-instruct', 'text,image'],
+        ['z-ai/glm-4.6v', 'text,image,video'],
+        ['z-ai/glm-5v-turbo', 'text,image,video'],
+        ['z-ai/glm-5.3-flashx', 'text,image,video'],
+        ['z-ai/glm-5.3', 'text'],
+        ['z-ai/glm-4.7-flash', 'text'],
+        ['moonshotai/kimi-k3.1-pro', 'text,image,video'],
+        ['moonshotai/kimi-k2.6', 'text,image'],
+        ['nvidia/nemotron-3.5-super-vl', 'text,image,video'],
+        ['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning', 'text,image,video,audio'],
+        ['nvidia/nemotron-3.5-content-safety', 'text,image'],
+        ['nvidia/nemotron-3.5-lightning', 'text'],
+        ['google/gemma-4-31b-it', 'text,image,video'],
+        ['google/gemma-4-e4b-it', 'text,image,video,audio'],
+        ['x-ai/grok-build-0.1', 'text,image'],
+        ['meta-llama/llama-guard-4-12b', 'text,image'],
+        ['deepseek/deepseek-v4-flash-vision-exp', 'text,image'],
+        ['xiaomi/mimo-v2.5-pro', 'text'],
+        ['xiaomi/mimo-v2.5', 'text,image,video,audio'],
+        ['google/gemini-omni-1.2-flash', 'text,image,video'],
+    ])('describes %s input as %s', (model, expected) => {
+        const input = resolveModelProfile(model, Providers.openai_compatible).capabilities.input;
+        const modalities = (['text', 'image', 'video', 'audio'] as const).filter((modality) => input[modality]);
+        expect(modalities.join(',')).toBe(expected);
+    });
+
     it('describes DeepSeek V4 limits and V4.1 Flash image input', () => {
         expect(resolveModelProfile('deepseek-v4-pro', Providers.openai_compatible)).toMatchObject({
             context_window: 1_048_576,

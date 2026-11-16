@@ -28,6 +28,7 @@ import {
     formatClaudePrompt,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
+import { resolveModelLifecycleDates } from '../shared/model-listing.js';
 
 export type { AnthropicDriverOptions } from '../driver-options.js';
 
@@ -106,6 +107,10 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
                 input_modalities: modelModalitiesToArray(capabilities.input),
                 output_modalities: modelModalitiesToArray(capabilities.output),
                 tool_support: capabilities.tool_support,
+                ...resolveModelLifecycleDates(m.id, Providers.anthropic, {
+                    deprecation_date: m.deprecated_at,
+                    retirement_date: m.retires_at,
+                }),
             } satisfies AIModel;
         });
     }

@@ -938,7 +938,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         const models = filter ? result.filter(filter) : result;
         const aiModels = models
             .map((m) => {
-                const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
+                const modelMetadata = resolveModelListingMetadata(m.id, this.provider, {
+                    retirement_date: m.shutdown_date,
+                });
                 let owner = m.owned_by;
                 if (owner === 'system') {
                     owner = 'openai';

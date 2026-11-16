@@ -2347,6 +2347,24 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         foundationModels = foundationModels.filter((m) => shouldIncludeModel(m.modelId, m.providerName));
 
+        // Bedrock lifecycle dates differ by region, and this listing is for one region. Custom models and
+        // single-region inference profiles report no lifecycle, so they take their base model's dates from it.
+        const lifecycleByModelId = new Map<string, BedrockLifecycleDates>();
+        for (const m of foundationModelsList.modelSummaries) {
+            if (!m.modelId || !m.modelLifecycle) continue;
+            lifecycleByModelId.set(m.modelId.toLowerCase(), {
+                deprecation_date: m.modelLifecycle.legacyTime,
+                retirement_date: m.modelLifecycle.endOfLifeTime,
+            });
+        }
+        const baseModelLifecycle = (modelIds: (string | undefined)[]): BedrockLifecycleDates => {
+            for (const modelId of modelIds) {
+                const lifecycle = modelId ? lifecycleByModelId.get(bedrockBaseModelId(modelId)) : undefined;
+                if (lifecycle) return lifecycle;
+            }
+            return {};
+        };
+
         const aiModels: AIModel[] = foundationModels.map((m) => {
             if (!m.modelId) {
                 throw new Error('modelId not found');
@@ -2355,6 +2373,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const modelMetadata = resolveModelListingMetadata(m.modelArn ?? m.modelId, this.provider, {
                 input_modalities: m.inputModalities,
                 output_modalities: m.outputModalities,
+                // Bedrock reports when a model entered Legacy and its end of life; for legacy models only.
+                deprecation_date: m.modelLifecycle?.legacyTime,
+                retirement_date: m.modelLifecycle?.endOfLifeTime,
             });
 
             const model: AIModel = {
@@ -2378,7 +2399,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
                 const capabilityModelId = m.baseModelName ?? m.modelArn;
                 if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
-                const modelMetadata = resolveModelListingMetadata(capabilityModelId, this.provider);
+                const modelMetadata = resolveModelListingMetadata(
+                    capabilityModelId,
+                    this.provider,
+                    baseModelLifecycle([m.baseModelArn]),
+                );
 
                 const model: AIModel = {
                     id: m.modelArn,
@@ -2414,9 +2439,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     }
                 }
 
+                // A cross-region profile routes to regions whose dates this listing does not know, so it gets a date
+                // only when every model it routes to is in this region.
+                const profileModelArns = (p.models ?? []).map((model) => model.modelArn);
+                const singleRegion =
+                    profileModelArns.length > 0 &&
+                    profileModelArns.every((arn) => arn?.includes(`:${this.options.region}:`));
                 const modelMetadata = resolveModelListingMetadata(
                     p.inferenceProfileArn ?? p.inferenceProfileId,
                     this.provider,
+                    singleRegion ? baseModelLifecycle(profileModelArns) : {},
                 );
 
                 if (
@@ -2462,6 +2494,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Its credential resolver and fetch belong to the resources released above.
         this._anthropicService = undefined;
     }
+}
+
+type BedrockLifecycleDates = { deprecation_date?: Date; retirement_date?: Date };
+
+/** The foundation model ID behind a model ARN or a cross-region inference profile ID (`us.anthropic.…`). */
+function bedrockBaseModelId(modelId: string): string {
+    const id = modelId.toLowerCase();
+    return id.slice(id.lastIndexOf('/') + 1).replace(/^(?:[a-z]{2}(?:-gov)?|apac|global)\./, '');
 }
 
 function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): TrainingJob {
