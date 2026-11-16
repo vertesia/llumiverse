@@ -10,13 +10,17 @@ import {
 } from './claude-messages.js';
 import {
     applyClaudeToolChanges,
+    canUseClaudeInlineTools,
     canUseClaudeToolChanges,
     getClaudeToolState,
+    INLINE_TOOLS_BETA,
     MID_CONVERSATION_TOOL_CHANGES_BETA,
     stripClaudeToolChanges,
 } from './claude-tool-changes.js';
 
 const MODEL = 'claude-sonnet-5-5';
+/** A platform that takes tool changes by reference only (no inline tools). */
+const BY_REFERENCE = Providers.vertexai;
 const schema = { type: 'object', properties: { q: { type: 'string' } } } as const;
 const tool = (name: string, description = `${name} tool`): ToolDefinition => ({
     name,
@@ -60,7 +64,7 @@ async function turn(
     tools: ToolDefinition[] | undefined,
     conversation: unknown,
     response: Message,
-    provider = 'anthropic',
+    provider: string = BY_REFERENCE,
     model = MODEL,
     extra: Partial<ExecutionOptions> = {},
 ) {
@@ -574,11 +578,13 @@ async function streamTurn(
         finalMessage: async () => final,
         abort() {},
     }));
-    const completion = await streamClaudeCompletion({ messages: { stream } } as never, prompt, {
-        model: MODEL,
-        tools,
-        conversation,
-    });
+    const completion = await streamClaudeCompletion(
+        { messages: { stream } } as never,
+        prompt,
+        { model: MODEL, tools, conversation },
+        undefined,
+        BY_REFERENCE,
+    );
     const toolNames: string[] = [];
     for await (const chunk of completion) {
         if (typeof chunk === 'object') toolNames.push(...(chunk.tool_use ?? []).map((t) => t.tool_name));
@@ -628,7 +634,7 @@ describe('Claude tool changes on the streaming path', () => {
             [],
             [{ id: 'c2', tool_name: 'b', tool_input: { q: 'x' } }],
             options,
-            'anthropic',
+            BY_REFERENCE,
         );
         const executed = await turn(toolResult('c1'), options.tools, t1.conversation, assistantToolUse('c2', 'b'));
 
@@ -778,7 +784,7 @@ describe('Claude tool changes across turns', () => {
             [tool('a')],
             undefined,
             assistantToolUse('c1', 'a'),
-            'anthropic',
+            BY_REFERENCE,
             MODEL,
             cleanup,
         );
@@ -799,7 +805,7 @@ describe('Claude tool changes across turns', () => {
             [tool('a'), tool('list_items')],
             t1.conversation,
             assistantReply([{ type: 'text', text: 'Listed.' }]),
-            'anthropic',
+            BY_REFERENCE,
             MODEL,
             cleanup,
         );
@@ -823,7 +829,7 @@ describe('Claude tool changes across turns', () => {
             [tool('a'), tool('list_items')],
             t2.conversation,
             assistantToolUse('c3', 'a'),
-            'anthropic',
+            BY_REFERENCE,
             MODEL,
             cleanup,
         );
@@ -888,5 +894,231 @@ describe('Claude cache breakpoints around tool changes', () => {
         const marked = (markedTurn.content as { text: string }[])[0];
         expect(marked).toMatchObject({ cache_control: { type: 'ephemeral' } });
         expect({ prompt, tools }).toEqual(before);
+    });
+});
+
+describe('inline Claude tool definitions', () => {
+    const INLINE = Providers.anthropic;
+    const defined = (definition: ToolDefinition) => ({
+        type: 'tool_addition',
+        tool: { type: 'tool_definition', definition },
+    });
+    const betas = (requestOptions: { headers?: Record<string, string> } | undefined) =>
+        requestOptions?.headers?.['anthropic-beta']?.split(',') ?? [];
+
+    it.each([
+        [Providers.anthropic, MODEL, true],
+        [Providers.anthropic, 'claude-fable-5-2', true],
+        [Providers.anthropic, 'claude-fable-7', true],
+        [Providers.azure_foundry, 'claude-opus-5-5', false],
+        [Providers.azure_foundry, 'claude-fable-5-2', false],
+        [Providers.vertexai, 'claude-sonnet-5-5@20260901', false],
+        [Providers.bedrock, 'global.anthropic.claude-sonnet-5-5', false],
+        [Providers.bedrock_mantle, 'anthropic.claude-opus-5-5', false],
+        [Providers.anthropic, 'claude-sonnet-5', false],
+        [Providers.anthropic, 'claude-opus-4-7', false],
+    ])('canUseClaudeInlineTools: %s with %s: %s', (provider, model, expected) => {
+        expect(canUseClaudeInlineTools(model, provider)).toBe(expected);
+    });
+
+    it('defines a new tool by value and leaves tools as sent', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+
+        expect(JSON.stringify(t2.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('b'))] });
+        expect(betas(t2.requestOptions)).toContain(INLINE_TOOLS_BETA);
+        expect(betas(t2.requestOptions)).not.toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(getClaudeToolState(t2.conversation)).toEqual({
+            declared: [{ definition: tool('a'), deferred: false }],
+            visible: ['a', 'b'],
+            inline: { b: tool('b') },
+        });
+
+        // Replayed verbatim; nothing new to announce.
+        const t3 = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('b')],
+            t2.conversation,
+            assistantToolUse('c3', 'a'),
+            INLINE,
+        );
+        expect(JSON.stringify(t3.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+        expect(withoutCacheControl(t3.payload.messages.slice(0, t2.payload.messages.length))).toEqual(
+            withoutCacheControl(t2.payload.messages),
+        );
+    });
+
+    it('redefines a changed tool in place of replacing it in tools', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const changed = tool('a', 'refreshed schema');
+        const t2 = await turn(toolResult('c1'), [changed], t1.conversation, assistantToolUse('c2', 'a'), INLINE);
+
+        expect(JSON.stringify(t2.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(changed)] });
+        expect(getClaudeToolState(t2.conversation)?.inline).toEqual({ a: changed });
+
+        const t3 = await turn(toolResult('c2'), [changed], t2.conversation, assistantToolUse('c3', 'a'), INLINE);
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+    });
+
+    it('re-offers an inline tool by value and a declared tool by reference', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(toolResult('c1'), [tool('b')], t1.conversation, assistantToolUse('c2', 'b'), INLINE);
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('b')), removal('a')] });
+
+        const t3 = await turn(toolResult('c2'), [tool('a')], t2.conversation, assistantToolUse('c3', 'a'), INLINE);
+        expect(t3.payload.messages.at(-1)).toEqual({ role: 'system', content: [addition('a'), removal('b')] });
+
+        const t4 = await turn(toolResult('c3'), [tool('b')], t3.conversation, assistantToolUse('c4', 'b'), INLINE);
+        expect(t4.payload.messages.at(-1)).toEqual({ role: 'system', content: [defined(tool('b')), removal('a')] });
+        expect(JSON.stringify(t4.payload.tools)).toBe(JSON.stringify(t1.payload.tools));
+    });
+
+    it('keeps tool changes by reference on Microsoft Foundry', async () => {
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            Providers.azure_foundry,
+        );
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            Providers.azure_foundry,
+        );
+        expect(t2.payload.tools).toEqual([tool('a'), { ...tool('b'), defer_loading: true }]);
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [addition('b')] });
+        expect(betas(t2.requestOptions)).not.toContain(INLINE_TOOLS_BETA);
+    });
+
+    it('sends inline definitions in tools and by reference on a platform without inline tools', async () => {
+        const changed = tool('a', 'refreshed schema');
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [changed, tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+        const t3 = await turn(
+            toolResult('c2'),
+            [changed, tool('b'), tool('c')],
+            t2.conversation,
+            assistantToolUse('c3', 'c'),
+            BY_REFERENCE,
+        );
+
+        expect(t3.payload.tools).toEqual([
+            changed,
+            { ...tool('b'), defer_loading: true },
+            { ...tool('c'), defer_loading: true },
+        ]);
+        // The redefinition of a callable tool adds nothing by reference; the new tool becomes a reference.
+        expect(t3.payload.messages.filter((m) => m.role === 'system')).toEqual([
+            { role: 'system', content: [addition('b')] },
+            { role: 'system', content: [addition('c')] },
+        ]);
+        expect(betas(t3.requestOptions)).toContain(MID_CONVERSATION_TOOL_CHANGES_BETA);
+        expect(betas(t3.requestOptions)).not.toContain(INLINE_TOOLS_BETA);
+        // The inline definitions now live in tools, so later by-reference requests replay the same tools.
+        expect(getClaudeToolState(t3.conversation)?.inline).toBeUndefined();
+
+        const t4 = await turn(
+            toolResult('c3'),
+            [changed, tool('b'), tool('c')],
+            t3.conversation,
+            assistantToolUse('c4', 'a'),
+            Providers.bedrock,
+            'global.anthropic.claude-sonnet-5-5',
+        );
+        expect(JSON.stringify(t4.payload.tools)).toBe(JSON.stringify(t3.payload.tools));
+        expect(JSON.stringify(t4.payload.messages.slice(0, t3.payload.messages.length))).toBe(
+            JSON.stringify(t3.payload.messages),
+        );
+
+        // Back on an inline platform, the conversation is replayed as the by-reference requests sent it.
+        const t5 = await turn(
+            toolResult('c4'),
+            [changed, tool('b'), tool('c')],
+            t4.conversation,
+            assistantToolUse('c5', 'a'),
+            INLINE,
+        );
+        expect(JSON.stringify(t5.payload.tools)).toBe(JSON.stringify(t4.payload.tools));
+        expect(JSON.stringify(t5.payload.messages.slice(0, t4.payload.messages.length))).toBe(
+            JSON.stringify(t4.payload.messages),
+        );
+    });
+
+    it('drops the definitions of a conversation sent to a model without tool changes', async () => {
+        const t1 = await turn(firstPrompt, [tool('a')], undefined, assistantToolUse('c1', 'a'), INLINE);
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a'), tool('b')],
+            t1.conversation,
+            assistantToolUse('c2', 'b'),
+            INLINE,
+        );
+        const t3 = await turn(
+            toolResult('c2'),
+            [tool('a'), tool('b')],
+            t2.conversation,
+            assistantToolUse('c3', 'b'),
+            INLINE,
+            'claude-sonnet-5',
+        );
+        expect(t3.payload.tools).toEqual([tool('a'), tool('b')]);
+        expect(t3.payload.messages.some((m) => m.role === 'system')).toBe(false);
+        expect(betas(t3.requestOptions)).not.toContain(INLINE_TOOLS_BETA);
+    });
+
+    describe('pending changes merged into one system message', () => {
+        const declaredA = {
+            claude_tools: { declared: [{ definition: tool('a'), deferred: false }], visible: ['a'] },
+        };
+        const pending = (...content: unknown[][]): ClaudePrompt =>
+            ({
+                messages: [
+                    { role: 'user', content: 'start' },
+                    ...content.map((blocks) => ({ role: 'system', content: blocks })),
+                ],
+                _llumiverse_meta: declaredA,
+            }) as unknown as ClaudePrompt;
+        const systemOf = (prompt: ClaudePrompt) =>
+            getClaudePayload({ model: MODEL, tools: [tool('a')] }, prompt, INLINE).payload.messages.filter(
+                (m) => m.role === 'system',
+            );
+
+        it('keeps a redefinition that follows a removal', () => {
+            const changed = tool('a', 'v2');
+            expect(systemOf(pending([removal('a')], [defined(changed)]))).toEqual([
+                { role: 'system', content: [defined(changed)] },
+            ]);
+        });
+
+        it('keeps a definition and the removal that follows it', () => {
+            expect(systemOf(pending([defined(tool('b'))], [removal('b')]))).toEqual([
+                { role: 'system', content: [defined(tool('b')), removal('b')] },
+            ]);
+        });
+
+        it('keeps only the last definition of a tool', () => {
+            const v2 = tool('b', 'v2');
+            expect(systemOf(pending([defined(tool('b'))], [removal('b')], [defined(v2)]))).toEqual([
+                { role: 'system', content: [defined(v2)] },
+            ]);
+        });
     });
 });

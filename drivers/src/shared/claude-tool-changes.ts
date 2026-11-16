@@ -3,19 +3,27 @@
  *
  * Claude binds each thinking block, and the prompt cache, to the conversation before it, including the
  * `tools` array. Editing `tools` between turns therefore invalidates earlier thinking and restarts the cache.
- * Instead, the first request's tools stay in `tools` as sent; tools that appear later are appended with
- * `defer_loading: true`, and every change is announced by a `tool_addition` / `tool_removal` block in an
- * appended `role: "system"` message (beta `mid-conversation-tool-changes-2026-07-01`).
+ * Instead, the first request's tools stay in `tools` as sent, and every later change is announced by a
+ * `tool_addition` / `tool_removal` block in an appended `role: "system"` message. How a new or changed tool
+ * reaches the model depends on the platform:
  *
- * TODO(inline-tools-2026-09-15): once that beta is available beyond the Claude API, define new and changed tools
- * by value in `tool_addition` (`{ type: 'tool_definition', definition }`) instead of appending them to `tools`.
- * That also removes the in-place replacement of a tool whose definition changes under the same name.
+ * - Inline tools (beta `inline-tools-2026-09-15`, see canUseClaudeInlineTools): `tool_addition` carries the new
+ *   or changed definition by value (`{ type: 'tool_definition', definition }`) and `tools` never changes.
+ * - By reference (beta `mid-conversation-tool-changes-2026-07-01`): new tools are appended to `tools` with
+ *   `defer_loading: true` and added by name. A tool whose definition changes under the same name is replaced in
+ *   place, which invalidates earlier thinking and the prompt cache once.
+ *
+ * A conversation can move between the two: a by-reference request moves the inline definitions into `tools` and
+ * stores the `tool_definition` blocks as references (see applyClaudeToolChanges).
+ *
+ * Platforms and models: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
  */
 
 import type {
     AnthropicBeta,
     BetaRequestToolAdditionBlock,
     BetaRequestToolRemovalBlock,
+    BetaToolUnion,
 } from '@anthropic-ai/sdk/resources/beta.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages.js';
@@ -36,6 +44,8 @@ export function claudeContinueTurn(): MessageParam {
 }
 
 export const MID_CONVERSATION_TOOL_CHANGES_BETA: AnthropicBeta = 'mid-conversation-tool-changes-2026-07-01';
+/** Tools defined by value in `tool_addition`. Also covers changes by reference, so it replaces the beta above. */
+export const INLINE_TOOLS_BETA: AnthropicBeta = 'inline-tools-2026-09-15';
 
 /**
  * Providers whose Claude endpoint accepts mid-conversation tool changes. Anthropic lists Microsoft Foundry among the
@@ -50,6 +60,14 @@ const TOOL_CHANGE_PROVIDERS = new Set<string>([
     Providers.azure_foundry,
 ]);
 
+/**
+ * Providers whose Claude endpoint also accepts tools defined by value (`inline-tools-2026-09-15`). Amazon Bedrock and
+ * Vertex AI (Claude Models on Google Cloud, Google managed) take tool changes by reference only (same page as
+ * above). Anthropic also lists Microsoft Foundry, but not whether that covers Azure-hosted deployments, so Foundry
+ * keeps tool changes by reference until that is confirmed.
+ */
+const INLINE_TOOL_PROVIDERS = new Set<string>([Providers.anthropic]);
+
 type ClaudeToolChangeBlock = BetaRequestToolAdditionBlock | BetaRequestToolRemovalBlock;
 
 interface DeclaredClaudeTool {
@@ -61,10 +79,15 @@ interface DeclaredClaudeTool {
 
 /** Tool state stored with the conversation so later requests replay `tools` unchanged. */
 export interface ClaudeToolState {
-    /** Every tool declared in this conversation, in first-declared order. */
+    /** Every tool declared in `tools` in this conversation, in first-declared order. */
     declared: DeclaredClaudeTool[];
     /** Names the model can currently call. */
     visible: string[];
+    /**
+     * The current definition of each tool defined by value in a `tool_addition` block, by name: tools first offered
+     * after the first request, and new definitions of declared tools. Inline tools only.
+     */
+    inline?: Record<string, Tool>;
 }
 
 /** Conversation metadata with the Claude tool state (`_llumiverse_meta`). */
@@ -74,6 +97,11 @@ export interface ClaudeConversationMeta extends ConversationMeta {
 
 export function canUseClaudeToolChanges(model: string, provider: string): boolean {
     return TOOL_CHANGE_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
+}
+
+/** Whether new and changed tools can be defined by value. The beta covers the models of tool changes. */
+export function canUseClaudeInlineTools(model: string, provider: string): boolean {
+    return INLINE_TOOL_PROVIDERS.has(provider) && supportsMidConversationToolChanges(model);
 }
 
 export function getClaudeToolState(conversation: unknown): ClaudeToolState | undefined {
@@ -119,17 +147,60 @@ export function clearClaudeToolState<T extends object>(conversation: T): T {
 }
 
 /**
+ * The state as a by-reference platform sends it: inline definitions move into `tools`, a new tool appended as
+ * deferred and a changed one replaced in place. Deterministic, so every by-reference request renders the same
+ * `tools`; returns the state itself when nothing is inline.
+ */
+function withInlineToolsDeclared(state: ClaudeToolState): ClaudeToolState {
+    if (!state.inline || Object.keys(state.inline).length === 0) return state;
+    const declared = [...state.declared];
+    const declaredIndex = new Map(declared.map((tool, index) => [tool.definition.name, index]));
+    for (const definition of Object.values(state.inline)) {
+        const index = declaredIndex.get(definition.name);
+        if (index === undefined) {
+            declaredIndex.set(definition.name, declared.length);
+            declared.push({ definition, deferred: true });
+        } else {
+            declared[index] = { ...declared[index], definition };
+        }
+    }
+    return { declared, visible: state.visible };
+}
+
+function referenceAddition(name: string): BetaRequestToolAdditionBlock {
+    return { type: 'tool_addition', tool: { type: 'tool_reference', name } };
+}
+
+function definitionAddition(definition: Tool): BetaRequestToolAdditionBlock {
+    // `Tool` is a custom `tools` entry, which the beta `BetaToolUnion` accepts; the SDK types them separately.
+    return { type: 'tool_addition', tool: { type: 'tool_definition', definition: definition as BetaToolUnion } };
+}
+
+/**
  * Record this request's tool set on the conversation. The first request declares the tools as sent. Later
- * requests append new tools as deferred, announce additions and removals in one `role: "system"` message at
- * the end of the conversation, and keep every declared definition in place.
+ * requests announce additions and removals in one `role: "system"` message at the end of the conversation and
+ * keep every declared definition in `tools` as sent. With inline tools, a new or changed tool is defined by
+ * value in its `tool_addition` block; otherwise it is appended to `tools` as deferred or replaced in place.
  *
- * Returns the conversation unchanged when the request has no tools; the declared tools are then sent with
- * tool_choice none (see getClaudePayload).
+ * A request without inline tools first stores the conversation as it sends it (see withInlineToolsDeclared and
+ * referenceInlineToolChanges), so a later request on any platform replays that request unchanged.
+ *
+ * Otherwise returns the conversation unchanged when the request has no tools; the declared tools are then sent
+ * with tool_choice none (see getClaudePayload).
  */
 export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
-    conversation: T,
+    storedConversation: T,
     requestedTools: Tool[] | undefined,
+    inlineTools = false,
 ): T {
+    const stored = getClaudeToolState(storedConversation);
+    const conversation =
+        stored?.inline && !inlineTools
+            ? setClaudeToolState(
+                  { ...storedConversation, messages: referenceInlineToolChanges(storedConversation.messages, stored) },
+                  withInlineToolsDeclared(stored),
+              )
+            : storedConversation;
     if (!requestedTools || requestedTools.length === 0) return conversation;
     // One definition per name; a later duplicate wins, as it does when replacing a declared tool.
     const requested = [...new Map(requestedTools.map((tool) => [tool.name, withoutRequestFields(tool)])).values()];
@@ -151,43 +222,50 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
 
     const declared = [...state.declared];
     const declaredIndex = new Map(declared.map((tool, index) => [tool.definition.name, index]));
+    const inline: Record<string, Tool> = { ...state.inline };
     const visible = new Set(state.visible);
-    const additions: string[] = [];
+    const additions: BetaRequestToolAdditionBlock[] = [];
     for (const definition of requested) {
-        const index = declaredIndex.get(definition.name);
-        if (index === undefined) {
-            declaredIndex.set(definition.name, declared.length);
+        const { name } = definition;
+        const index = declaredIndex.get(name);
+        const current = inline[name] ?? (index === undefined ? undefined : declared[index].definition);
+        const changed = current !== undefined && !sameDefinition(current, definition);
+        if (inlineTools && (current === undefined || changed)) {
+            // A new tool, or a new definition that replaces the earlier one from here on: `tools` stays as sent.
+            inline[name] = definition;
+            additions.push(definitionAddition(definition));
+            continue;
+        }
+        if (current === undefined) {
+            declaredIndex.set(name, declared.length);
             declared.push({ definition, deferred: true });
-        } else if (!sameDefinition(declared[index].definition, definition)) {
-            // Same name, new definition (e.g. a refreshed MCP schema). There is no append-only form without the
-            // inline-tools beta, so replace it in place: this invalidates earlier thinking and the prompt cache
-            // once, and the model sees the current schema.
+        } else if (changed && index !== undefined) {
+            // Same name, new definition (e.g. a refreshed MCP schema), on a platform without inline tools. There
+            // is no append-only form, so replace it in place: this invalidates earlier thinking and the prompt
+            // cache once, and the model sees the current schema.
             declared[index] = { ...declared[index], definition };
         }
-        if (!visible.has(definition.name)) additions.push(definition.name);
+        if (!visible.has(name)) {
+            // Re-offer an inline tool by value: a tool_addition that defined it may have cancelled out with a
+            // removal before it was sent (see mergeToolChangeMessages). An identical definition is a no-op.
+            additions.push(name in inline ? definitionAddition(inline[name]) : referenceAddition(name));
+        }
     }
     const requestedNames = new Set(requested.map((tool) => tool.name));
-    const removals = state.visible.filter((name) => !requestedNames.has(name));
+    const removals = state.visible
+        .filter((name) => !requestedNames.has(name))
+        .map((name): BetaRequestToolRemovalBlock => ({ type: 'tool_removal', tool: { type: 'tool_reference', name } }));
 
-    const nextState: ClaudeToolState = { declared, visible: [...requestedNames] };
+    const nextState: ClaudeToolState = {
+        declared,
+        visible: [...requestedNames],
+        ...(Object.keys(inline).length > 0 && { inline }),
+    };
     if (additions.length === 0 && removals.length === 0) {
         return setClaudeToolState(conversation, nextState);
     }
 
-    const changes: ClaudeToolChangeBlock[] = [
-        ...additions.map(
-            (name): BetaRequestToolAdditionBlock => ({
-                type: 'tool_addition',
-                tool: { type: 'tool_reference', name },
-            }),
-        ),
-        ...removals.map(
-            (name): BetaRequestToolRemovalBlock => ({
-                type: 'tool_removal',
-                tool: { type: 'tool_reference', name },
-            }),
-        ),
-    ];
+    const changes: ClaudeToolChangeBlock[] = [...additions, ...removals];
     // The SDK only types tool-change blocks on beta message params; the wire format is the same.
     // A system message must follow a user turn: prepareClaudeConversation stores the continuation turn after a
     // trailing assistant turn, and getClaudePayload places any change that still follows one.
@@ -195,9 +273,13 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     return setClaudeToolState({ ...conversation, messages: [...conversation.messages, changeMessage] }, nextState);
 }
 
-/** The `tools` array for a conversation: every declared tool, later ones deferred. */
-export function renderClaudeTools(state: ClaudeToolState): Tool[] {
-    return state.declared.map(({ definition, deferred }) =>
+/**
+ * The `tools` array for a conversation: every declared tool, later ones deferred. Without inline tools, the
+ * inline definitions are sent here too (see withInlineToolsDeclared).
+ */
+export function renderClaudeTools(state: ClaudeToolState, inlineTools = false): Tool[] {
+    const sent = inlineTools ? state : withInlineToolsDeclared(state);
+    return sent.declared.map(({ definition, deferred }) =>
         deferred ? { ...definition, defer_loading: true } : { ...definition },
     );
 }
@@ -205,6 +287,58 @@ export function renderClaudeTools(state: ClaudeToolState): Tool[] {
 export function isClaudeToolChangeBlock(block: unknown): boolean {
     const type = (block as { type?: unknown } | null)?.type;
     return type === 'tool_addition' || type === 'tool_removal';
+}
+
+/** Whether a block is a `tool_addition` that defines its tool by value. */
+export function isClaudeToolDefinitionBlock(block: unknown): boolean {
+    const change = block as { type?: unknown; tool?: { type?: unknown } } | null;
+    return change?.type === 'tool_addition' && change.tool?.type === 'tool_definition';
+}
+
+/** The name of the tool a tool-change block adds or removes, by reference or by value. */
+export function claudeToolChangeName(block: unknown): string | undefined {
+    if (!isClaudeToolChangeBlock(block)) return undefined;
+    const tool = (block as { tool?: { name?: unknown; definition?: { name?: unknown } } }).tool;
+    const name = tool?.name ?? tool?.definition?.name;
+    return typeof name === 'string' ? name : undefined;
+}
+
+/**
+ * The messages as a by-reference platform accepts them: each `tool_definition` addition becomes a reference to
+ * the tool, which renderClaudeTools sends in `tools`. A definition that changed a tool the model could already
+ * call adds nothing by reference, so it is dropped. System messages left empty are dropped.
+ */
+export function referenceInlineToolChanges(messages: MessageParam[], state: ClaudeToolState): MessageParam[] {
+    if (
+        !messages.some((message) => Array.isArray(message.content) && message.content.some(isClaudeToolDefinitionBlock))
+    ) {
+        return messages;
+    }
+    // Stored tool changes all follow the first declaration (applyClaudeToolChanges strips older ones), whose tools
+    // are the ones loaded up front.
+    const visible = new Set(state.declared.filter((tool) => !tool.deferred).map((tool) => tool.definition.name));
+    const result: MessageParam[] = [];
+    for (const message of messages) {
+        if (!Array.isArray(message.content) || !message.content.some(isClaudeToolChangeBlock)) {
+            result.push(message);
+            continue;
+        }
+        const content: unknown[] = [];
+        for (const block of message.content as unknown[]) {
+            const name = claudeToolChangeName(block);
+            if (name === undefined) {
+                content.push(block);
+            } else if ((block as { type: string }).type === 'tool_removal') {
+                visible.delete(name);
+                content.push(block);
+            } else if (!visible.has(name)) {
+                visible.add(name);
+                content.push(isClaudeToolDefinitionBlock(block) ? referenceAddition(name) : block);
+            }
+        }
+        if (content.length > 0) result.push({ ...message, content } as MessageParam);
+    }
+    return result;
 }
 
 /**
