@@ -196,6 +196,22 @@ conversation as is; the summary is encrypted, so the result is empty. Both repor
 The `native_compaction` model option (Claude and OpenAI Responses option sets) does nothing in the drivers: it tells
 the application that compacts conversations to request `compact_conversation`.
 
+### Message Threads
+
+`ExecutionOptions.message_thread` (opt-in) keeps a Claude conversation on the provider (beta
+`message-threads-2026-08-12`, `drivers/src/shared/claude-threads.ts`), so later requests send only the new
+messages. It lowers request size and time to first token, not cost. It applies on the Claude API (`anthropic`) and
+Foundry (`azure_foundry`) for Claude 4.5 and later, and is off with `compaction` or `compact_conversation`.
+
+The returned `conversation` stays complete and is the source of truth; the thread state is stored in
+`_llumiverse_meta.claude_thread`. A request continues the thread only when the endpoint, the fixed fields
+(fingerprint) and the hash of the stored messages still match and the thread is under 4.5 minutes old; otherwise it
+creates a new one. A rejected continue is replayed as a create, and a request the provider cannot thread is sent
+without one and sets `claude_thread_disabled`. The prefix hash is taken before llumiverse rewrites history (image,
+heartbeat and thinking stripping), so a rewrite starts a new thread. Thread requests replace message breakpoints with
+one top-level `cache_control`, and a threaded conversation that tracks tool changes sends its tool-change beta from the
+first request, since the set of betas cannot change within a thread.
+
 ### Utility Functions
 
 The following functions are exported from `@llumiverse/core` for advanced use cases:
@@ -224,6 +240,7 @@ Live tests run on demand:
 - `max-tokens-limit.live.test.ts` - Each smoke model at its documented output limit (`live-smoke-drivers.ts` holds the shared model list)
 - `vertexai-embedding-models.live.test.ts` - Older Vertex embedding models, one per request path
 - `api-key-list-models.live.test.ts` - Gemini model listing with an API key
+- `message-threads.live.test.ts` - Claude message threads continued across a tool loop (Claude API, and Foundry with `AZURE_FOUNDRY_CLAUDE_MODEL`)
 
 Live tests use small, current models so a retirement does not break CI, and build options with
 `getLowEffortTestOptions()` from `drivers/test/utils.ts`: low effort where supported, no `temperature`, and only the

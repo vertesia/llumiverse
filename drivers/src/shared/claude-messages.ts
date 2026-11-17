@@ -12,6 +12,7 @@ import type {
     BetaCompactionConfig,
     BetaContextManagementConfig,
     BetaMessage,
+    BetaMessageThreadParam,
     BetaRawMessageDeltaEvent,
 } from '@anthropic-ai/sdk/resources/beta.js';
 import type {
@@ -71,13 +72,19 @@ import {
     isClaudeCompactionBlock,
     trimClaudeConversationToCompaction,
 } from './claude-compaction.js';
-import { claudeFinishReason, logClaudeRefusal, logClaudeTruncation } from './claude-stop-reason.js';
+import {
+    CLAUDE_CUT_OFF_STOP_REASONS,
+    claudeFinishReason,
+    logClaudeRefusal,
+    logClaudeTruncation,
+} from './claude-stop-reason.js';
 import {
     CLAUDE_NATIVE_RESULT_SCHEMA_PROVIDERS,
     endsWithClaudePrefill,
     usesClaudeNativeResultSchema,
 } from './claude-structured-output.js';
 import { type ClaudeThinkingInput, logClaudeInputTransformations, resolveClaudeThinking } from './claude-thinking.js';
+import { type ClaudeThreadAttempt, ClaudeThreadRequest, usesClaudeThreads } from './claude-threads.js';
 import {
     applyClaudeToolChanges,
     type ClaudeConversationMeta,
@@ -144,6 +151,13 @@ function mergeClaudeSystemBlocks(base: TextBlockParam[], additions: TextBlockPar
 }
 
 type ClaudeCacheControl = { type: 'ephemeral'; ttl?: '5m' | '1h' };
+
+/** The cache_control of this request's breakpoints, or undefined when prompt caching is off. */
+function claudeCacheControl(options: ExecutionOptions): ClaudeCacheControl | undefined {
+    if (!isClaudePromptCacheEnabled(options)) return undefined;
+    const cacheTtl = (options.model_options as ClaudeBaseOptions | undefined)?.cache_ttl as '5m' | '1h' | undefined;
+    return { type: 'ephemeral', ...(cacheTtl && { ttl: cacheTtl }) };
+}
 
 /**
  * Exception to preserving supplied options: with prompt caching on, `stripHeartbeatsAfterTurns` is ignored, as
@@ -295,6 +309,8 @@ export type ClaudeMessageCreateParams = MessageCreateParamsBase & {
     context_management?: BetaContextManagementConfig;
     /** Beta: on-demand compaction (see claude-compaction.ts), sent with its beta header. */
     compaction?: BetaCompactionConfig;
+    /** Beta: message threads (see claude-threads.ts), sent with its beta header. */
+    thread?: BetaMessageThreadParam;
 };
 
 export interface AnthropicUsageLike {
@@ -388,27 +404,88 @@ export class ClaudeStreamError extends AnthropicError {
  * A client-side SDK error after the first event is a stream fault (API errors carry their own status and type);
  * before it, the same error type means a configuration problem such as a missing credential.
  */
-async function* eventsThenOutcome(stream: ClaudeMessageStream): AsyncGenerator<RawMessageStreamEvent> {
+async function* eventsThenOutcome({
+    stream,
+    iterator,
+    peeked,
+}: OpenedClaudeStream): AsyncGenerator<RawMessageStreamEvent> {
     let started = false;
+    let finished = false;
     try {
-        for await (const event of stream) {
+        for (let next = peeked ?? (await iterator.next()); !next.done; next = await iterator.next()) {
             started = true;
-            yield event;
+            yield next.value;
         }
+        finished = true;
         await stream.finalMessage();
     } catch (error) {
+        finished = true;
         throw started && isAnthropicSdkError(error) && !isAnthropicApiError(error)
             ? new ClaudeStreamError(error)
             : error;
+    } finally {
+        // A consumer that stops early ends the stream, as `for await` does.
+        if (!finished) await iterator.return?.();
     }
 }
 
-function streamClaudeMessages(
+/** A message stream with its iterator, and the first event when the stream was opened with `peek`. */
+interface OpenedClaudeStream {
+    stream: ClaudeMessageStream;
+    iterator: AsyncIterator<RawMessageStreamEvent>;
+    peeked?: IteratorResult<RawMessageStreamEvent>;
+}
+
+/**
+ * Open a message stream. The SDK sends the request when the stream is first read, so a request error surfaces only
+ * then: `peek` reads the first event here, so that a rejected request fails this call (see ClaudeThreadRequest.send).
+ */
+async function openClaudeStream(
     client: ClaudeMessagesClient,
     payload: MessageStreamParams,
     requestOptions: RequestOptions | undefined,
-): Promise<ClaudeMessageStream> {
-    return Promise.resolve(client.messages.stream(payload, requestOptions));
+    peek = false,
+): Promise<OpenedClaudeStream> {
+    // Promise.resolve: some platform clients return the stream through a promise.
+    const stream = await Promise.resolve(client.messages.stream(payload, requestOptions));
+    const iterator = stream[Symbol.asyncIterator]();
+    if (!peek) return { stream, iterator };
+    const peeked = await iterator.next();
+    // A stream that ends without an event failed: its error is only on the outcome.
+    if (peeked.done) await stream.finalMessage();
+    return { stream, iterator, peeked };
+}
+
+/** The request's message thread (see claude-threads.ts), inactive when the request does not use one. */
+function claudeThreadRequest(
+    client: ClaudeMessagesClient,
+    payload: ClaudeMessageCreateParams,
+    requestOptions: RequestOptions | undefined,
+    options: ExecutionOptions,
+    provider: string,
+    logger: Logger | undefined,
+): ClaudeThreadRequest<ClaudeMessageCreateParams> {
+    const baseURL = (client as { baseURL?: unknown }).baseURL;
+    return new ClaudeThreadRequest(payload, requestOptions, {
+        options,
+        provider,
+        baseURL: typeof baseURL === 'string' ? baseURL : undefined,
+        cacheControl: claudeCacheControl(options),
+        logger,
+    });
+}
+
+function openClaudeThreadAttempt(
+    client: ClaudeMessagesClient,
+    attempt: ClaudeThreadAttempt<ClaudeMessageCreateParams>,
+): Promise<OpenedClaudeStream> {
+    // A threaded attempt is peeked, so a thread error can fall back before the caller reads the stream.
+    return openClaudeStream(
+        client,
+        attempt.payload as MessageStreamParams,
+        attempt.requestOptions,
+        attempt.kind !== 'unthreaded',
+    );
 }
 
 // ============================================================================
@@ -447,9 +524,6 @@ export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): Execution
 // ============================================================================
 // Content extraction
 // ============================================================================
-
-/** Claude stop reasons that can end a response in the middle of its last content block. */
-const CLAUDE_CUT_OFF_STOP_REASONS = new Set(['max_tokens', 'model_context_window_exceeded', 'refusal']);
 
 export function collectClaudeTools(content: ContentBlock[]): ToolUse[] | undefined {
     const out: ToolUse[] = [];
@@ -1085,11 +1159,14 @@ export function getClaudePayload(
     const changesTools =
         toolState !== undefined &&
         (toolState.declared.some((tool) => tool.deferred) || containsClaudeToolChanges(sanitizedMessages));
+    // The set of betas is fixed for a message thread, so a threaded conversation that tracks tool changes sends its
+    // tool-change beta from the first request on, rather than from the first change, which would start a new thread.
+    const sendsToolChangeBeta = changesTools || (toolState !== undefined && usesClaudeThreads(options, provider));
     // A conversation that defines tools by value replays every tool change under the inline-tools beta: a change may
     // name a tool defined only in the messages. A compaction block's `tool_changes` needs it whatever it holds, on
     // any target: the signed block cannot be rewritten, so the request carries the beta it requires and the platform
     // decides. The beta also covers changes by reference, so the by-reference beta is not sent with it.
-    if (needsClaudeInlineToolsBeta(sanitizedMessages) || (inlineTools && changesTools)) {
+    if (needsClaudeInlineToolsBeta(sanitizedMessages) || (inlineTools && sendsToolChangeBeta)) {
         betas.push(INLINE_TOOLS_BETA);
         if (!canUseClaudeInlineTools(modelName, provider)) {
             logger?.warn(
@@ -1097,7 +1174,7 @@ export function getClaudePayload(
                 '[Claude] Sending the inline-tools beta that a stored compaction block requires to a platform or model not documented to support it',
             );
         }
-    } else if (changesTools) {
+    } else if (sendsToolChangeBeta) {
         betas.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
     }
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
@@ -1148,11 +1225,8 @@ export function getClaudePayload(
           ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
           : undefined;
 
-    const cacheEnabled = isClaudePromptCacheEnabled(options);
-    if (cacheEnabled) {
-        const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
-        const cacheControl: ClaudeCacheControl = { type: 'ephemeral', ...(cacheTtl && { ttl: cacheTtl }) };
-
+    const cacheControl = claudeCacheControl(options);
+    if (cacheControl) {
         const isAgentLayout = isAgentPromptCacheKey(options.prompt_cache_key);
         if (isAgentLayout) {
             addAgentCacheBreakpoints(
@@ -1456,8 +1530,12 @@ function finalizeClaudeConversation(
     conversation: ClaudePrompt,
     result: Message,
     options: ExecutionOptions,
+    thread: ClaudeThreadRequest<ClaudeMessageCreateParams>,
 ): ClaudePrompt {
-    let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
+    const reply = createPromptFromResponse(result);
+    // The reply as the next request sends it, recorded before the history rewrites below.
+    const sentReply = sanitizeMessages(reply.messages);
+    let completedConversation = updateClaudeConversation(conversation, reply);
     completedConversation = trimClaudeConversationToCompaction(completedConversation);
     completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
     // Models that keep earlier turns' thinking get it back unchanged, as Anthropic recommends; removing it rewrites
@@ -1493,7 +1571,7 @@ function finalizeClaudeConversation(
         currentTurn,
         preserveSubtree,
     });
-    return processedConversation as ClaudePrompt;
+    return thread.record(processedConversation as ClaudePrompt, result, sentReply);
 }
 
 export function pruneClaudeThinking(conversation: ClaudePrompt): ClaudePrompt {
@@ -1616,18 +1694,25 @@ export async function executeClaudeCompletion(
         resultSchemaOptions,
     );
 
-    const responseStream = await streamClaudeMessages(
+    const thread = claudeThreadRequest(
         client,
-        { ...payload, model: requestModel ?? payload.model } as MessageStreamParams,
+        { ...payload, model: requestModel ?? payload.model },
         mergeRequestOptions(requestOptions, transportOptions),
+        options,
+        provider,
+        logger,
     );
-    let transformations: InputTransformations;
-    const compactionDeltas = new ClaudeCompactionDeltas();
-    for await (const event of eventsThenOutcome(responseStream)) {
-        transformations = trackInputTransformations(transformations, event);
-        compactionDeltas.track(event);
-    }
-    const result = compactionDeltas.apply(await responseStream.finalMessage());
+    // Thread errors are returned before the response starts, so a failed attempt is replaced as a whole.
+    const { result, transformations } = await thread.send(async (attempt) => {
+        const opened = await openClaudeStream(client, attempt.payload as MessageStreamParams, attempt.requestOptions);
+        let transformations: InputTransformations;
+        const compactionDeltas = new ClaudeCompactionDeltas();
+        for await (const event of eventsThenOutcome(opened)) {
+            transformations = trackInputTransformations(transformations, event);
+            compactionDeltas.track(event);
+        }
+        return { result: compactionDeltas.apply(await opened.stream.finalMessage()), transformations };
+    });
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
     logClaudeRefusal(logger, result.stop_reason, {
         provider,
@@ -1652,7 +1737,7 @@ export async function executeClaudeCompletion(
             : result.content;
     const tool_use = collectClaudeTools(toolBlocks);
 
-    const processedConversation = finalizeClaudeConversation(conversation, result, options);
+    const processedConversation = finalizeClaudeConversation(conversation, result, options, thread);
 
     return {
         result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
@@ -1692,13 +1777,16 @@ export async function streamClaudeCompletion(
         logger,
         resultSchemaOptions,
     );
-    const streamingPayload: MessageStreamParams = { ...payload, model: requestModel ?? payload.model, stream: true };
-
-    const response_stream = await streamClaudeMessages(
+    const thread = claudeThreadRequest(
         client,
-        streamingPayload,
+        { ...payload, model: requestModel ?? payload.model, stream: true },
         mergeRequestOptions(requestOptions, transportOptions),
+        options,
+        provider,
+        logger,
     );
+    const opened = await thread.send((attempt) => openClaudeThreadAttempt(client, attempt));
+    const response_stream = opened.stream;
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
@@ -1707,7 +1795,7 @@ export async function streamClaudeCompletion(
     let startUsage: AnthropicUsageLike | undefined;
     const compactionDeltas = new ClaudeCompactionDeltas();
 
-    const stream = asyncMap(eventsThenOutcome(response_stream), async (streamEvent: RawMessageStreamEvent) => {
+    const stream = asyncMap(eventsThenOutcome(opened), async (streamEvent: RawMessageStreamEvent) => {
         transformations = trackInputTransformations(transformations, streamEvent);
         compactionDeltas.track(streamEvent);
         switch (streamEvent.type) {
@@ -1812,7 +1900,7 @@ export async function streamClaudeCompletion(
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
             const finalMessage = compactionDeltas.apply(await response_stream.finalMessage());
-            return finalizeClaudeConversation(conversation, finalMessage, options);
+            return finalizeClaudeConversation(conversation, finalMessage, options, thread);
         },
     };
 }
