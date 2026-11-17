@@ -843,6 +843,339 @@
             ],
             "additionalProperties": false
         },
+        "DecisionAnswer": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/DecisionBooleanAnswer"
+                },
+                {
+                    "$ref": "#/$defs/DecisionChoiceAnswer"
+                },
+                {
+                    "$ref": "#/$defs/DecisionScoreAnswer"
+                },
+                {
+                    "$ref": "#/$defs/DecisionRefusalAnswer"
+                }
+            ],
+            "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                    "boolean": "#/$defs/DecisionBooleanAnswer",
+                    "choice": "#/$defs/DecisionChoiceAnswer",
+                    "score": "#/$defs/DecisionScoreAnswer",
+                    "refusal": "#/$defs/DecisionRefusalAnswer"
+                }
+            },
+            "type": "object",
+            "required": [
+                "type"
+            ]
+        },
+        "DecisionBooleanAnswer": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "boolean"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the question this answers."
+                },
+                "probability": {
+                    "type": "number",
+                    "description": "The probability that the statement is true."
+                }
+            },
+            "required": [
+                "type",
+                "name",
+                "probability"
+            ],
+            "additionalProperties": false
+        },
+        "DecisionBooleanQuestion": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "boolean"
+                },
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Identifies the question; its answer carries the same name. Unique within a request."
+                },
+                "instructions": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The question to answer about the input, in natural language."
+                }
+            },
+            "required": [
+                "type",
+                "name",
+                "instructions"
+            ],
+            "additionalProperties": false,
+            "description": "Estimate how likely a statement about the input is to be true."
+        },
+        "DecisionChoiceAnswer": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "choice"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the question this answers."
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The chosen option value."
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "The provider's confidence in the answer, between 0 and 1. Its meaning differs by provider, so a threshold set for one provider does not carry over to another."
+                },
+                "probabilities": {
+                    "type": "object",
+                    "propertyNames": {
+                        "type": "string"
+                    },
+                    "additionalProperties": {
+                        "type": "number"
+                    },
+                    "description": "Probability per option value."
+                }
+            },
+            "required": [
+                "type",
+                "name",
+                "value",
+                "confidence",
+                "probabilities"
+            ],
+            "additionalProperties": false
+        },
+        "DecisionChoiceOption": {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The value returned when this option is chosen."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What the option means, to guide the choice."
+                }
+            },
+            "required": [
+                "value"
+            ],
+            "additionalProperties": false
+        },
+        "DecisionChoiceQuestion": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "choice"
+                },
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Identifies the question; its answer carries the same name. Unique within a request."
+                },
+                "instructions": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The question to answer about the input, in natural language."
+                },
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/DecisionChoiceOption"
+                    },
+                    "description": "The options to choose from. Providers set the allowed count (for example 2 to 255)."
+                }
+            },
+            "required": [
+                "type",
+                "name",
+                "instructions",
+                "options"
+            ],
+            "additionalProperties": false,
+            "description": "Choose one of the supplied options."
+        },
+        "DecisionQuestion": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/DecisionBooleanQuestion"
+                },
+                {
+                    "$ref": "#/$defs/DecisionChoiceQuestion"
+                },
+                {
+                    "$ref": "#/$defs/DecisionScoreQuestion"
+                }
+            ],
+            "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                    "boolean": "#/$defs/DecisionBooleanQuestion",
+                    "choice": "#/$defs/DecisionChoiceQuestion",
+                    "score": "#/$defs/DecisionScoreQuestion"
+                }
+            },
+            "type": "object",
+            "required": [
+                "type"
+            ]
+        },
+        "DecisionRefusalAnswer": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "refusal"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the question this answers."
+                }
+            },
+            "required": [
+                "type",
+                "name"
+            ],
+            "additionalProperties": false,
+            "description": "The model declined to answer this question. Other questions can still be answered."
+        },
+        "DecisionScoreAnswer": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "score"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the question this answers."
+                },
+                "score": {
+                    "type": "number",
+                    "description": "The score as the provider reports it."
+                },
+                "label": {
+                    "type": "string",
+                    "description": "The label of the level the score falls on."
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "The provider's confidence in the answer, between 0 and 1. Its meaning differs by provider, so a threshold set for one provider does not carry over to another."
+                },
+                "probabilities": {
+                    "type": "object",
+                    "propertyNames": {
+                        "type": "string"
+                    },
+                    "additionalProperties": {
+                        "type": "number"
+                    },
+                    "description": "Probability per level label."
+                }
+            },
+            "required": [
+                "type",
+                "name",
+                "score",
+                "confidence",
+                "probabilities"
+            ],
+            "additionalProperties": false
+        },
+        "DecisionScoreLevel": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The level label, returned with the score."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What the level means."
+                }
+            },
+            "required": [
+                "label"
+            ],
+            "additionalProperties": false
+        },
+        "DecisionScoreQuestion": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "score"
+                },
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Identifies the question; its answer carries the same name. Unique within a request."
+                },
+                "instructions": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The question to answer about the input, in natural language."
+                },
+                "levels": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/DecisionScoreLevel"
+                    },
+                    "description": "The ordered levels, lowest first. Providers set the allowed count."
+                }
+            },
+            "required": [
+                "type",
+                "name",
+                "instructions",
+                "levels"
+            ],
+            "additionalProperties": false,
+            "description": "Rate the input against ordered levels."
+        },
+        "DecisionsResult": {
+            "type": "object",
+            "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/DecisionAnswer"
+                    },
+                    "description": "One answer per question, in question order, each carrying its question name."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "The provider model id that answered."
+                },
+                "token_usage": {
+                    "description": "Token usage. Decisions generate no text, so `result` is the reported output count.",
+                    "$ref": "#/$defs/ExecutionTokenUsage"
+                }
+            },
+            "required": [
+                "answers",
+                "model"
+            ],
+            "additionalProperties": false
+        },
         "EmbeddingOutput": {
             "type": "object",
             "properties": {

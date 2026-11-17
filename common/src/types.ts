@@ -9,6 +9,17 @@ import type {
     ToolUsageSchema,
 } from './schemas/completion.js';
 import type {
+    DecisionAnswerSchema,
+    DecisionBooleanAnswerSchema,
+    DecisionChoiceAnswerSchema,
+    DecisionChoiceOptionSchema,
+    DecisionQuestionSchema,
+    DecisionRefusalAnswerSchema,
+    DecisionScoreAnswerSchema,
+    DecisionScoreLevelSchema,
+    DecisionsResultSchema,
+} from './schemas/decisions.js';
+import type {
     EmbeddingOutputSchema,
     EmbeddingResultItemSchema,
     EmbeddingsResultSchema,
@@ -238,6 +249,42 @@ export type EmbeddingResultItem = z.infer<typeof EmbeddingResultItemSchema>;
 export type EmbeddingOutput = z.infer<typeof EmbeddingOutputSchema>;
 
 export type EmbeddingsTokenUsage = z.infer<typeof EmbeddingsTokenUsageSchema>;
+
+// ============== Decisions ===============
+
+// Inferred from `./schemas/decisions.js`, which documents each field.
+export type DecisionQuestion = z.infer<typeof DecisionQuestionSchema>;
+export type DecisionChoiceOption = z.infer<typeof DecisionChoiceOptionSchema>;
+export type DecisionScoreLevel = z.infer<typeof DecisionScoreLevelSchema>;
+export type DecisionAnswer = z.infer<typeof DecisionAnswerSchema>;
+export type DecisionBooleanAnswer = z.infer<typeof DecisionBooleanAnswerSchema>;
+export type DecisionChoiceAnswer = z.infer<typeof DecisionChoiceAnswerSchema>;
+export type DecisionScoreAnswer = z.infer<typeof DecisionScoreAnswerSchema>;
+export type DecisionRefusalAnswer = z.infer<typeof DecisionRefusalAnswerSchema>;
+export type DecisionsResult = z.infer<typeof DecisionsResultSchema>;
+
+/**
+ * `LlumiverseError.name` when a decision input holds content the provider's decisions endpoint cannot carry (for
+ * example a PDF on OpenAI). Callers can route such inputs to `execute()` instead.
+ */
+export const DECISION_INPUT_NOT_SUPPORTED = 'DecisionInputNotSupported';
+
+/**
+ * Options for `Driver.decide()`: classification or scoring questions asked about one input.
+ */
+export interface DecisionsOptions {
+    /** Provider model id, for example `gpt-6-luna`. */
+    model: string;
+    /**
+     * The input every question is asked about. Segments carry text, files and conversation history the same way
+     * they do for `execute()`; each driver converts the files its provider accepts.
+     */
+    input: PromptSegment[];
+    /** The questions to answer. Names must be unique; answers come back in the same order. */
+    questions: DecisionQuestion[];
+    /** Overrides the driver's default `DriverOptions.httpTimeout` for this call only, as for `execute()`. */
+    httpTimeout?: HttpTimeoutOptions;
+}
 
 export interface ResultValidationError {
     code: 'validation_error' | 'json_error' | 'content_policy_violation';

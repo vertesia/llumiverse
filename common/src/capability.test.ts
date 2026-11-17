@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getModelCapabilities, isDedicatedInferenceModel, isEmbeddingModel, supportsToolUse } from './capability.js';
+import {
+    getModelCapabilities,
+    isDedicatedInferenceModel,
+    isEmbeddingModel,
+    supportsDecisions,
+    supportsToolUse,
+} from './capability.js';
 import { Providers } from './types.js';
 
 describe('dedicated inference model classification', () => {
@@ -135,5 +141,24 @@ describe('supportsToolUse streaming default', () => {
         const caps = getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock);
         expect(caps.tool_support).toBeUndefined();
         expect(caps.tool_support_streaming).toBeUndefined();
+    });
+});
+
+describe('decision support', () => {
+    it.each([
+        ['gpt-6-luna', true],
+        ['gpt-6-luna-2026-10-22', true],
+        ['gpt-7-luna', true],
+        ['gpt-6.5-luna', true],
+        ['gpt-5.6-luna', false],
+        ['gpt-6-astra', false],
+        ['gpt-6', false],
+    ])('%s on OpenAI: %s', (model, expected) => {
+        expect(supportsDecisions(model, Providers.openai)).toBe(expected);
+    });
+
+    it('is scoped to the provider that serves the endpoint', () => {
+        expect(supportsDecisions('gpt-6-luna', Providers.azure_openai)).toBe(false);
+        expect(supportsDecisions('openai/gpt-6-luna', Providers.openrouter)).toBe(false);
     });
 });

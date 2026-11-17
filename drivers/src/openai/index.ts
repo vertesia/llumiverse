@@ -5,6 +5,8 @@ import {
     type CompletionResult,
     type CompletionStream,
     type DataSource,
+    type DecisionsOptions,
+    type DecisionsResult,
     type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingResultItem,
@@ -59,6 +61,7 @@ import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-op
 import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
+import { buildOpenAIDecisionRequest, fromOpenAIDecision } from './decisions.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { logOpenAIInputTransformations } from './input-transformations.js';
@@ -1008,6 +1011,30 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,
                 model,
+                operation: 'execute',
+            });
+        }
+    }
+
+    /**
+     * `POST /v1/decisions`. Sent for any model, so the provider answers for models and deployments llumiverse does
+     * not know yet; `supportsDecisions()` describes the known ones. Inputs the endpoint cannot carry (PDF, audio,
+     * video) fail before the request with a `DecisionInputNotSupported` error.
+     */
+    override async decide(options: DecisionsOptions, signal?: AbortSignal): Promise<DecisionsResult> {
+        const request = await buildOpenAIDecisionRequest(options, this.provider);
+        try {
+            const decision = await this.service.decisions.create(
+                request,
+                this.getDriverRequestOptions(options, signal),
+            );
+            return fromOpenAIDecision(decision, options.questions);
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && !hasNumericStatus(error)) throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model: options.model,
                 operation: 'execute',
             });
         }
