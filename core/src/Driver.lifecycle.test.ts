@@ -479,3 +479,19 @@ describe('AbstractDriver lifecycle', () => {
         );
     });
 });
+
+describe('AbstractDriver stream logging', () => {
+    it('hands the options to the logger without serializing them itself', async () => {
+        const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const driver = new LifecycleTestDriver(vi.fn(), { logger });
+        // JSON.stringify calls toJSON, so this counts every serialization of the options.
+        const toJSON = vi.fn(() => ({ model: 'test-model' }));
+        const streamOptions = { model: 'test-model', toJSON } as ExecutionOptions;
+
+        const stream = await driver.stream(segments, streamOptions);
+        await stream.cancel();
+
+        expect(toJSON).not.toHaveBeenCalled();
+        expect(logger.debug).toHaveBeenCalledWith(streamOptions, 'Executing prompt with provider lifecycle-test');
+    });
+});
