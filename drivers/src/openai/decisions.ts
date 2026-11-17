@@ -72,12 +72,10 @@ export async function toOpenAIDecisionInput(
                 content: segment.role === PromptRole.safety ? `IMPORTANT: ${text}` : text,
             });
         } else if (segment.role === PromptRole.tool) {
-            if (!segment.tool_use_id) throw new Error('Tool use id is required for tool messages');
-            others.push({
-                type: 'function_call_output',
-                call_id: segment.tool_use_id,
-                output: parts.length === 1 && parts[0].type === 'input_text' ? parts[0].text : toolParts(parts),
-            });
+            // The endpoint requires a function_call for every function_call_output, and assistant tool calls are
+            // not carried over, so a tool result goes in as evidence in a user message.
+            const label = segment.tool_use_id ? `Result of tool call ${segment.tool_use_id}:` : 'Tool result:';
+            others.push({ role: 'user', content: [{ type: 'input_text', text: label }, ...parts] });
         } else if (segment.role === PromptRole.assistant) {
             others.push({ role: 'assistant', content: textOnly(parts, provider, model, 'assistant') });
         } else {
@@ -92,15 +90,6 @@ function textOnly(parts: DecisionInputPart[], provider: string, model: string, r
         throw unsupportedInput(provider, model, `files in ${role} messages`);
     }
     return parts.map((part) => (part.type === 'input_text' ? part.text : '')).join('\n');
-}
-
-function toolParts(
-    parts: DecisionInputPart[],
-): Array<OpenAI.Decisions.DecisionInputText | OpenAI.Decisions.DecisionInputImage> {
-    return parts.filter(
-        (part): part is OpenAI.Decisions.DecisionInputText | OpenAI.Decisions.DecisionInputImage =>
-            part.type === 'input_text' || part.type === 'input_image',
-    );
 }
 
 /** Llumiverse names the yes/no type `boolean`; OpenAI calls it `predicate`. */

@@ -69,13 +69,22 @@ describe('OpenAI decision input', () => {
         ]);
     });
 
-    it('maps tool results to function call outputs', async () => {
+    it('passes tool results as user evidence, since no matching function call is sent', async () => {
         const input = await toOpenAIDecisionInput(
             [{ role: PromptRole.tool, content: 'deleted 3 rows', tool_use_id: 'call_1' }],
             'openai',
             'gpt-6-luna',
         );
-        expect(input).toEqual([{ type: 'function_call_output', call_id: 'call_1', output: 'deleted 3 rows' }]);
+        expect(input).toEqual([
+            {
+                role: 'user',
+                content: [
+                    { type: 'input_text', text: 'Result of tool call call_1:' },
+                    { type: 'input_text', text: 'deleted 3 rows' },
+                ],
+            },
+        ]);
+        expect(input.some((item) => 'type' in item && item.type === 'function_call_output')).toBe(false);
     });
 
     it('rejects a PDF with a typed, non-retryable error instead of dropping it', async () => {
