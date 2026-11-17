@@ -322,6 +322,21 @@ describe('current reasoning model options', () => {
         });
         expect((unsupportedFlexTier as { enum?: Record<string, string> }).enum?.Flex).toBeUndefined();
 
+        // GPT-6.2 launched without Flex; GPT-6.1 and later generations keep it.
+        // https://developers.openai.com/api/docs/pricing
+        const flexOf = (model: string) =>
+            (
+                getOptions(model, Providers.openai).options.find((option) => option.name === 'service_tier') as {
+                    enum?: Record<string, string>;
+                }
+            ).enum?.Flex;
+        for (const model of ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.2-astra-law', 'gpt-6.2-sol-2026-11-17']) {
+            expect(flexOf(model)).toBeUndefined();
+        }
+        for (const model of ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6.3-sol', 'gpt-7']) {
+            expect(flexOf(model)).toBe('flex');
+        }
+
         const azureOpenAiTier = getOptions('gpt-5.6-sol', Providers.azure_openai).options.find(
             (option) => option.name === 'service_tier',
         );
