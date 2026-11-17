@@ -94,8 +94,8 @@
     "scripts": {
         "lint": "biome lint src",
         "test": "vitest run --retry 3 --passWithNoTests",
-        "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
+        "typecheck:test": "tsc --checkers 1 -p tsconfig.test.json --noEmit",
+        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc --checkers 1",
         "clean": "rimraf ./lib tsconfig.tsbuildinfo",
         "test:unit": "vitest run --exclude '**/*.live.test.ts'"
     },
