@@ -12,6 +12,7 @@ import {
     getGrokReasoningEffortLevels,
     getOpenAIReasoningEffortLevels,
     hasGeminiSamplingRestriction,
+    isClaudeVersionGTE,
     isGeminiModelVersionGte,
     isGeminiOmniVideoModel,
     isKimiVersionGte,
@@ -613,6 +614,8 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
 function getOpenRouterReasoningEffortLevels(model: string, family: string): readonly string[] | undefined {
     switch (family) {
         case 'claude': {
+            // OpenRouter publishes no `supported_efforts` for Claude 4.5 and older, so it offers no effort there.
+            if (!isClaudeVersionGTE(model, 4, 6)) return undefined;
             const levels = getAvailableEffortLevels(model);
             return levels ? Object.values(levels) : undefined;
         }
@@ -628,7 +631,10 @@ function getOpenRouterReasoningEffortLevels(model: string, family: string): read
         case 'qwen': {
             // Qwen Flash, Omni and Coder models take no effort on OpenRouter.
             if (/(?:flash|omni|coder)/.test(model) || !isQwenVersionGte(model, 3, 8)) return undefined;
-            if (!/-max(?:[-_.:]|$)/.test(model)) return ['low', 'medium', 'xhigh'];
+            if (!/-max(?:[-_.:]|$)/.test(model)) {
+                // The 27B model reasons by default and can switch it off; the 2.4T model requires reasoning.
+                return /-27b(?:[-_.:]|$)/.test(model) ? ['none', 'low', 'medium', 'xhigh'] : ['low', 'medium', 'xhigh'];
+            }
             return isQwenVersionGte(model, 4, 0)
                 ? ['none', 'low', 'high', 'xhigh']
                 : ['minimal', 'low', 'medium', 'high', 'xhigh'];
