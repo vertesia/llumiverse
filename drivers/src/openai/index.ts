@@ -1024,7 +1024,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     override async decide(options: DecisionsOptions, signal?: AbortSignal): Promise<DecisionsResult> {
         const request = await buildOpenAIDecisionRequest(options, this.provider);
         try {
-            const decision = await this.service.decisions.create(request, signal ? { signal } : undefined);
+            const decision = await this.service.decisions.create(
+                request,
+                this.getDriverRequestOptions(options, signal),
+            );
             return fromOpenAIDecision(decision, options.questions);
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;

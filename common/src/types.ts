@@ -282,6 +282,8 @@ export interface DecisionsOptions {
     input: PromptSegment[];
     /** The questions to answer. Names must be unique; answers come back in the same order. */
     questions: DecisionQuestion[];
+    /** Overrides the driver's default `DriverOptions.httpTimeout` for this call only, as for `execute()`. */
+    httpTimeout?: HttpTimeoutOptions;
 }
 
 export interface ResultValidationError {
