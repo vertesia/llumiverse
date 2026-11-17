@@ -440,10 +440,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         signal?: AbortSignal,
     ): Promise<CompletionStream<PromptT>> {
         signal?.throwIfAborted();
-        this.logger.debug(
-            options,
-            `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
-        );
+        // The options ride along as the structured argument, which the logger serializes only when debug is on.
+        // Interpolating them into the message would serialize them, conversation and all, on every call.
+        this.logger.debug(options, `Executing prompt with provider ${this.provider}`);
         const prompt = await this.createExecutionPrompt(segments, options, 'stream', signal);
         signal?.throwIfAborted();
         if (await this.canStream(options, signal)) {
