@@ -412,6 +412,44 @@ describe('central model directory', () => {
         expect(maxTokens.max).toBe(max_output_tokens);
     });
 
+    // Levels from the `reasoning.supported_efforts` of OpenRouter's model listing; source-model rules keep their
+    // native levels, which leave out OpenRouter's extra `none`.
+    it.each([
+        ['anthropic/claude-opus-5.5', ['low', 'medium', 'high', 'xhigh', 'max']],
+        ['anthropic/claude-fable-5.2:batch', ['low', 'medium', 'high', 'xhigh', 'max']],
+        ['anthropic/claude-sonnet-4.6', ['low', 'medium', 'high', 'max']],
+        ['anthropic/claude-3.7-sonnet', undefined],
+        ['x-ai/grok-4.7', ['low', 'medium', 'high', 'xhigh']],
+        ['x-ai/grok-4.3:batch', ['none', 'low', 'medium', 'high']],
+        ['mistralai/mistral-medium-3-5', ['none', 'high']],
+        ['moonshotai/kimi-k3.1-pro', ['none', 'low', 'high', 'max']],
+        ['moonshotai/kimi-k4', ['none', 'low', 'high', 'max']],
+        ['moonshotai/kimi-k2.6', undefined],
+        ['google/gemini-omni-1.2-flash', ['low', 'high']],
+        ['qwen/qwen4-max', ['none', 'low', 'high', 'xhigh']],
+        ['qwen/qwen4.1-max-preview', ['none', 'low', 'high', 'xhigh']],
+        ['qwen/qwen3.8-max-0902:batch', ['minimal', 'low', 'medium', 'high', 'xhigh']],
+        ['qwen/qwen3.8-27b', ['low', 'medium', 'xhigh']],
+        ['qwen/qwen3.8-flash', undefined],
+        ['qwen/qwen3.8-omni-flash', undefined],
+        ['qwen/qwen3.7-max', undefined],
+        ['tencent/hy4', ['none', 'low', 'high']],
+        ['tencent/hy3-preview', ['none', 'low', 'high']],
+        ['tencent/hy5', ['none', 'low', 'high']],
+        ['tencent/hy4-flash', undefined],
+        ['tencent/hy-mt2-7b', undefined],
+    ])('describes OpenRouter effort levels for %s', (model, levels) => {
+        expect(resolveModelProfile(model, Providers.openrouter).reasoning_effort_levels).toEqual(levels);
+        const effort = getOptions(model, Providers.openrouter).options.find((option) => option.name === 'effort');
+        expect(effort?.type === 'enum' ? Object.values(effort.enum) : undefined).toEqual(levels);
+    });
+
+    it('keeps OpenRouter effort rules off generic OpenAI-compatible endpoints', () => {
+        for (const model of ['anthropic/claude-opus-5.5', 'qwen/qwen4-max', 'tencent/hy4', 'moonshotai/kimi-k3']) {
+            expect(resolveModelProfile(model, Providers.openai_compatible).reasoning_effort_levels).toBeUndefined();
+        }
+    });
+
     it.each([
         ['anthropic/claude-opus-4.6', 1_000_000, 128_000],
         ['anthropic/claude-opus-4.8:batch', 1_000_000, 128_000],

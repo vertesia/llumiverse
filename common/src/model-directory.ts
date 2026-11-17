@@ -8,10 +8,12 @@ import { getVertexAIModelLimits } from './capability/vertexai-limits.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
 import { getGeminiModelLimits } from './options/gemini-limits.js';
 import {
+    getAvailableEffortLevels,
     getGrokReasoningEffortLevels,
     getOpenAIReasoningEffortLevels,
     hasGeminiSamplingRestriction,
     isGeminiModelVersionGte,
+    isGeminiOmniVideoModel,
     isKimiVersionGte,
     isMetaMuseModel,
     isModelFamilyVersionGTE,
@@ -598,6 +600,43 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     if ((provider === Providers.xai || provider === Providers.bedrock) && family === 'grok') {
         return getGrokReasoningEffortLevels(model);
     }
+    if (provider === Providers.openrouter) return getOpenRouterReasoningEffortLevels(model, family);
+    return undefined;
+}
+
+/**
+ * Effort levels of models that OpenRouter normalizes to its `reasoning.effort` field. Each rule matches the
+ * `reasoning.supported_efforts` that OpenRouter's model listing publishes for the family
+ * (https://openrouter.ai/api/v1/models). OpenRouter also lists `none` for models whose reasoning can be switched
+ * off; the source-model rules (Claude, Grok, Mistral) keep their native levels, a subset of OpenRouter's list.
+ */
+function getOpenRouterReasoningEffortLevels(model: string, family: string): readonly string[] | undefined {
+    switch (family) {
+        case 'claude': {
+            const levels = getAvailableEffortLevels(model);
+            return levels ? Object.values(levels) : undefined;
+        }
+        case 'grok':
+            return getGrokReasoningEffortLevels(model);
+        case 'mistral':
+            return getMistralModelKnowledge(model).reasoning_effort_levels;
+        case 'kimi':
+            return isKimiVersionGte(model, 3, 0) ? ['none', 'low', 'high', 'max'] : undefined;
+        case 'gemini':
+            // Omni video models are chat models on OpenRouter, with two thinking levels.
+            return isGeminiOmniVideoModel(model) ? ['low', 'high'] : undefined;
+        case 'qwen': {
+            // Qwen Flash, Omni and Coder models take no effort on OpenRouter.
+            if (/(?:flash|omni|coder)/.test(model) || !isQwenVersionGte(model, 3, 8)) return undefined;
+            if (!/-max(?:[-_.:]|$)/.test(model)) return ['low', 'medium', 'xhigh'];
+            return isQwenVersionGte(model, 4, 0)
+                ? ['none', 'low', 'high', 'xhigh']
+                : ['minimal', 'low', 'medium', 'high', 'xhigh'];
+        }
+    }
+    // Tencent Hunyuan Hy 3+ (`hy3`, `hy4-preview`); the Flash tier and the `hy-mt` translation models take no effort.
+    const hunyuan = /(?:^|\/)hy(\d+)(?:-preview)?$/.exec(model);
+    if (hunyuan && Number(hunyuan[1]) >= 3) return ['none', 'low', 'high'];
     return undefined;
 }
 
