@@ -50,11 +50,12 @@ export function normalizeBedrockModelId(model: string): string {
 
 type BedrockServiceTier = 'default' | 'flex' | 'priority' | 'reserved';
 
-const OPAQUE_MODEL_ARN =
-    /^arn:[^:]+:bedrock:[^:]+:[^:]+:(?:application-inference-profile|custom-model|provisioned-model)\//;
+function bedrockArnResource(model: string): string | undefined {
+    return /^arn:[^:]+:bedrock:[^:]+:[^:]*:([^/]+)\//.exec(model)?.[1];
+}
 
 export function isBedrockApplicationInferenceProfile(model: string): boolean {
-    return /^arn:[^:]+:bedrock:[^:]+:[^:]+:application-inference-profile\//.test(model);
+    return bedrockArnResource(model) === 'application-inference-profile';
 }
 
 const CLAUDE_RESERVED_VERSIONS = new Set(['haiku-4-5', 'opus-4-5', 'opus-4-6', 'sonnet-4-5', 'sonnet-4-6']);
@@ -67,11 +68,18 @@ function supportsNemotronFlexAndPriority(model: string): boolean {
 
 // Bedrock discovery does not report tiers. The model cards document support for each family:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
-export function getBedrockServiceTiers(model: string): readonly BedrockServiceTier[] | undefined {
-    // These resources need an authenticated Bedrock lookup to identify their backing model.
-    if (OPAQUE_MODEL_ARN.test(model)) return undefined;
+export function getBedrockServiceTiers(model: string, baseModelId?: string): readonly BedrockServiceTier[] | undefined {
+    const resource = bedrockArnResource(model);
+    // Custom deployments and Provisioned Throughput have their own capacity rules. A foundation model's
+    // on-demand tiers do not describe those resources. https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-use.html
+    if (resource === 'custom-model' || resource === 'custom-model-deployment' || resource === 'provisioned-model') {
+        return ['default'];
+    }
+    if (resource === 'application-inference-profile' && !baseModelId) return undefined;
 
-    const modelId = normalizeBedrockModelId(model);
+    const modelId = normalizeBedrockModelId(
+        resource === 'application-inference-profile' ? (baseModelId ?? model) : model,
+    );
     if (modelId.startsWith('anthropic.claude-')) {
         const claude = parseClaudeVersion(modelId);
         if (claude && CLAUDE_RESERVED_VERSIONS.has(`${claude.variant}-${claude.major}-${claude.minor}`)) {

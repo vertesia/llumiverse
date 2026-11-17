@@ -10,24 +10,24 @@ import { getAzureOpenAiOptions, getOpenAiCompatibleOptions, getOpenAiOptions } f
 import { getOpenRouterOptions } from './options/openrouter.js';
 import { getVertexAiOptions } from './options/vertexai.js';
 import { getXAIOptions } from './options/xai.js';
-import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
+import { type AvailableAIModel, type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
-/** Supply the discovered base model ID to resolve tiers for an opaque Bedrock resource. */
+/** A catalog entry can provide backing-model metadata for a selectable resource such as a Bedrock profile. */
 export function getOptions(
-    model: string,
+    target: string | Pick<AvailableAIModel, 'id' | 'base_model_id'>,
     provider?: Providers,
     options?: ModelOptions,
-    baseModelId?: string,
 ): ModelOptionsInfo {
     if (!provider) {
         return textOptionsFallback;
     }
+    const model = typeof target === 'string' ? target : target.id;
     // Providers is intentionally an enum here: transport selection must be explicit before exposing an option schema.
     switch (provider) {
         case Providers.anthropic:
             return getAnthropicOptions(model, options);
         case Providers.bedrock:
-            return getBedrockOptions(model, options, baseModelId);
+            return getBedrockOptions(model, options, typeof target === 'string' ? undefined : target.base_model_id);
         case Providers.bedrock_mantle:
             return getBedrockMantleOptions(model, options);
         case Providers.vertexai:

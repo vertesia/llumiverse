@@ -2400,7 +2400,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     throw new Error('Model ID not found');
                 }
 
-                const capabilityModelId = m.baseModelName ?? m.modelArn;
+                const capabilityModelId = m.baseModelArn ?? m.baseModelName ?? m.modelArn;
                 if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
                 const modelMetadata = resolveModelListingMetadata(
                     capabilityModelId,
@@ -2408,8 +2408,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     baseModelLifecycle([m.baseModelArn]),
                 );
 
-                const model: AIModel = {
+                const model: AvailableAIModel = {
                     id: m.modelArn,
+                    ...(m.baseModelArn ? { base_model_id: m.baseModelArn } : {}),
                     name: m.modelName ?? m.modelArn,
                     provider: this.provider,
                     owner: 'custom',
@@ -2439,7 +2440,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const baseModelId = baseModelArn ? bedrockBaseModelId(baseModelArn) : undefined;
 
                 const providerName =
-                    baseModelId?.split('.')[0] ??
+                    (baseModelId ? getPublisherKey(baseModelId.split('.')[0]) : undefined) ??
                     supportedPublishers.find(
                         (provider) =>
                             profileName.toLowerCase().includes(provider) || profileId.toLowerCase().includes(provider),

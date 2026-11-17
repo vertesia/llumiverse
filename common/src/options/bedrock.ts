@@ -314,7 +314,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions, baseMode
         };
     } else {
         const max_tokens_limit = getMaxTokensLimitBedrock(model);
-        const serviceTiers = getBedrockServiceTiers(baseModelId ?? model);
+        const serviceTiers = getBedrockServiceTiers(model, baseModelId);
         //Not canvas, i.e normal AWS bedrock converse
         // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)
         // Opus 4.6 and Sonnet 4.6 still support these parameters

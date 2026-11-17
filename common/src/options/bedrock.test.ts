@@ -519,19 +519,29 @@ describe('Bedrock service tier options', () => {
         expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
     });
 
-    it.each(['application-inference-profile', 'custom-model', 'provisioned-model'])(
-        'preserves tier selection for an opaque %s ARN',
+    it('preserves tier selection for an application profile with an unknown backing model', () => {
+        const model = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz';
+        const tier = getOptions(model, Providers.bedrock).options.find((option) => option.name === 'service_tier');
+
+        expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual([
+            'default',
+            'flex',
+            'priority',
+            'reserved',
+        ]);
+        expect(tier?.description).toContain('Bedrock validates');
+    });
+
+    it.each(['custom-model', 'custom-model-deployment', 'provisioned-model'])(
+        'does not inherit foundation model tiers for a %s ARN',
         (resource) => {
-            const model = `arn:aws:bedrock:us-east-1:123456789012:${resource}/abc123xyz`;
+            const model = {
+                id: `arn:aws:bedrock:us-east-1:123456789012:${resource}/abc123xyz`,
+                base_model_id: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+            };
             const tier = getOptions(model, Providers.bedrock).options.find((option) => option.name === 'service_tier');
 
-            expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual([
-                'default',
-                'flex',
-                'priority',
-                'reserved',
-            ]);
-            expect(tier?.description).toContain('Bedrock validates');
+            expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(['default']);
         },
     );
 });

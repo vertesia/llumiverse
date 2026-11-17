@@ -94,43 +94,47 @@ function mockModelListingMethods(
 
 describe('Bedrock Converse model discovery', () => {
     it.each([
-        ['amazon.nova-pro-v1:0', ['default', 'flex', 'priority']],
-        ['anthropic.claude-haiku-5-5', ['default']],
-    ])('reports tier metadata for an application profile backed by %s', async (model, expected) => {
-        const driver = new BedrockDriver({ region: 'us-east-1' });
-        const service = createMockService();
-        const profileArn = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz';
-        const baseModelArn = `arn:aws:bedrock:us-east-1::foundation-model/${model}`;
-        mockModelListingMethods(
-            service,
-            { $metadata: {}, modelSummaries: [foundationModel(model)] },
-            emptyCustomModels,
-            {
-                $metadata: {},
-                inferenceProfileSummaries: [
-                    {
-                        inferenceProfileId: 'abc123xyz',
-                        inferenceProfileArn: profileArn,
-                        inferenceProfileName: 'My test profile',
-                        models: [{ modelArn: baseModelArn }],
-                        status: 'ACTIVE',
-                        type: 'APPLICATION',
-                    },
-                ],
-            },
-        );
-        vi.spyOn(driver, 'getService').mockReturnValue(service);
+        ['amazon.nova-pro-v1:0', 'Amazon', ['default', 'flex', 'priority']],
+        ['anthropic.claude-haiku-5-5', 'Anthropic', ['default']],
+        ['moonshotai.kimi-k2-thinking', 'Moonshot AI', ['default', 'flex', 'priority']],
+    ])(
+        'reports tier and publisher metadata for an application profile backed by %s',
+        async (model, owner, expected) => {
+            const driver = new BedrockDriver({ region: 'us-east-1' });
+            const service = createMockService();
+            const profileArn = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz';
+            const baseModelArn = `arn:aws:bedrock:us-east-1::foundation-model/${model}`;
+            mockModelListingMethods(
+                service,
+                { $metadata: {}, modelSummaries: [{ ...foundationModel(model), providerName: owner }] },
+                emptyCustomModels,
+                {
+                    $metadata: {},
+                    inferenceProfileSummaries: [
+                        {
+                            inferenceProfileId: 'abc123xyz',
+                            inferenceProfileArn: profileArn,
+                            inferenceProfileName: 'My test profile',
+                            models: [{ modelArn: baseModelArn }],
+                            status: 'ACTIVE',
+                            type: 'APPLICATION',
+                        },
+                    ],
+                },
+            );
+            vi.spyOn(driver, 'getService').mockReturnValue(service);
 
-        const profile = (await driver.listModels()).find(({ id }) => id === profileArn);
-        expect(profile).toMatchObject({ id: profileArn, base_model_id: baseModelArn });
-        const tier = getOptions(profileArn, Providers.bedrock, undefined, profile?.base_model_id).options.find(
-            (option) => option.name === 'service_tier',
-        );
-        expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
-        expect(await driver.listTrainableModels()).not.toContainEqual(
-            expect.objectContaining({ base_model_id: baseModelArn }),
-        );
-    });
+            const profile = (await driver.listModels()).find(({ id }) => id === profileArn);
+            expect(profile).toMatchObject({ id: profileArn, base_model_id: baseModelArn, owner });
+            const tier = getOptions(profile ?? profileArn, Providers.bedrock).options.find(
+                (option) => option.name === 'service_tier',
+            );
+            expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
+            expect(await driver.listTrainableModels()).not.toContainEqual(
+                expect.objectContaining({ base_model_id: baseModelArn }),
+            );
+        },
+    );
 
     it('inherits discovery support for future models from known publishers', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
@@ -224,7 +228,10 @@ describe('Bedrock Converse model discovery', () => {
 
         const models = await driver.listModels();
         const lifecycle = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
-        expect(models.find((model) => model.id.endsWith('custom-model/opus-41-tuned'))).toMatchObject(lifecycle);
+        expect(models.find((model) => model.id.endsWith('custom-model/opus-41-tuned'))).toMatchObject({
+            ...lifecycle,
+            base_model_id: customModels.modelSummaries[0].baseModelArn,
+        });
         expect(models.find((model) => model.id === 'anthropic.claude-opus-4-1-20250805-v1:0')).toMatchObject(lifecycle);
         expect(models.find((model) => model.id.endsWith('application-inference-profile/opus-41-app'))).toMatchObject(
             lifecycle,
