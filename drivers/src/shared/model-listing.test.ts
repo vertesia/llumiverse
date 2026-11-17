@@ -63,6 +63,16 @@ describe('uncatalogued model inputs', () => {
     });
 });
 
+describe('models with only curated effort levels', () => {
+    it('keeps the provider-listed inputs, since effort says nothing about modalities', () => {
+        const metadata = resolveModelListingMetadata('tencent/hy4', Providers.openrouter, {
+            input_modalities: ['text', 'image'],
+            output_modalities: ['text'],
+        });
+        expect(metadata.input_modalities).toEqual(['text', 'image']);
+    });
+});
+
 describe('model listing lifecycle dates', () => {
     it('prefers dates reported by the provider over the curated table', () => {
         expect(

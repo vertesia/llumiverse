@@ -34,12 +34,15 @@ function normalizeRuntimeModalities(modalities: readonly string[] | undefined): 
     });
 }
 
+/**
+ * Whether a catalog rule describes the model's capabilities. Effort levels alone do not: they say nothing about
+ * modalities or tools, so a generic-family model with only curated effort keeps the provider's listing metadata.
+ */
 function hasCatalogInformation(profile: ReturnType<typeof resolveModelProfile>): boolean {
     return (
         profile.family !== 'generic' ||
         profile.context_window !== undefined ||
         profile.max_output_tokens !== undefined ||
-        profile.reasoning_effort_levels !== undefined ||
         profile.capabilities.tool_support !== undefined ||
         profile.capabilities.tool_support_streaming !== undefined
     );
