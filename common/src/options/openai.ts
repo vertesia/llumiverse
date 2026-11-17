@@ -22,7 +22,12 @@ import {
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
 import { buildNativeCompactionOption } from './shared-parsing.js';
-import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE, isOpenAIImageVersionGTE } from './version-parsing.js';
+import {
+    getOpenAIReasoningEffortLevels,
+    isOpenAIGptVersionGTE,
+    isOpenAIImageVersionGTE,
+    parseOpenAIGptVersion,
+} from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -166,6 +171,10 @@ export function isFlexSupportedOpenAIModel(model: string): boolean {
     const modelName = (model.split('/').pop() ?? model).toLowerCase();
     const unsupportedVariant = ['chat', 'codex', 'pro', 'deep-research'].some((variant) => modelName.includes(variant));
     if (unsupportedVariant) return false;
+    // Exception: GPT-6.2 (Astra, Sol) launched without Flex; the Flex pricing table lists GPT-6.1 and earlier only.
+    // Scoped to 6.2 so later generations keep inheriting Flex. https://developers.openai.com/api/docs/pricing
+    const version = parseOpenAIGptVersion(modelName);
+    if (version?.major === 6 && version.minor === 2) return false;
 
     return (
         isOpenAIGptVersionGTE(modelName, 5, 0) ||
