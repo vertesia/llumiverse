@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { getBedrockModelKnowledge, getBedrockServiceTiers } from '../capability/bedrock-models.js';
 import { isMistralLargeGte } from '../capability/mistral.js';
 import type {
     BedrockAI21OptionsSchema,
@@ -77,6 +77,8 @@ export type BedrockOptions =
     | BedrockPalmyraOptions
     | BedrockGptOssOptions
     | TwelvelabsPegasusOptions;
+
+const SERVICE_TIER_LABELS = { default: 'Default', flex: 'Flex', priority: 'Priority', reserved: 'Reserved' };
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
     const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;
@@ -329,7 +331,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             {
                 name: 'service_tier',
                 type: OptionType.enum,
-                enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
+                enum: Object.fromEntries(
+                    getBedrockServiceTiers(model).map((tier) => [SERVICE_TIER_LABELS[tier], tier]),
+                ),
                 default: 'default',
                 description: 'Select the Amazon Bedrock processing tier for this request.',
             },

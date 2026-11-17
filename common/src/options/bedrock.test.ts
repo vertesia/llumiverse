@@ -471,6 +471,30 @@ describe('Bedrock Converse GPT options', () => {
     });
 });
 
+describe('Bedrock service tier options', () => {
+    it.each([
+        ['anthropic.claude-haiku-5-5', ['default']],
+        ['global.anthropic.claude-haiku-5-5', ['default']],
+        ['arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-haiku-5-5', ['default']],
+        ['us.anthropic.claude-haiku-4-5-20251001-v1:0', ['default', 'reserved']],
+        ['global.anthropic.claude-opus-4-7', ['default']],
+        ['us.amazon.nova-lite-v1:0', ['default']],
+        ['us.amazon.nova-pro-v1:0', ['default', 'flex', 'priority']],
+        ['global.amazon.nova-2-lite-v1:0', ['default', 'flex', 'priority']],
+        ['deepseek.v3-v1:0', ['default']],
+        ['deepseek.v3.2', ['default', 'flex', 'priority']],
+        ['openai.gpt-oss-120b-1:0', ['default', 'flex', 'priority']],
+        ['qwen.qwen3-coder-next', ['default']],
+        ['qwen.qwen3-coder-480b-a35b-v1:0', ['default', 'flex', 'priority']],
+        ['zai.glm-6', ['default', 'flex', 'priority']],
+        ['unverified.model-1', ['default']],
+    ])('lists the supported tiers for %s', (model, expected) => {
+        const tier = getOptions(model, Providers.bedrock).options.find((option) => option.name === 'service_tier');
+
+        expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
+    });
+});
+
 describe('Bedrock open-weight model cards', () => {
     it.each([
         ['zai.glm-4.7', 203_000, 131_072],

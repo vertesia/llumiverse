@@ -48,6 +48,50 @@ export function normalizeBedrockModelId(model: string): string {
     return modelId.replace(GEO_PREFIX, '');
 }
 
+type BedrockServiceTier = 'default' | 'flex' | 'priority' | 'reserved';
+
+const FLEX_AND_PRIORITY_FAMILIES = [
+    'google.gemma-',
+    'mistral.',
+    'moonshot.kimi-',
+    'moonshotai.kimi-',
+    'nvidia.nemotron-',
+    'openai.gpt-oss-',
+    'writer.palmyra-vision-',
+];
+
+// Bedrock discovery does not report tiers. The model cards document support for each family:
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
+export function getBedrockServiceTiers(model: string): readonly BedrockServiceTier[] {
+    const modelId = normalizeBedrockModelId(model);
+    if (modelId.startsWith('anthropic.claude-')) {
+        const claude = parseClaudeVersion(modelId);
+        const supportsReserved =
+            claude?.major === 4 &&
+            (claude.minor === 5 || claude.minor === 6) &&
+            (claude.variant === 'opus' ||
+                claude.variant === 'sonnet' ||
+                (claude.minor === 5 && claude.variant === 'haiku'));
+        return supportsReserved ? ['default', 'reserved'] : ['default'];
+    }
+
+    // Qwen3 Coder Next is Standard-only even though the other Qwen3 Coder variants support both tiers.
+    if (modelId.startsWith('qwen.qwen3-coder-next')) return ['default'];
+
+    if (
+        FLEX_AND_PRIORITY_FAMILIES.some((family) => modelId.startsWith(family)) ||
+        /^amazon\.nova-(?:2-lite|pro|premier)(?:[-:]|$)/.test(modelId) ||
+        isFamilyVersionGte(modelId, 'deepseek.v', 3, 2) ||
+        isFamilyVersionGte(modelId, 'minimax.minimax-m', 2) ||
+        isFamilyVersionGte(modelId, 'qwen.qwen', 3) ||
+        isFamilyVersionGte(modelId, 'zai.glm-', 4, 7) ||
+        (modelId.startsWith('xai.grok-') && isSingleDigitGrokVersionGte(modelId, 4, 3))
+    ) {
+        return ['default', 'flex', 'priority'];
+    }
+    return ['default'];
+}
+
 function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'output'> {
     if (includesAny(model, ['nova-2-multimodal-embeddings', 'titan-embed', 'cohere.embed', 'marengo-embed'])) {
         return {

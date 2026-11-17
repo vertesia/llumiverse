@@ -338,7 +338,10 @@ describe('current reasoning model options', () => {
         expect(bedrockTier).toMatchObject({
             type: OptionType.enum,
             default: 'default',
-            enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
+        });
+        expect(bedrockTier?.type === OptionType.enum && bedrockTier.enum).toEqual({
+            Default: 'default',
+            Reserved: 'reserved',
         });
 
         const vertexTier = getOptions('gemini-3.1-pro-preview', Providers.vertexai).options.find(
