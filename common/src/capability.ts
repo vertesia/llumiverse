@@ -65,6 +65,22 @@ export function supportsToolUse(model: string, provider: Providers, streaming: b
     return !!(capabilities.tool_support_streaming ?? capabilities.tool_support);
 }
 
+/**
+ * Whether a model is known to answer `Driver.decide()` on a provider. This is capability metadata, not a runtime
+ * guard: `decide()` still sends the request for any model and lets the provider answer.
+ *
+ * OpenAI serves `POST /v1/decisions` with the `luna` tier from GPT-6 on (`gpt-6-luna`, dated snapshots included).
+ * Later generations of the tier are assumed to keep it.
+ */
+export function supportsDecisions(model: string, provider: Providers | string): boolean {
+    const name = model.split('/').pop()?.toLowerCase() ?? '';
+    if (provider === 'openai') {
+        const match = /^gpt-(\d+)(?:\.\d+)?-luna(?:-\d{4}-\d{2}-\d{2})?$/.exec(name);
+        return !!match && Number(match[1]) >= 6;
+    }
+    return false;
+}
+
 export function modelModalitiesToArray(modalities: ModelModalities): string[] {
     return Object.entries(modalities)
         .filter(([_, isSupported]) => isSupported)

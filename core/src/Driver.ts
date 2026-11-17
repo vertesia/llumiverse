@@ -9,6 +9,8 @@ import {
     type Completion,
     type CompletionStream,
     type DataSource,
+    type DecisionsOptions,
+    type DecisionsResult,
     type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
@@ -109,6 +111,13 @@ export interface Driver<PromptT = unknown> {
      */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    /**
+     * Ask classification or scoring questions about an input and get calibrated answers: a probability for a
+     * boolean question, a probability per option or level for a choice or a score. Drivers without a decisions
+     * endpoint throw.
+     */
+    decide(options: DecisionsOptions, signal?: AbortSignal): Promise<DecisionsResult>;
+
     /** Request cleanup after all active operations and owned streams finish. */
     destroy(): void;
 }
@@ -129,6 +138,7 @@ const lifecycleGuardedOperationNames = [
     'listTrainableModels',
     'validateConnection',
     'generateEmbeddings',
+    'decide',
     'createPrompt',
     'createTrainingPrompt',
 ] as const satisfies readonly LifecycleGuardedOperationName[];
@@ -630,6 +640,12 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     //generate embeddings for a given text
     abstract generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
+
+    // Not abstract: only providers with a decisions endpoint implement it. Fails locally because there is no
+    // request to construct, rather than silently answering nothing.
+    async decide(_options: DecisionsOptions, _signal?: AbortSignal): Promise<DecisionsResult> {
+        throw new Error(`Decisions are not supported by the ${this.provider} driver.`);
+    }
 
     private acquireOperationLease(): () => void {
         if (this._destroyRequested || this._resourcesDestroyed) {
