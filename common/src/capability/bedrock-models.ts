@@ -50,39 +50,48 @@ export function normalizeBedrockModelId(model: string): string {
 
 type BedrockServiceTier = 'default' | 'flex' | 'priority' | 'reserved';
 
-const FLEX_AND_PRIORITY_FAMILIES = [
-    'google.gemma-',
-    'mistral.',
-    'moonshot.kimi-',
-    'moonshotai.kimi-',
-    'nvidia.nemotron-',
-    'openai.gpt-oss-',
-    'writer.palmyra-vision-',
-];
+const OPAQUE_MODEL_ARN =
+    /^arn:[^:]+:bedrock:[^:]+:[^:]+:(?:application-inference-profile|custom-model|provisioned-model)\//;
+
+export function isBedrockApplicationInferenceProfile(model: string): boolean {
+    return /^arn:[^:]+:bedrock:[^:]+:[^:]+:application-inference-profile\//.test(model);
+}
+
+const CLAUDE_RESERVED_VERSIONS = new Set(['haiku-4-5', 'opus-4-5', 'opus-4-6', 'sonnet-4-5', 'sonnet-4-6']);
+
+function supportsNemotronFlexAndPriority(model: string): boolean {
+    // The generation precedes the size for Nano/Super 3 and follows it for Nano v2.
+    const version = model.match(/^nvidia\.nemotron-(?:(?:nano|super)-(\d+)-|nano-\d+b-v(\d+)(?:[-:]|$))/);
+    return Number(version?.[1]) >= 3 || Number(version?.[2]) >= 2;
+}
 
 // Bedrock discovery does not report tiers. The model cards document support for each family:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
-export function getBedrockServiceTiers(model: string): readonly BedrockServiceTier[] {
+export function getBedrockServiceTiers(model: string): readonly BedrockServiceTier[] | undefined {
+    // These resources need an authenticated Bedrock lookup to identify their backing model.
+    if (OPAQUE_MODEL_ARN.test(model)) return undefined;
+
     const modelId = normalizeBedrockModelId(model);
     if (modelId.startsWith('anthropic.claude-')) {
         const claude = parseClaudeVersion(modelId);
-        const supportsReserved =
-            claude?.major === 4 &&
-            (claude.minor === 5 || claude.minor === 6) &&
-            (claude.variant === 'opus' ||
-                claude.variant === 'sonnet' ||
-                (claude.minor === 5 && claude.variant === 'haiku'));
-        return supportsReserved ? ['default', 'reserved'] : ['default'];
+        if (claude && CLAUDE_RESERVED_VERSIONS.has(`${claude.variant}-${claude.major}-${claude.minor}`)) {
+            return ['default', 'reserved'];
+        }
+        return ['default'];
     }
 
     // Qwen3 Coder Next is Standard-only even though the other Qwen3 Coder variants support both tiers.
     if (modelId.startsWith('qwen.qwen3-coder-next')) return ['default'];
 
     if (
-        FLEX_AND_PRIORITY_FAMILIES.some((family) => modelId.startsWith(family)) ||
         /^amazon\.nova-(?:2-lite|pro|premier)(?:[-:]|$)/.test(modelId) ||
+        /^(?:mistral\.|openai\.gpt-oss-)/.test(modelId) ||
+        /^writer\.palmyra-vision-7b(?:[-:]|$)/.test(modelId) ||
         isFamilyVersionGte(modelId, 'deepseek.v', 3, 2) ||
+        isFamilyVersionGte(modelId, 'google.gemma-', 3) ||
         isFamilyVersionGte(modelId, 'minimax.minimax-m', 2) ||
+        (/^moonshot(?:ai)?\.kimi-k/.test(modelId) && isKimiVersionGte(modelId, 2, 0)) ||
+        supportsNemotronFlexAndPriority(modelId) ||
         isFamilyVersionGte(modelId, 'qwen.qwen', 3) ||
         isFamilyVersionGte(modelId, 'zai.glm-', 4, 7) ||
         (modelId.startsWith('xai.grok-') && isSingleDigitGrokVersionGte(modelId, 4, 3))

@@ -8,6 +8,7 @@ import {
     type ListInferenceProfilesCommandInput,
     type ListInferenceProfilesCommandOutput,
 } from '@aws-sdk/client-bedrock';
+import { getOptions, OptionType, Providers } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
@@ -92,6 +93,45 @@ function mockModelListingMethods(
 }
 
 describe('Bedrock Converse model discovery', () => {
+    it.each([
+        ['amazon.nova-pro-v1:0', ['default', 'flex', 'priority']],
+        ['anthropic.claude-haiku-5-5', ['default']],
+    ])('reports tier metadata for an application profile backed by %s', async (model, expected) => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const service = createMockService();
+        const profileArn = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz';
+        const baseModelArn = `arn:aws:bedrock:us-east-1::foundation-model/${model}`;
+        mockModelListingMethods(
+            service,
+            { $metadata: {}, modelSummaries: [foundationModel(model)] },
+            emptyCustomModels,
+            {
+                $metadata: {},
+                inferenceProfileSummaries: [
+                    {
+                        inferenceProfileId: 'abc123xyz',
+                        inferenceProfileArn: profileArn,
+                        inferenceProfileName: 'My test profile',
+                        models: [{ modelArn: baseModelArn }],
+                        status: 'ACTIVE',
+                        type: 'APPLICATION',
+                    },
+                ],
+            },
+        );
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        const profile = (await driver.listModels()).find(({ id }) => id === profileArn);
+        expect(profile).toMatchObject({ id: profileArn, base_model_id: baseModelArn });
+        const tier = getOptions(profileArn, Providers.bedrock, undefined, profile?.base_model_id).options.find(
+            (option) => option.name === 'service_tier',
+        );
+        expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
+        expect(await driver.listTrainableModels()).not.toContainEqual(
+            expect.objectContaining({ base_model_id: baseModelArn }),
+        );
+    });
+
     it('inherits discovery support for future models from known publishers', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
         const service = createMockService();

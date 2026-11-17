@@ -28,7 +28,7 @@ import type {
 } from './schemas/embeddings.js';
 import type { HttpTimeoutOptionsSchema } from './schemas/http-timeout.js';
 import type { JSONSchema } from './schemas/json-schema.js';
-import type { AIModelSchema, ModelSearchPayloadSchema } from './schemas/model.js';
+import type { AIModelSchema, AvailableAIModelSchema, ModelSearchPayloadSchema } from './schemas/model.js';
 import type { ModelOptionsSchema, ReasoningEffortSchema } from './schemas/model-options.js';
 
 // ============== Provider details ===============
@@ -1022,6 +1022,7 @@ export interface ModelCapabilities {
 // `string`, which is what the published component has always said, and a canonical alias cannot
 // carry one. `AIModel` becomes `AIModel`.
 export type AIModel = z.infer<typeof AIModelSchema>;
+export type AvailableAIModel = z.infer<typeof AvailableAIModelSchema>;
 
 export enum AIModelStatus {
     Available = 'available',

@@ -12,7 +12,13 @@ import { getVertexAiOptions } from './options/vertexai.js';
 import { getXAIOptions } from './options/xai.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
-export function getOptions(model: string, provider?: Providers, options?: ModelOptions): ModelOptionsInfo {
+/** Supply the discovered base model ID to resolve tiers for an opaque Bedrock resource. */
+export function getOptions(
+    model: string,
+    provider?: Providers,
+    options?: ModelOptions,
+    baseModelId?: string,
+): ModelOptionsInfo {
     if (!provider) {
         return textOptionsFallback;
     }
@@ -21,7 +27,7 @@ export function getOptions(model: string, provider?: Providers, options?: ModelO
         case Providers.anthropic:
             return getAnthropicOptions(model, options);
         case Providers.bedrock:
-            return getBedrockOptions(model, options);
+            return getBedrockOptions(model, options, baseModelId);
         case Providers.bedrock_mantle:
             return getBedrockMantleOptions(model, options);
         case Providers.vertexai:
