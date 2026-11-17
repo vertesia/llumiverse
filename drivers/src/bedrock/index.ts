@@ -4,9 +4,12 @@ import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
+    type CustomModelSummary,
     type FoundationModelSummary,
     GetModelCustomizationJobCommand,
     type GetModelCustomizationJobCommandOutput,
+    type InferenceProfileSummary,
+    InferenceProfileType,
     ModelCustomizationJobStatus,
     StopModelCustomizationJobCommand,
 } from '@aws-sdk/client-bedrock';
@@ -458,6 +461,51 @@ function isBedrockClaudeModel(model: string): boolean {
  * profile (`us.anthropic.claude-…`), whose names AWS defines. Undefined for application inference profiles, custom
  * models and provisioned throughput, whose ARNs carry caller-chosen names.
  */
+/** The largest page both listings accept. */
+const LISTING_PAGE_SIZE = 1000;
+
+/** Every page of a paginated Bedrock listing: one call returns at most one page and a token for the next. */
+async function listAllPages<T>(
+    listPage: (nextToken: string | undefined) => Promise<{ items?: T[]; nextToken?: string }>,
+): Promise<T[]> {
+    const items: T[] = [];
+    let nextToken: string | undefined;
+    do {
+        const page = await listPage(nextToken);
+        items.push(...(page.items ?? []));
+        nextToken = page.nextToken;
+    } while (nextToken);
+    return items;
+}
+
+function listAllCustomModels(service: Bedrock): Promise<CustomModelSummary[]> {
+    return listAllPages(async (nextToken) => {
+        const page = await service.listCustomModels({ maxResults: LISTING_PAGE_SIZE, nextToken });
+        return { items: page.modelSummaries, nextToken: page.nextToken };
+    });
+}
+
+/**
+ * System-defined and application inference profiles. Each type is requested explicitly because the API does not
+ * document which types an unfiltered call returns, and application profiles carry their backing model.
+ */
+async function listAllInferenceProfiles(service: Bedrock): Promise<InferenceProfileSummary[]> {
+    const types = [InferenceProfileType.SYSTEM_DEFINED, InferenceProfileType.APPLICATION];
+    const pages = await Promise.all(
+        types.map((typeEquals) =>
+            listAllPages(async (nextToken) => {
+                const page = await service.listInferenceProfiles({
+                    typeEquals,
+                    maxResults: LISTING_PAGE_SIZE,
+                    nextToken,
+                });
+                return { items: page.inferenceProfileSummaries, nextToken: page.nextToken };
+            }),
+        ),
+    );
+    return pages.flat();
+}
+
 function namedBedrockModel(model: string): string | undefined {
     if (!model.startsWith('arn:')) return model;
     for (const resource of [':foundation-model/', ':inference-profile/']) {
@@ -2249,11 +2297,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 foundationModelsError = error;
                 return undefined;
             }),
-            service.listCustomModels({}).catch(() => {
+            listAllCustomModels(service).catch(() => {
                 this.logger.warn("[Bedrock] Can't list custom models. Check if the user has the right permissions.");
                 return undefined;
             }),
-            service.listInferenceProfiles({}).catch(() => {
+            listAllInferenceProfiles(service).catch(() => {
                 this.logger.warn(
                     "[Bedrock] Can't list inference profiles. Check if the user has the right permissions.",
                 );
@@ -2394,8 +2442,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
 
         //add custom models
-        if (customModelsList?.modelSummaries) {
-            customModelsList.modelSummaries.forEach((m) => {
+        if (customModelsList) {
+            customModelsList.forEach((m) => {
                 if (!m.modelArn) {
                     throw new Error('Model ID not found');
                 }
@@ -2424,8 +2472,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         //add inference profiles
-        if (inferenceProfilesList?.inferenceProfileSummaries) {
-            inferenceProfilesList.inferenceProfileSummaries.forEach((p) => {
+        if (inferenceProfilesList) {
+            inferenceProfilesList.forEach((p) => {
                 if (!p.inferenceProfileArn) {
                     throw new Error('Profile ARN not found');
                 }

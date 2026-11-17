@@ -83,9 +83,14 @@ function mockModelListingMethods(
     const listCustomModels = vi.fn(
         async (_input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> => customModels,
     );
+    // The driver requests each profile type separately; a fixture profile without a type is system-defined.
     const listInferenceProfiles = vi.fn(
-        async (_input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
-            inferenceProfiles,
+        async (input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> => ({
+            ...inferenceProfiles,
+            inferenceProfileSummaries: inferenceProfiles.inferenceProfileSummaries?.filter(
+                (profile) => !input.typeEquals || (profile.type ?? 'SYSTEM_DEFINED') === input.typeEquals,
+            ),
+        }),
     );
     Reflect.set(service, 'listFoundationModels', listFoundationModels);
     Reflect.set(service, 'listCustomModels', listCustomModels);
@@ -135,6 +140,67 @@ describe('Bedrock Converse model discovery', () => {
             );
         },
     );
+
+    it('follows the next page token of the custom model and inference profile listings', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const service = createMockService();
+        mockModelListingMethods(service, {
+            $metadata: {},
+            modelSummaries: [foundationModel('amazon.nova-pro-v1:0'), foundationModel('anthropic.claude-haiku-5-5')],
+        });
+        const profile = (name: string, model: string) => ({
+            inferenceProfileId: name,
+            inferenceProfileArn: `arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/${name}`,
+            inferenceProfileName: name,
+            models: [{ modelArn: `arn:aws:bedrock:us-east-1::foundation-model/${model}` }],
+            status: 'ACTIVE' as const,
+            type: 'APPLICATION' as const,
+        });
+        const listInferenceProfiles = vi.fn(
+            async (input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
+                input.typeEquals !== 'APPLICATION'
+                    ? { $metadata: {}, inferenceProfileSummaries: [] }
+                    : input.nextToken === 'page-2'
+                      ? { $metadata: {}, inferenceProfileSummaries: [profile('second', 'anthropic.claude-haiku-5-5')] }
+                      : {
+                            $metadata: {},
+                            inferenceProfileSummaries: [profile('first', 'amazon.nova-pro-v1:0')],
+                            nextToken: 'page-2',
+                        },
+        );
+        const customModel = (name: string) => ({
+            modelArn: `arn:aws:bedrock:us-east-1:123456789012:custom-model/${name}`,
+            modelName: name,
+            baseModelArn: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+            baseModelName: 'Nova Pro',
+            creationTime: new Date(0),
+        });
+        const listCustomModels = vi.fn(
+            async (input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> =>
+                input.nextToken === 'page-2'
+                    ? { $metadata: {}, modelSummaries: [customModel('tuned-2')] }
+                    : { $metadata: {}, modelSummaries: [customModel('tuned-1')], nextToken: 'page-2' },
+        );
+        Reflect.set(service, 'listInferenceProfiles', listInferenceProfiles);
+        Reflect.set(service, 'listCustomModels', listCustomModels);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        const ids = (await driver.listModels()).map(({ id }) => id);
+
+        expect(ids).toEqual(
+            expect.arrayContaining([
+                expect.stringMatching(/application-inference-profile\/first$/),
+                expect.stringMatching(/application-inference-profile\/second$/),
+                expect.stringMatching(/custom-model\/tuned-1$/),
+                expect.stringMatching(/custom-model\/tuned-2$/),
+            ]),
+        );
+        expect(listInferenceProfiles).toHaveBeenCalledWith(
+            expect.objectContaining({ typeEquals: 'APPLICATION', nextToken: 'page-2', maxResults: 1000 }),
+        );
+        expect(listInferenceProfiles).toHaveBeenCalledWith(expect.objectContaining({ typeEquals: 'SYSTEM_DEFINED' }));
+        expect(listCustomModels).toHaveBeenCalledTimes(2);
+    });
 
     it('inherits discovery support for future models from known publishers', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
