@@ -28,6 +28,7 @@ const MODEL_LIMITS: Readonly<Record<string, VertexAIModelLimits>> = {
     'grok-4.1-fast-reasoning': { context_window: 128_000 },
     'grok-4.1-fast-non-reasoning': { context_window: 128_000 },
     // Vertex documents a 1,048,576-token input limit for every Muse model, and an output limit only for Ember.
+    // The API itself accepts any output budget that fits in the window left after the input.
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
     'muse-ember-1.0': { context_window: 1_048_576, max_output_tokens: 524_288 },
     'muse-wonder-1.0': { context_window: 1_048_576 },
