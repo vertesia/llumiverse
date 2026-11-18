@@ -1,4 +1,4 @@
-import { getMaxOutputTokens, resolveModelProfile } from '@llumiverse/common';
+import { getMaxOutputTokens, isDeepSeekVersionGte, resolveModelProfile } from '@llumiverse/common';
 import { type AIModel, Providers } from '@llumiverse/core';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { selectVertexListingRegions } from './listing-regions.js';
@@ -174,6 +174,16 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         regions: model === 'grok-4.7' || model === 'grok-4.6' ? ['global', 'us'] : GLOBAL_REGIONS,
     })),
 ] as const;
+
+/**
+ * Whether a Vertex open MaaS model also gets the result schema in the prompt, next to the native `response_format`.
+ * Vertex constrains DeepSeek V4.1+ output to the schema without showing the schema to the model, and emits the
+ * properties alphabetically, so the model can be forced to write a value before the fields it depends on (an
+ * invoice line's `amount` before its `quantity`). DeepSeek's own serving shows the schema in the prompt.
+ */
+export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): boolean {
+    return isDeepSeekVersionGte(model.toLowerCase().split('/').pop() ?? '', 4, 1);
+}
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {
     if (!publisher) return undefined;

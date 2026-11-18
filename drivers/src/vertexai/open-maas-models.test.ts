@@ -1,4 +1,4 @@
-import { type Completion, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { type Completion, type ExecutionOptions, type JSONSchema, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createFetchClient, type VertexAIDriver } from './index.js';
 import { selectVertexListingRegions } from './listing-regions.js';
@@ -350,5 +350,61 @@ describe('Vertex MaaS forward routing', () => {
         expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
             payload: expect.objectContaining({ model: `${publisher === 'zaiorg' ? 'zai-org' : publisher}/${model}` }),
         });
+    });
+});
+
+describe('Vertex open MaaS result schema in the prompt', () => {
+    const schema: JSONSchema = {
+        type: 'object',
+        properties: { color: { type: 'string' } },
+        required: ['color'],
+        additionalProperties: false,
+    };
+
+    async function payloadFor(model: string) {
+        const modelDefinition = getModelDefinition(model);
+        const options: ExecutionOptions = {
+            model,
+            result_schema: schema,
+            model_options: { _option_id: 'text-fallback' },
+        };
+        const prompt = await modelDefinition.createPrompt(
+            {} as VertexAIDriver,
+            [{ role: PromptRole.user, content: 'What colour is grass?' }],
+            options,
+        );
+        const stub = createDriverStub();
+        await modelDefinition.requestTextCompletion(stub.driver, prompt, options);
+        const call = stub.post.mock.calls[0] as unknown as [string, { payload: Record<string, unknown> }];
+        return call[1].payload as {
+            messages: Array<{ role: string; content: unknown }>;
+            response_format?: { type: string };
+        };
+    }
+
+    const promptHasSchema = (payload: Awaited<ReturnType<typeof payloadFor>>) =>
+        payload.messages.some(
+            (message) =>
+                typeof message.content === 'string' &&
+                message.content.includes(`<response_schema>${JSON.stringify(schema)}</response_schema>`),
+        );
+
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-1017-maas',
+        'publishers/deepseek-ai/models/deepseek-v4.2-flash-maas',
+    ])('sends the schema natively and in the prompt for %s', async (model) => {
+        const payload = await payloadFor(model);
+        expect(payload.response_format?.type).toBe('json_schema');
+        expect(promptHasSchema(payload)).toBe(true);
+    });
+
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
+        'locations/global/publishers/zai-org/models/glm-5.2-maas',
+    ])('keeps the schema native-only for %s', async (model) => {
+        const payload = await payloadFor(model);
+        expect(payload.response_format?.type).toBe('json_schema');
+        expect(promptHasSchema(payload)).toBe(false);
     });
 });
