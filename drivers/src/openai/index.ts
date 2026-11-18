@@ -634,7 +634,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.azure_foundry
         | Providers.bedrock
         | Providers.bedrock_mantle
-        | Providers.openai_compatible;
+        | Providers.openai_compatible
+        | Providers.vertexai;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 

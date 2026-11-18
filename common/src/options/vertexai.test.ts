@@ -396,3 +396,49 @@ describe('Vertex regional Mistral chat metadata', () => {
         expect(getVertexAiOptions('publishers/mistralai/models/mistral-ocr-2505')._option_id).toBe('text-fallback');
     });
 });
+
+describe('Vertex Meta Muse metadata', () => {
+    const withoutMax = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    it.each([
+        ['locations/global/publishers/meta/models/muse-wonder-1.0', withoutMax, undefined],
+        ['publishers/meta/models/muse-spark-1.3', withoutMax, undefined],
+        ['publishers/meta/models/muse-ember-1.0', [...withoutMax, 'max'], 524_288],
+        // Later generations inherit the newest documented Vertex rules.
+        ['publishers/meta/models/muse-spark-1.4', withoutMax, undefined],
+        ['publishers/meta/models/muse-wonder-2.0', withoutMax, undefined],
+        ['publishers/meta/models/muse-ember-1.1', [...withoutMax, 'max'], 524_288],
+    ])('describes %s as Vertex serves it', (model, effort, maxOutput) => {
+        const profile = resolveModelProfile(model, Providers.vertexai);
+        expect(profile).toMatchObject({ family: 'muse', context_window: 1_048_576 });
+        expect(profile.max_output_tokens).toBe(maxOutput);
+        expect(profile.reasoning_effort_levels).toEqual(effort);
+        expect(getModelCapabilities(model, Providers.vertexai)).toMatchObject({
+            input: { text: true, image: true, video: false, audio: false },
+            output: { text: true },
+            tool_support: true,
+        });
+        expect(getMaxTokensLimitVertexAi(model)).toBe(maxOutput);
+
+        const options = getVertexAiOptions(model);
+        expect(options._option_id).toBe('openai-text');
+        expect(options.options.map((option) => option.name).sort()).toEqual(
+            ['effort', 'extra_body', 'image_detail', 'max_tokens', 'temperature', 'top_p'].sort(),
+        );
+        const effortOption = options.options.find((option) => option.name === 'effort');
+        expect(Object.values((effortOption as { enum: Record<string, string> }).enum)).toEqual(effort);
+        expect(effortOption).not.toHaveProperty('default');
+        const maxTokens = options.options.find((option) => option.name === 'max_tokens');
+        expect(maxTokens).not.toHaveProperty('default');
+        if (maxOutput === undefined) expect(maxTokens).not.toHaveProperty('max');
+        else expect(maxTokens).toMatchObject({ max: maxOutput });
+        for (const name of ['temperature', 'top_p']) {
+            expect(options.options.find((option) => option.name === name)).not.toHaveProperty('default');
+        }
+    });
+
+    it('keeps the source-model Muse metadata on OpenRouter', () => {
+        const profile = resolveModelProfile('meta/muse-wonder', Providers.openrouter);
+        expect(profile.reasoning_effort_levels).toContain('max');
+        expect(profile.capabilities.input.audio).toBe(true);
+    });
+});
