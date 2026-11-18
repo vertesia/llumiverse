@@ -11,7 +11,8 @@ import OpenAI, { AzureOpenAI, type ClientOptions } from 'openai';
 import { cognitiveServicesScope } from '../azure/entra-scope.js';
 import { withoutKeyRedirects } from '../azure/key-redirect.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { OpenAIResponsesDriverBase, type OpenAIResponsesPolicy } from './index.js';
+import { azureResponsesPolicy } from './azure-responses-policy.js';
+import { OpenAIResponsesDriverBase } from './index.js';
 
 export type { AzureOpenAIDriverOptions } from '../driver-options.js';
 
@@ -105,24 +106,6 @@ function azureOpenAIV1BaseURL(endpoint: string): string {
     let end = endpoint.length;
     while (end > 0 && endpoint[end - 1] === '/') end--;
     return `${endpoint.slice(0, end).replace(/\/openai(?:\/v1)?$/, '')}/openai/v1`;
-}
-
-/**
- * Azure serves the Responses image-generation tool from a separate image deployment, named in a header, on the preview
- * API. Shared by Azure OpenAI and Microsoft Foundry.
- */
-export function azureResponsesPolicy(requestModel: (model: string) => string): OpenAIResponsesPolicy {
-    return {
-        requestHeaders: (options) => {
-            const imageTool = (options.model_options as { image_generation?: { model: string } } | undefined)
-                ?.image_generation;
-            if (!imageTool) return undefined;
-            return {
-                'x-ms-oai-image-generation-deployment': requestModel(imageTool.model),
-                api_version: 'preview',
-            };
-        },
-    };
 }
 
 /** The service an Azure OpenAI driver uses: the v1 client, or the legacy dated-API `AzureOpenAI` client. */
