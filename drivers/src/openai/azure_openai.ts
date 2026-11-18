@@ -15,6 +15,7 @@ import { OpenAIResponsesDriverBase } from './index.js';
 export type { AzureOpenAIDriverOptions } from '../driver-options.js';
 
 import type { AzureOpenAIDriverOptions } from '../driver-options.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS } from './openai_compatible.js';
 
 export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
     service: AzureOpenAI;
@@ -38,6 +39,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
 
         this.service = new AzureOpenAI({
             apiKey: opts.apiKey,
+            ...NON_OPENAI_ACCOUNT_OPTIONS,
             azureADTokenProvider: opts.azureADTokenProvider,
             endpoint: opts.endpoint,
             apiVersion: opts.apiVersion ?? '2024-10-21',
@@ -48,6 +50,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
         });
         if (opts.endpoint) {
             this.imageService = new OpenAI({
+                ...NON_OPENAI_ACCOUNT_OPTIONS,
                 baseURL: `${opts.endpoint.replace(/\/$/, '')}/openai/v1`,
                 apiKey: opts.azureADTokenProvider ?? opts.apiKey,
                 defaultHeaders: opts.apiKey ? { 'api-key': opts.apiKey, Authorization: null } : undefined,

@@ -22,6 +22,34 @@ class TestVertexAIDriver extends VertexAIDriver {
                 if (parent === 'publishers/xai') {
                     return [[{ name: 'publishers/xai/models/grok-4.1' }]];
                 }
+                if (parent === 'publishers/meta') {
+                    return [
+                        [
+                            { name: 'publishers/meta/models/muse-wonder-1.0', supportedActions: { requestAccess: {} } },
+                            {
+                                name: 'publishers/meta/models/muse-spark-1.3',
+                                supportedActions: { openNotebook: {}, requestAccess: {} },
+                            },
+                            // Open-weight entries, offered only for deployment to the caller's own endpoint.
+                            {
+                                name: 'publishers/meta/models/muse-glimmer',
+                                supportedActions: { deploy: {}, multiDeployVertex: {} },
+                            },
+                            {
+                                name: 'publishers/meta/models/muse-spark-open',
+                                supportedActions: { deploy: {}, multiDeployVertex: {} },
+                            },
+                            // A later API release of an open-weight family is still listed.
+                            {
+                                name: 'publishers/meta/models/muse-glimmer-2.0',
+                                supportedActions: { requestAccess: {} },
+                            },
+                            // An unset protobuf field does not mark a model as self-deploy only.
+                            { name: 'publishers/meta/models/muse-ember-1.0', supportedActions: { deploy: null } },
+                            { name: 'publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas' },
+                        ],
+                    ];
+                }
                 if (parent === 'publishers/google') {
                     return [
                         [
@@ -188,5 +216,35 @@ describe('VertexAIDriver storage permission errors', () => {
             { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
         );
         expect(error.message).not.toContain('bucket permissions');
+    });
+});
+
+describe('VertexAIDriver Meta Muse listing', () => {
+    it('lists Muse API models with global location ids and leaves out self-deploy entries', async () => {
+        const modelIds = (await new TestVertexAIDriver().listModels())
+            .map((model) => model.id)
+            .filter((id) => id.includes('/meta/'));
+
+        expect(modelIds).toEqual(
+            expect.arrayContaining([
+                'locations/global/publishers/meta/models/muse-wonder-1.0',
+                'locations/global/publishers/meta/models/muse-spark-1.3',
+                'locations/global/publishers/meta/models/muse-glimmer-2.0',
+                'locations/global/publishers/meta/models/muse-ember-1.0',
+            ]),
+        );
+        expect(modelIds.filter((id) => /muse-glimmer$|muse-spark-open$/.test(id))).toEqual([]);
+        expect(modelIds.filter((id) => id.includes('muse') && !id.startsWith('locations/global/'))).toEqual([]);
+        // Llama is listed from the open MaaS catalog, not from this publisher listing.
+        expect(modelIds).not.toContain('publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas');
+    });
+});
+
+describe('VertexAIDriver formatDebugPrompt', () => {
+    it('formats a Responses prompt (an input-item array) without the Imagen formatter', () => {
+        const prompt = [
+            { type: 'message' as const, role: 'user' as const, content: [{ type: 'input_text' as const, text: 'hi' }] },
+        ];
+        expect(new TestVertexAIDriver().formatDebugPrompt(prompt)).toEqual(prompt);
     });
 });

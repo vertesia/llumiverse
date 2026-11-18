@@ -17,6 +17,13 @@ import {
     UnprocessableEntityError,
 } from 'openai/error';
 
+/**
+ * OpenAI organization and project are settings of an OpenAI account. Without them, the OpenAI SDK reads
+ * OPENAI_ORG_ID and OPENAI_PROJECT_ID from the environment and sends them as headers on every request, so a client
+ * for another service (xAI, Azure, any OpenAI-compatible endpoint) would send a server's OpenAI account IDs to it.
+ */
+export const NON_OPENAI_ACCOUNT_OPTIONS = { organization: null, project: null } as const;
+
 export type CompatibleAPIError = Error & {
     status?: number;
     statusCode?: number;
