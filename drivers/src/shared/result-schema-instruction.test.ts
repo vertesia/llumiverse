@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import type { Logger } from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
 import {
     buildResultSchemaInstruction,
     isResultSchemaInstruction,
@@ -23,13 +24,24 @@ describe('mergeResultSchemaInstructions', () => {
         ]);
     });
 
-    it('replaces stored copies when the schema changes', () => {
+    it('replaces stored copies when the schema changes, and logs the removal', () => {
         const history = [copy(a), user('one')];
-        expect(mergeResultSchemaInstructions(history, [copy(b), user('two')], instructionText)).toEqual([
+        const logger = { debug: vi.fn() } as unknown as Logger;
+        expect(mergeResultSchemaInstructions(history, [copy(b), user('two')], instructionText, logger)).toEqual([
             user('one'),
             copy(b),
             user('two'),
         ]);
+        expect(logger.debug).toHaveBeenCalledWith(
+            { removed_messages: 1, reason: 'result_schema_changed' },
+            expect.any(String),
+        );
+    });
+
+    it('does not log when an identical copy is dropped', () => {
+        const logger = { debug: vi.fn() } as unknown as Logger;
+        mergeResultSchemaInstructions([copy(a), user('one')], [copy(a), user('two')], instructionText, logger);
+        expect(logger.debug).not.toHaveBeenCalled();
     });
 
     it('still leaves one copy when the stored copy was truncated', () => {

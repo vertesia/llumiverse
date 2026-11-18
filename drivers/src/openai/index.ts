@@ -323,7 +323,7 @@ export class OpenAIResponsesProtocol {
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
 
         const toolDefs = getToolDefinitions(options.tools);
@@ -473,7 +473,7 @@ export class OpenAIResponsesProtocol {
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
 
         // When no tools are provided but conversation contains function_call/function_call_output
@@ -595,7 +595,7 @@ export class OpenAIResponsesProtocol {
         assertConversationArray(options.conversation, { provider: driver.provider, model: options.model, operation });
         convertRoles(prompt, options.model);
         const conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
         // Compatibility exception: the compact endpoint has no summarization prompt to carry `instructions`, and the
@@ -1625,11 +1625,11 @@ function responsesResultSchemaInstructionText(item: ResponseInputItem): string |
  * Merges a new prompt into the stored conversation for a request without storing a schema copy again on every
  * turn. Suffix copies (`prompt_cache_schema_suffix`) are user messages and are left alone.
  */
-function mergeResponsesPrompt(conversation: unknown, items: ResponseInputItem[]): ResponseInputItem[] {
+function mergeResponsesPrompt(conversation: unknown, items: ResponseInputItem[], logger?: Logger): ResponseInputItem[] {
     const history = conversation
         ? (unwrapConversationArray<ResponseInputItem>(conversation) ?? (conversation as ResponseInputItem[]))
         : [];
-    return mergeResultSchemaInstructions(history, items ?? [], responsesResultSchemaInstructionText);
+    return mergeResultSchemaInstructions(history, items ?? [], responsesResultSchemaInstructionText, logger);
 }
 
 function updateConversation(conversation: unknown, items: ResponseInputItem[]): ResponseInputItem[] {

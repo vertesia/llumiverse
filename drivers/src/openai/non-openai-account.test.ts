@@ -7,6 +7,11 @@ import { OpenAIChatCompletionsDriver } from './openai_chat_completions.js';
 import { OpenAIResponsesDriver } from './openai_responses.js';
 
 type AccountFields = { organization: string | null; project: string | null };
+type Built = { driver: { destroy(): void }; client: unknown };
+
+function withClient(driver: { service: unknown; destroy(): void }): Built {
+    return { driver, client: driver.service };
+}
 
 describe('OpenAI account settings from the environment', () => {
     beforeEach(() => {
@@ -16,47 +21,65 @@ describe('OpenAI account settings from the environment', () => {
     afterEach(() => vi.unstubAllEnvs());
 
     it.each([
-        ['xAI', () => new xAIDriver({ apiKey: 'key' }).service],
+        ['xAI', () => withClient(new xAIDriver({ apiKey: 'key' }))],
         [
             'an OpenAI-compatible Responses endpoint',
-            () => new OpenAIResponsesDriver({ apiKey: 'key', endpoint: 'https://compatible.example/v1' }).service,
+            () => withClient(new OpenAIResponsesDriver({ apiKey: 'key', endpoint: 'https://compatible.example/v1' })),
         ],
         [
             'an OpenAI-compatible Chat Completions endpoint',
-            () => new OpenAIChatCompletionsDriver({ apiKey: 'key', endpoint: 'https://compatible.example/v1' }).service,
+            () =>
+                withClient(
+                    new OpenAIChatCompletionsDriver({ apiKey: 'key', endpoint: 'https://compatible.example/v1' }),
+                ),
         ],
         [
             'Azure OpenAI (v1 API)',
-            () => new AzureOpenAIDriver({ apiKey: 'key', endpoint: 'https://resource.openai.azure.com' }).service,
+            () => withClient(new AzureOpenAIDriver({ apiKey: 'key', endpoint: 'https://resource.openai.azure.com' })),
         ],
         [
             'Azure OpenAI (dated API)',
             () =>
-                new AzureOpenAIDriver({
-                    apiKey: 'key',
-                    endpoint: 'https://resource.openai.azure.com',
-                    apiVersion: '2024-10-21',
-                }).service,
+                withClient(
+                    new AzureOpenAIDriver({
+                        apiKey: 'key',
+                        endpoint: 'https://resource.openai.azure.com',
+                        apiVersion: '2024-10-21',
+                    }),
+                ),
         ],
         [
             'Azure Foundry inference',
-            () =>
-                (
-                    new AzureFoundryDriver({
-                        apiKey: 'key',
-                        endpoint: 'https://resource.services.ai.azure.com/api/projects/project',
-                    }) as unknown as { getInferenceClient(): unknown }
-                ).getInferenceClient(),
+            () => {
+                const driver = new AzureFoundryDriver({
+                    apiKey: 'key',
+                    endpoint: 'https://resource.services.ai.azure.com/api/projects/project',
+                });
+                return {
+                    driver,
+                    client: (driver as unknown as { getInferenceClient(): unknown }).getInferenceClient(),
+                };
+            },
         ],
-    ])('are not sent to %s', (_name, client) => {
-        const { organization, project } = client() as AccountFields;
-        expect(organization).toBeNull();
-        expect(project).toBeNull();
+    ])('are not sent to %s', (_name, build: () => Built) => {
+        const { driver, client } = build();
+        try {
+            const { organization, project } = client as AccountFields;
+            expect(organization).toBeNull();
+            expect(project).toBeNull();
+        } finally {
+            driver.destroy();
+        }
     });
 
     it('are still read by the OpenAI driver, whose account they describe', () => {
-        const { organization, project } = new OpenAIDriver({ apiKey: 'key' }).service as unknown as AccountFields;
-        expect(organization).toBe('org-from-env');
-        expect(project).toBe('proj_from_env');
+        const driver = new OpenAIDriver({ apiKey: 'key' });
+        try {
+            const { organization, project } = driver.service as unknown as AccountFields;
+            expect(organization).toBe('org-from-env');
+            expect(project).toBe('proj_from_env');
+        } finally {
+            driver.destroy();
+        }
     });
 });

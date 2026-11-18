@@ -270,13 +270,18 @@ export function updateOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
     prompt: OpenAIChatCompletionsPrompt,
 ): OpenAIChatCompletionsPrompt {
-    // TODO: Remove legacy array-shaped conversation compatibility after 2026-08-14,
-    // once all resumable conversations written before the native container migration have expired.
-    const baseMessages = Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
     return {
         _is_openai_chat_completions: true,
-        messages: [...baseMessages, ...(prompt.messages || [])],
+        messages: [...storedOpenAIChatCompletionsMessages(conversation), ...(prompt.messages || [])],
     };
+}
+
+function storedOpenAIChatCompletionsMessages(
+    conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
+): OpenAIChatCompletionsMessage[] {
+    // TODO: Remove legacy array-shaped conversation compatibility after 2026-08-14,
+    // once all resumable conversations written before the native container migration have expired.
+    return Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
 }
 
 /** The schema copy a Chat Completions prompt carries as a system message, if this message is one. */
@@ -288,14 +293,19 @@ function chatResultSchemaInstructionText(message: OpenAIChatCompletionsMessage):
  * Merges a new prompt into the stored conversation for a request. Unlike
  * {@link updateOpenAIChatCompletionsConversation}, a schema copy is not stored again on every turn.
  */
-export function mergeOpenAIChatCompletionsPrompt(
+function mergeOpenAIChatCompletionsPrompt(
     conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
     prompt: OpenAIChatCompletionsPrompt,
+    logger?: Logger,
 ): OpenAIChatCompletionsPrompt {
-    const baseMessages = Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
     return {
         _is_openai_chat_completions: true,
-        messages: mergeResultSchemaInstructions(baseMessages, prompt.messages || [], chatResultSchemaInstructionText),
+        messages: mergeResultSchemaInstructions(
+            storedOpenAIChatCompletionsMessages(conversation),
+            prompt.messages || [],
+            chatResultSchemaInstructionText,
+            logger,
+        ),
     };
 }
 
@@ -1025,6 +1035,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         let conversation = mergeOpenAIChatCompletionsPrompt(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
+            getOpenAIChatDriverLogger(driver),
         );
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
@@ -1114,6 +1125,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         let conversation = mergeOpenAIChatCompletionsPrompt(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
+            getOpenAIChatDriverLogger(driver),
         );
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =

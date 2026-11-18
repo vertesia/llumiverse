@@ -1,4 +1,4 @@
-import { RESULT_SCHEMA_CLOSE_TAG, RESULT_SCHEMA_OPEN_TAG } from '@llumiverse/core';
+import { type Logger, RESULT_SCHEMA_CLOSE_TAG, RESULT_SCHEMA_OPEN_TAG } from '@llumiverse/core';
 
 /**
  * The prompt copy of a result schema, which drivers add when native structured output is missing or unreliable.
@@ -20,12 +20,14 @@ export function isResultSchemaInstruction(text: unknown): text is string {
  * Copies already in the history stay where they are, so the cached prompt prefix is unchanged: an incoming copy
  * identical to a stored one is dropped. A copy with a different schema replaces the stored ones, since two schemas
  * would contradict each other. `instructionText` returns the instruction text of a message that is a schema copy
- * eligible for deduplication, and undefined otherwise (for example a suffix copy, which is left alone).
+ * eligible for deduplication, and undefined otherwise (for example a suffix copy, which is left alone). Removing
+ * stored copies changes the caller's conversation, so it is logged.
  */
 export function mergeResultSchemaInstructions<T>(
     history: readonly T[],
     incoming: readonly T[],
     instructionText: (message: T) => string | undefined,
+    logger?: Logger,
 ): T[] {
     const incomingTexts = incoming.map(instructionText);
     const incomingText = incomingTexts.find((text) => text !== undefined);
@@ -35,6 +37,10 @@ export function mergeResultSchemaInstructions<T>(
     if (stored.includes(incomingText)) {
         return [...history, ...incoming.filter((_message, index) => incomingTexts[index] === undefined)];
     }
-    const keptHistory = stored.length ? history.filter((message) => instructionText(message) === undefined) : history;
-    return [...keptHistory, ...incoming];
+    if (!stored.length) return [...history, ...incoming];
+    logger?.debug(
+        { removed_messages: stored.length, reason: 'result_schema_changed' },
+        'Replaced the stored result schema instruction with the new schema',
+    );
+    return [...history.filter((message) => instructionText(message) === undefined), ...incoming];
 }

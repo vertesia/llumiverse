@@ -703,6 +703,38 @@ describe('Vertex MaaS Chat Completions through the OpenAI SDK', () => {
         expect(text).toBe('ok');
     });
 
+    it('streams to a streaming path set without a unary path', async () => {
+        const fetchMock = vi.fn(async () =>
+            sseResponse([
+                {
+                    id: 'chatcmpl-1',
+                    object: 'chat.completion.chunk',
+                    created: 1,
+                    model: 'm',
+                    choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }],
+                },
+            ]),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        const definition = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'example-model',
+            region: 'europe-west4',
+            streamingEndpointPath: 'publishers/example/models/example-model:streamRawPredict',
+        });
+        const stream = await definition.requestTextCompletionStream(
+            driver,
+            { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'hello' }] },
+            { model: 'example-model', model_options: { _option_id: 'text-fallback' } },
+        );
+        for await (const _chunk of stream) {
+            // Drain the stream.
+        }
+        const [url] = fetchMock.mock.calls[0] as unknown as [string];
+        expect(String(url)).toBe(
+            'https://europe-west4-aiplatform.googleapis.com/v1/projects/test-project/locations/europe-west4/publishers/example/models/example-model:streamRawPredict',
+        );
+    });
+
     it('reports a provider error with its status code', async () => {
         const fetchMock = vi.fn(
             async () =>
