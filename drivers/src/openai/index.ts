@@ -22,6 +22,7 @@ import {
     isJSONObjectText,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
+    isVertexOpenAIResponsesModel,
     type JSONSchema,
     LlumiverseError,
     type Logger,
@@ -159,12 +160,16 @@ function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
     context: OpenAIRequestOptions['reasoning_context'],
+    model: string,
+    provider: Providers,
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
-        // Compatibility exception: retain reasoning summaries for the existing completion projection.
-        summary: 'auto',
+        // Compatibility exception: retain reasoning summaries for the existing completion projection, except on
+        // Vertex's OpenAI models, whose docs list reasoning summaries as unsupported.
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai
+        ...(!(provider === Providers.vertexai && isVertexOpenAIResponsesModel(model)) && { summary: 'auto' }),
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
@@ -356,7 +361,13 @@ export class OpenAIResponsesProtocol {
         const requestedEffort = resolveOpenAIEffort(model_options, driver.logger, options.model);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoningContext = model_options?.reasoning_context;
-        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
+        const reasoning = openAIReasoning(
+            requestedEffort,
+            isReasoningModel,
+            reasoningContext,
+            options.model,
+            driver.provider,
+        );
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
@@ -497,7 +508,13 @@ export class OpenAIResponsesProtocol {
         const requestedEffort = resolveOpenAIEffort(model_options, driver.logger, options.model);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoningContext = model_options?.reasoning_context;
-        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
+        const reasoning = openAIReasoning(
+            requestedEffort,
+            isReasoningModel,
+            reasoningContext,
+            options.model,
+            driver.provider,
+        );
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
         // Prompt-cache support follows the source model, not a deployment alias that names another version.
@@ -1533,8 +1550,9 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
     // Vertex constrains output to the schema without showing it to the model, and emits the properties
     // alphabetically; without the schema in the prompt, Muse fills the constrained fields with wrong or garbled
-    // values. This applies to every model Vertex serves through a Responses API.
-    if (provider === Providers.vertexai) return true;
+    // values. This applies to the models Vertex serves through a publisher's Responses API, except OpenAI's GPT
+    // models: OpenAI's Responses API enforces the schema natively, so they stay native-only until measured on Vertex.
+    if (provider === Providers.vertexai) return !isVertexOpenAIResponsesModel(model);
     return provider === Providers.openai_compatible && /^minimax\//i.test(model);
 }
 

@@ -13,6 +13,7 @@ import {
     type HttpTimeoutOptions,
     incrementConversationTurn,
     isMetaMuseModel,
+    isVertexOpenAIResponsesModel,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
@@ -815,6 +816,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 excluded: [],
                 additional: [],
             },
+            openai: {
+                // GPT models served by OpenAI's Responses API. Model Garden lists them only for projects with access,
+                // so they appear once access is granted. gpt-oss comes from VERTEX_OPEN_MAAS_MODELS.
+                families: ['gpt-'],
+                excluded: ['gpt-oss'],
+                additional: [],
+            },
         } as const;
 
         type Publisher = keyof typeof publisherConfig;
@@ -901,7 +909,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
-                        if (publisher === 'meta' && isSelfDeployOnlyPublisherModel(model)) return false;
+                        if ((publisher === 'meta' || publisher === 'openai') && isSelfDeployOnlyPublisherModel(model)) {
+                            return false;
+                        }
                         // Check if the model belongs to the supported model families
                         return modelFamily.some((family) => modelName.includes(family));
                     })
@@ -1075,6 +1085,7 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
     return (
         publisher === 'xai' ||
         (publisher === 'meta' && isMetaMuseModel(modelName)) ||
+        (publisher === 'openai' && isVertexOpenAIResponsesModel(modelName)) ||
         (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || isGeminiWithoutRegionalEndpoints(modelName)))
     );
 }
