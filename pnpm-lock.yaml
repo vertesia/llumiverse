@@ -259,8 +259,8 @@ importers:
         specifier: ^11.5.3
         version: 11.5.3
       undici:
-        specifier: ^7.30.1
-        version: 7.30.1
+        specifier: ^7.30.2
+        version: 7.30.2
     devDependencies:
       '@vertesia/api-fetch-client':
         specifier: ^1.5.1
@@ -312,7 +312,7 @@ importers:
         version: 1.1.0
       '@azure/ai-projects':
         specifier: ^2.10.0
-        version: 2.10.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.1)(zod@4.6.7)
+        version: 2.10.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.2)(zod@4.6.7)
       '@azure/core-auth':
         specifier: ^1.11.0
         version: 1.11.0
@@ -338,14 +338,14 @@ importers:
         specifier: ^3.5.0
         version: 3.5.0(@aws-sdk/client-s3@3.1164.0)(@azure/identity@4.14.1)(@azure/storage-blob@12.27.0)(@opentelemetry/api@1.9.1)
       '@openrouter/sdk':
-        specifier: ^1.5.40
-        version: 1.5.67
+        specifier: ^1.5.84
+        version: 1.5.103
       '@vertesia/api-fetch-client':
         specifier: ^1.5.1
         version: 1.5.1
       eventsource:
-        specifier: ^5.1.4
-        version: 5.1.4
+        specifier: ^5.1.5
+        version: 5.1.5
       google-auth-library:
         specifier: ^11.3.4
         version: 11.3.4
@@ -360,20 +360,20 @@ importers:
         version: 0.2.1
       openai:
         specifier: 7.56.0
-        version: 7.56.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+        version: 7.56.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.2)(ws@8.21.0)(zod@4.6.7)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^1.0.0
-        version: 1.0.0
+        specifier: ^1.1.0
+        version: 1.1.0
     devDependencies:
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
       dotenv:
-        specifier: ^18.0.9
-        version: 18.0.9
+        specifier: ^18.0.10
+        version: 18.0.10
       rimraf:
         specifier: ^6.1.4
         version: 6.1.4
@@ -393,8 +393,8 @@ importers:
         specifier: workspace:*
         version: link:../drivers
       dotenv:
-        specifier: ^18.0.9
-        version: 18.0.9
+        specifier: ^18.0.10
+        version: 18.0.10
     devDependencies:
       rimraf:
         specifier: ^6.1.4
@@ -826,8 +826,8 @@ packages:
   '@nodable/entities@3.1.0':
     resolution: {integrity: sha512-LsS/DjHr+uDM647Gru/cA8+J3a3HfhttwCKLyuoyN7yXTFCxKBtSgMQBvrW9yNPa2/zDRUNuGPaH5QUFoa4arQ==}
 
-  '@openrouter/sdk@1.5.67':
-    resolution: {integrity: sha512-RaNNACVhknU0/GG7I9X8l3Z1PDBkBYd2oEpO02z4Q7I2bX8Nr3Z/Wx9iBR/tWpGPuh3jHNxq7jcPjkE9nkPQ2w==}
+  '@openrouter/sdk@1.5.103':
+    resolution: {integrity: sha512-TfDg7s67+DsqSt4pGH5oIjsVNEwa9FDzigB3C8GJdjO0ebjXb9tHG4pWP5WQjIS8yLYDJK+gmNfBaTgjwgmp/g==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -1496,8 +1496,8 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  dotenv@18.0.9:
-    resolution: {integrity: sha512-3fVOW4cB02R066PUSwn8O4TJyz9NckQl7F81blIbaq9jKBm2tSmOKky7ZHIXzGvkVPXCSn6jkpziBPZdGFs8Tw==}
+  dotenv@18.0.10:
+    resolution: {integrity: sha512-89FAA1xchzK2mxVWdr5F/0rldwiueXs6zJM86rO66EzekR1iBdiXRthyG+m5GvkJaFH3C2LESzamTkgndmLT2A==}
     engines: {node: '>=12'}
     hasBin: true
 
@@ -1569,12 +1569,16 @@ packages:
     resolution: {integrity: sha512-N9b0EvATDJfZj+Szg3m8WwqseQhei/mtTd6V0rCciGbI/yG24o3yBk0YVyfOZZsLVMZHWs++Zk3Aqd2y2EztnQ==}
     engines: {node: '>=22.12'}
 
+  eventsource-parser@4.1.3:
+    resolution: {integrity: sha512-jZVIVilXZfAx6H20ZKKEj5dabbpD9ETmMj3uHsjMmgBzBHB6tsHrmdWB4mAiy3amtN6MOoVkfXRQu4wf1n88Rw==}
+    engines: {node: '>=22.12'}
+
   eventsource@3.0.7:
     resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
     engines: {node: '>=18.0.0'}
 
-  eventsource@5.1.4:
-    resolution: {integrity: sha512-awkjURTcaMUKjtEqM/78nMtFSfGcgGST6EbXGV2/E7LJXzWwnNaByn1zACiX9VluWzokVeHpjRdzo3nZr9zhMg==}
+  eventsource@5.1.5:
+    resolution: {integrity: sha512-Z41ZPzy7CM1NgAKgrG6pzPdOSimaly20ZY3+6opMQw/VEso+xhPWX4asJT2WAX8zPyFitV3C1+WJMWSLKSlAWg==}
     engines: {node: '>=22.12.0'}
 
   expect-type@1.4.0:
@@ -2248,8 +2252,8 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
-  together-ai@1.0.0:
-    resolution: {integrity: sha512-uJq1R6gACNd5OEi7ONlJLOMAfbbQCx2+/Pl/XQ+Cm5yEaPrkWIg87UMOjt4hV94lq7eVcivLAEVt/Ph8SqhH0w==}
+  together-ai@1.1.0:
+    resolution: {integrity: sha512-2As/45PcrnYLCBeNiSG1w+/cPMkScgCW2T6eDZPwhjDO9okrB2vjadZ8hOseDM6XcJjulPtN7l0ATvpWIsRKNw==}
     hasBin: true
 
   toidentifier@1.0.1:
@@ -2281,8 +2285,8 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
-  undici@7.30.1:
-    resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
+  undici@7.30.2:
+    resolution: {integrity: sha512-mLyPQnHwUxaM/rideoK/+KL8DaAJLRl4aBCfmX444aCSLnIaomqPLtNRe2jdCYcsk5wZzXrDIQC8ZeYNRAYyIA==}
     engines: {node: '>=20.18.1'}
 
   unpipe@1.0.0:
@@ -2808,7 +2812,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.1)(zod@4.6.7)':
+  '@azure/ai-projects@2.10.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.2)(zod@4.6.7)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -2823,7 +2827,7 @@ snapshots:
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
       https-proxy-agent: 9.1.0
-      openai: 7.56.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7)
+      openai: 7.56.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.2)(ws@8.21.0)(zod@4.6.7)
       tslib: 2.8.1
       ws: 8.21.0
     transitivePeerDependencies:
@@ -3119,7 +3123,7 @@ snapshots:
 
   '@nodable/entities@3.1.0': {}
 
-  '@openrouter/sdk@1.5.67':
+  '@openrouter/sdk@1.5.103':
     dependencies:
       zod: 4.6.7
 
@@ -3718,7 +3722,7 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  dotenv@18.0.9: {}
+  dotenv@18.0.10: {}
 
   dunder-proto@1.0.1:
     dependencies:
@@ -3776,13 +3780,15 @@ snapshots:
 
   eventsource-parser@4.1.2: {}
 
+  eventsource-parser@4.1.3: {}
+
   eventsource@3.0.7:
     dependencies:
       eventsource-parser: 3.1.1
 
-  eventsource@5.1.4:
+  eventsource@5.1.5:
     dependencies:
-      eventsource-parser: 4.1.2
+      eventsource-parser: 4.1.3
 
   expect-type@1.4.0: {}
 
@@ -4214,13 +4220,13 @@ snapshots:
       powershell-utils: 0.2.1
       wsl-utils: 1.0.1
 
-  openai@7.56.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7):
+  openai@7.56.0(@aws-sdk/credential-provider-node@3.972.94)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.7.5)(google-auth-library@11.3.4)(undici@7.30.2)(ws@8.21.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.94
       '@smithy/hash-node': 4.4.6
       '@smithy/signature-v4': 5.7.5
       google-auth-library: 11.3.4
-      undici: 7.30.1
+      undici: 7.30.2
       ws: 8.21.0
       zod: 4.6.7
 
@@ -4497,7 +4503,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
 
-  together-ai@1.0.0: {}
+  together-ai@1.1.0: {}
 
   toidentifier@1.0.1: {}
 
@@ -4547,7 +4553,7 @@ snapshots:
 
   undici-types@7.24.6: {}
 
-  undici@7.30.1: {}
+  undici@7.30.2: {}
 
   unpipe@1.0.0: {}
 

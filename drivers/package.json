@@ -128,7 +128,7 @@
     ],
     "devDependencies": {
         "@types/node": "catalog:",
-        "dotenv": "^18.0.9",
+        "dotenv": "^18.0.10",
         "rimraf": "^6.1.4",
         "typescript": "catalog:",
         "vitest": "catalog:"
@@ -154,16 +154,16 @@
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^3.5.0",
-        "@openrouter/sdk": "^1.5.40",
+        "@openrouter/sdk": "^1.5.84",
         "@vertesia/api-fetch-client": "^1.5.1",
-        "eventsource": "^5.1.4",
+        "eventsource": "^5.1.5",
         "google-auth-library": "catalog:",
         "groq-sdk": "^1.6.0",
         "lru-cache": "^11.5.3",
         "node-web-stream-adapters": "^0.2.1",
         "openai": "7.56.0",
         "replicate": "^1.4.0",
-        "together-ai": "^1.0.0"
+        "together-ai": "^1.1.0"
     },
     "gitHead": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
     "releaseIdentity": {
