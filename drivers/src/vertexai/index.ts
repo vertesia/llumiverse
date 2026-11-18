@@ -13,6 +13,7 @@ import {
     type HttpTimeoutOptions,
     incrementConversationTurn,
     isMetaMuseModel,
+    isVertexOpenAIResponsesModel,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
@@ -45,6 +46,7 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 
 export * from './embeddings/batch.js';
 
+import { selectVertexListingRegions } from './listing-regions.js';
 import { getListedVertexMistralModels } from './mistral-models.js';
 import { NON_GLOBAL_ANTHROPIC_MODELS, resolveAnthropicVertexRegion } from './models/claude.js';
 import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './models/gemini.js';
@@ -815,6 +817,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 excluded: [],
                 additional: [],
             },
+            openai: {
+                // GPT models served by OpenAI's Responses API, as routing defines them (isVertexOpenAIResponsesModel).
+                // Model Garden lists them only for projects with access, so they appear once access is granted.
+                // gpt-oss has no GPT version, and comes from VERTEX_OPEN_MAAS_MODELS.
+                families: ['gpt-'],
+                excluded: [],
+                additional: [],
+            },
         } as const;
 
         type Publisher = keyof typeof publisherConfig;
@@ -893,34 +903,57 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             const modelFamily = config.families;
             const excludedModels = config.excluded;
 
+            const listedPublisherModels = response.filter((model) => {
+                const modelName = model.name ?? '';
+                // Exclude embedding, retired and or unsupported models
+                if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                    return false;
+                }
+                if ((publisher === 'meta' || publisher === 'openai') && isSelfDeployOnlyPublisherModel(model)) {
+                    return false;
+                }
+                // Only the OpenAI models routing sends to the Responses API; others (images, realtime) have no path.
+                if (publisher === 'openai' && !isVertexOpenAIResponsesModel(modelName.split('/').pop() ?? '')) {
+                    return false;
+                }
+                // Check if the model belongs to the supported model families
+                return modelFamily.some((family) => modelName.includes(family));
+            });
             models = models.concat(
-                response
-                    .filter((model) => {
-                        const modelName = model.name ?? '';
-                        // Exclude embedding, retired and or unsupported models
-                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
-                            return false;
-                        }
-                        if (publisher === 'meta' && isSelfDeployOnlyPublisherModel(model)) return false;
-                        // Check if the model belongs to the supported model families
-                        return modelFamily.some((family) => modelName.includes(family));
-                    })
-                    .map((model) => {
-                        const rawModelId = model.name ?? '';
-                        const isGlobalOnlyPublisher = isGlobalOnlyPublisherModel(publisher, rawModelId);
-                        const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
-                        const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
-                        return {
-                            id: listedModelId,
-                            name: isGlobalOnlyPublisher
-                                ? `Global ${rawModelId.split('/').pop()}`
-                                : (rawModelId.split('/').pop() ?? ''),
+                listedPublisherModels.map((model) => {
+                    const rawModelId = model.name ?? '';
+                    const isGlobalOnlyPublisher = isGlobalOnlyPublisherModel(publisher, rawModelId);
+                    const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
+                    const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
+                    return {
+                        id: listedModelId,
+                        name: isGlobalOnlyPublisher
+                            ? `Global ${rawModelId.split('/').pop()}`
+                            : (rawModelId.split('/').pop() ?? ''),
+                        provider: 'vertexai',
+                        owner: publisher,
+                        ...modelMetadata,
+                    } satisfies AIModel;
+                }),
+            );
+
+            // OpenAI GPT models are also served from the US multi-region: list it next to the global entry above.
+            if (publisher === 'openai') {
+                const regions = selectVertexListingRegions(VERTEX_OPENAI_RESPONSES_REGIONS, this.options.region);
+                for (const model of listedPublisherModels) {
+                    const modelName = model.name?.split('/').pop() ?? '';
+                    for (const region of regions.filter((listingRegion) => listingRegion !== 'global')) {
+                        const id = `locations/${region}/${model.name}`;
+                        models.push({
+                            id,
+                            name: modelName,
                             provider: 'vertexai',
                             owner: publisher,
-                            ...modelMetadata,
-                        } satisfies AIModel;
-                    }),
-            );
+                            ...resolveModelListingMetadata(id, Providers.vertexai),
+                        } satisfies AIModel);
+                    }
+                }
+            }
 
             // Create global google gemini models for Gemini 2.5 and later, if missing from GenAI listing
             if (publisher === 'google') {
@@ -1070,11 +1103,16 @@ function isSelfDeployOnlyPublisherModel(model: protos.google.cloud.aiplatform.v1
     return Boolean(actions?.deploy || actions?.multiDeployVertex);
 }
 
+/** Locations of OpenAI's Responses API on Vertex: global and the US multi-region. */
+const VERTEX_OPENAI_RESPONSES_REGIONS = ['global', 'us'] as const;
+
+/** Publisher models listed with a global location ID; a regional variant, where there is one, is listed separately. */
 function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {
     const modelName = modelId.split('/').pop() ?? modelId;
     return (
         publisher === 'xai' ||
         (publisher === 'meta' && isMetaMuseModel(modelName)) ||
+        (publisher === 'openai' && isVertexOpenAIResponsesModel(modelName)) ||
         (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || isGeminiWithoutRegionalEndpoints(modelName)))
     );
 }

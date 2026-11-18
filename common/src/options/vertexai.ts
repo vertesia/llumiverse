@@ -18,7 +18,7 @@ import {
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
 import { textOptionsFallback } from './fallback.js';
-import { getOpenAiCompatibleOptions } from './openai.js';
+import { getOpenAiCompatibleOptions, getOpenAiOptions } from './openai.js';
 import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
@@ -39,6 +39,7 @@ import {
     isGeminiOmniVideoModel,
     isMetaMuseModel,
     isModelFamilyVersionGTE,
+    parseOpenAIGptVersion,
     supportsGeminiXHighThinking,
     supportsVertexAIClaudeFastMode,
 } from './version-parsing.js';
@@ -128,6 +129,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getClaudeOptions(model, option);
     } else if (isVertexMuseModel(model)) {
         return getMuseResponsesOptions(model);
+    } else if (isVertexOpenAIResponsesModel(model)) {
+        return getVertexOpenAIResponsesOptions(model, option);
     } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
         return getOpenMaaSChatOptions(model);
     }
@@ -834,6 +837,34 @@ function isOpenMaaSChatModel(model: string): boolean {
     );
 }
 
+/**
+ * OpenAI GPT models that Vertex serves through OpenAI's Responses API (`publishers/openai/v1/responses`), such as
+ * `gpt-6-luna`. A family rule on the GPT version, so a later release is covered on its first day; gpt-oss is an
+ * open-weight model on the Chat Completions MaaS endpoint instead, and has no GPT version.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai
+ */
+export function isVertexOpenAIResponsesModel(model: string): boolean {
+    const segments = model.toLowerCase().split('/');
+    const publisherIndex = segments.indexOf('publishers');
+    const publisher =
+        publisherIndex !== -1 ? segments[publisherIndex + 1] : segments.length === 2 ? segments[0] : undefined;
+    if (publisher !== undefined && publisher !== 'openai') return false;
+    return parseOpenAIGptVersion(segments.at(-1) ?? '') !== null;
+}
+
+/** Options Vertex does not offer for OpenAI models: processing tiers (no Flex) and hosted image generation. */
+const VERTEX_OPENAI_UNSUPPORTED_OPTIONS = new Set<string>(['service_tier', 'image_generation']);
+
+/**
+ * OpenAI GPT models on Vertex take OpenAI's Responses controls for the source model, except the ones the Vertex docs
+ * list as unsupported: Flex and other processing tiers, and hosted OpenAI tools.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai
+ */
+function getVertexOpenAIResponsesOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    const info = getOpenAiOptions(model, option, resolveModelProfile(model, Providers.vertexai), Providers.vertexai);
+    return { ...info, options: info.options.filter((item) => !VERTEX_OPENAI_UNSUPPORTED_OPTIONS.has(item.name)) };
+}
+
 /** Meta Muse models, which Vertex serves through the Responses API rather than Chat Completions. */
 function isVertexMuseModel(model: string): boolean {
     return isMetaMuseModel(model.toLowerCase().split('/').pop() ?? '');
@@ -920,7 +951,12 @@ export function getMaxTokensLimitVertexAi(model: string): number | undefined {
         return getClaudeMaxTokensLimit(model);
     } else if (model.includes('gemini')) {
         return getGeminiMaxTokensLimit(model);
-    } else if (isVertexMuseModel(model) || isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
+    } else if (
+        isVertexMuseModel(model) ||
+        isVertexOpenAIResponsesModel(model) ||
+        isOpenMaaSChatModel(model) ||
+        isVertexMistralResource(model)
+    ) {
         return resolveModelProfile(model, Providers.vertexai).max_output_tokens;
     }
     return 8192; // Default fallback limit
