@@ -520,6 +520,13 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     ) {
         return ['low', 'high', 'max'];
     }
+    // Vertex rejects `max` on Wonder and Spark 1.3 and accepts it on Ember; no Muse model takes `none`.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
+    if (provider === Providers.vertexai && family === 'muse') {
+        return model.includes('muse-ember')
+            ? ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+            : ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    }
     if (isOpenAICompatibleTransport(provider) && family === 'muse') {
         // Muse models always reason; Spark 1.3+ and Wonder add max. https://openrouter.ai/meta
         if (model.includes('glimmer')) return ['low', 'medium', 'high', 'xhigh'];

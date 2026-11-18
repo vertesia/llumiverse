@@ -33,6 +33,7 @@ import {
     hasSamplingParameterRestriction,
     isGeminiLongDecodeModel,
     isGeminiModelVersionGte,
+    isMetaMuseModel,
     isModelFamilyVersionGTE,
 } from './version-parsing.js';
 
@@ -159,6 +160,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getGeminiOptions(model, option);
     } else if (model.includes('claude')) {
         return getClaudeOptions(model, option);
+    } else if (isVertexMuseModel(model)) {
+        return getMuseResponsesOptions(model);
     } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
         return getOpenMaaSChatOptions(model);
     }
@@ -783,6 +786,35 @@ function isOpenMaaSChatModel(model: string): boolean {
     );
 }
 
+/** Meta Muse models, which Vertex serves through the Responses API rather than Chat Completions. */
+function isVertexMuseModel(model: string): boolean {
+    return isMetaMuseModel(model.toLowerCase().split('/').pop() ?? '');
+}
+
+/** Options the Vertex Meta Responses API documents, with the effort levels it accepts for the model. */
+const MUSE_RESPONSES_OPTIONS = new Set<string>([
+    SharedOptions.max_tokens,
+    SharedOptions.temperature,
+    SharedOptions.top_p,
+    SharedOptions.effort,
+    'image_detail',
+    'extra_body',
+]);
+
+/**
+ * Meta Muse on Vertex takes no stop sequences, penalties, service tiers or prompt-cache lifetimes, so only the
+ * documented Responses controls are offered. The option set keeps the `openai-text` shape the Responses driver reads.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
+ */
+function getMuseResponsesOptions(model: string): ModelOptionsInfo {
+    const profile = resolveModelProfile(model, Providers.vertexai);
+    const compatible = getOpenAiCompatibleOptions(model, undefined, profile);
+    return {
+        ...compatible,
+        options: compatible.options.filter((option) => MUSE_RESPONSES_OPTIONS.has(option.name)),
+    };
+}
+
 function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
     const profile = resolveModelProfile(model, Providers.vertexai);
     const compatible = getOpenAiCompatibleOptions(model, undefined, profile);
@@ -840,7 +872,7 @@ export function getMaxTokensLimitVertexAi(model: string): number | undefined {
         return getClaudeMaxTokensLimit(model);
     } else if (model.includes('gemini')) {
         return getGeminiMaxTokensLimit(model);
-    } else if (isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
+    } else if (isVertexMuseModel(model) || isOpenMaaSChatModel(model) || isVertexMistralResource(model)) {
         return resolveModelProfile(model, Providers.vertexai).max_output_tokens;
     }
     return 8192; // Default fallback limit
