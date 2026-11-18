@@ -370,6 +370,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         signal?: AbortSignal,
     ): Promise<PromptT> {
         try {
+            // A caller-supplied formatter builds the prompt itself, so it decides what to do with a selection.
+            if (!options.format && !this.supportsMediaSelection(options)) {
+                rejectMediaSelection(segments, this.provider, options.model);
+            }
             return await this.createPrompt(segments, options, signal);
         } catch (error) {
             // A cancellation keeps the caller's own abort reason, as it does before the prompt is built.
@@ -488,6 +492,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      */
     protected canStream(_options: ExecutionOptions, _signal?: AbortSignal) {
         return Promise.resolve(true);
+    }
+
+    /**
+     * Whether this driver sends a file's `selection` (a page, sheet or time range) to the model in `options`.
+     * When it does not, a request that selects part of a file is rejected: sending the whole file would silently
+     * change what the model reads. Override it for the models whose provider request carries a selection.
+     */
+    protected supportsMediaSelection(_options: ExecutionOptions): boolean {
+        return false;
     }
 
     /**
@@ -699,3 +712,21 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 }
 
 export { FallbackCompletionStream } from './CompletionStream.js';
+
+/** Rejects a request that selects part of a file when the driver cannot send the selection. */
+function rejectMediaSelection(segments: PromptSegment[], provider: string, model: string): void {
+    for (const segment of segments) {
+        for (const file of segment.files ?? []) {
+            if (file.selection) {
+                // A 400, like the provider's own rejection of an unsupported field: retrying cannot succeed.
+                throw Object.assign(
+                    new Error(
+                        `${provider} cannot read part of a file for model ${model}: remove the selection from ` +
+                            `"${file.name}" to send the whole file, or use a model that supports file selections`,
+                    ),
+                    { status: 400 },
+                );
+            }
+        }
+    }
+}

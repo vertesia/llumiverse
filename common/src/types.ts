@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
     ExecutionTokenUsageSchema,
+    MediaSelectionSchema,
     PromptCacheDiagnosticSchema,
     PromptCacheModeSchema,
     PromptCachePathSchema,
@@ -1060,9 +1061,17 @@ export enum ModelType {
 
 // ============== training =====================
 
+/** The part of a file a model should read: a page range, a sheet and cell range, or a time range. */
+export type MediaSelection = z.infer<typeof MediaSelectionSchema>;
+
 export interface DataSource {
     name: string;
     mime_type: string;
+    /**
+     * Read only part of the file. Omit it to send the whole file. A driver that cannot send a selection rejects the
+     * request instead of sending the whole file.
+     */
+    selection?: MediaSelection;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
     getURL(): Promise<string>;
     getURI(): Promise<string>;

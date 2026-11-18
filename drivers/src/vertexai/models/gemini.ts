@@ -65,6 +65,7 @@ import { createToolChoiceConfigurationError } from '../../shared/tool-choice-err
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
+import { type GeminiMediaSelectionFields, geminiMediaSelectionFields } from './gemini-media-selection.js';
 
 type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 type GeminiFinishReasonHandling = { message: string; retryable: boolean };
@@ -1799,9 +1800,11 @@ function storeSystemInConversation(conversation: unknown, system: Content | unde
  * mapping serves both a user turn and a tool result. Files already in Google Cloud Storage are
  * passed by URI; anything else is inlined as base64.
  */
-type GeminiMediaPart =
+type GeminiMediaPart = (
     | { fileData: { fileUri: string; mimeType?: string } }
-    | { inlineData: { data: string; mimeType?: string } };
+    | { inlineData: { data: string; mimeType?: string } }
+) &
+    GeminiMediaSelectionFields;
 
 /**
  * Largest source read for inline media, matching Gemini's 100 MB inline file limit; anything bigger
@@ -1875,9 +1878,11 @@ function boundedInlineStream(
 }
 
 async function fileToMediaPart(file: DataSource, budget: InlineMediaBudget): Promise<GeminiMediaPart> {
+    // Checked before any read, so an invalid selection fails without downloading the file.
+    const selection = geminiMediaSelectionFields(file);
     const fileUri = await file.getURI();
     if (fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/')) {
-        return { fileData: { fileUri, mimeType: file.mime_type } };
+        return { fileData: { fileUri, mimeType: file.mime_type }, ...selection };
     }
     const source = await file.getStream();
     // Audio keeps its tighter per-file cap and still counts toward the request total.
@@ -1888,7 +1893,7 @@ async function fileToMediaPart(file: DataSource, budget: InlineMediaBudget): Pro
             budget,
         ),
     );
-    return { inlineData: { data, mimeType: file.mime_type } };
+    return { inlineData: { data, mimeType: file.mime_type }, ...selection };
 }
 
 /**

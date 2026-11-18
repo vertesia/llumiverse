@@ -349,6 +349,73 @@ describe('AbstractDriver prompt creation errors', () => {
     });
 });
 
+describe('AbstractDriver file selections', () => {
+    class PromptRecordingDriver extends TestDriver {
+        selectionSupported = false;
+        prompts = 0;
+
+        async createPrompt(): Promise<string> {
+            this.prompts++;
+            return 'prompt';
+        }
+
+        protected supportsMediaSelection(): boolean {
+            return this.selectionSupported;
+        }
+    }
+
+    const file = {
+        name: 'report.pdf',
+        mime_type: 'application/pdf',
+        selection: { pages: { start: 2, end: 3 } },
+        getStream: vi.fn(),
+        getURL: vi.fn(),
+        getURI: vi.fn(),
+    };
+    const segments = [{ role: PromptRole.user, content: 'Summarize', files: [file] }];
+
+    it.each(['execute', 'stream'] as const)(
+        'rejects a %s that selects part of a file when the driver cannot send it',
+        async (operation) => {
+            const driver = new PromptRecordingDriver({});
+            const failure =
+                operation === 'execute'
+                    ? driver.execute(segments, { model: 'test-model' })
+                    : driver.stream(segments, { model: 'test-model' });
+
+            await expect(failure).rejects.toMatchObject({
+                code: 400,
+                retryable: false,
+                message: expect.stringContaining('cannot read part of a file for model test-model'),
+            });
+            expect(driver.prompts).toBe(0);
+            expect(file.getStream).not.toHaveBeenCalled();
+        },
+    );
+
+    it('builds the prompt when the driver sends selections, or when the caller formats the prompt', async () => {
+        const supporting = new PromptRecordingDriver({});
+        supporting.selectionSupported = true;
+        supporting.requestError = new Error('stop after the prompt');
+        await expect(supporting.execute(segments, { model: 'test-model' })).rejects.toThrow('stop after the prompt');
+        expect(supporting.prompts).toBe(1);
+
+        const formatted = new PromptRecordingDriver({});
+        formatted.requestError = new Error('stop after the prompt');
+        await expect(
+            formatted.execute(segments, { model: 'test-model', format: () => 'caller prompt' }),
+        ).rejects.toThrow('stop after the prompt');
+    });
+
+    it('accepts files without a selection', async () => {
+        const driver = new PromptRecordingDriver({});
+        driver.requestError = new Error('stop after the prompt');
+        const plain = [{ role: PromptRole.user, content: 'Summarize', files: [{ ...file, selection: undefined }] }];
+        await expect(driver.execute(plain, { model: 'test-model' })).rejects.toThrow('stop after the prompt');
+        expect(driver.prompts).toBe(1);
+    });
+});
+
 const mockPromptContext: LlumiverseErrorContext = {
     provider: 'test-provider',
     model: 'test-model',

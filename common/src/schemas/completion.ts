@@ -77,13 +77,59 @@ export const PromptCacheDiagnosticSchema = z
             'contents, images, credentials, or full provider resource names.',
     });
 
+// The part of a file a model should read. Each range is 1-indexed and inclusive; an omitted bound means the start
+// or end of the file. One kind of range per file: pages, a sheet or a time range.
+export const MediaSelectionSchema = z
+    .strictObject({
+        pages: z
+            .strictObject({
+                start: z.number().int().positive().optional(),
+                end: z.number().int().positive().optional(),
+            })
+            .meta({ description: 'Page or slide range of a document (PDF, Word, PowerPoint, OpenDocument).' })
+            .optional(),
+        sheet: z
+            .strictObject({
+                index: z.number().int().positive().optional(),
+                cells: z.string().optional(),
+            })
+            .meta({
+                description:
+                    'Spreadsheet sheet, by 1-indexed position in the workbook, and cell range in A1 notation ' +
+                    '(for example A1:H50).',
+            })
+            .optional(),
+        time: z
+            .strictObject({
+                start: z.number().nonnegative().optional(),
+                end: z.number().nonnegative().optional(),
+            })
+            .meta({ description: 'Time range of an audio or video file, in seconds.' })
+            .optional(),
+        layers: z
+            .array(z.string())
+            .meta({
+                description:
+                    'Content layers to read, in the provider vocabulary (Gemini: page_image and page_text for ' +
+                    'documents; data, formulas and visual for spreadsheets; frames, audio and transcript for video).',
+            })
+            .optional(),
+    })
+    .meta({
+        id: 'MediaSelection',
+        description:
+            'The part of a file a model should read. Drivers that cannot send a selection reject the request ' +
+            'rather than send the whole file.',
+    });
+
 // The wire form of a data source: what it is called and what it contains. The BYTES are not here —
-// a `DataSource` in memory can hand back a stream, and the published component has only ever
-// described these two fields.
+// a `DataSource` in memory can hand back a stream, and the published component describes only its name,
+// type and the part of it to read.
 export const DataSourceSchema = z
     .strictObject({
         name: z.string(),
         mime_type: z.string(),
+        selection: MediaSelectionSchema.optional(),
     })
     .meta({ id: 'DataSource' });
 

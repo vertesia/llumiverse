@@ -919,6 +919,9 @@
                 },
                 "mime_type": {
                     "type": "string"
+                },
+                "selection": {
+                    "$ref": "#/$defs/MediaSelection"
                 }
             },
             "required": [
@@ -1682,6 +1685,67 @@
                 "value"
             ],
             "additionalProperties": false
+        },
+        "MediaSelection": {
+            "type": "object",
+            "properties": {
+                "pages": {
+                    "type": "object",
+                    "properties": {
+                        "start": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                        },
+                        "end": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                        }
+                    },
+                    "additionalProperties": false,
+                    "description": "Page or slide range of a document (PDF, Word, PowerPoint, OpenDocument)."
+                },
+                "sheet": {
+                    "type": "object",
+                    "properties": {
+                        "index": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                        },
+                        "cells": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "description": "Spreadsheet sheet, by 1-indexed position in the workbook, and cell range in A1 notation (for example A1:H50)."
+                },
+                "time": {
+                    "type": "object",
+                    "properties": {
+                        "start": {
+                            "type": "number",
+                            "minimum": 0
+                        },
+                        "end": {
+                            "type": "number",
+                            "minimum": 0
+                        }
+                    },
+                    "additionalProperties": false,
+                    "description": "Time range of an audio or video file, in seconds."
+                },
+                "layers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Content layers to read, in the provider vocabulary (Gemini: page_image and page_text for documents; data, formulas and visual for spreadsheets; frames, audio and transcript for video)."
+                }
+            },
+            "additionalProperties": false,
+            "description": "The part of a file a model should read. Drivers that cannot send a selection reject the request rather than send the whole file."
         },
         "MistralTextOptions": {
             "type": "object",

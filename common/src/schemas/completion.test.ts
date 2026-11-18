@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CompletionResultSchema, PromptCacheDiagnosticSchema, StatelessExecutionOptionsSchema } from './completion.js';
+import {
+    CompletionResultSchema,
+    DataSourceSchema,
+    PromptCacheDiagnosticSchema,
+    StatelessExecutionOptionsSchema,
+} from './completion.js';
 
 describe('CompletionResultSchema', () => {
     it('round trips durable audio metadata and rejects embedded or temporary payloads', () => {
@@ -23,6 +28,30 @@ describe('CompletionResultSchema', () => {
             type: 'video',
             value: 'gs://bucket/video.mp4',
         });
+    });
+});
+
+describe('DataSourceSchema', () => {
+    it('accepts a file without a selection, and one selection kind with layers', () => {
+        expect(DataSourceSchema.safeParse({ name: 'a.pdf', mime_type: 'application/pdf' }).success).toBe(true);
+        const selection = { pages: { start: 2, end: 4 }, layers: ['page_text'] };
+        expect(DataSourceSchema.parse({ name: 'a.pdf', mime_type: 'application/pdf', selection })).toEqual({
+            name: 'a.pdf',
+            mime_type: 'application/pdf',
+            selection,
+        });
+    });
+
+    it('rejects unknown selection fields and invalid bounds', () => {
+        const file = { name: 'a.pdf', mime_type: 'application/pdf' };
+        for (const selection of [
+            { pages: { start: 0 } },
+            { pages: { first: 1 } },
+            { time: { start: -1 } },
+            { rows: 2 },
+        ]) {
+            expect(DataSourceSchema.safeParse({ ...file, selection }).success).toBe(false);
+        }
     });
 });
 

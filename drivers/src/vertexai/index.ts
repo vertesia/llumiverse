@@ -49,7 +49,7 @@ export * from './embeddings/batch.js';
 import { selectVertexListingRegions } from './listing-regions.js';
 import { getListedVertexMistralModels } from './mistral-models.js';
 import { NON_GLOBAL_ANTHROPIC_MODELS, resolveAnthropicVertexRegion } from './models/claude.js';
-import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './models/gemini.js';
+import { formatGeminiDebugPrompt, GeminiModelDefinition, isGeminiWithoutRegionalEndpoints } from './models/gemini.js';
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
@@ -467,6 +467,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     protected isImageModel(model: string): boolean {
         return model.includes('imagen');
+    }
+
+    /**
+     * Gemini generateContent carries a file selection as part metadata (`documentMetadata`, `spreadsheetMetadata`,
+     * `audioMetadata`, `videoMetadata`). The other Vertex publishers and the Imagen and Omni video paths have no such
+     * field, so a selection sent to them is rejected.
+     */
+    protected supportsMediaSelection(options: ExecutionOptions): boolean {
+        return !this.isImageModel(options.model) && getModelDefinition(options.model) instanceof GeminiModelDefinition;
     }
 
     public createPrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<VertexAIPrompt> {

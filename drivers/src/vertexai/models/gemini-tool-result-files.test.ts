@@ -19,6 +19,7 @@ import {
 } from './gemini.js';
 
 const OPTIONS = { model: 'gemini-3-pro' } as unknown as ExecutionOptions;
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 function source(uri: string, mimeType = 'image/jpeg', bytes = [1, 2, 3]): DataSource {
     return {
@@ -62,6 +63,44 @@ describe('Gemini tool result attachments', () => {
         ]);
         expect(file.getStream).not.toHaveBeenCalled();
         expect(file.getURL).not.toHaveBeenCalled();
+    });
+
+    it('sends a file selection as part metadata on user files and tool results', async () => {
+        // https://ai.google.dev/gemini-api/docs/document-processing#customize-document-processing
+        const pdf = {
+            ...source('gs://bucket/report.pdf', 'application/pdf'),
+            selection: { pages: { start: 2, end: 4 } },
+        };
+        const sheet = {
+            ...source('https://signed.example/book.xlsx', XLSX),
+            selection: { sheet: { index: 2, cells: 'A1:H50' }, layers: ['data'] },
+        };
+        const contents = await createPrompt([
+            { role: PromptRole.user, content: 'Compare', files: [pdf] },
+            toolSegment([sheet]),
+        ]);
+
+        expect(contents[0].parts?.[1]).toEqual({
+            fileData: { fileUri: 'gs://bucket/report.pdf', mimeType: 'application/pdf' },
+            documentMetadata: { startPage: 2, endPage: 4 },
+        });
+        expect(contents[1].parts?.[0].functionResponse?.parts).toEqual([
+            {
+                inlineData: { data: 'AQID', mimeType: XLSX },
+                spreadsheetMetadata: { sheetIndex: 2, visibleCells: 'A1:H50', contentLayers: ['DATA'] },
+            },
+        ]);
+    });
+
+    it('rejects a selection with no Gemini field before reading the file', async () => {
+        const doc = {
+            ...source('https://signed.example/report.pdf', 'application/pdf'),
+            selection: { time: { start: 5 } },
+        };
+        await expect(createPrompt([{ role: PromptRole.user, content: 'Read', files: [doc] }])).rejects.toThrow(
+            'A time range applies to audio or video',
+        );
+        expect(doc.getStream).not.toHaveBeenCalled();
     });
 
     it('inlines an image attached to a tool result as a functionResponse part', async () => {
