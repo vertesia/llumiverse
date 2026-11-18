@@ -185,6 +185,15 @@ export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): bo
     return isDeepSeekVersionGte(model.toLowerCase().split('/').pop() ?? '', 4, 1);
 }
 
+/**
+ * Whether a Vertex open MaaS model gets no native `response_format` on requests that offer tools. With a schema set,
+ * Vertex never lets DeepSeek V4.1+ call a tool (the answer is invented JSON instead), while the schema in the prompt
+ * leaves tool calls working. Applies only to models that also get the schema in the prompt.
+ */
+export function omitsVertexOpenMaaSResultSchemaFormatWithTools(model: string): boolean {
+    return supplementsVertexOpenMaaSResultSchemaInPrompt(model);
+}
+
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {
     if (!publisher) return undefined;
     const normalizedPublisher = publisher === 'zaiorg' ? 'zai-org' : publisher;

@@ -14,7 +14,11 @@ import { GeminiModelDefinition } from './models/gemini.js';
 import { GeminiOmniVideoModelDefinition, isGeminiOmniVideoModel } from './models/omni-video.js';
 import { OpenAIChatCompletionsModelDefinition } from './models/openai_chat_completions.js';
 import { VertexAIResponsesModelDefinition } from './models/openai_responses.js';
-import { getVertexOpenMaaSRequestModel, supplementsVertexOpenMaaSResultSchemaInPrompt } from './open-maas-models.js';
+import {
+    getVertexOpenMaaSRequestModel,
+    omitsVertexOpenMaaSResultSchemaFormatWithTools,
+    supplementsVertexOpenMaaSResultSchemaInPrompt,
+} from './open-maas-models.js';
 
 export function trimModelName(model: string): string {
     const i = model.lastIndexOf('@');
@@ -111,6 +115,7 @@ export function getModelDefinition(model: string): ModelDefinition {
                 defaultMaxTokens: openMaaSModel.defaultMaxTokens,
                 extraBody: openMaaSModel.extraBody,
                 includeResultSchemaInPromptForModel: supplementsVertexOpenMaaSResultSchemaInPrompt,
+                omitResultSchemaFormatWithToolsForModel: omitsVertexOpenMaaSResultSchemaFormatWithTools,
             });
         }
     }

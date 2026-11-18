@@ -1,4 +1,10 @@
-import { type Completion, type ExecutionOptions, type JSONSchema, PromptRole } from '@llumiverse/core';
+import {
+    type Completion,
+    type ExecutionOptions,
+    type JSONSchema,
+    PromptRole,
+    type ToolDefinition,
+} from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createFetchClient, type VertexAIDriver } from './index.js';
 import { selectVertexListingRegions } from './listing-regions.js';
@@ -361,11 +367,20 @@ describe('Vertex open MaaS result schema in the prompt', () => {
         additionalProperties: false,
     };
 
-    async function payloadFor(model: string) {
+    const tools: ToolDefinition[] = [
+        {
+            name: 'get_weather',
+            description: 'Get the current weather for a city',
+            input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+        },
+    ];
+
+    async function payloadFor(model: string, withTools = false) {
         const modelDefinition = getModelDefinition(model);
         const options: ExecutionOptions = {
             model,
             result_schema: schema,
+            ...(withTools && { tools }),
             model_options: { _option_id: 'text-fallback' },
         };
         const prompt = await modelDefinition.createPrompt(
@@ -379,6 +394,7 @@ describe('Vertex open MaaS result schema in the prompt', () => {
         return call[1].payload as {
             messages: Array<{ role: string; content: unknown }>;
             response_format?: { type: string };
+            tools?: unknown[];
         };
     }
 
@@ -406,5 +422,24 @@ describe('Vertex open MaaS result schema in the prompt', () => {
         const payload = await payloadFor(model);
         expect(payload.response_format?.type).toBe('json_schema');
         expect(promptHasSchema(payload)).toBe(false);
+    });
+
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-1017-maas',
+    ])('leaves out the native schema when %s is offered tools', async (model) => {
+        const payload = await payloadFor(model, true);
+        expect(payload.tools).toHaveLength(1);
+        expect(payload.response_format).toBeUndefined();
+        expect(promptHasSchema(payload)).toBe(true);
+    });
+
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
+        'locations/global/publishers/zai-org/models/glm-5.2-maas',
+    ])('keeps the native schema with tools for %s', async (model) => {
+        const payload = await payloadFor(model, true);
+        expect(payload.tools).toHaveLength(1);
+        expect(payload.response_format?.type).toBe('json_schema');
     });
 });
