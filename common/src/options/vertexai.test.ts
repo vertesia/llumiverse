@@ -492,3 +492,12 @@ describe('Vertex DeepSeek V4.1 Flash metadata', () => {
         expect(getModelCapabilities(model, Providers.vertexai).input.image).toBe(false);
     });
 });
+
+describe('Vertex publisher/model ids', () => {
+    it('resolves the publisher of a two-segment id like the driver routing does', () => {
+        expect(getVertexAiOptions('mistralai/mistral-small-2503')._option_id).toBe('openai-text');
+        expect(getVertexAiOptions('meta/muse-wonder-1.0')).toEqual(
+            getVertexAiOptions('locations/global/publishers/meta/models/muse-wonder-1.0'),
+        );
+    });
+});

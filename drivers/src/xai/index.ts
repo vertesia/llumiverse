@@ -17,6 +17,7 @@ import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
 import type { xAiDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS } from '../openai/openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
 import { resolveModelLifecycleDates } from '../shared/model-listing.js';
 
@@ -39,6 +40,7 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
 
         this.service = new OpenAI({
             apiKey: opts.apiKey,
+            ...NON_OPENAI_ACCOUNT_OPTIONS,
             baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
             fetch: this.getDriverFetch(),
             maxRetries: 0,

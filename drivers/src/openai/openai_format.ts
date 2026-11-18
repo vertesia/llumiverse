@@ -5,6 +5,7 @@ import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } f
 import { readStreamAsBase64, readStreamAsString } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
+import { buildResultSchemaInstruction } from '../shared/result-schema-instruction.js';
 
 // Types for Response API
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -234,7 +235,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             content: [
                 {
                     type: 'input_text',
-                    text: `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(opts.result_schema)}</response_schema>`,
+                    text: buildResultSchemaInstruction(opts.result_schema),
                 },
             ],
         };

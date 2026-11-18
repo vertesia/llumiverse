@@ -20,7 +20,6 @@ import {
     isCutOffFinishReason,
     isDedicatedInferenceModel,
     isJSONObjectText,
-    isMetaMuseModel,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
     type JSONSchema,
@@ -60,6 +59,7 @@ import { assertConversationArray } from '../shared/conversation-shape.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { logModelRefusal, type RefusalLogContext } from '../shared/refusal-log.js';
+import { isResultSchemaInstruction, mergeResultSchemaInstructions } from '../shared/result-schema-instruction.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { buildOpenAIDecisionRequest, fromOpenAIDecision } from './decisions.js';
@@ -322,7 +322,9 @@ export class OpenAIResponsesProtocol {
             operation: 'stream',
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
+        let conversation = fixOrphanedToolResults(
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
+        );
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
@@ -470,7 +472,9 @@ export class OpenAIResponsesProtocol {
             operation: 'execute',
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
+        let conversation = fixOrphanedToolResults(
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
+        );
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -591,7 +595,7 @@ export class OpenAIResponsesProtocol {
         assertConversationArray(options.conversation, { provider: driver.provider, model: options.model, operation });
         convertRoles(prompt, options.model);
         const conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(updateConversation(options.conversation, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
         // Compatibility exception: the compact endpoint has no summarization prompt to carry `instructions`, and the
@@ -825,7 +829,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             operation: 'stream',
         });
         // Start with the conversation from options or the prompt
-        let conversation = updateConversation(options.conversation, prompt);
+        let conversation = mergeResponsesPrompt(options.conversation, prompt);
 
         // Add assistant message as EasyInputMessage
         if (textContent) {
@@ -1527,9 +1531,10 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
  * A family rule: it applies to any OpenAI-compatible endpoint serving a `minimax/` model ID, not only OpenRouter.
  */
 function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
-    // Vertex constrains Muse output to the schema but reorders its properties, and without the schema in the prompt
-    // the model fills the constrained fields with wrong or garbled values. The prompt copy restores the answers.
-    if (provider === Providers.vertexai && isMetaMuseModel(model.split('/').pop() ?? model)) return true;
+    // Vertex constrains output to the schema without showing it to the model, and emits the properties
+    // alphabetically; without the schema in the prompt, Muse fills the constrained fields with wrong or garbled
+    // values. This applies to every model Vertex serves through a Responses API.
+    if (provider === Providers.vertexai) return true;
     return provider === Providers.openai_compatible && /^minimax\//i.test(model);
 }
 
@@ -1604,6 +1609,27 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTo
         parameters: parsedSchema ?? null,
         strict: strictMode,
     };
+}
+
+/** The schema copy a Responses prompt carries as a system or developer message, if this item is one. */
+function responsesResultSchemaInstructionText(item: ResponseInputItem): string | undefined {
+    if (!('role' in item) || item.role === 'user' || !('content' in item)) return undefined;
+    const content = item.content;
+    if (typeof content === 'string') return isResultSchemaInstruction(content) ? content : undefined;
+    if (!Array.isArray(content) || content.length !== 1) return undefined;
+    const part = content[0] as { type?: string; text?: unknown };
+    return part.type === 'input_text' && isResultSchemaInstruction(part.text) ? part.text : undefined;
+}
+
+/**
+ * Merges a new prompt into the stored conversation for a request without storing a schema copy again on every
+ * turn. Suffix copies (`prompt_cache_schema_suffix`) are user messages and are left alone.
+ */
+function mergeResponsesPrompt(conversation: unknown, items: ResponseInputItem[], logger?: Logger): ResponseInputItem[] {
+    const history = conversation
+        ? (unwrapConversationArray<ResponseInputItem>(conversation) ?? (conversation as ResponseInputItem[]))
+        : [];
+    return mergeResultSchemaInstructions(history, items ?? [], responsesResultSchemaInstructionText, logger);
 }
 
 function updateConversation(conversation: unknown, items: ResponseInputItem[]): ResponseInputItem[] {

@@ -1,6 +1,6 @@
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import { type Content, GoogleGenAI, type Model } from '@google/genai';
-import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
+import { PredictionServiceClient, type protos, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
     type Completion,
@@ -28,6 +28,7 @@ import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth } from 'google-auth-library';
 import OpenAI from 'openai';
+import { vertex } from 'openai/providers/vertex';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
@@ -110,6 +111,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     /** One Responses client per publisher and location, for publishers served by the OpenAI Responses API. */
     private responsesDelegates: Map<string, VertexAIResponsesDelegate> = new Map();
+    /** OpenAI SDK clients by API root, for Vertex's OpenAI-compatible and publisher endpoints. */
+    private vertexOpenAIClients: Map<string, OpenAI> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIServiceTier: string | undefined;
@@ -317,22 +320,45 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return client;
     }
 
+    /** One OpenAI SDK client per Vertex API root, authenticated by the SDK's Vertex provider. */
+    private getVertexOpenAIClient(baseURL: string): OpenAI {
+        let client = this.vertexOpenAIClients.get(baseURL);
+        if (!client) {
+            // The provider authenticates every attempt with the driver's Google credentials, and keeps the SDK from
+            // reading OpenAI settings such as `OPENAI_ORG_ID` from the environment and sending them to Google.
+            client = new OpenAI({
+                provider: vertex({ baseURL, credentials: this.googleAuth }),
+                fetch: this.getDriverFetch(),
+                maxRetries: 0,
+                timeout: this.getDriverRequestTimeoutMs(),
+            });
+            this.vertexOpenAIClients.set(baseURL, client);
+        }
+        return client;
+    }
+
+    /**
+     * The OpenAI SDK client for a Vertex location, rooted at `.../projects/{project}/locations/{region}` plus
+     * `basePath`: `/endpoints/openapi` for the OpenAI-compatible MaaS endpoint, nothing for publisher model paths.
+     */
+    public getOpenAIClientForRegion(
+        region: string,
+        apiVersion = 'v1',
+        endpointRegion?: string,
+        basePath = '/endpoints/openapi',
+    ): OpenAI {
+        const host = getVertexApiHost(endpointRegion ?? region);
+        return this.getVertexOpenAIClient(
+            `https://${host}/${apiVersion}/projects/${this.options.project}/locations/${region}${basePath}`,
+        );
+    }
+
     /** The Responses API of a publisher (`.../publishers/meta/v1/responses`), through the OpenAI SDK. */
     public getResponsesDelegate(publisher: string, region: string): VertexAIResponsesDelegate {
         const cacheKey = `${publisher}:${region}:${this.options.project}`;
         let delegate = this.responsesDelegates.get(cacheKey);
         if (!delegate) {
-            const service = new OpenAI({
-                baseURL: `https://${getVertexApiHost(region)}/v1/projects/${this.options.project}/locations/${region}/publishers/${publisher}/v1`,
-                apiKey: async () => {
-                    const token = await this.googleAuth.getAccessToken();
-                    if (!token) throw new Error('Google authentication returned no access token');
-                    return token;
-                },
-                fetch: this.getDriverFetch(),
-                maxRetries: 0,
-                timeout: this.getDriverRequestTimeoutMs(),
-            });
+            const service = this.getOpenAIClientForRegion(region, 'v1', undefined, `/publishers/${publisher}/v1`);
             delegate = new VertexAIResponsesDelegate(this.options, service);
             this.responsesDelegates.set(cacheKey, delegate);
         }
@@ -783,10 +809,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 additional: [],
             },
             meta: {
-                // Only Muse is served by Meta's Responses API; Llama comes from VERTEX_OPEN_MAAS_MODELS.
+                // Only Muse is served by Meta's Responses API; Llama comes from VERTEX_OPEN_MAAS_MODELS. Open-weight
+                // Muse entries are left out by isSelfDeployOnlyPublisherModel, not by name.
                 families: ['muse-'],
-                // Open-weight Model Garden entries, which the Responses API answers with 404.
-                excluded: ['muse-glimmer', '-open'],
+                excluded: [],
                 additional: [],
             },
         } as const;
@@ -859,7 +885,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Process publisher models
         for (const result of publisherResults) {
-            const { publisher, response } = result as { publisher: string; response: Array<{ name?: string }> };
+            const { publisher, response } = result as {
+                publisher: string;
+                response: protos.google.cloud.aiplatform.v1beta1.IPublisherModel[];
+            };
             const config = publisherConfig[publisher as Publisher];
             const modelFamily = config.families;
             const excludedModels = config.excluded;
@@ -872,6 +901,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
+                        if (publisher === 'meta' && isSelfDeployOnlyPublisherModel(model)) return false;
                         // Check if the model belongs to the supported model families
                         return modelFamily.some((family) => modelName.includes(family));
                     })
@@ -1027,6 +1057,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
         return formatted;
     }
+}
+
+/**
+ * Whether Model Garden offers this publisher model only for deployment to the caller's own endpoint (open weights,
+ * such as `muse-glimmer` and `muse-spark-open`), rather than as an API. Those entries answer the publisher's API with
+ * 404, so they are not listed. Read from the listing's own call-to-action metadata, so a later API release of the
+ * same model family is still listed.
+ */
+function isSelfDeployOnlyPublisherModel(model: protos.google.cloud.aiplatform.v1beta1.IPublisherModel): boolean {
+    const actions = model.supportedActions;
+    return Boolean(actions?.deploy || actions?.multiDeployVertex);
 }
 
 function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {

@@ -40,12 +40,17 @@ import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { logModelRefusal } from '../shared/refusal-log.js';
+import {
+    buildResultSchemaInstruction,
+    isResultSchemaInstruction,
+    mergeResultSchemaInstructions,
+} from '../shared/result-schema-instruction.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
-import { OpenAICompatibleDriverBase } from './openai_compatible.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS, OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
@@ -265,12 +270,42 @@ export function updateOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
     prompt: OpenAIChatCompletionsPrompt,
 ): OpenAIChatCompletionsPrompt {
-    // TODO: Remove legacy array-shaped conversation compatibility after 2026-08-14,
-    // once all resumable conversations written before the native container migration have expired.
-    const baseMessages = Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
     return {
         _is_openai_chat_completions: true,
-        messages: [...baseMessages, ...(prompt.messages || [])],
+        messages: [...storedOpenAIChatCompletionsMessages(conversation), ...(prompt.messages || [])],
+    };
+}
+
+function storedOpenAIChatCompletionsMessages(
+    conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
+): OpenAIChatCompletionsMessage[] {
+    // TODO: Remove legacy array-shaped conversation compatibility after 2026-08-14,
+    // once all resumable conversations written before the native container migration have expired.
+    return Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
+}
+
+/** The schema copy a Chat Completions prompt carries as a system message, if this message is one. */
+function chatResultSchemaInstructionText(message: OpenAIChatCompletionsMessage): string | undefined {
+    return message.role === 'system' && isResultSchemaInstruction(message.content) ? message.content : undefined;
+}
+
+/**
+ * Merges a new prompt into the stored conversation for a request. Unlike
+ * {@link updateOpenAIChatCompletionsConversation}, a schema copy is not stored again on every turn.
+ */
+function mergeOpenAIChatCompletionsPrompt(
+    conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
+    prompt: OpenAIChatCompletionsPrompt,
+    logger?: Logger,
+): OpenAIChatCompletionsPrompt {
+    return {
+        _is_openai_chat_completions: true,
+        messages: mergeResultSchemaInstructions(
+            storedOpenAIChatCompletionsMessages(conversation),
+            prompt.messages || [],
+            chatResultSchemaInstructionText,
+            logger,
+        ),
     };
 }
 
@@ -782,7 +817,7 @@ export function buildOpenAIChatCompletionsStreamingConversation(
         _is_openai_chat_completions: true,
         messages: [
             ...prepareOpenAIChatCompletionsConversation(
-                updateOpenAIChatCompletionsConversation(
+                mergeOpenAIChatCompletionsPrompt(
                     options.conversation as OpenAIChatCompletionsPrompt | undefined,
                     prompt,
                 ),
@@ -882,12 +917,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         }
 
         const resultSchemaInstruction = _options.result_schema
-            ? `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`
+            ? buildResultSchemaInstruction(_options.result_schema)
             : undefined;
         if (
             (this.options.resultSchemaMode === 'prompt' ||
                 this.options.includeResultSchemaInPrompt ||
-                this.options.includeResultSchemaInPromptForModel?.(_options.model)) &&
+                this.options.includeResultSchemaInPromptForModel?.(_options.model) ||
+                // The native schema can be left out on tool turns, so the prompt must carry it.
+                this.options.omitResultSchemaFormatWithToolsForModel?.(_options.model)) &&
             resultSchemaInstruction
         ) {
             messages.push({
@@ -995,9 +1032,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        let conversation = updateOpenAIChatCompletionsConversation(
+        let conversation = mergeOpenAIChatCompletionsPrompt(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
+            getOpenAIChatDriverLogger(driver),
         );
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
@@ -1084,9 +1122,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        let conversation = updateOpenAIChatCompletionsConversation(
+        let conversation = mergeOpenAIChatCompletionsPrompt(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
+            getOpenAIChatDriverLogger(driver),
         );
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
@@ -1278,13 +1317,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             this.options.omitResultSchemaFormatWithToolsForModel?.(options.model)
         ) {
             // Compatibility exception: the model's constrained decoding would block the tool calls this request
-            // offers. The schema stays in the prompt, and the returned JSON is still validated.
-            logModelOptionException(
-                logger,
-                options.model,
-                options,
-                ['result_schema'],
-                'result_schema_format_with_tools',
+            // offers. The schema stays in the prompt, and the returned JSON is still validated. Expected on every tool
+            // turn of these models, so it is a debug diagnostic rather than a warning.
+            logger?.debug(
+                { model: options.model, option_names: ['result_schema'], reason: 'result_schema_format_with_tools' },
+                'Native result schema left out on a request that offers tools',
             );
         } else if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
             const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
@@ -1609,6 +1646,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         super(options);
         this.service = new OpenAI({
             apiKey: options.apiKey,
+            ...NON_OPENAI_ACCOUNT_OPTIONS,
             baseURL: options.endpoint,
             defaultHeaders: options.default_headers,
             fetch: this.getDriverFetch(),

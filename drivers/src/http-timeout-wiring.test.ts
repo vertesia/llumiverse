@@ -257,6 +257,18 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
+    it('passes the driver fetch and request timeout to the Vertex OpenAI SDK clients', () => {
+        const driver = new VertexAIDriver({ project: 'project', region: 'us-central1' });
+        for (const client of [
+            driver.getOpenAIClientForRegion('global'),
+            driver.getOpenAIClientForRegion('europe-west4', 'v1', undefined, ''),
+        ]) {
+            expectSdkUsesDriverFetch(driver, client);
+            expectSdkUsesDriverRequestTimeout(client);
+        }
+        driver.destroy();
+    });
+
     it('maps Vertex AI single-timeout SDK clients from DriverOptions.httpTimeout', () => {
         const driver = new VertexAIDriver({
             project: 'project',

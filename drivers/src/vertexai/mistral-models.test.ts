@@ -1,7 +1,7 @@
 import { isVertexMistralChatModel } from '@llumiverse/common';
 import { PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
-import type { VertexAIDriver } from './index.js';
+import { withVertexOpenAIClient } from '../../test/__helpers__/vertex-openai-client.js';
 import { getListedVertexMistralModels, VERTEX_MISTRAL_CHAT_MODELS } from './mistral-models.js';
 import { getModelDefinition } from './models.js';
 
@@ -22,7 +22,7 @@ function createDriverStub(region = 'us-central1') {
     const getFetchClient = vi.fn(() => getFetchClientForRegion(region));
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     return {
-        driver: { getFetchClient, getFetchClientForRegion, logger } as unknown as VertexAIDriver,
+        driver: withVertexOpenAIClient({ getFetchClient, getFetchClientForRegion, logger, region }),
         post,
         getFetchClientForRegion,
         logger,
@@ -45,8 +45,9 @@ describe('Vertex regional Mistral chat models', () => {
             await definition.requestTextCompletion(stub.driver, prompt, options);
             await definition.requestTextCompletionStream(stub.driver, prompt, options);
             expect(stub.getFetchClientForRegion).toHaveBeenCalledTimes(2);
-            expect(stub.getFetchClientForRegion).toHaveBeenNthCalledWith(1, 'europe-west4');
-            expect(stub.getFetchClientForRegion).toHaveBeenNthCalledWith(2, 'europe-west4');
+            // The SDK client is built for the driver's configured region and the default API version.
+            expect(stub.getFetchClientForRegion).toHaveBeenNthCalledWith(1, 'europe-west4', undefined);
+            expect(stub.getFetchClientForRegion).toHaveBeenNthCalledWith(2, 'europe-west4', undefined);
         },
     );
     it.each(['mistral-ocr-2505', 'mistral-embed', 'voxtral-small-2507'])(
