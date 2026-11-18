@@ -90,6 +90,95 @@ describe('Vertex Meta Muse routing', () => {
     });
 });
 
+describe('Vertex OpenAI GPT routing', () => {
+    it.each([
+        ['locations/global/publishers/openai/models/gpt-6-luna', 'global'],
+        ['publishers/openai/models/gpt-6.1-sol', 'global'],
+        ['locations/us/publishers/openai/models/gpt-6-astra', 'us'],
+        ['openai/gpt-6.1-terra', 'global'],
+        ['gpt-6-luna', 'global'],
+        // A later generation keeps the Responses transport.
+        ['publishers/openai/models/gpt-7', 'global'],
+    ])('routes %s to the OpenAI Responses API in %s', (model, region) => {
+        const definition = getModelDefinition(model);
+        expect(definition).toBeInstanceOf(VertexAIResponsesModelDefinition);
+        expect(definition).toMatchObject({ publisher: 'openai', region });
+    });
+
+    it.each(['publishers/openai/models/gpt-oss-120b-maas', 'openai/gpt-oss-20b-maas'])(
+        'keeps %s on Chat Completions',
+        (model) => {
+            expect(getModelDefinition(model)).toBeInstanceOf(OpenAIChatCompletionsModelDefinition);
+        },
+    );
+});
+
+describe('Vertex OpenAI GPT requests', () => {
+    const schema: JSONSchema = {
+        type: 'object',
+        properties: { color: { type: 'string' } },
+        required: ['color'],
+        additionalProperties: false,
+    };
+
+    it('posts to the OpenAI publisher endpoint of the US multi-region with the bare model ID', async () => {
+        const { url, body } = await captureRequest('locations/us/publishers/openai/models/gpt-6-luna', {
+            effort: 'low',
+            max_tokens: 512,
+        });
+        expect(url).toBe(
+            'https://aiplatform.us.rep.googleapis.com/v1/projects/test-project/locations/us/publishers/openai/v1/responses',
+        );
+        expect(body).toMatchObject({ model: 'gpt-6-luna', max_output_tokens: 512, reasoning: { effort: 'low' } });
+        // Vertex does not offer reasoning summaries for OpenAI models.
+        expect(body.reasoning).not.toHaveProperty('summary');
+        expect(body.include).toEqual(['reasoning.encrypted_content']);
+    });
+
+    it('leaves out the reasoning summary on streamed requests too', async () => {
+        const events = [
+            { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 1, content_index: 0, delta: 'Hi' },
+            { type: 'response.completed', response: responseBody('gpt-6-luna', 'Hi') },
+        ];
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(
+                    events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+                    {
+                        status: 200,
+                        headers: { 'Content-Type': 'text/event-stream' },
+                    },
+                ),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Say hello' }], {
+            model: 'publishers/openai/models/gpt-6-luna',
+            model_options: { _option_id: 'openai-thinking', effort: 'low' },
+        });
+        let text = '';
+        for await (const chunk of stream) text += chunk;
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const body = JSON.parse(String(init.body));
+        expect(url).toBe(
+            'https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/openai/v1/responses',
+        );
+        expect(body).toMatchObject({ stream: true, model: 'gpt-6-luna', reasoning: { effort: 'low' } });
+        expect(body.reasoning).not.toHaveProperty('summary');
+        expect(text).toBe('Hi');
+    });
+
+    it('sends the result schema natively, without a prompt copy', async () => {
+        const { body } = await captureRequest('publishers/openai/models/gpt-6.1-sol', {}, schema);
+        expect(body.text?.format).toMatchObject({ type: 'json_schema' });
+        expect(JSON.stringify(body.input)).not.toContain('<response_schema>');
+    });
+
+    it('keeps the prompt copy for Muse', async () => {
+        const { body } = await captureRequest('publishers/meta/models/muse-spark-1.3', {}, schema);
+        expect(JSON.stringify(body.input)).toContain('<response_schema>');
+    });
+});
+
 describe('Vertex Meta Muse requests', () => {
     it('posts a stateless Responses request with the bare model ID to the global Meta endpoint', async () => {
         const { completion, url, body, authorization } = await captureRequest(

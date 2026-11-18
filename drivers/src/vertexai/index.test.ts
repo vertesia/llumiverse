@@ -6,7 +6,15 @@ type AIPlatformClient = Awaited<ReturnType<VertexAIDriver['getAIPlatformClient']
 type ModelGardenClient = Awaited<ReturnType<VertexAIDriver['getModelGardenClient']>>;
 
 class TestVertexAIDriver extends VertexAIDriver {
-    constructor(private readonly googleModels: Model[] = []) {
+    constructor(
+        private readonly googleModels: Model[] = [],
+        // What Model Garden lists under publishers/openai for a project without preview access.
+        private readonly openaiModels: Array<{ name: string; supportedActions?: Record<string, unknown> }> = [
+            { name: 'publishers/openai/models/gpt-oss', supportedActions: { deploy: {}, multiDeployVertex: {} } },
+            { name: 'publishers/openai/models/gpt-oss-120b-maas', supportedActions: {} },
+            { name: 'publishers/openai/models/whisper-large', supportedActions: { deploy: {}, multiDeployVertex: {} } },
+        ],
+    ) {
         super({ project: 'test-project', region: 'us-central1' });
     }
 
@@ -68,6 +76,7 @@ class TestVertexAIDriver extends VertexAIDriver {
                         ],
                     ];
                 }
+                if (parent === 'publishers/openai') return [this.openaiModels];
                 return [[]];
             },
         } as unknown as ModelGardenClient;
@@ -216,6 +225,36 @@ describe('VertexAIDriver storage permission errors', () => {
             { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
         );
         expect(error.message).not.toContain('bucket permissions');
+    });
+});
+
+describe('VertexAIDriver OpenAI GPT listing', () => {
+    const gptIds = async (driver: TestVertexAIDriver) =>
+        (await driver.listModels()).map((model) => model.id).filter((id) => /\/openai\/models\/gpt-(?!oss)/.test(id));
+
+    it('lists no GPT model while Model Garden shows the project none', async () => {
+        expect(await gptIds(new TestVertexAIDriver())).toEqual([]);
+    });
+
+    it('lists the GPT models Model Garden shows, with global location ids, once the project has access', async () => {
+        const driver = new TestVertexAIDriver(
+            [],
+            [
+                { name: 'publishers/openai/models/gpt-6-luna', supportedActions: { requestAccess: {} } },
+                { name: 'publishers/openai/models/gpt-6.1-sol', supportedActions: {} },
+                { name: 'publishers/openai/models/gpt-oss-120b-maas', supportedActions: {} },
+                // OpenAI models without a Responses route here are not listed.
+                { name: 'publishers/openai/models/gpt-image-2', supportedActions: {} },
+                { name: 'publishers/openai/models/gpt-realtime', supportedActions: {} },
+            ],
+        );
+        // Global, plus the US multi-region as the regional variant.
+        expect((await gptIds(driver)).sort()).toEqual([
+            'locations/global/publishers/openai/models/gpt-6-luna',
+            'locations/global/publishers/openai/models/gpt-6.1-sol',
+            'locations/us/publishers/openai/models/gpt-6-luna',
+            'locations/us/publishers/openai/models/gpt-6.1-sol',
+        ]);
     });
 });
 

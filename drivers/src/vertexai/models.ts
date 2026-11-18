@@ -1,4 +1,4 @@
-import { isMetaMuseModel, isVertexMistralChatModel } from '@llumiverse/common';
+import { isMetaMuseModel, isVertexMistralChatModel, isVertexOpenAIResponsesModel } from '@llumiverse/common';
 import type {
     AIModel,
     Completion,
@@ -95,6 +95,13 @@ export function getModelDefinition(model: string): ModelDefinition {
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
     if (isMetaMuseModel(modelName) && (publisher === 'meta' || (publisherIndex === -1 && splits.length === 1))) {
         return new VertexAIResponsesModelDefinition(modelName, 'meta', region ?? 'global');
+    }
+
+    // OpenAI GPT models are served only by OpenAI's Responses API, on the global and US multi-region endpoints. A bare
+    // ID ("gpt-6-luna") names the OpenAI publisher, since Vertex offers GPT models from no other.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai/responses
+    if (isVertexOpenAIResponsesModel(publisher === undefined ? modelName : `${publisher}/${modelName}`)) {
+        return new VertexAIResponsesModelDefinition(modelName, 'openai', region ?? 'global');
     }
 
     if (publisher?.includes('anthropic')) {
