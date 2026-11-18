@@ -2,7 +2,7 @@ import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { APIError } from 'openai/error';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AzureOpenAIDriver } from './azure_openai.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 import { OpenAIResponsesDriver } from './openai_responses.js';
@@ -22,10 +22,17 @@ class TestResponsesDriver extends OpenAIResponsesDriverBase {
 }
 
 /** A real driver class, whose provider rules apply, with its Responses client replaced by a stub. */
+/** Real drivers built by a test, destroyed after it so their HTTP agents do not outlive it. */
+const realDrivers: OpenAIResponsesDriverBase[] = [];
+afterEach(() => {
+    for (const driver of realDrivers.splice(0)) driver.destroy();
+});
+
 function withResponsesStub<T extends OpenAIResponsesDriverBase>(
     driver: T,
     create: (...args: never[]) => Promise<unknown>,
 ): T {
+    realDrivers.push(driver);
     vi.spyOn(driver as OpenAIResponsesDriverBase, 'getResponsesService').mockReturnValue({
         responses: { create },
     } as unknown as OpenAI);
