@@ -773,7 +773,9 @@ export function isVertexMistralChatModel(publisher: string | undefined, model: s
 function isVertexMistralResource(model: string): boolean {
     const segments = model.split('/');
     const publisherIndex = segments.indexOf('publishers');
-    const publisher = publisherIndex === -1 ? segments[1] : segments[publisherIndex + 1];
+    // Same publisher resolution as the driver's routing: `publishers/<p>/...`, `<p>/<model>`, then the legacy form.
+    const publisher =
+        publisherIndex !== -1 ? segments[publisherIndex + 1] : segments.length === 2 ? segments[0] : segments[1];
     return isVertexMistralChatModel(publisher, model);
 }
 

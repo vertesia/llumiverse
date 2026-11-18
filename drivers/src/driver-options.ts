@@ -113,8 +113,8 @@ export interface OpenAIChatCompletionsProtocolOptions {
     includeResultSchemaInPromptForModel?: (model: string) => boolean;
     /**
      * Leave out the native `response_format` on requests that offer tools, for models whose constrained decoding
-     * prevents tool calls while a schema is set. Pair it with `includeResultSchemaInPromptForModel` so the schema
-     * stays in the prompt; Llumiverse still validates the returned JSON.
+     * prevents tool calls while a schema is set. It implies the prompt copy of the schema for those models, so the
+     * schema stays in the prompt on every turn; Llumiverse still validates the returned JSON.
      */
     omitResultSchemaFormatWithToolsForModel?: (model: string) => boolean;
     /**

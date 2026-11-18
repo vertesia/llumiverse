@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import type { OpenAIResponsesDriverOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS } from './openai_compatible.js';
 
 export type { OpenAIResponsesDriverOptions } from '../driver-options.js';
 
@@ -28,6 +29,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
 
         this.service = new OpenAI({
             apiKey: opts.apiKey,
+            ...NON_OPENAI_ACCOUNT_OPTIONS,
             baseURL: opts.endpoint,
             defaultHeaders: opts.default_headers,
             fetch: this.getDriverFetch(),

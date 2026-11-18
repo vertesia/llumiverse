@@ -8,9 +8,11 @@ import { VertexAIResponsesModelDefinition } from './openai_responses.js';
 class TestVertexAIDriver extends VertexAIDriver {
     constructor(private readonly fetchMock: typeof fetch) {
         super({ project: 'test-project', region: 'us-central1' });
+        // The SDK's Vertex provider authenticates each attempt through the Google client's request headers.
         this.googleAuth = {
             getAccessToken: async () => 'test-token',
-        } as VertexAIDriver['googleAuth'];
+            getRequestHeaders: async () => new Headers({ authorization: 'Bearer test-token' }),
+        } as unknown as VertexAIDriver['googleAuth'];
     }
 
     protected override getDriverFetch(): typeof fetch {
@@ -18,7 +20,7 @@ class TestVertexAIDriver extends VertexAIDriver {
     }
 }
 
-function responseBody(model: string) {
+function responseBody(model: string, text = 'Bonjour') {
     return {
         id: 'resp_1',
         object: 'response',
@@ -34,7 +36,7 @@ function responseBody(model: string) {
                 id: 'msg_1',
                 role: 'assistant',
                 status: 'completed',
-                content: [{ type: 'output_text', text: 'Bonjour', annotations: [] }],
+                content: [{ type: 'output_text', text, annotations: [] }],
             },
         ],
         usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
@@ -57,7 +59,13 @@ async function captureRequest(model: string, modelOptions: Record<string, unknow
     });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const headers = new Headers(init.headers);
-    return { completion, url, body: JSON.parse(String(init.body)), authorization: headers.get('authorization') };
+    return {
+        completion,
+        url,
+        headers,
+        body: JSON.parse(String(init.body)),
+        authorization: headers.get('authorization'),
+    };
 }
 
 describe('Vertex Meta Muse routing', () => {
@@ -69,6 +77,8 @@ describe('Vertex Meta Muse routing', () => {
         'publishers/meta/models/muse-spark-1.4',
         'publishers/meta/models/muse-wonder-2.0@001',
         'muse-ember-1.0',
+        // The `publisher/model` form Vertex model cards use.
+        'meta/muse-wonder-1.0',
     ])('routes %s to the Responses API', (model) => {
         expect(getModelDefinition(model)).toBeInstanceOf(VertexAIResponsesModelDefinition);
     });
@@ -120,5 +130,81 @@ describe('Vertex Meta Muse requests', () => {
         const { body } = await captureRequest('publishers/meta/models/muse-spark-1.3', {}, schema);
         expect(body.text.format).toMatchObject({ type: 'json_schema', strict: true });
         expect(body.input[0].content[0].text).toContain(`<response_schema>${JSON.stringify(schema)}</response_schema>`);
+    });
+});
+
+describe('Vertex Meta Muse transport', () => {
+    it('sends no OpenAI organization or project from the environment to Vertex', async () => {
+        vi.stubEnv('OPENAI_ORG_ID', 'org-from-env');
+        vi.stubEnv('OPENAI_PROJECT_ID', 'proj_from_env');
+        try {
+            const { headers, authorization } = await captureRequest('publishers/meta/models/muse-spark-1.3', {});
+            expect(authorization).toBe('Bearer test-token');
+            expect(headers.get('openai-organization')).toBeNull();
+            expect(headers.get('openai-project')).toBeNull();
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+});
+
+describe('Vertex Meta Muse result schema across turns', () => {
+    const colour: JSONSchema = {
+        type: 'object',
+        properties: { color: { type: 'string' } },
+        required: ['color'],
+        additionalProperties: false,
+    };
+    const shade: JSONSchema = {
+        type: 'object',
+        properties: { shade: { type: 'string' } },
+        required: ['shade'],
+        additionalProperties: false,
+    };
+
+    function schemaCopies(input: Array<{ content?: unknown }>): string[] {
+        return input.flatMap((item) => {
+            const parts = Array.isArray(item.content) ? item.content : [{ text: item.content }];
+            return parts
+                .map((part: { text?: unknown }) => part.text)
+                .filter((text): text is string => typeof text === 'string' && text.includes('<response_schema>'));
+        });
+    }
+
+    async function runTurns(schemas: JSONSchema[]) {
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(JSON.stringify(responseBody('muse-spark-1.3', '{"color":"green","shade":"dark"}')), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        let conversation: unknown;
+        for (const schema of schemas) {
+            const completion = await driver.execute([{ role: PromptRole.user, content: 'What colour is grass?' }], {
+                model: 'publishers/meta/models/muse-spark-1.3',
+                result_schema: schema,
+                conversation,
+                model_options: { _option_id: 'openai-text' },
+            });
+            conversation = completion.conversation;
+        }
+        const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+        return calls.map(([, init]) => JSON.parse(String(init.body)).input as Array<{ content?: unknown }>);
+    }
+
+    it('keeps one copy of an unchanged schema, at the position of its first turn', async () => {
+        const inputs = await runTurns([colour, colour, colour]);
+        for (const input of inputs) expect(schemaCopies(input)).toHaveLength(1);
+        // The stored copy keeps its place, so the request prefix stays the same from turn to turn.
+        expect(JSON.stringify(inputs[2].slice(0, 2))).toBe(JSON.stringify(inputs[1].slice(0, 2)));
+    });
+
+    it('replaces the stored copy when the schema changes', async () => {
+        const inputs = await runTurns([colour, shade]);
+        const copies = schemaCopies(inputs[1]);
+        expect(copies).toHaveLength(1);
+        expect(copies[0]).toContain('"shade"');
     });
 });

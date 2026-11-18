@@ -152,3 +152,31 @@ describe('validateResult', () => {
         });
     });
 });
+
+describe('validateResult with the prompt copy of a result schema', () => {
+    const schema = {
+        type: 'object',
+        properties: { object: { type: 'string' }, color: { type: 'string' } },
+        required: ['object', 'color'],
+    };
+    const echoed = `<response_schema>${JSON.stringify(schema)}</response_schema>`;
+
+    it.each([
+        ['the schema block echoed before the answer', `${echoed}\n\n{"object": "grass", "color": "green"}`],
+        ['the answer wrapped in the tags', '<response_schema>{"object": "grass", "color": "green"}</response_schema>'],
+        ['a plain answer', '{"object": "grass", "color": "green"}'],
+        ['a stray closing tag of another name', '{"object": "grass", "color": "green"}</response>'],
+        // A reply that parses as it is is not re-read, even when a string value contains the tags.
+        [
+            'a string value that mentions the tags',
+            '{"object": "grass", "color": "green", "note": "</response_schema> {not json"}',
+        ],
+    ])('reads the answer from %s', (_case, text) => {
+        expect(validateResult([{ type: 'text', value: text }], schema)).toEqual([
+            {
+                type: 'json',
+                value: expect.objectContaining({ object: 'grass', color: 'green' }),
+            },
+        ]);
+    });
+});

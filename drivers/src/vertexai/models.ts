@@ -68,6 +68,10 @@ export function getModelDefinition(model: string): ModelDefinition {
         if (locationIndex !== -1 && locationIndex + 1 < splits.length) {
             region = splits[locationIndex + 1];
         }
+    } else if (splits.length === 2) {
+        // `publisher/model`, the form Vertex model cards use (`meta/muse-wonder-1.0`, `deepseek-ai/...-maas`).
+        publisher = splits[0];
+        modelName = trimModelName(splits[1]);
     } else {
         // Fallback to old logic for backward compatibility
         publisher = splits[1];

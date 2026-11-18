@@ -43,6 +43,7 @@ import {
     toOpenAINonStreamingPayload,
     toOpenAIStreamingPayload,
 } from '../openai/openai_chat_completions.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS } from '../openai/openai_compatible.js';
 import {
     convertResponseItemsToChatMessages,
     formatOpenAIDebugPrompt,
@@ -370,6 +371,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             const configured = this.service.getOpenAIClient();
             // Projects resolves the project URL; inference uses our current SDK independently.
             this.inferenceClient = new OpenAI({
+                ...NON_OPENAI_ACCOUNT_OPTIONS,
                 baseURL: configured.baseURL,
                 apiKey: getBearerTokenProvider(
                     this.options.azureADTokenProvider ?? new DefaultAzureCredential(),
