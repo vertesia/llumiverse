@@ -3,7 +3,12 @@ import { getModelCapabilities } from '../capability.js';
 import { resolveModelProfile } from '../model-directory.js';
 import { Providers } from '../types.js';
 import { getContextWindowSize, getMaxOutputTokens } from './context-windows.js';
-import { getMaxTokensLimitVertexAi, getVertexAiOptions, isFlexSupportedGeminiModel } from './vertexai.js';
+import {
+    getMaxTokensLimitVertexAi,
+    getVertexAiOptions,
+    isFlexSupportedGeminiModel,
+    isVertexOpenAIResponsesModel,
+} from './vertexai.js';
 
 describe('Vertex AI MaaS metadata', () => {
     it.each([
@@ -444,5 +449,52 @@ describe('Vertex publisher/model ids', () => {
         expect(getVertexAiOptions('meta/muse-wonder-1.0')).toEqual(
             getVertexAiOptions('locations/global/publishers/meta/models/muse-wonder-1.0'),
         );
+    });
+});
+
+describe('Vertex OpenAI GPT models', () => {
+    it.each([
+        'locations/global/publishers/openai/models/gpt-6-luna',
+        'publishers/openai/models/gpt-6.1-sol',
+        'openai/gpt-6-astra',
+        'gpt-6.1-terra',
+        'publishers/openai/models/gpt-7',
+    ])('recognises %s as a Responses model', (model) => {
+        expect(isVertexOpenAIResponsesModel(model)).toBe(true);
+    });
+
+    it.each([
+        'publishers/openai/models/gpt-oss-120b-maas',
+        'openai/gpt-oss-20b-maas',
+        'publishers/meta/models/muse-spark-1.3',
+        'publishers/xai/models/grok-4.7',
+    ])('does not treat %s as one', (model) => {
+        expect(isVertexOpenAIResponsesModel(model)).toBe(false);
+    });
+
+    it('offers the OpenAI reasoning controls without processing tiers or hosted image generation', () => {
+        const info = getVertexAiOptions('locations/global/publishers/openai/models/gpt-6-luna');
+        const names = info.options.map((option) => option.name);
+        expect(info._option_id).toBe('openai-thinking');
+        expect(names).toEqual(expect.arrayContaining(['max_tokens', 'effort', 'image_detail']));
+        expect(names).not.toContain('service_tier');
+        expect(names).not.toContain('image_generation');
+        expect(names).not.toContain('temperature');
+    });
+
+    it('keeps gpt-oss on the open MaaS options', () => {
+        expect(getVertexAiOptions('publishers/openai/models/gpt-oss-120b-maas')._option_id).not.toBe('openai-thinking');
+    });
+});
+
+describe('Vertex OpenAI GPT limits', () => {
+    it('reads the documented token limits', () => {
+        expect(getMaxTokensLimitVertexAi('locations/global/publishers/openai/models/gpt-6-luna')).toBe(128_000);
+        expect(
+            resolveModelProfile('locations/global/publishers/openai/models/gpt-6-luna', Providers.vertexai),
+        ).toMatchObject({
+            context_window: 1_050_000,
+            max_output_tokens: 128_000,
+        });
     });
 });
