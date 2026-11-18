@@ -3,7 +3,9 @@ import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { APIError } from 'openai/error';
 import { describe, expect, it, vi } from 'vitest';
+import { AzureOpenAIDriver } from './azure_openai.js';
 import { OpenAIResponsesDriverBase } from './index.js';
+import { OpenAIResponsesDriver } from './openai_responses.js';
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {
     provider: OpenAIResponsesDriverBase['provider'];
@@ -18,6 +20,20 @@ class TestResponsesDriver extends OpenAIResponsesDriverBase {
         this.service = { responses: { create } } as unknown as OpenAI;
     }
 }
+
+/** A real driver class, whose provider rules apply, with its Responses client replaced by a stub. */
+function withResponsesStub<T extends OpenAIResponsesDriverBase>(
+    driver: T,
+    create: (...args: never[]) => Promise<unknown>,
+): T {
+    vi.spyOn(driver as OpenAIResponsesDriverBase, 'getResponsesService').mockReturnValue({
+        responses: { create },
+    } as unknown as OpenAI);
+    return driver;
+}
+
+const compatibleDriver = (create: (...args: never[]) => Promise<unknown>) =>
+    withResponsesStub(new OpenAIResponsesDriver({ apiKey: 'key', endpoint: 'https://compatible.example/v1' }), create);
 
 const reasoningItem = {
     id: 'reason-1',
@@ -69,7 +85,7 @@ describe('OpenAI Responses reasoning', () => {
                 },
             ],
         }));
-        const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+        const driver = compatibleDriver(create);
         const options = {
             model: 'z-ai/glm-5.3',
             result_schema: {
@@ -286,7 +302,7 @@ describe('OpenAI Responses reasoning', () => {
         'supplements native structured output for %s on OpenAI-compatible Responses',
         async (model) => {
             const create = vi.fn(async (_request: unknown) => response());
-            const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+            const driver = compatibleDriver(create);
             const options = {
                 model,
                 result_schema: { type: 'object' as const, properties: { value: { type: 'string' as const } } },
@@ -1121,7 +1137,10 @@ describe('Responses image generation', () => {
     );
     it('adds Azure deployment headers', async () => {
         const create = vi.fn(async (_request: unknown, _options?: unknown) => ({ ...response(), output: [image] }));
-        const driver = new TestResponsesDriver(create, Providers.azure_openai);
+        const driver = withResponsesStub(
+            new AzureOpenAIDriver({ apiKey: 'key', endpoint: 'https://resource.openai.azure.com' }),
+            create,
+        );
         await driver.requestTextCompletion([{ role: 'user', content: 'Draw' }], {
             model: 'gpt-5',
             model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },

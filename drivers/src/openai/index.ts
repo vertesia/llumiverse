@@ -22,7 +22,6 @@ import {
     isJSONObjectText,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
-    isVertexOpenAIResponsesModel,
     type JSONSchema,
     LlumiverseError,
     type Logger,
@@ -160,16 +159,14 @@ function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
     context: OpenAIRequestOptions['reasoning_context'],
-    model: string,
-    provider: Providers,
+    requestSummary: boolean,
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
-        // Compatibility exception: retain reasoning summaries for the existing completion projection, except on
-        // Vertex's OpenAI models, whose docs list reasoning summaries as unsupported.
-        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai
-        ...(!(provider === Providers.vertexai && isVertexOpenAIResponsesModel(model)) && { summary: 'auto' }),
+        // Compatibility exception: retain reasoning summaries for the existing completion projection, unless the
+        // driver's policy says its endpoint does not offer them.
+        ...(requestSummary && { summary: 'auto' }),
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
@@ -263,6 +260,33 @@ const supportFineTunning = new Set([
 
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
+/**
+ * Where a provider's Responses endpoint differs from OpenAI's. Each hook is optional, and an omitted one keeps
+ * OpenAI's behaviour, so a driver states only its own differences.
+ */
+export interface OpenAIResponsesPolicy {
+    /** Whether a model takes a native result schema; undefined keeps the default (its tool support). */
+    supportsSchema?(model: string): boolean | undefined;
+    /** Whether a model also gets the result schema in the prompt, next to the native format. Default: no. */
+    supplementsSchemaInPrompt?(model: string): boolean;
+    /** Whether reasoning requests ask for reasoning summaries (`summary: 'auto'`). Default: yes. */
+    requestsReasoningSummary?(model: string): boolean;
+    /** Headers for a request, such as the image-generation deployment Azure needs. */
+    requestHeaders?(options: ExecutionOptions): Record<string, string> | undefined;
+}
+
+/** What the shared Responses protocol needs from the driver it runs for: transport, model mapping and policy. */
+export interface OpenAIResponsesContext {
+    readonly provider: Providers;
+    readonly logger: Logger;
+    readonly responsesPolicy?: OpenAIResponsesPolicy;
+    getResponsesService(options: ExecutionOptions): OpenAI;
+    /** The model ID the endpoint takes for a llumiverse model ID. */
+    getResponsesRequestModel(model: string): string;
+    /** The model whose prompt-cache support applies, such as the source model of a deployment alias. */
+    getPromptCacheSourceModel(model: string): string;
+}
+
 /** Reusable Responses text protocol shared by OpenAI-compatible transports. */
 export class OpenAIResponsesProtocol {
     constructor(
@@ -273,26 +297,17 @@ export class OpenAIResponsesProtocol {
     ) {}
 
     private getRequestOptions(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): OpenAI.RequestOptions | undefined {
         const base = this.resolveRequestOptions(options, signal);
-        const imageTool = (options.model_options as OpenAIRequestOptions | undefined)?.image_generation;
-        if (!imageTool || (driver.provider !== Providers.azure_foundry && driver.provider !== Providers.azure_openai)) {
-            return base;
-        }
-        return {
-            ...base,
-            headers: {
-                'x-ms-oai-image-generation-deployment': driver.getResponsesRequestModel(imageTool.model),
-                api_version: 'preview',
-            },
-        };
+        const headers = driver.responsesPolicy?.requestHeaders?.(options);
+        return headers ? { ...base, headers } : base;
     }
 
     async requestTextCompletionStream(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
@@ -350,7 +365,7 @@ export class OpenAIResponsesProtocol {
         let strictMode = false;
         if (
             options.result_schema &&
-            supportsSchema(options.model, driver.provider) &&
+            supportsSchema(options.model, driver) &&
             options.prompt_cache_schema_suffix !== true
         ) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
@@ -365,8 +380,7 @@ export class OpenAIResponsesProtocol {
             requestedEffort,
             isReasoningModel,
             reasoningContext,
-            options.model,
-            driver.provider,
+            driver.responsesPolicy?.requestsReasoningSummary?.(options.model) ?? true,
         );
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
@@ -450,7 +464,7 @@ export class OpenAIResponsesProtocol {
     }
 
     async requestTextCompletion(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
@@ -497,7 +511,7 @@ export class OpenAIResponsesProtocol {
         let strictMode = false;
         if (
             options.result_schema &&
-            supportsSchema(options.model, driver.provider) &&
+            supportsSchema(options.model, driver) &&
             options.prompt_cache_schema_suffix !== true
         ) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
@@ -512,8 +526,7 @@ export class OpenAIResponsesProtocol {
             requestedEffort,
             isReasoningModel,
             reasoningContext,
-            options.model,
-            driver.provider,
+            driver.responsesPolicy?.requestsReasoningSummary?.(options.model) ?? true,
         );
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
@@ -586,7 +599,7 @@ export class OpenAIResponsesProtocol {
             ? await driver.getResponsesService(options).responses.create(request, requestOptions)
             : await driver.getResponsesService(options).responses.create(request);
 
-        const completion = driver.extractDataFromResponse(options, res);
+        const completion = extractOpenAIResponsesCompletion(driver, options, res);
         if (options.include_original_response) {
             completion.original_response = res;
         }
@@ -603,7 +616,7 @@ export class OpenAIResponsesProtocol {
      * compaction item) replaces the conversation, and there is no answer: the summary is encrypted.
      */
     private async compactConversation(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         operation: 'execute' | 'stream',
@@ -721,15 +734,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 result_schema: undefined,
             });
         }
-        const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
-        const nativeSchemaOnly =
-            supportsSchema(options.model, this.provider) && !supplementsSchemaInPrompt(options.model, this.provider);
-        const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
-        return formatOpenAILikeMultimodalPrompt(segments, {
-            ...options,
-            result_schema: resultSchema,
-            resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
-        });
+        return formatOpenAIResponsesPrompt(this, segments, options);
     }
 
     /** @internal Resolve the model identifier sent to the Responses transport. */
@@ -737,62 +742,12 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return model;
     }
 
-    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
-        assertOpenAIResponseSucceeded(result);
-        const tokenInfo = mapOpenAIResponsesUsage(result.usage, result.tool_usage);
-        logOpenAIInputTransformations(this.logger, result.input_transformations, {
-            provider: this.provider,
-            model: _options.model,
-        });
-
-        // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
-        // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
-        // streaming path does the same.
-        const lastCall =
-            result.status === 'incomplete'
-                ? result.output.filter((item) => item.type === 'function_call').at(-1)
-                : undefined;
-        const tools = collectTools(
-            lastCall && !isJSONObjectText(lastCall.arguments)
-                ? result.output.filter((item) => item !== lastCall)
-                : result.output,
-        );
-        const finish_reason = responseFinishReason(result, tools);
-        const refusalDetails = responseRefusalDetails(result);
-        if (refusalDetails) {
-            logModelRefusal(this.logger, {
-                provider: this.provider,
-                model: _options.model,
-                streaming: false,
-                finish_reason,
-                provider_finish_reason: result.incomplete_details?.reason ?? result.status,
-                response_id: result.id,
-                details: refusalDetails,
-            });
-        }
-        // Collect all parts in order (text and images)
-        const includeThoughts =
-            (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
-        const allResults = extractCompletionResults(
-            result.output,
-            includeThoughts,
-            (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
-        );
-
-        // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
-        if (allResults.length === 0 && !tools && !isCutOffFinishReason(finish_reason)) {
-            this.logger.error({ result }, '[OpenAI] Response is not valid');
-            throw new Error('Response is not valid: no data');
-        }
-
-        return {
-            result: allResults,
-            token_usage: tokenInfo,
-            service_tier: result.service_tier ?? undefined,
-            finish_reason,
-            tool_use: tools,
-        };
+    extractDataFromResponse(options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
+        return extractOpenAIResponsesCompletion(this, options, result);
     }
+
+    /** Per-driver differences from OpenAI's Responses endpoint; none by default. */
+    readonly responsesPolicy?: OpenAIResponsesPolicy;
 
     requestTextCompletionStream(
         prompt: ResponseInputItem[],
@@ -1177,6 +1132,84 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 }
 
+/** The completion of a non-streamed Responses request: results, tool calls, usage and finish reason. */
+export function extractOpenAIResponsesCompletion(
+    context: Pick<OpenAIResponsesContext, 'provider' | 'logger'>,
+    _options: ExecutionOptions,
+    result: OpenAI.Responses.Response,
+): Completion {
+    assertOpenAIResponseSucceeded(result);
+    const tokenInfo = mapOpenAIResponsesUsage(result.usage, result.tool_usage);
+    logOpenAIInputTransformations(context.logger, result.input_transformations, {
+        provider: context.provider,
+        model: _options.model,
+    });
+
+    // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
+    // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
+    // streaming path does the same.
+    const lastCall =
+        result.status === 'incomplete'
+            ? result.output.filter((item) => item.type === 'function_call').at(-1)
+            : undefined;
+    const tools = collectTools(
+        lastCall && !isJSONObjectText(lastCall.arguments)
+            ? result.output.filter((item) => item !== lastCall)
+            : result.output,
+    );
+    const finish_reason = responseFinishReason(result, tools);
+    const refusalDetails = responseRefusalDetails(result);
+    if (refusalDetails) {
+        logModelRefusal(context.logger, {
+            provider: context.provider,
+            model: _options.model,
+            streaming: false,
+            finish_reason,
+            provider_finish_reason: result.incomplete_details?.reason ?? result.status,
+            response_id: result.id,
+            details: refusalDetails,
+        });
+    }
+    // Collect all parts in order (text and images)
+    const includeThoughts = (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
+    const allResults = extractCompletionResults(
+        result.output,
+        includeThoughts,
+        (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
+    );
+
+    // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
+    if (allResults.length === 0 && !tools && !isCutOffFinishReason(finish_reason)) {
+        context.logger.error({ result }, '[OpenAI] Response is not valid');
+        throw new Error('Response is not valid: no data');
+    }
+
+    return {
+        result: allResults,
+        token_usage: tokenInfo,
+        service_tier: result.service_tier ?? undefined,
+        finish_reason,
+        tool_use: tools,
+    };
+}
+/** The prompt for a Responses text request: the prompt copy of the result schema only where it is needed. */
+export function formatOpenAIResponsesPrompt(
+    context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>,
+    segments: PromptSegment[],
+    options: PromptOptions,
+): Promise<ResponseInputItem[]> {
+    const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
+    const nativeSchemaOnly =
+        supportsSchema(options.model, context) &&
+        !(context.responsesPolicy?.supplementsSchemaInPrompt?.(options.model) ?? false);
+    const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
+    return formatOpenAILikeMultimodalPrompt(segments, {
+        ...options,
+        result_schema: resultSchema,
+        resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
+    });
+}
+
 function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     //validating_files`, `queued`, `running`, `succeeded`, `failed`, or `cancelled`.
     const jobStatus = job.status;
@@ -1541,36 +1574,16 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
     return items;
 }
 
-/**
- * Prompt-schema supplement alongside native structured output. OpenRouter routes `minimax/` models across many
- * hosts, and most do not enforce a JSON schema: some downgrade it to JSON mode and return `{}`, others ignore it.
- * The prompt schema gives every host the shape, while hosts that enforce the schema still receive it natively.
- * A family rule: it applies to any OpenAI-compatible endpoint serving a `minimax/` model ID, not only OpenRouter.
- */
-function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
-    // Vertex constrains output to the schema without showing it to the model, and emits the properties
-    // alphabetically; without the schema in the prompt, Muse fills the constrained fields with wrong or garbled
-    // values. This applies to the models Vertex serves through a publisher's Responses API, except OpenAI's GPT
-    // models: OpenAI's Responses API enforces the schema natively, so they stay native-only until measured on Vertex.
-    if (provider === Providers.vertexai) return !isVertexOpenAIResponsesModel(model);
-    return provider === Providers.openai_compatible && /^minimax\//i.test(model);
-}
-
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
-function supportsSchema(model: string, provider: Providers): boolean {
+function supportsSchema(model: string, context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>): boolean {
+    const policy = context.responsesPolicy?.supportsSchema?.(model);
+    if (policy !== undefined) return policy;
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;
     }
-    // OpenRouter's OpenAI-compatible Responses surface advertises native structured output for
-    // GLM 5.3, but the model returns unconstrained prose and downstream validation fails. Keep
-    // this generation on the existing prompt-schema fallback; later GLM generations remain
-    // eligible for native support unless runtime evidence says otherwise.
-    if (provider === Providers.openai_compatible && /^z-ai\/glm-5\.3(?:$|[-/:])/.test(model)) {
-        return false;
-    }
-    return supportsToolUse(model, provider);
+    return supportsToolUse(model, context.provider);
 }
 
 /**

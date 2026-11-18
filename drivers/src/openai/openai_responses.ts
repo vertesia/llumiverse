@@ -2,7 +2,7 @@ import { type AIModel, isDedicatedInferenceModel, isEmbeddingModel, ModelType, P
 import OpenAI from 'openai';
 import type { OpenAIResponsesDriverOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { OpenAIResponsesDriverBase } from './index.js';
+import { OpenAIResponsesDriverBase, type OpenAIResponsesPolicy } from './index.js';
 import { NON_OPENAI_ACCOUNT_OPTIONS } from './openai_compatible.js';
 
 export type { OpenAIResponsesDriverOptions } from '../driver-options.js';
@@ -12,9 +12,25 @@ export type { OpenAIResponsesDriverOptions } from '../driver-options.js';
  * This can be used with any service that implements the OpenAI API spec,
  * such as xAI (Grok), LM Studio, Ollama, vLLM, LocalAI, etc.
  */
+/**
+ * Family rules for models served by OpenAI-compatible Responses endpoints such as OpenRouter. They apply to any such
+ * endpoint serving the model ID, not to one host.
+ */
+const OPENAI_COMPATIBLE_RESPONSES_POLICY: OpenAIResponsesPolicy = {
+    // OpenRouter's OpenAI-compatible Responses surface advertises native structured output for GLM 5.3, but the model
+    // returns unconstrained prose and downstream validation fails. Keep this generation on the existing prompt-schema
+    // fallback; later GLM generations remain eligible for native support unless runtime evidence says otherwise.
+    supportsSchema: (model) => (/^z-ai\/glm-5\.3(?:$|[-/:])/.test(model) ? false : undefined),
+    // OpenRouter routes `minimax/` models across many hosts, and most do not enforce a JSON schema: some downgrade it
+    // to JSON mode and return `{}`, others ignore it. The prompt schema gives every host the shape, while hosts that
+    // enforce the schema still receive it natively.
+    supplementsSchemaInPrompt: (model) => /^minimax\//i.test(model),
+};
+
 export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.openai_compatible;
+    override readonly responsesPolicy = OPENAI_COMPATIBLE_RESPONSES_POLICY;
 
     constructor(opts: OpenAIResponsesDriverOptions) {
         super(opts);

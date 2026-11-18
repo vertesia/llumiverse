@@ -53,7 +53,7 @@ import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './mod
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
-import { VertexAIResponsesDelegate, type VertexAIResponsesPrompt } from './models/openai_responses.js';
+import type { VertexAIResponsesPrompt } from './models/openai_responses.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -111,8 +111,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private anthropicClients: Map<string, AnthropicVertex> = new Map();
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
-    /** One Responses client per publisher and location, for publishers served by the OpenAI Responses API. */
-    private responsesDelegates: Map<string, VertexAIResponsesDelegate> = new Map();
     /** OpenAI SDK clients by API root, for Vertex's OpenAI-compatible and publisher endpoints. */
     private vertexOpenAIClients: Map<string, OpenAI> = new Map();
     googleGenAI: GoogleGenAI | undefined;
@@ -355,16 +353,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         );
     }
 
-    /** The Responses API of a publisher (`.../publishers/meta/v1/responses`), through the OpenAI SDK. */
-    public getResponsesDelegate(publisher: string, region: string): VertexAIResponsesDelegate {
-        const cacheKey = `${publisher}:${region}:${this.options.project}`;
-        let delegate = this.responsesDelegates.get(cacheKey);
-        if (!delegate) {
-            const service = this.getOpenAIClientForRegion(region, 'v1', undefined, `/publishers/${publisher}/v1`);
-            delegate = new VertexAIResponsesDelegate(this.options, service);
-            this.responsesDelegates.set(cacheKey, delegate);
-        }
-        return delegate;
+    /** The OpenAI SDK client for a publisher's Responses API (`.../publishers/meta/v1/responses`). */
+    public getResponsesClient(publisher: string, region: string): OpenAI {
+        return this.getOpenAIClientForRegion(region, 'v1', undefined, `/publishers/${publisher}/v1`);
+    }
+
+    /** Per-request SDK options (signal, and the timeout of an execution-level `httpTimeout`). */
+    public getRequestOptions(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        signal?: AbortSignal,
+    ): { signal?: AbortSignal; timeout?: number } | undefined {
+        return this.getDriverRequestOptions(options, signal);
     }
 
     public getRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {

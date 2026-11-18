@@ -28,6 +28,7 @@ import OpenAI from 'openai';
 import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
 import { canStreamImage } from '../openai/images.js';
+import { azureResponsesPolicy } from '../openai/azure_openai.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     normalizeOpenAIChatCompletionsResponse,
@@ -86,6 +87,7 @@ function trimTrailingSlashes(endpoint: string): string {
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
+    override readonly responsesPolicy = azureResponsesPolicy((model) => this.getResponsesRequestModel(model));
 
     constructor(
         service: OpenAI,

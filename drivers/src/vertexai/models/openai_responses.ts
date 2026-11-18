@@ -1,3 +1,4 @@
+import { isVertexOpenAIResponsesModel } from '@llumiverse/common';
 import {
     type AIModel,
     type Completion,
@@ -10,35 +11,44 @@ import {
     Providers,
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
-import type { VertexAIDriverOptions } from '../../driver-options.js';
-import { OpenAIResponsesDriverBase } from '../../openai/index.js';
+import {
+    formatOpenAIResponsesPrompt,
+    type OpenAIResponsesContext,
+    type OpenAIResponsesPolicy,
+    OpenAIResponsesProtocol,
+} from '../../openai/index.js';
+import { formatOpenAICompatibleLlumiverseError } from '../../openai/openai_compatible.js';
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 
 export type VertexAIResponsesPrompt = OpenAI.Responses.ResponseInputItem[];
 
 /**
- * Runs the shared OpenAI Responses protocol against a Vertex publisher's Responses endpoint
- * (`.../locations/{location}/publishers/{publisher}/v1/responses`), with Vertex capability metadata.
+ * Where Vertex's publisher Responses endpoints differ from OpenAI's.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai
  */
-export class VertexAIResponsesDelegate extends OpenAIResponsesDriverBase {
-    readonly provider = Providers.vertexai;
-    service: OpenAI;
+const VERTEX_RESPONSES_POLICY: OpenAIResponsesPolicy = {
+    // Vertex constrains output to the schema without showing it to the model, and emits the properties
+    // alphabetically; without the schema in the prompt, Muse fills the constrained fields with wrong or garbled
+    // values. OpenAI's GPT models are the exception: OpenAI's Responses API enforces the schema natively, so they stay
+    // native-only until measured on Vertex.
+    supplementsSchemaInPrompt: (model) => !isVertexOpenAIResponsesModel(model),
+    // Vertex lists reasoning summaries as unsupported for OpenAI's models.
+    requestsReasoningSummary: (model) => !isVertexOpenAIResponsesModel(model),
+};
 
-    constructor(opts: VertexAIDriverOptions, service: OpenAI) {
-        super(opts);
-        this.service = service;
-    }
-
-    /** The endpoint takes the bare model ID (`muse-wonder-1.0`), not the Vertex resource path. */
-    override getResponsesRequestModel(model: string): string {
-        const name = model.split('/').pop() ?? model;
-        const version = name.lastIndexOf('@');
-        return version > -1 ? name.slice(0, version) : name;
-    }
+/** The endpoint takes the bare model ID (`muse-wonder-1.0`), not the Vertex resource path. */
+function publisherRequestModel(model: string): string {
+    const name = model.split('/').pop() ?? model;
+    const version = name.lastIndexOf('@');
+    return version > -1 ? name.slice(0, version) : name;
 }
 
-/** Vertex models served by a publisher's OpenAI-compatible Responses API, such as Meta Muse. */
+/**
+ * Vertex models served by a publisher's OpenAI-compatible Responses API
+ * (`.../locations/{location}/publishers/{publisher}/v1/responses`), such as Meta Muse and OpenAI GPT.
+ */
 export class VertexAIResponsesModelDefinition implements ModelDefinition<VertexAIResponsesPrompt> {
     model: AIModel;
 
@@ -56,8 +66,19 @@ export class VertexAIResponsesModelDefinition implements ModelDefinition<VertexA
         } as AIModel;
     }
 
-    private delegate(driver: VertexAIDriver): VertexAIResponsesDelegate {
-        return driver.getResponsesDelegate(this.publisher, this.region);
+    private context(driver: VertexAIDriver): OpenAIResponsesContext {
+        return {
+            provider: Providers.vertexai,
+            logger: driver.logger,
+            responsesPolicy: VERTEX_RESPONSES_POLICY,
+            getResponsesService: () => driver.getResponsesClient(this.publisher, this.region),
+            getResponsesRequestModel: publisherRequestModel,
+            getPromptCacheSourceModel: (model) => model.split('::').pop() ?? model,
+        };
+    }
+
+    private protocol(driver: VertexAIDriver): OpenAIResponsesProtocol {
+        return new OpenAIResponsesProtocol((options, signal) => driver.getRequestOptions(options, signal));
     }
 
     createPrompt(
@@ -65,7 +86,10 @@ export class VertexAIResponsesModelDefinition implements ModelDefinition<VertexA
         segments: PromptSegment[],
         options: ExecutionOptions,
     ): Promise<VertexAIResponsesPrompt> {
-        return this.delegate(driver).createPrompt(segments, options);
+        if (options.format) {
+            return Promise.resolve(options.format(segments, options.result_schema) as VertexAIResponsesPrompt);
+        }
+        return formatOpenAIResponsesPrompt(this.context(driver), segments, options);
     }
 
     requestTextCompletion(
@@ -74,7 +98,7 @@ export class VertexAIResponsesModelDefinition implements ModelDefinition<VertexA
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        return this.delegate(driver).requestTextCompletion(prompt, options, signal);
+        return this.protocol(driver).requestTextCompletion(this.context(driver), prompt, options, signal);
     }
 
     requestTextCompletionStream(
@@ -83,10 +107,15 @@ export class VertexAIResponsesModelDefinition implements ModelDefinition<VertexA
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return this.delegate(driver).requestTextCompletionStream(prompt, options, signal);
+        return this.protocol(driver).requestTextCompletionStream(this.context(driver), prompt, options, signal);
     }
 
-    formatLlumiverseError(driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-        return this.delegate(driver).formatLlumiverseError(error, context);
+    /** OpenAI SDK errors keep the OpenAI-compatible format; other errors take the Vertex driver's default. */
+    formatLlumiverseError(
+        _driver: VertexAIDriver,
+        error: unknown,
+        context: LlumiverseErrorContext,
+    ): LlumiverseError | undefined {
+        return formatOpenAICompatibleLlumiverseError(error, context);
     }
 }

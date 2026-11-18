@@ -47,9 +47,13 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
     ): { result: Completion; options: ExecutionOptions };
     /**
      * Format provider-specific errors into standardized LlumiverseError.
-     * Optional - if not provided, VertexAIDriver will use default error handling.
+     * Optional: without it, or when it returns undefined, VertexAIDriver uses its default error handling.
      */
-    formatLlumiverseError?(driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError;
+    formatLlumiverseError?(
+        driver: VertexAIDriver,
+        error: unknown,
+        context: LlumiverseErrorContext,
+    ): LlumiverseError | undefined;
 }
 
 function isBareClaudeId(modelName: string): boolean {
