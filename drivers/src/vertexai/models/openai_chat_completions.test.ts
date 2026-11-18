@@ -651,6 +651,75 @@ describe('Vertex MaaS Chat Completions through the OpenAI SDK', () => {
         );
     });
 
+    function sseResponse(chunks: unknown[]) {
+        const body = [...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`), 'data: [DONE]\n\n'].join('');
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }
+
+    async function stream(model: string) {
+        const chunk = (delta: object, finish_reason: string | null = null) => ({
+            id: 'chatcmpl-1',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'm',
+            choices: [{ index: 0, delta, finish_reason }],
+        });
+        const fetchMock = vi.fn(async () =>
+            sseResponse([
+                chunk({ role: 'assistant', content: 'o' }),
+                chunk({ content: 'k' }, 'stop'),
+                { ...chunk({}), choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
+            ]),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        const completionStream = await driver.stream([{ role: PromptRole.user, content: 'hello' }], {
+            model,
+            model_options: { _option_id: 'text-fallback' },
+        });
+        let text = '';
+        for await (const part of completionStream) text += part;
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        return { url: String(url), body: JSON.parse(String(init.body)), text, completion: completionStream.completion };
+    }
+
+    it('streams MaaS models through the SDK and asks for usage', async () => {
+        const { url, body, text, completion } = await stream('locations/global/publishers/zai-org/models/glm-5.2-maas');
+        expect(url).toBe(
+            'https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions',
+        );
+        expect(body).toMatchObject({ stream: true, stream_options: { include_usage: true } });
+        expect(text).toBe('ok');
+        expect(completion?.token_usage).toMatchObject({ prompt: 3, result: 2 });
+    });
+
+    it('streams regional Mistral models from their streamRawPredict path', async () => {
+        const { url, body, text } = await stream(
+            'locations/europe-west4/publishers/mistralai/models/mistral-small-2503',
+        );
+        expect(url).toBe(
+            'https://europe-west4-aiplatform.googleapis.com/v1/projects/test-project/locations/europe-west4/publishers/mistralai/models/mistral-small-2503:streamRawPredict',
+        );
+        expect(body.stream).toBe(true);
+        expect(text).toBe('ok');
+    });
+
+    it('reports a provider error with its status code', async () => {
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(JSON.stringify({ error: { code: 429, message: 'Resource exhausted' } }), {
+                    status: 429,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: 'hello' }], {
+                model: 'locations/global/publishers/zai-org/models/glm-5.2-maas',
+                model_options: { _option_id: 'text-fallback' },
+            }),
+        ).rejects.toMatchObject({ code: 429, retryable: true });
+    });
+
     it('posts regional Mistral models to their publisher rawPredict path', async () => {
         const { url } = await send('locations/europe-west4/publishers/mistralai/models/mistral-small-2503');
         expect(url).toBe(

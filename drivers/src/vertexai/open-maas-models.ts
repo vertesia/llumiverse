@@ -177,7 +177,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
 
 /** Google-hosted MaaS models on the OpenAI-compatible endpoint carry the `-maas` suffix; xAI models do not. */
 function isGoogleHostedMaaSModel(model: string): boolean {
-    return /-maas$/.test(model.toLowerCase().split('/').pop()?.split('@')[0] ?? '');
+    return /-maas$/.test(vertexModelName(model));
+}
+
+/** The lowercase model name of a Vertex model ID, without its path or `@version`. */
+function vertexModelName(model: string): string {
+    return model.toLowerCase().split('/').pop()?.split('@')[0] ?? '';
 }
 
 /**
@@ -206,8 +211,7 @@ export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): bo
  * or not. Without a schema, the same tool-offering requests answered 12/12.
  */
 export function omitsVertexOpenMaaSResultSchemaFormatWithTools(model: string): boolean {
-    const name = model.toLowerCase().split('/').pop() ?? '';
-    return isGoogleHostedMaaSModel(model) && !name.startsWith('gpt-oss');
+    return isGoogleHostedMaaSModel(model) && !vertexModelName(model).startsWith('gpt-oss');
 }
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {

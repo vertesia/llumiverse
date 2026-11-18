@@ -1065,7 +1065,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
  * 404, so they are not listed. Read from the listing's own call-to-action metadata, so a later API release of the
  * same model family is still listed.
  */
-export function isSelfDeployOnlyPublisherModel(model: protos.google.cloud.aiplatform.v1beta1.IPublisherModel): boolean {
+function isSelfDeployOnlyPublisherModel(model: protos.google.cloud.aiplatform.v1beta1.IPublisherModel): boolean {
     const actions = model.supportedActions;
     return Boolean(actions?.deploy || actions?.multiDeployVertex);
 }

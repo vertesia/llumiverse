@@ -32,7 +32,12 @@ export function extractAndParseJSON(text: string): JSONValue {
         // today is unchanged.
         const answer = textAfterEchoedResultSchema(text);
         if (answer === undefined) throw error;
-        return parseJSON(extractJsonFromText(answer));
+        try {
+            return parseJSON(extractJsonFromText(answer));
+        } catch {
+            // The original error describes the whole reply, which is what the caller sees.
+            throw error;
+        }
     }
 }
 

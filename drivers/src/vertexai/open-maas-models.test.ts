@@ -435,7 +435,7 @@ describe('Vertex open MaaS result schema in the prompt', () => {
         expect(promptHasSchema(payload)).toBe(true);
     });
 
-    it('keeps the native schema with tools for gpt-oss, which answers tool results in prose without it', async () => {
+    it('keeps the native schema with tools for gpt-oss, which returns empty answers without it', async () => {
         const payload = await payloadFor('locations/global/publishers/openai/models/gpt-oss-120b-maas', true);
         expect(payload.tools).toHaveLength(1);
         expect(payload.response_format?.type).toBe('json_schema');

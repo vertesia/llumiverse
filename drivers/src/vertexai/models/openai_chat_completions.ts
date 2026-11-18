@@ -101,16 +101,14 @@ export class OpenAIChatCompletionsModelDefinition
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
         const requestOptions = this.requestOptions(driver, options, signal);
-        if (this.vertexOptions.endpointPath) {
+        const streamingPath = this.vertexOptions.streamingEndpointPath ?? this.vertexOptions.endpointPath;
+        if (streamingPath) {
             const client = this.getClient(driver, '');
-            const stream = (await client.post(
-                `/${this.vertexOptions.streamingEndpointPath ?? this.vertexOptions.endpointPath}`,
-                {
-                    body: this.preparePayload(driver, { ...payload, stream: true }),
-                    stream: true,
-                    ...requestOptions,
-                },
-            )) as Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
+            const stream = (await client.post(`/${streamingPath}`, {
+                body: this.preparePayload(driver, { ...payload, stream: true }),
+                stream: true,
+                ...requestOptions,
+            })) as Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
             return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
                 stream.controller.abort(),
             );
