@@ -200,8 +200,10 @@ export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): bo
  * Gemma 4 and Llama 4 Scout made no tool call in 3/3 requests each, GLM 5.2 in 2/3, and Llama 4 Maverick answered
  * 500. With the schema only in the prompt, each of them called the tool, then returned valid JSON with its result.
  *
- * gpt-oss is the exception: it calls the tool, then answers the tool result in prose unless the schema is restated
- * after it, so it keeps the native schema (and its blocked tool calls) until that is addressed.
+ * gpt-oss is the exception, so it keeps the native schema and its blocked tool calls. Without it, gpt-oss-120b
+ * answers a tool result in prose unless the schema is restated after it, and even with the restatement, when tools
+ * are offered but not needed, it returns no content (only reasoning, finish `stop`) in 3-6 of 12 requests, streamed
+ * or not. Without a schema, the same tool-offering requests answered 12/12.
  */
 export function omitsVertexOpenMaaSResultSchemaFormatWithTools(model: string): boolean {
     const name = model.toLowerCase().split('/').pop() ?? '';

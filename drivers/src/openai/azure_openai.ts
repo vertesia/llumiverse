@@ -16,6 +16,7 @@ import { OpenAIResponsesDriverBase } from './index.js';
 export type { AzureOpenAIDriverOptions } from '../driver-options.js';
 
 import type { AzureOpenAIDriverOptions } from '../driver-options.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS } from './openai_compatible.js';
 
 /** Endpoints that the legacy AzureOpenAI client sends to its configured deployment, whatever the request's model. */
 const DEPLOYMENT_SCOPED_PATHS = new Set([
@@ -47,7 +48,8 @@ export class AzureOpenAIV1Client extends OpenAI {
     readonly apiVersion: undefined = undefined;
 
     constructor(options: AzureOpenAIV1Options) {
-        super(options);
+        // Azure takes no OpenAI organization or project; do not read them from the environment.
+        super({ ...NON_OPENAI_ACCOUNT_OPTIONS, ...options });
         const deployment = options.azureDeployment;
         this.deploymentName = deployment;
         if (deployment) {
@@ -181,6 +183,7 @@ export class AzureOpenAIDriver<S extends AzureOpenAIService = AzureOpenAIService
             // legacy client reads AZURE_OPENAI_ENDPOINT as it always has.
             this.service = new AzureOpenAI({
                 apiKey: opts.apiKey,
+                ...NON_OPENAI_ACCOUNT_OPTIONS,
                 azureADTokenProvider: opts.azureADTokenProvider,
                 endpoint: opts.endpoint,
                 apiVersion: opts.apiVersion ?? '2024-10-21',

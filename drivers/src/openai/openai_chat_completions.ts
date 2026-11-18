@@ -50,7 +50,7 @@ import {
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
-import { OpenAICompatibleDriverBase } from './openai_compatible.js';
+import { NON_OPENAI_ACCOUNT_OPTIONS, OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
@@ -1634,6 +1634,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         super(options);
         this.service = new OpenAI({
             apiKey: options.apiKey,
+            ...NON_OPENAI_ACCOUNT_OPTIONS,
             baseURL: options.endpoint,
             defaultHeaders: options.default_headers,
             fetch: this.getDriverFetch(),

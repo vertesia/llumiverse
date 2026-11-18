@@ -6,6 +6,7 @@ import {
     type ToolDefinition,
 } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
+import { withVertexOpenAIClient } from '../../test/__helpers__/vertex-openai-client.js';
 import { createFetchClient, type VertexAIDriver } from './index.js';
 import { selectVertexListingRegions } from './listing-regions.js';
 import { getModelDefinition } from './models.js';
@@ -38,7 +39,7 @@ function createDriverStub() {
     const getFetchClientForRegion = vi.fn(() => ({ post }));
 
     return {
-        driver: { getFetchClient, getFetchClientForRegion } as unknown as VertexAIDriver,
+        driver: withVertexOpenAIClient({ getFetchClient, getFetchClientForRegion }),
         getFetchClient,
         getFetchClientForRegion,
         post,

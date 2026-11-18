@@ -111,6 +111,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     /** One Responses client per publisher and location, for publishers served by the OpenAI Responses API. */
     private responsesDelegates: Map<string, VertexAIResponsesDelegate> = new Map();
+    /** OpenAI SDK clients by API root, for Vertex's OpenAI-compatible and publisher endpoints. */
+    private vertexOpenAIClients: Map<string, OpenAI> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIServiceTier: string | undefined;
@@ -318,24 +320,45 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return client;
     }
 
-    /**
-     * The Responses API of a publisher (`.../publishers/meta/v1/responses`), through the OpenAI SDK's Vertex provider.
-     * The provider authenticates every attempt with the driver's Google credentials, and keeps the SDK from reading
-     * OpenAI settings such as `OPENAI_ORG_ID` from the environment and sending them to Google.
-     */
-    public getResponsesDelegate(publisher: string, region: string): VertexAIResponsesDelegate {
-        const cacheKey = `${publisher}:${region}:${this.options.project}`;
-        let delegate = this.responsesDelegates.get(cacheKey);
-        if (!delegate) {
-            const service = new OpenAI({
-                provider: vertex({
-                    baseURL: `https://${getVertexApiHost(region)}/v1/projects/${this.options.project}/locations/${region}/publishers/${publisher}/v1`,
-                    credentials: this.googleAuth,
-                }),
+    /** One OpenAI SDK client per Vertex API root, authenticated by the SDK's Vertex provider. */
+    private getVertexOpenAIClient(baseURL: string): OpenAI {
+        let client = this.vertexOpenAIClients.get(baseURL);
+        if (!client) {
+            // The provider authenticates every attempt with the driver's Google credentials, and keeps the SDK from
+            // reading OpenAI settings such as `OPENAI_ORG_ID` from the environment and sending them to Google.
+            client = new OpenAI({
+                provider: vertex({ baseURL, credentials: this.googleAuth }),
                 fetch: this.getDriverFetch(),
                 maxRetries: 0,
                 timeout: this.getDriverRequestTimeoutMs(),
             });
+            this.vertexOpenAIClients.set(baseURL, client);
+        }
+        return client;
+    }
+
+    /**
+     * The OpenAI SDK client for a Vertex location, rooted at `.../projects/{project}/locations/{region}` plus
+     * `basePath`: `/endpoints/openapi` for the OpenAI-compatible MaaS endpoint, nothing for publisher model paths.
+     */
+    public getOpenAIClientForRegion(
+        region: string,
+        apiVersion = 'v1',
+        endpointRegion?: string,
+        basePath = '/endpoints/openapi',
+    ): OpenAI {
+        const host = getVertexApiHost(endpointRegion ?? region);
+        return this.getVertexOpenAIClient(
+            `https://${host}/${apiVersion}/projects/${this.options.project}/locations/${region}${basePath}`,
+        );
+    }
+
+    /** The Responses API of a publisher (`.../publishers/meta/v1/responses`), through the OpenAI SDK. */
+    public getResponsesDelegate(publisher: string, region: string): VertexAIResponsesDelegate {
+        const cacheKey = `${publisher}:${region}:${this.options.project}`;
+        let delegate = this.responsesDelegates.get(cacheKey);
+        if (!delegate) {
+            const service = this.getOpenAIClientForRegion(region, 'v1', undefined, `/publishers/${publisher}/v1`);
             delegate = new VertexAIResponsesDelegate(this.options, service);
             this.responsesDelegates.set(cacheKey, delegate);
         }

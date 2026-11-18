@@ -1,6 +1,7 @@
-import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
+import { type CompletionChunkObject, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withVertexOpenAIClient } from '../../../test/__helpers__/vertex-openai-client.js';
 import type { OpenAIChatCompletionsPrompt } from '../../openai/openai_chat_completions.js';
 import { VertexAIDriver } from '../index.js';
 import { OpenAIChatCompletionsModelDefinition } from './openai_chat_completions.js';
@@ -29,7 +30,8 @@ class TestVertexAIDriver extends VertexAIDriver {
         super({ project: 'test-project', region: 'us-central1' });
         this.googleAuth = {
             getAccessToken: async () => 'test-token',
-        } as VertexAIDriver['googleAuth'];
+            getRequestHeaders: async () => new Headers({ authorization: 'Bearer test-token' }),
+        } as unknown as VertexAIDriver['googleAuth'];
     }
 
     protected override getDriverFetch(): typeof fetch {
@@ -101,11 +103,11 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                 }),
             },
         ]);
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => stream,
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Weather?' }],
@@ -168,7 +170,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
             modelName: 'zai-org/glm-5-maas',
             region: 'global',
         });
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => ({
                     id: 'chatcmpl-1',
@@ -188,7 +190,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                     ],
                 }),
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -208,7 +210,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
             modelName: 'deepseek-ai/deepseek-v3.2-maas',
             region: 'global',
         });
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => ({
                     id: 'chatcmpl-1',
@@ -231,7 +233,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                     ],
                 }),
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -254,7 +256,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
             modelName: 'zai-org/glm-5-maas',
             region: 'global',
         });
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => ({
                     id: 'chatcmpl-1',
@@ -274,7 +276,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                     ],
                 }),
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -313,9 +315,9 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                 },
             ],
         }));
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({ post }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -373,9 +375,9 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                 },
             ],
         }));
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({ post }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Use a tool if needed' }],
@@ -448,11 +450,11 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                 }),
             },
         ]);
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => stream,
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -509,11 +511,11 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                 }),
             },
         ]);
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => stream,
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -573,11 +575,11 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
                 }),
             },
         ]);
-        const driver = {
+        const driver = withVertexOpenAIClient({
             getFetchClientForRegion: () => ({
                 post: async () => stream,
             }),
-        } as unknown as VertexAIDriver;
+        });
         const prompt: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
             messages: [{ role: 'user', content: 'Hello' }],
@@ -593,5 +595,66 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
             { type: 'thoughts', value: 'fallback' },
             { type: 'thoughts', value: ' text' },
         ]);
+    });
+});
+
+describe('Vertex MaaS Chat Completions through the OpenAI SDK', () => {
+    function completionResponse() {
+        return new Response(
+            JSON.stringify({
+                id: 'chatcmpl-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'm',
+                choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+    }
+
+    async function send(model: string) {
+        const fetchMock = vi.fn(async () => completionResponse());
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        await driver.execute([{ role: PromptRole.user, content: 'hello' }], {
+            model,
+            model_options: { _option_id: 'text-fallback' },
+        });
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        return { url: String(url), headers: new Headers(init.headers), body: JSON.parse(String(init.body)) };
+    }
+
+    afterEach(() => vi.unstubAllEnvs());
+
+    it('posts to the regional endpoint with the API version and Google auth, and no OpenAI account headers', async () => {
+        vi.stubEnv('OPENAI_ORG_ID', 'org-from-env');
+        vi.stubEnv('OPENAI_PROJECT_ID', 'proj_from_env');
+        const { url, headers, body } = await send(
+            'locations/us-east5/publishers/meta/models/llama-4-scout-17b-16e-instruct-maas',
+        );
+        expect(url).toBe(
+            'https://us-east5-aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-east5/endpoints/openapi/chat/completions',
+        );
+        expect(headers.get('authorization')).toBe('Bearer test-token');
+        expect(headers.get('openai-organization')).toBeNull();
+        expect(headers.get('openai-project')).toBeNull();
+        expect(body.model).toBe('meta/llama-4-scout-17b-16e-instruct-maas');
+        // Llama's safety settings stay in the literal `extra_body` field the MaaS endpoint reads.
+        expect(body.extra_body).toMatchObject({ google: { model_safety_settings: { enabled: false } } });
+        expect(body).not.toHaveProperty('google');
+    });
+
+    it('uses the global host for global MaaS models', async () => {
+        const { url } = await send('locations/global/publishers/zai-org/models/glm-5.2-maas');
+        expect(url).toBe(
+            'https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions',
+        );
+    });
+
+    it('posts regional Mistral models to their publisher rawPredict path', async () => {
+        const { url } = await send('locations/europe-west4/publishers/mistralai/models/mistral-small-2503');
+        expect(url).toBe(
+            'https://europe-west4-aiplatform.googleapis.com/v1/projects/test-project/locations/europe-west4/publishers/mistralai/models/mistral-small-2503:rawPredict',
+        );
     });
 });
