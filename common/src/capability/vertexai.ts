@@ -222,6 +222,11 @@ const TOOL_SUPPORT_MODELS = [
     'qwen',
 ];
 
+/** DeepSeek V4.1+ Flash MaaS services on Vertex, including dated snapshots such as `-flash-1017-maas`. */
+export function isVertexDeepSeekFlashMaaS(model: string): boolean {
+    return /-flash(?:-\d{4})?-maas$/.test(model) && isModelFamilyVersionGTE(model, 'deepseek-v', 4, 1);
+}
+
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some((pattern) => modelName.includes(pattern));
 }
@@ -260,8 +265,8 @@ export function getModelCapabilitiesVertexAI(model: string): {
     // Later generations inherit the latest known Vertex capabilities, including hosted-model differences.
     if (isModelFamilyVersionGTE(normalized, 'gemma-', 4, 0))
         return RECORD_MODEL_CAPABILITIES['gemma-4-26b-a4b-it-maas'];
-    if (normalized.endsWith('-flash-maas') && isModelFamilyVersionGTE(normalized, 'deepseek-v', 4, 1))
-        return RECORD_MODEL_CAPABILITIES['deepseek-v4.1-flash-maas'];
+    // Dated snapshots (`deepseek-v4.1-flash-1017-maas`) are separate services with the same capabilities.
+    if (isVertexDeepSeekFlashMaaS(normalized)) return RECORD_MODEL_CAPABILITIES['deepseek-v4.1-flash-maas'];
     if (isModelFamilyVersionGTE(normalized, 'mistral-small-', 2503, 0))
         return RECORD_MODEL_CAPABILITIES['mistral-small-2503'];
     if (isModelFamilyVersionGTE(normalized, 'mistral-medium-', 3, 0))

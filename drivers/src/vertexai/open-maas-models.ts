@@ -1,4 +1,4 @@
-import { getMaxOutputTokens, resolveModelProfile } from '@llumiverse/common';
+import { getMaxOutputTokens, isDeepSeekVersionGte, resolveModelProfile } from '@llumiverse/common';
 import { type AIModel, Providers } from '@llumiverse/core';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { selectVertexListingRegions } from './listing-regions.js';
@@ -67,6 +67,14 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
     {
         publisher: 'deepseek-ai',
         model: 'deepseek-v4.1-flash-maas',
+        requestPublisher: 'deepseek-ai',
+        regions: GLOBAL_REGIONS,
+    },
+    // A separate, dated service; the undated model is not repointed to it.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash-1017
+    {
+        publisher: 'deepseek-ai',
+        model: 'deepseek-v4.1-flash-1017-maas',
         requestPublisher: 'deepseek-ai',
         regions: GLOBAL_REGIONS,
     },
@@ -166,6 +174,25 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         regions: model === 'grok-4.7' || model === 'grok-4.6' ? ['global', 'us'] : GLOBAL_REGIONS,
     })),
 ] as const;
+
+/**
+ * Whether a Vertex open MaaS model also gets the result schema in the prompt, next to the native `response_format`.
+ * Vertex constrains DeepSeek V4.1+ output to the schema without showing the schema to the model, and emits the
+ * properties alphabetically, so the model can be forced to write a value before the fields it depends on (an
+ * invoice line's `amount` before its `quantity`). DeepSeek's own serving shows the schema in the prompt.
+ */
+export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): boolean {
+    return isDeepSeekVersionGte(model.toLowerCase().split('/').pop() ?? '', 4, 1);
+}
+
+/**
+ * Whether a Vertex open MaaS model gets no native `response_format` on requests that offer tools. With a schema set,
+ * Vertex never lets DeepSeek V4.1+ call a tool (the answer is invented JSON instead), while the schema in the prompt
+ * leaves tool calls working. Applies only to models that also get the schema in the prompt.
+ */
+export function omitsVertexOpenMaaSResultSchemaFormatWithTools(model: string): boolean {
+    return supplementsVertexOpenMaaSResultSchemaInPrompt(model);
+}
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {
     if (!publisher) return undefined;

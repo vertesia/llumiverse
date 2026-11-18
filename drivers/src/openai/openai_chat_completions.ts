@@ -40,7 +40,7 @@ import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
+import { logModelOptionException, resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { logModelRefusal } from '../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
@@ -1272,7 +1272,21 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
         }
 
-        if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
+        if (
+            options.result_schema &&
+            payload.tools?.length &&
+            this.options.omitResultSchemaFormatWithToolsForModel?.(options.model)
+        ) {
+            // Compatibility exception: the model's constrained decoding would block the tool calls this request
+            // offers. The schema stays in the prompt, and the returned JSON is still validated.
+            logModelOptionException(
+                logger,
+                options.model,
+                options,
+                ['result_schema'],
+                'result_schema_format_with_tools',
+            );
+        } else if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
             const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
             payload.response_format = {
                 type: 'json_schema',
