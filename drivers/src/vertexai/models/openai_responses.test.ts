@@ -1,4 +1,4 @@
-import { PromptRole } from '@llumiverse/core';
+import { type JSONSchema, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
 import { getModelDefinition } from '../models.js';
@@ -41,7 +41,7 @@ function responseBody(model: string) {
     };
 }
 
-async function captureRequest(model: string, modelOptions: Record<string, unknown>) {
+async function captureRequest(model: string, modelOptions: Record<string, unknown>, resultSchema?: JSONSchema) {
     const fetchMock = vi.fn(
         async () =>
             new Response(JSON.stringify(responseBody(model.split('/').pop() ?? model)), {
@@ -52,6 +52,7 @@ async function captureRequest(model: string, modelOptions: Record<string, unknow
     const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
     const completion = await driver.execute([{ role: PromptRole.user, content: 'Say hello' }], {
         model,
+        result_schema: resultSchema,
         model_options: { _option_id: 'openai-text', ...modelOptions },
     });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
@@ -107,5 +108,17 @@ describe('Vertex Meta Muse requests', () => {
         expect(url).toBe(
             'https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/meta/v1/responses',
         );
+    });
+
+    it('sends the result schema both natively and in the prompt', async () => {
+        const schema: JSONSchema = {
+            type: 'object',
+            properties: { color: { type: 'string' } },
+            required: ['color'],
+            additionalProperties: false,
+        };
+        const { body } = await captureRequest('publishers/meta/models/muse-spark-1.3', {}, schema);
+        expect(body.text.format).toMatchObject({ type: 'json_schema', strict: true });
+        expect(body.input[0].content[0].text).toContain(`<response_schema>${JSON.stringify(schema)}</response_schema>`);
     });
 });
