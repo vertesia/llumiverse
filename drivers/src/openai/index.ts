@@ -20,6 +20,7 @@ import {
     isCutOffFinishReason,
     isDedicatedInferenceModel,
     isJSONObjectText,
+    isMetaMuseModel,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
     type JSONSchema,
@@ -634,7 +635,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.azure_foundry
         | Providers.bedrock
         | Providers.bedrock_mantle
-        | Providers.openai_compatible;
+        | Providers.openai_compatible
+        | Providers.vertexai;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 
@@ -1525,6 +1527,9 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
  * A family rule: it applies to any OpenAI-compatible endpoint serving a `minimax/` model ID, not only OpenRouter.
  */
 function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
+    // Vertex constrains Muse output to the schema but reorders its properties, and without the schema in the prompt
+    // the model fills the constrained fields with wrong or garbled values. The prompt copy restores the answers.
+    if (provider === Providers.vertexai && isMetaMuseModel(model.split('/').pop() ?? model)) return true;
     return provider === Providers.openai_compatible && /^minimax\//i.test(model);
 }
 

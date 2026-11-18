@@ -1,6 +1,7 @@
 import { getGeminiModelLimits } from '../options/gemini-limits.js';
 import {
     isGeminiLongDecodeModel,
+    isMetaMuseModel,
     isModelFamilyVersionGTE,
     isSingleDigitGrokVersionGte,
 } from '../options/version-parsing.js';
@@ -26,6 +27,12 @@ const MODEL_LIMITS: Readonly<Record<string, VertexAIModelLimits>> = {
     'grok-4.20-non-reasoning': { context_window: 2_000_000 },
     'grok-4.1-fast-reasoning': { context_window: 128_000 },
     'grok-4.1-fast-non-reasoning': { context_window: 128_000 },
+    // Vertex documents a 1,048,576-token input limit for every Muse model, and an output limit only for Ember.
+    // The API itself accepts any output budget that fits in the window left after the input.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
+    'muse-ember-1.0': { context_window: 1_048_576, max_output_tokens: 524_288 },
+    'muse-wonder-1.0': { context_window: 1_048_576 },
+    'muse-spark-1.3': { context_window: 1_048_576 },
     'mistral-small-2503': { context_window: 128_000 },
     'mistral-medium-3': { context_window: 128_000 },
     'codestral-2': { context_window: 128_000 },
@@ -50,6 +57,9 @@ export function getVertexAIModelLimits(model: string): VertexAIModelLimits {
     }
     if (isSingleDigitGrokVersionGte(modelName, 4, 6)) return MODEL_LIMITS['grok-4.7'];
     if (isSingleDigitGrokVersionGte(modelName, 4, 3)) return MODEL_LIMITS['grok-4.3'];
+    if (isModelFamilyVersionGTE(modelName, 'muse-ember-', 1, 0)) return MODEL_LIMITS['muse-ember-1.0'];
+    // Glimmer, the small Muse model, is not on Vertex; keep its own canonical 128K window if it arrives.
+    if (isMetaMuseModel(modelName) && !modelName.includes('glimmer')) return MODEL_LIMITS['muse-wonder-1.0'];
     if (isModelFamilyVersionGTE(modelName, 'mistral-small-', 2503, 0)) return MODEL_LIMITS['mistral-small-2503'];
     if (isModelFamilyVersionGTE(modelName, 'mistral-medium-', 3, 0)) return MODEL_LIMITS['mistral-medium-3'];
     if (isModelFamilyVersionGTE(modelName, 'codestral-', 2, 0)) return MODEL_LIMITS['codestral-2'];
