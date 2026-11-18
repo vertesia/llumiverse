@@ -141,6 +141,13 @@ const RECORD_FAMILY_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: true,
     },
+    // Vertex serves Muse with text and image input only, unlike the source models' audio and video.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta
+    'muse-': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
     'grok-3': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },

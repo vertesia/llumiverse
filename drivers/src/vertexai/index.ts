@@ -12,6 +12,7 @@ import {
     getConversationMeta,
     type HttpTimeoutOptions,
     incrementConversationTurn,
+    isMetaMuseModel,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
@@ -26,10 +27,12 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth } from 'google-auth-library';
+import OpenAI from 'openai';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
+import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
 import {
     type ClaudePrompt,
     claudeHeartbeatKeepTurns,
@@ -47,6 +50,7 @@ import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './mod
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
+import { VertexAIResponsesDelegate, type VertexAIResponsesPrompt } from './models/openai_responses.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -90,7 +94,8 @@ export type VertexAIPrompt =
     | OmniVideoPrompt
     | GenerateContentPrompt
     | ClaudePrompt
-    | OpenAIChatCompletionsPrompt;
+    | OpenAIChatCompletionsPrompt
+    | VertexAIResponsesPrompt;
 
 export { trimModelName };
 
@@ -103,6 +108,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private anthropicClients: Map<string, AnthropicVertex> = new Map();
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
+    /** One Responses client per publisher and location, for publishers served by the OpenAI Responses API. */
+    private responsesDelegates: Map<string, VertexAIResponsesDelegate> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIServiceTier: string | undefined;
@@ -306,6 +313,28 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return client;
     }
 
+    /** The Responses API of a publisher (`.../publishers/meta/v1/responses`), through the OpenAI SDK. */
+    public getResponsesDelegate(publisher: string, region: string): VertexAIResponsesDelegate {
+        const cacheKey = `${publisher}:${region}:${this.options.project}`;
+        let delegate = this.responsesDelegates.get(cacheKey);
+        if (!delegate) {
+            const service = new OpenAI({
+                baseURL: `https://${getVertexApiHost(region)}/v1/projects/${this.options.project}/locations/${region}/publishers/${publisher}/v1`,
+                apiKey: async () => {
+                    const token = await this.googleAuth.getAccessToken();
+                    if (!token) throw new Error('Google authentication returned no access token');
+                    return token;
+                },
+                fetch: this.getDriverFetch(),
+                maxRetries: 0,
+                timeout: this.getDriverRequestTimeoutMs(),
+            });
+            delegate = new VertexAIResponsesDelegate(this.options, service);
+            this.responsesDelegates.set(cacheKey, delegate);
+        }
+        return delegate;
+    }
+
     public getRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
         return this.getDriverRequestTimeoutMs(httpTimeout);
     }
@@ -416,6 +445,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public formatDebugPrompt(prompt: VertexAIPrompt): VertexAIPrompt {
+        if (Array.isArray(prompt)) {
+            return formatOpenAIDebugPrompt(prompt);
+        }
         if (isClaudePrompt(prompt)) {
             return formatClaudeDebugPrompt(prompt);
         }
@@ -746,6 +778,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 excluded: [],
                 additional: [],
             },
+            meta: {
+                // Only Muse is served by Meta's Responses API; Llama comes from VERTEX_OPEN_MAAS_MODELS.
+                families: ['muse-'],
+                // Open-weight Model Garden entries, which the Responses API answers with 404.
+                excluded: ['muse-glimmer', '-open'],
+                additional: [],
+            },
         } as const;
 
         type Publisher = keyof typeof publisherConfig;
@@ -990,6 +1029,7 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
     const modelName = modelId.split('/').pop() ?? modelId;
     return (
         publisher === 'xai' ||
+        (publisher === 'meta' && isMetaMuseModel(modelName)) ||
         (publisher === 'google' && (isGeminiOmniVideoModel(modelName) || isGeminiWithoutRegionalEndpoints(modelName)))
     );
 }
@@ -1013,6 +1053,13 @@ function isExecutableGoogleModel(model: Model): boolean {
 
 //'us-central1-aiplatform.googleapis.com',
 const API_BASE_PATH = 'aiplatform.googleapis.com';
+/** The Vertex API hostname of a location. */
+export function getVertexApiHost(region: string): string {
+    if (region === 'global') return API_BASE_PATH;
+    if (region === 'us') return 'aiplatform.us.rep.googleapis.com';
+    return `${region}-${API_BASE_PATH}`;
+}
+
 export function createFetchClient({
     region,
     project,
@@ -1031,14 +1078,7 @@ export function createFetchClient({
     // For the "global" region, use aiplatform.googleapis.com without any prefix.
     // The US multi-region uses the dedicated aiplatform.us.rep.googleapis.com hostname.
     // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
-    const hostRegion = endpointRegion ?? region;
-    const vertexBaseEndpoint =
-        apiEndpoint ??
-        (hostRegion === 'global'
-            ? API_BASE_PATH
-            : hostRegion === 'us'
-              ? 'aiplatform.us.rep.googleapis.com'
-              : `${hostRegion}-${API_BASE_PATH}`);
+    const vertexBaseEndpoint = apiEndpoint ?? getVertexApiHost(endpointRegion ?? region);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,
