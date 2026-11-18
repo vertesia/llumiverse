@@ -131,13 +131,14 @@ export function isGeminiOmniVersionGte(model: string, major: number, minor: numb
 }
 
 /**
- * Model-specific exception: Gemini 4 Hydrogen adds the XHIGH thinking level, which Gemini 4 Argon and Carbon do not
- * offer, so it follows the Hydrogen tier rather than a version. The tier is matched on any generation and suffix
- * (`gemini-4-hydrogen`, `google/gemini-4-hydrogen:batch`) so later Hydrogen releases keep it.
+ * Model-specific exception: Gemini 4 Hydrogen and Neon add the XHIGH thinking level, which Gemini 4 Argon and Carbon
+ * do not offer, so it follows those tiers rather than a version. The tiers are matched on any generation and suffix
+ * (`gemini-4-hydrogen`, `google/gemini-4-neon:batch`) so later Hydrogen and Neon releases keep it.
  * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-neon
  */
 export function supportsGeminiXHighThinking(model: string): boolean {
-    return /(?:^|[/.])gemini-\d+(?:\.\d+)?-hydrogen(?:$|[^a-z0-9])/.test(model.toLowerCase());
+    return /(?:^|[/.])gemini-\d+(?:\.\d+)?-(?:hydrogen|neon)(?:$|[^a-z0-9])/.test(model.toLowerCase());
 }
 
 /**
