@@ -18,6 +18,8 @@ minimumReleaseAgeExclude:
   - openai@7.56.0
   # ThinkingLevel.XHIGH (Gemini 4 Hydrogen) and the new FinishReason values.
   - '@google/genai@3.3.0'
+  # documentMetadata, spreadsheetMetadata and audioMetadata on Vertex parts (file selections); older releases drop them.
+  - '@google/genai@3.5.0'
   - '@vertesia/*'
   - '@llumiverse/*'
 

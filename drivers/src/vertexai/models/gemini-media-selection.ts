@@ -1,16 +1,25 @@
+import type {
+    AudioMetadata,
+    DocumentMetadata,
+    DocumentMetadataContentLayer,
+    SpreadsheetMetadata,
+    SpreadsheetMetadataContentLayer,
+    VideoMetadata,
+    VideoMetadataContentLayer,
+} from '@google/genai';
 import type { DataSource } from '@llumiverse/core';
 
 /**
- * The Gemini `Part` and `FunctionResponsePart` fields that select part of a file. They are typed here because the
- * installed SDK types predate them; @google/genai 3.5.0 is the first release whose request converters forward them.
+ * The Gemini `Part` and `FunctionResponsePart` fields that select part of a file. @google/genai 3.5.0 is the first
+ * release whose Vertex request converters forward them; earlier releases drop them without an error.
  * https://ai.google.dev/gemini-api/docs/document-processing#customize-document-processing
  * https://ai.google.dev/gemini-api/docs/audio#clipping-intervals
  */
 export interface GeminiMediaSelectionFields {
-    documentMetadata?: { startPage?: number; endPage?: number; contentLayers?: string[] };
-    spreadsheetMetadata?: { sheetIndex?: number; visibleCells?: string; contentLayers?: string[] };
-    audioMetadata?: { startOffset?: string; endOffset?: string };
-    videoMetadata?: { startOffset?: string; endOffset?: string; contentLayers?: string[] };
+    documentMetadata?: DocumentMetadata;
+    spreadsheetMetadata?: SpreadsheetMetadata;
+    audioMetadata?: AudioMetadata;
+    videoMetadata?: VideoMetadata;
 }
 
 const SPREADSHEET_MIME_TYPES = new Set([
@@ -24,9 +33,12 @@ function offset(seconds: number | undefined): string | undefined {
     return seconds === undefined ? undefined : `${seconds}s`;
 }
 
-/** Gemini spells content layers in upper case (`PAGE_TEXT`); llumiverse accepts either case. */
-function contentLayers(layers: string[] | undefined): string[] | undefined {
-    return layers?.map((layer) => layer.toUpperCase());
+/**
+ * Gemini spells content layers in upper case (`PAGE_TEXT`); llumiverse accepts either case. Names outside the SDK
+ * enums are passed through, typed as that enum, so Gemini validates them and newer layers work without a release.
+ */
+function contentLayers<Layer extends string>(layers: string[] | undefined): Layer[] | undefined {
+    return layers?.map((layer) => layer.toUpperCase() as Layer);
 }
 
 function withoutUndefined<T extends object>(value: T): T {
@@ -44,8 +56,7 @@ export function geminiMediaSelectionFields(
 ): GeminiMediaSelectionFields {
     const selection = file.selection;
     if (!selection) return {};
-    const { pages, sheet, time } = selection;
-    const layers = contentLayers(selection.layers);
+    const { pages, sheet, time, layers } = selection;
     const ranges = [pages, sheet, time].filter((range) => range !== undefined).length;
     if (ranges > 1) {
         throw new Error(`The selection of "${file.name}" sets more than one of pages, sheet and time; set one`);
@@ -56,7 +67,11 @@ export function geminiMediaSelectionFields(
 
     if (pages) {
         return {
-            documentMetadata: withoutUndefined({ startPage: pages.start, endPage: pages.end, contentLayers: layers }),
+            documentMetadata: withoutUndefined({
+                startPage: pages.start,
+                endPage: pages.end,
+                contentLayers: contentLayers<DocumentMetadataContentLayer>(layers),
+            }),
         };
     }
     if (sheet) {
@@ -64,13 +79,20 @@ export function geminiMediaSelectionFields(
             spreadsheetMetadata: withoutUndefined({
                 sheetIndex: sheet.index,
                 visibleCells: sheet.cells,
-                contentLayers: layers,
+                contentLayers: contentLayers<SpreadsheetMetadataContentLayer>(layers),
             }),
         };
     }
     if (time) {
         const range = { startOffset: offset(time.start), endOffset: offset(time.end) };
-        if (isVideo) return { videoMetadata: withoutUndefined({ ...range, contentLayers: layers }) };
+        if (isVideo) {
+            return {
+                videoMetadata: withoutUndefined({
+                    ...range,
+                    contentLayers: contentLayers<VideoMetadataContentLayer>(layers),
+                }),
+            };
+        }
         if (isAudio) {
             if (layers) throw new Error(`Gemini has no content layers for audio; remove layers from "${file.name}"`);
             return { audioMetadata: withoutUndefined(range) };
@@ -78,8 +100,10 @@ export function geminiMediaSelectionFields(
         throw new Error(`A time range applies to audio or video, but "${file.name}" is ${file.mime_type}`);
     }
     if (!layers) return {};
-    if (isVideo) return { videoMetadata: { contentLayers: layers } };
+    if (isVideo) return { videoMetadata: { contentLayers: contentLayers<VideoMetadataContentLayer>(layers) } };
     if (isAudio) throw new Error(`Gemini has no content layers for audio; remove layers from "${file.name}"`);
-    if (SPREADSHEET_MIME_TYPES.has(mime)) return { spreadsheetMetadata: { contentLayers: layers } };
-    return { documentMetadata: { contentLayers: layers } };
+    if (SPREADSHEET_MIME_TYPES.has(mime)) {
+        return { spreadsheetMetadata: { contentLayers: contentLayers<SpreadsheetMetadataContentLayer>(layers) } };
+    }
+    return { documentMetadata: { contentLayers: contentLayers<DocumentMetadataContentLayer>(layers) } };
 }
