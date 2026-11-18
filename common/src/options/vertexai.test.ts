@@ -387,3 +387,53 @@ describe('Vertex Meta Muse metadata', () => {
         expect(profile.capabilities.input.audio).toBe(true);
     });
 });
+
+describe('Vertex DeepSeek V4.1 Flash metadata', () => {
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
+        // The dated 1017 service is separate from the undated one and has the same capabilities.
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-1017-maas',
+        // Later snapshots and generations inherit the same rules.
+        'publishers/deepseek-ai/models/deepseek-v4.1-flash-1203-maas',
+        'publishers/deepseek-ai/models/deepseek-v4.2-flash-maas',
+    ])('describes %s as Vertex serves it', (model) => {
+        const profile = resolveModelProfile(model, Providers.vertexai);
+        expect(profile).toMatchObject({ context_window: 1_048_576, max_output_tokens: 393_216 });
+        expect(profile.reasoning_effort_levels).toEqual(['minimal', 'low', 'medium', 'high', 'max']);
+        expect(getModelCapabilities(model, Providers.vertexai)).toMatchObject({
+            input: { text: true, image: true, video: false, audio: false },
+            tool_support: true,
+        });
+        expect(getMaxTokensLimitVertexAi(model)).toBe(393_216);
+
+        const options = getVertexAiOptions(model).options;
+        const effort = options.find((option) => option.name === 'effort');
+        expect(Object.values((effort as { enum: Record<string, string> }).enum)).toEqual([
+            'minimal',
+            'low',
+            'medium',
+            'high',
+            'max',
+        ]);
+        expect(effort).not.toHaveProperty('default');
+        expect(options.map((option) => option.name)).toContain('image_detail');
+    });
+
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
+        // Below the 4.1 floor: the snapshot pattern alone does not select the V4.1 Flash record.
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4-flash-maas',
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4-flash-0731-maas',
+    ])('keeps %s text-only and without an effort control', (model) => {
+        expect(getModelCapabilities(model, Providers.vertexai).input.image).toBe(false);
+        expect(getVertexAiOptions(model).options.map((option) => option.name)).not.toContain('effort');
+    });
+
+    it.each([
+        // Not a dated snapshot: the suffix between `-flash-` and `-maas` is not four digits.
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-lite-maas',
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-10170-maas',
+    ])('does not give %s the V4.1 Flash record', (model) => {
+        expect(getModelCapabilities(model, Providers.vertexai).input.image).toBe(false);
+    });
+});

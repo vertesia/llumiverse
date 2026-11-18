@@ -5,6 +5,7 @@ import {
     isModelFamilyVersionGTE,
     isSingleDigitGrokVersionGte,
 } from '../options/version-parsing.js';
+import { isVertexDeepSeekFlashMaaS } from './vertexai.js';
 
 interface VertexAIModelLimits {
     context_window?: number;
@@ -52,9 +53,7 @@ export function getVertexAIModelLimits(model: string): VertexAIModelLimits {
     if (modelName.endsWith('-maas') && isModelFamilyVersionGTE(modelName, 'glm-', 5, 2)) {
         return MODEL_LIMITS['glm-5.2-maas'];
     }
-    if (modelName.endsWith('-flash-maas') && isModelFamilyVersionGTE(modelName, 'deepseek-v', 4, 1)) {
-        return MODEL_LIMITS['deepseek-v4.1-flash-maas'];
-    }
+    if (isVertexDeepSeekFlashMaaS(modelName)) return MODEL_LIMITS['deepseek-v4.1-flash-maas'];
     if (isSingleDigitGrokVersionGte(modelName, 4, 6)) return MODEL_LIMITS['grok-4.7'];
     if (isSingleDigitGrokVersionGte(modelName, 4, 3)) return MODEL_LIMITS['grok-4.3'];
     if (isModelFamilyVersionGTE(modelName, 'muse-ember-', 1, 0)) return MODEL_LIMITS['muse-ember-1.0'];
