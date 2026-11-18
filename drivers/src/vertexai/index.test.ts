@@ -253,15 +253,18 @@ describe('VertexAIDriver OpenAI GPT listing', () => {
                 { name: 'publishers/openai/models/gpt-6-luna', supportedActions: { requestAccess: {} } },
                 { name: 'publishers/openai/models/gpt-6.1-sol', supportedActions: {} },
                 { name: 'publishers/openai/models/gpt-oss-120b-maas', supportedActions: {} },
+                // OpenAI models without a Responses route here are not listed.
+                { name: 'publishers/openai/models/gpt-image-2', supportedActions: {} },
+                { name: 'publishers/openai/models/gpt-realtime', supportedActions: {} },
             ],
         );
-        expect(await gptIds(driver)).toEqual(
-            expect.arrayContaining([
-                'locations/global/publishers/openai/models/gpt-6-luna',
-                'locations/global/publishers/openai/models/gpt-6.1-sol',
-            ]),
-        );
-        expect((await gptIds(driver)).length).toBe(2);
+        // Global, plus the US multi-region as the regional variant.
+        expect((await gptIds(driver)).sort()).toEqual([
+            'locations/global/publishers/openai/models/gpt-6-luna',
+            'locations/global/publishers/openai/models/gpt-6.1-sol',
+            'locations/us/publishers/openai/models/gpt-6-luna',
+            'locations/us/publishers/openai/models/gpt-6.1-sol',
+        ]);
     });
 });
 

@@ -135,6 +135,38 @@ describe('Vertex OpenAI GPT requests', () => {
         expect(body.include).toEqual(['reasoning.encrypted_content']);
     });
 
+    it('leaves out the reasoning summary on streamed requests too', async () => {
+        const events = [
+            { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 1, content_index: 0, delta: 'Hi' },
+            { type: 'response.completed', response: responseBody('gpt-6-luna', 'Hi') },
+        ];
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(
+                    events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+                    {
+                        status: 200,
+                        headers: { 'Content-Type': 'text/event-stream' },
+                    },
+                ),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Say hello' }], {
+            model: 'publishers/openai/models/gpt-6-luna',
+            model_options: { _option_id: 'openai-thinking', effort: 'low' },
+        });
+        let text = '';
+        for await (const chunk of stream) text += chunk;
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const body = JSON.parse(String(init.body));
+        expect(url).toBe(
+            'https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/openai/v1/responses',
+        );
+        expect(body).toMatchObject({ stream: true, model: 'gpt-6-luna', reasoning: { effort: 'low' } });
+        expect(body.reasoning).not.toHaveProperty('summary');
+        expect(text).toBe('Hi');
+    });
+
     it('sends the result schema natively, without a prompt copy', async () => {
         const { body } = await captureRequest('publishers/openai/models/gpt-6.1-sol', {}, schema);
         expect(body.text?.format).toMatchObject({ type: 'json_schema' });
