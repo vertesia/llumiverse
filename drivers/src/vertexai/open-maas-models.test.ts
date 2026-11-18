@@ -85,7 +85,8 @@ describe('Vertex open MaaS catalog', () => {
             VERTEX_OPEN_MAAS_MODELS.map((entry) => [`${entry.publisher}/${entry.model}`, entry.regions]),
         );
 
-        expect(catalog).toEqual({
+        // Each documented entry and its regions, without pinning the catalog size: adding a model stays compatible.
+        expect(catalog).toMatchObject({
             'deepseek-ai/deepseek-r1-0528-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.2-maas': ['global'],
             'deepseek-ai/deepseek-v4.1-flash-maas': ['global'],
@@ -405,41 +406,105 @@ describe('Vertex open MaaS result schema in the prompt', () => {
                 message.content.includes(`<response_schema>${JSON.stringify(schema)}</response_schema>`),
         );
 
-    it.each([
+    // Google-hosted MaaS models: the schema goes in the prompt too, and is left out natively on tool turns.
+    const hostedMaaS = [
         'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
         'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-1017-maas',
-        'publishers/deepseek-ai/models/deepseek-v4.2-flash-maas',
-    ])('sends the schema natively and in the prompt for %s', async (model) => {
-        const payload = await payloadFor(model);
-        expect(payload.response_format?.type).toBe('json_schema');
-        expect(promptHasSchema(payload)).toBe(true);
-    });
-
-    it.each([
         'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
         'locations/global/publishers/zai-org/models/glm-5.2-maas',
-    ])('keeps the schema native-only for %s', async (model) => {
-        const payload = await payloadFor(model);
-        expect(payload.response_format?.type).toBe('json_schema');
-        expect(promptHasSchema(payload)).toBe(false);
-    });
+        'locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas',
+        'locations/us-east5/publishers/meta/models/llama-4-scout-17b-16e-instruct-maas',
+        // A model the catalog does not list yet inherits the transport rule.
+        'publishers/qwen/models/qwen4-max-maas',
+    ];
 
-    it.each([
-        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-maas',
-        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-1017-maas',
-    ])('leaves out the native schema when %s is offered tools', async (model) => {
+    it.each([...hostedMaaS, 'locations/global/publishers/openai/models/gpt-oss-120b-maas'])(
+        'sends the schema natively and in the prompt for %s',
+        async (model) => {
+            const payload = await payloadFor(model);
+            expect(payload.response_format?.type).toBe('json_schema');
+            expect(promptHasSchema(payload)).toBe(true);
+        },
+    );
+
+    it.each(hostedMaaS)('leaves out the native schema when %s is offered tools', async (model) => {
         const payload = await payloadFor(model, true);
         expect(payload.tools).toHaveLength(1);
         expect(payload.response_format).toBeUndefined();
         expect(promptHasSchema(payload)).toBe(true);
     });
 
-    it.each([
-        'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
-        'locations/global/publishers/zai-org/models/glm-5.2-maas',
-    ])('keeps the native schema with tools for %s', async (model) => {
-        const payload = await payloadFor(model, true);
+    it('keeps the native schema with tools for gpt-oss, which answers tool results in prose without it', async () => {
+        const payload = await payloadFor('locations/global/publishers/openai/models/gpt-oss-120b-maas', true);
         expect(payload.tools).toHaveLength(1);
         expect(payload.response_format?.type).toBe('json_schema');
+        expect(promptHasSchema(payload)).toBe(true);
     });
+
+    it.each(['locations/global/publishers/xai/models/grok-4.7', 'publishers/xai/models/grok-5'])(
+        'keeps %s native-only, with and without tools',
+        async (model) => {
+            for (const withTools of [false, true]) {
+                const payload = await payloadFor(model, withTools);
+                expect(payload.response_format?.type).toBe('json_schema');
+                expect(promptHasSchema(payload)).toBe(false);
+            }
+        },
+    );
+
+    it('stores one schema copy across turns and replaces it when the schema changes', async () => {
+        const model = 'locations/global/publishers/zai-org/models/glm-5.2-maas';
+        const modelDefinition = getModelDefinition(model);
+        const shade: JSONSchema = {
+            type: 'object',
+            properties: { shade: { type: 'string' } },
+            required: ['shade'],
+            additionalProperties: false,
+        };
+        let conversation: unknown;
+        const sent: Array<Array<{ role: string; content: unknown }>> = [];
+        for (const result_schema of [schema, schema, schema, shade]) {
+            const options: ExecutionOptions = {
+                model,
+                result_schema,
+                conversation,
+                model_options: { _option_id: 'text-fallback' },
+            };
+            const prompt = await modelDefinition.createPrompt(
+                {} as VertexAIDriver,
+                [{ role: PromptRole.user, content: 'What colour is grass?' }],
+                options,
+            );
+            const stub = createDriverStub();
+            const completion = await modelDefinition.requestTextCompletion(stub.driver, prompt, options);
+            conversation = completion.conversation;
+            const call = stub.post.mock.calls[0] as unknown as [string, { payload: { messages: never[] } }];
+            sent.push(call[1].payload.messages);
+        }
+        const copies = (messages: Array<{ content: unknown }>) =>
+            messages.filter(
+                (message) => typeof message.content === 'string' && message.content.includes('<response_schema>'),
+            );
+        for (const messages of sent) expect(copies(messages)).toHaveLength(1);
+        // An unchanged schema keeps its first position, so the request prefix stays stable.
+        expect(JSON.stringify(sent[2].slice(0, 2))).toBe(JSON.stringify(sent[1].slice(0, 2)));
+        expect(String(copies(sent[3])[0].content)).toContain('"shade"');
+    });
+});
+
+describe('Vertex open MaaS publisher/model ids', () => {
+    it.each(VERTEX_OPEN_MAAS_MODELS.map((entry) => [`${entry.publisher}/${entry.model}`, entry] as const))(
+        'routes %s like its full resource path',
+        async (shortId, entry) => {
+            const full = await requestForModel(`publishers/${entry.publisher}/models/${entry.model}`);
+            const short = await requestForModel(shortId);
+            expect(getModelDefinition(shortId).constructor).toBe(
+                getModelDefinition(`publishers/${entry.publisher}/models/${entry.model}`).constructor,
+            );
+            expect(
+                (short.post.mock.calls[0] as unknown as [string, { payload: { model: string } }])[1].payload.model,
+            ).toBe((full.post.mock.calls[0] as unknown as [string, { payload: { model: string } }])[1].payload.model);
+            expect(short.getFetchClientForRegion.mock.calls[0]).toEqual(full.getFetchClientForRegion.mock.calls[0]);
+        },
+    );
 });

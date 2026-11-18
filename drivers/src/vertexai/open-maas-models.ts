@@ -1,4 +1,4 @@
-import { getMaxOutputTokens, isDeepSeekVersionGte, resolveModelProfile } from '@llumiverse/common';
+import { getMaxOutputTokens, resolveModelProfile } from '@llumiverse/common';
 import { type AIModel, Providers } from '@llumiverse/core';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { selectVertexListingRegions } from './listing-regions.js';
@@ -175,23 +175,37 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
     })),
 ] as const;
 
-/**
- * Whether a Vertex open MaaS model also gets the result schema in the prompt, next to the native `response_format`.
- * Vertex constrains DeepSeek V4.1+ output to the schema without showing the schema to the model, and emits the
- * properties alphabetically, so the model can be forced to write a value before the fields it depends on (an
- * invoice line's `amount` before its `quantity`). DeepSeek's own serving shows the schema in the prompt.
- */
-export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): boolean {
-    return isDeepSeekVersionGte(model.toLowerCase().split('/').pop() ?? '', 4, 1);
+/** Google-hosted MaaS models on the OpenAI-compatible endpoint carry the `-maas` suffix; xAI models do not. */
+function isGoogleHostedMaaSModel(model: string): boolean {
+    return /-maas$/.test(model.toLowerCase().split('/').pop()?.split('@')[0] ?? '');
 }
 
 /**
- * Whether a Vertex open MaaS model gets no native `response_format` on requests that offer tools. With a schema set,
- * Vertex never lets DeepSeek V4.1+ call a tool (the answer is invented JSON instead), while the schema in the prompt
- * leaves tool calls working. Applies only to models that also get the schema in the prompt.
+ * Whether a Vertex open MaaS model also gets the result schema in the prompt, next to the native `response_format`.
+ *
+ * For the Google-hosted `-maas` models, Vertex constrains the output to the schema without showing the schema to
+ * most of them (no prompt tokens are added) and emits the properties alphabetically, so a model can be forced to
+ * write a value before the fields it depends on. Measured: Gemma 4 extracted an invoice correctly 0/4 times without
+ * the prompt copy and 4/4 with it; DeepSeek V4.1, GLM 5.2, gpt-oss-120b and Llama 4 were unharmed by it. xAI's Grok
+ * is shown the schema and answered correctly without the copy, so it stays native-only.
+ */
+export function supplementsVertexOpenMaaSResultSchemaInPrompt(model: string): boolean {
+    return isGoogleHostedMaaSModel(model);
+}
+
+/**
+ * Whether a Vertex open MaaS model gets no native `response_format` on requests that offer tools.
+ *
+ * With a schema set, Vertex stops the Google-hosted `-maas` models calling tools: DeepSeek V4.1, gpt-oss-120b,
+ * Gemma 4 and Llama 4 Scout made no tool call in 3/3 requests each, GLM 5.2 in 2/3, and Llama 4 Maverick answered
+ * 500. With the schema only in the prompt, each of them called the tool, then returned valid JSON with its result.
+ *
+ * gpt-oss is the exception: it calls the tool, then answers the tool result in prose unless the schema is restated
+ * after it, so it keeps the native schema (and its blocked tool calls) until that is addressed.
  */
 export function omitsVertexOpenMaaSResultSchemaFormatWithTools(model: string): boolean {
-    return supplementsVertexOpenMaaSResultSchemaInPrompt(model);
+    const name = model.toLowerCase().split('/').pop() ?? '';
+    return isGoogleHostedMaaSModel(model) && !name.startsWith('gpt-oss');
 }
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {
