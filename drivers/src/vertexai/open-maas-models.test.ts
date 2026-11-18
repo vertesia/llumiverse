@@ -83,6 +83,7 @@ describe('Vertex open MaaS catalog', () => {
             'deepseek-ai/deepseek-r1-0528-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.2-maas': ['global'],
             'deepseek-ai/deepseek-v4.1-flash-maas': ['global'],
+            'deepseek-ai/deepseek-v4.1-flash-1017-maas': ['global'],
             'google/gemma-4-26b-a4b-it-maas': ['global'],
             'meta/llama-3.3-70b-instruct-maas': ['us-central1'],
             'meta/llama-4-maverick-17b-128e-instruct-maas': ['us-east5'],

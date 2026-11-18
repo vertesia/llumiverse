@@ -13,6 +13,7 @@ import {
     getOpenAIReasoningEffortLevels,
     hasGeminiSamplingRestriction,
     isClaudeVersionGTE,
+    isDeepSeekVersionGte,
     isGeminiModelVersionGte,
     isGeminiOmniVideoModel,
     isKimiVersionGte,
@@ -583,6 +584,11 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         (isOpenAICompatibleTransport(provider) || provider === Providers.togetherai || provider === Providers.mistralai)
     ) {
         return ['low', 'high', 'max'];
+    }
+    // Vertex accepts minimal, low, medium, high and max on DeepSeek V4.1 Flash, and rejects none and xhigh.
+    // Reasoning is off until an effort is sent.
+    if (provider === Providers.vertexai && family === 'deepseek' && isDeepSeekVersionGte(model, 4, 1)) {
+        return ['minimal', 'low', 'medium', 'high', 'max'];
     }
     // Vertex rejects `max` on Wonder and Spark 1.3 and accepts it on Ember; no Muse model takes `none`.
     // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta

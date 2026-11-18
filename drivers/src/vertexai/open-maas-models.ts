@@ -70,6 +70,14 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         requestPublisher: 'deepseek-ai',
         regions: GLOBAL_REGIONS,
     },
+    // A separate, dated service; the undated model is not repointed to it.
+    // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash-1017
+    {
+        publisher: 'deepseek-ai',
+        model: 'deepseek-v4.1-flash-1017-maas',
+        requestPublisher: 'deepseek-ai',
+        regions: GLOBAL_REGIONS,
+    },
     {
         publisher: 'deepseek-ai',
         model: 'deepseek-v3.2-maas',
