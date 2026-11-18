@@ -474,9 +474,21 @@ describe('Vertex DeepSeek V4.1 Flash metadata', () => {
         expect(options.map((option) => option.name)).toContain('image_detail');
     });
 
-    it('keeps older DeepSeek models text-only and without an effort control', () => {
-        const model = 'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas';
+    it.each([
+        'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
+        // Below the 4.1 floor: the snapshot pattern alone does not select the V4.1 Flash record.
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4-flash-maas',
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4-flash-0731-maas',
+    ])('keeps %s text-only and without an effort control', (model) => {
         expect(getModelCapabilities(model, Providers.vertexai).input.image).toBe(false);
         expect(getVertexAiOptions(model).options.map((option) => option.name)).not.toContain('effort');
+    });
+
+    it.each([
+        // Not a dated snapshot: the suffix between `-flash-` and `-maas` is not four digits.
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-lite-maas',
+        'locations/global/publishers/deepseek-ai/models/deepseek-v4.1-flash-10170-maas',
+    ])('does not give %s the V4.1 Flash record', (model) => {
+        expect(getModelCapabilities(model, Providers.vertexai).input.image).toBe(false);
     });
 });
