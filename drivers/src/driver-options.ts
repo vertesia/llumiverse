@@ -137,6 +137,12 @@ export interface OpenAIChatCompletionsProtocolOptions {
     /** Model-specific form of the prompt alignment guard for mixed-model providers. */
     includeResultSchemaInPromptForModel?: (model: string) => boolean;
     /**
+     * Leave out the native `response_format` on requests that offer tools, for models whose constrained decoding
+     * prevents tool calls while a schema is set. Pair it with `includeResultSchemaInPromptForModel` so the schema
+     * stays in the prompt; Llumiverse still validates the returned JSON.
+     */
+    omitResultSchemaFormatWithToolsForModel?: (model: string) => boolean;
+    /**
      * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
      * or mis-handle those OpenAI-specific fields, so adapters can request a looser
      * JSON Schema payload for tools while preserving the shared Chat Completions path.
