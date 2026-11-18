@@ -429,7 +429,10 @@ describe('current Bedrock GPT families', () => {
         ['openai.gpt-6.1-terra-v1:0', 1_050_000, 128_000, true],
         ['openai.gpt-6.2-terra', 1_050_000, 128_000, true],
         ['openai.gpt-6.1-luna', 1_050_000, 128_000, true],
-        ['openai.gpt-7-sol', 1_000_000, 131_072, false],
+        // GPT-6.2 Sol's card returns to 1.05M / 128K, so the GPT-6.1 Sol limits do not carry forward.
+        ['openai.gpt-6.2-sol', 1_050_000, 128_000, false],
+        ['openai.gpt-6.2-astra', 1_050_000, 128_000, false],
+        ['openai.gpt-7-sol', 1_050_000, 128_000, false],
         // Daybreak Blue's card gives 1.05M, unlike plain GPT-5.6 Sol.
         ['openai.gpt-daybreak-blue-5.6-sol', 1_050_000, 128_000, true],
         ['openai.gpt-5.6-cyber', 1_050_000, 128_000, true],
