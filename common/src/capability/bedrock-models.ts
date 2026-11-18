@@ -48,6 +48,67 @@ export function normalizeBedrockModelId(model: string): string {
     return modelId.replace(GEO_PREFIX, '');
 }
 
+type BedrockServiceTier = 'default' | 'flex' | 'priority' | 'reserved';
+
+function bedrockArnResource(model: string): string | undefined {
+    return /^arn:[^:]+:bedrock:[^:]+:[^:]*:([^/]+)\//.exec(model)?.[1];
+}
+
+export function isBedrockApplicationInferenceProfile(model: string): boolean {
+    return bedrockArnResource(model) === 'application-inference-profile';
+}
+
+const CLAUDE_RESERVED_VERSIONS = new Set(['haiku-4-5', 'opus-4-5', 'opus-4-6', 'sonnet-4-5', 'sonnet-4-6']);
+
+function supportsNemotronFlexAndPriority(model: string): boolean {
+    // The generation precedes the size for Nano/Super 3 and follows it for Nano v2.
+    const version = model.match(/^nvidia\.nemotron-(?:(?:nano|super)-(\d+)-|nano-\d+b-v(\d+)(?:[-:]|$))/);
+    return Number(version?.[1]) >= 3 || Number(version?.[2]) >= 2;
+}
+
+// Bedrock discovery does not report tiers. The model cards document support for each family:
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
+export function getBedrockServiceTiers(model: string, baseModelId?: string): readonly BedrockServiceTier[] | undefined {
+    const resource = bedrockArnResource(model);
+    // Custom deployments and Provisioned Throughput have their own capacity rules. A foundation model's
+    // on-demand tiers do not describe those resources. https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-use.html
+    if (resource === 'custom-model' || resource === 'custom-model-deployment' || resource === 'provisioned-model') {
+        return ['default'];
+    }
+    if (resource === 'application-inference-profile' && !baseModelId) return undefined;
+
+    const modelId = normalizeBedrockModelId(
+        resource === 'application-inference-profile' ? (baseModelId ?? model) : model,
+    );
+    if (modelId.startsWith('anthropic.claude-')) {
+        const claude = parseClaudeVersion(modelId);
+        if (claude && CLAUDE_RESERVED_VERSIONS.has(`${claude.variant}-${claude.major}-${claude.minor}`)) {
+            return ['default', 'reserved'];
+        }
+        return ['default'];
+    }
+
+    // Qwen3 Coder Next is Standard-only even though the other Qwen3 Coder variants support both tiers.
+    if (modelId.startsWith('qwen.qwen3-coder-next')) return ['default'];
+
+    if (
+        /^amazon\.nova-(?:2-lite|pro|premier)(?:[-:]|$)/.test(modelId) ||
+        /^(?:mistral\.|openai\.gpt-oss-)/.test(modelId) ||
+        /^writer\.palmyra-vision-7b(?:[-:]|$)/.test(modelId) ||
+        isFamilyVersionGte(modelId, 'deepseek.v', 3, 2) ||
+        isFamilyVersionGte(modelId, 'google.gemma-', 3) ||
+        isFamilyVersionGte(modelId, 'minimax.minimax-m', 2) ||
+        (/^moonshot(?:ai)?\.kimi-k/.test(modelId) && isKimiVersionGte(modelId, 2, 0)) ||
+        supportsNemotronFlexAndPriority(modelId) ||
+        isFamilyVersionGte(modelId, 'qwen.qwen', 3) ||
+        isFamilyVersionGte(modelId, 'zai.glm-', 4, 7) ||
+        (modelId.startsWith('xai.grok-') && isSingleDigitGrokVersionGte(modelId, 4, 3))
+    ) {
+        return ['default', 'flex', 'priority'];
+    }
+    return ['default'];
+}
+
 function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'output'> {
     if (includesAny(model, ['nova-2-multimodal-embeddings', 'titan-embed', 'cohere.embed', 'marengo-embed'])) {
         return {

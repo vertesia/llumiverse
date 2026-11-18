@@ -8,6 +8,7 @@ import {
     type ListInferenceProfilesCommandInput,
     type ListInferenceProfilesCommandOutput,
 } from '@aws-sdk/client-bedrock';
+import { getOptions, OptionType, Providers } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
@@ -82,9 +83,14 @@ function mockModelListingMethods(
     const listCustomModels = vi.fn(
         async (_input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> => customModels,
     );
+    // The driver requests each profile type separately; a fixture profile without a type is system-defined.
     const listInferenceProfiles = vi.fn(
-        async (_input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
-            inferenceProfiles,
+        async (input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> => ({
+            ...inferenceProfiles,
+            inferenceProfileSummaries: inferenceProfiles.inferenceProfileSummaries?.filter(
+                (profile) => !input.typeEquals || (profile.type ?? 'SYSTEM_DEFINED') === input.typeEquals,
+            ),
+        }),
     );
     Reflect.set(service, 'listFoundationModels', listFoundationModels);
     Reflect.set(service, 'listCustomModels', listCustomModels);
@@ -92,6 +98,110 @@ function mockModelListingMethods(
 }
 
 describe('Bedrock Converse model discovery', () => {
+    it.each([
+        ['amazon.nova-pro-v1:0', 'Amazon', ['default', 'flex', 'priority']],
+        ['anthropic.claude-haiku-5-5', 'Anthropic', ['default']],
+        ['moonshotai.kimi-k2-thinking', 'Moonshot AI', ['default', 'flex', 'priority']],
+    ])(
+        'reports tier and publisher metadata for an application profile backed by %s',
+        async (model, owner, expected) => {
+            const driver = new BedrockDriver({ region: 'us-east-1' });
+            const service = createMockService();
+            const profileArn = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz';
+            const baseModelArn = `arn:aws:bedrock:us-east-1::foundation-model/${model}`;
+            mockModelListingMethods(
+                service,
+                { $metadata: {}, modelSummaries: [{ ...foundationModel(model), providerName: owner }] },
+                emptyCustomModels,
+                {
+                    $metadata: {},
+                    inferenceProfileSummaries: [
+                        {
+                            inferenceProfileId: 'abc123xyz',
+                            inferenceProfileArn: profileArn,
+                            inferenceProfileName: 'My test profile',
+                            models: [{ modelArn: baseModelArn }],
+                            status: 'ACTIVE',
+                            type: 'APPLICATION',
+                        },
+                    ],
+                },
+            );
+            vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+            const profile = (await driver.listModels()).find(({ id }) => id === profileArn);
+            expect(profile).toMatchObject({ id: profileArn, base_model_id: baseModelArn, owner });
+            const tier = getOptions(profile ?? profileArn, Providers.bedrock).options.find(
+                (option) => option.name === 'service_tier',
+            );
+            expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
+            expect(await driver.listTrainableModels()).not.toContainEqual(
+                expect.objectContaining({ base_model_id: baseModelArn }),
+            );
+        },
+    );
+
+    it('follows the next page token of the custom model and inference profile listings', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const service = createMockService();
+        mockModelListingMethods(service, {
+            $metadata: {},
+            modelSummaries: [foundationModel('amazon.nova-pro-v1:0'), foundationModel('anthropic.claude-haiku-5-5')],
+        });
+        const profile = (name: string, model: string) => ({
+            inferenceProfileId: name,
+            inferenceProfileArn: `arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/${name}`,
+            inferenceProfileName: name,
+            models: [{ modelArn: `arn:aws:bedrock:us-east-1::foundation-model/${model}` }],
+            status: 'ACTIVE' as const,
+            type: 'APPLICATION' as const,
+        });
+        const listInferenceProfiles = vi.fn(
+            async (input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
+                input.typeEquals !== 'APPLICATION'
+                    ? { $metadata: {}, inferenceProfileSummaries: [] }
+                    : input.nextToken === 'page-2'
+                      ? { $metadata: {}, inferenceProfileSummaries: [profile('second', 'anthropic.claude-haiku-5-5')] }
+                      : {
+                            $metadata: {},
+                            inferenceProfileSummaries: [profile('first', 'amazon.nova-pro-v1:0')],
+                            nextToken: 'page-2',
+                        },
+        );
+        const customModel = (name: string) => ({
+            modelArn: `arn:aws:bedrock:us-east-1:123456789012:custom-model/${name}`,
+            modelName: name,
+            baseModelArn: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+            baseModelName: 'Nova Pro',
+            creationTime: new Date(0),
+        });
+        const listCustomModels = vi.fn(
+            async (input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> =>
+                input.nextToken === 'page-2'
+                    ? { $metadata: {}, modelSummaries: [customModel('tuned-2')] }
+                    : { $metadata: {}, modelSummaries: [customModel('tuned-1')], nextToken: 'page-2' },
+        );
+        Reflect.set(service, 'listInferenceProfiles', listInferenceProfiles);
+        Reflect.set(service, 'listCustomModels', listCustomModels);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        const ids = (await driver.listModels()).map(({ id }) => id);
+
+        expect(ids).toEqual(
+            expect.arrayContaining([
+                expect.stringMatching(/application-inference-profile\/first$/),
+                expect.stringMatching(/application-inference-profile\/second$/),
+                expect.stringMatching(/custom-model\/tuned-1$/),
+                expect.stringMatching(/custom-model\/tuned-2$/),
+            ]),
+        );
+        expect(listInferenceProfiles).toHaveBeenCalledWith(
+            expect.objectContaining({ typeEquals: 'APPLICATION', nextToken: 'page-2', maxResults: 1000 }),
+        );
+        expect(listInferenceProfiles).toHaveBeenCalledWith(expect.objectContaining({ typeEquals: 'SYSTEM_DEFINED' }));
+        expect(listCustomModels).toHaveBeenCalledTimes(2);
+    });
+
     it('inherits discovery support for future models from known publishers', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
         const service = createMockService();
@@ -184,7 +294,10 @@ describe('Bedrock Converse model discovery', () => {
 
         const models = await driver.listModels();
         const lifecycle = { deprecation_date: '2026-07-08', retirement_date: '2027-01-08' };
-        expect(models.find((model) => model.id.endsWith('custom-model/opus-41-tuned'))).toMatchObject(lifecycle);
+        expect(models.find((model) => model.id.endsWith('custom-model/opus-41-tuned'))).toMatchObject({
+            ...lifecycle,
+            base_model_id: customModels.modelSummaries[0].baseModelArn,
+        });
         expect(models.find((model) => model.id === 'anthropic.claude-opus-4-1-20250805-v1:0')).toMatchObject(lifecycle);
         expect(models.find((model) => model.id.endsWith('application-inference-profile/opus-41-app'))).toMatchObject(
             lifecycle,

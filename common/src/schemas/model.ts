@@ -51,6 +51,15 @@ export const AIModelSchema = z
 
 export const AIModelArraySchema = z.array(AIModelSchema).meta({ id: 'AIModelArray' });
 
+export const AvailableAIModelSchema = AIModelSchema.extend({
+    base_model_id: z
+        .string()
+        .optional()
+        .describe('The provider identifier of the model behind this selectable resource. Use id for invocation.'),
+}).meta({ id: 'AvailableAIModel' });
+
+export const AvailableAIModelArraySchema = z.array(AvailableAIModelSchema).meta({ id: 'AvailableAIModelArray' });
+
 // `text` is OPTIONAL, where the derived parameter said `required: true`. The interface declared it
 // non-optional, but `EnvironmentsApi.listModels(id, payload?)` takes the whole payload optionally and
 // three Studio call sites pass nothing — so the document promised a parameter that its own client

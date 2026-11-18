@@ -217,6 +217,90 @@
             ],
             "additionalProperties": false
         },
+        "AvailableAIModel": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/$defs/ModelType"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/$defs/AIModelStatus"
+                },
+                "can_stream": {
+                    "type": "boolean"
+                },
+                "is_custom": {
+                    "type": "boolean"
+                },
+                "is_multimodal": {
+                    "type": "boolean"
+                },
+                "input_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "output_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tool_support": {
+                    "type": "boolean"
+                },
+                "deprecation_date": {
+                    "type": "string"
+                },
+                "retirement_date": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "string"
+                },
+                "base_model_id": {
+                    "description": "The provider identifier of the model behind this selectable resource. Use id for invocation.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "id",
+                "name",
+                "provider"
+            ],
+            "additionalProperties": false
+        },
+        "AvailableAIModelArray": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/AvailableAIModel"
+            }
+        },
         "AzureFoundryChatOptions": {
             "type": "object",
             "properties": {

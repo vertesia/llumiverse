@@ -4,9 +4,12 @@ import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta.js';
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
+    type CustomModelSummary,
     type FoundationModelSummary,
     GetModelCustomizationJobCommand,
     type GetModelCustomizationJobCommandOutput,
+    type InferenceProfileSummary,
+    InferenceProfileType,
     ModelCustomizationJobStatus,
     StopModelCustomizationJobCommand,
 } from '@aws-sdk/client-bedrock';
@@ -30,6 +33,7 @@ import {
 import { S3Client } from '@aws-sdk/client-s3';
 import {
     type AIModel,
+    type AvailableAIModel,
     type BedrockClaudeOptions,
     type BedrockConverseOptions,
     type BedrockGptOssOptions,
@@ -49,6 +53,7 @@ import {
     getMaxTokensLimitBedrock,
     type HttpTimeoutOptions,
     incrementConversationTurn,
+    isBedrockApplicationInferenceProfile,
     isEmbeddingModel,
     isOpenAIGptVersionGTE,
     type JSONObject,
@@ -456,6 +461,51 @@ function isBedrockClaudeModel(model: string): boolean {
  * profile (`us.anthropic.claude-…`), whose names AWS defines. Undefined for application inference profiles, custom
  * models and provisioned throughput, whose ARNs carry caller-chosen names.
  */
+/** The largest page both listings accept. */
+const LISTING_PAGE_SIZE = 1000;
+
+/** Every page of a paginated Bedrock listing: one call returns at most one page and a token for the next. */
+async function listAllPages<T>(
+    listPage: (nextToken: string | undefined) => Promise<{ items?: T[]; nextToken?: string }>,
+): Promise<T[]> {
+    const items: T[] = [];
+    let nextToken: string | undefined;
+    do {
+        const page = await listPage(nextToken);
+        items.push(...(page.items ?? []));
+        nextToken = page.nextToken;
+    } while (nextToken);
+    return items;
+}
+
+function listAllCustomModels(service: Bedrock): Promise<CustomModelSummary[]> {
+    return listAllPages(async (nextToken) => {
+        const page = await service.listCustomModels({ maxResults: LISTING_PAGE_SIZE, nextToken });
+        return { items: page.modelSummaries, nextToken: page.nextToken };
+    });
+}
+
+/**
+ * System-defined and application inference profiles. Each type is requested explicitly because the API does not
+ * document which types an unfiltered call returns, and application profiles carry their backing model.
+ */
+async function listAllInferenceProfiles(service: Bedrock): Promise<InferenceProfileSummary[]> {
+    const types = [InferenceProfileType.SYSTEM_DEFINED, InferenceProfileType.APPLICATION];
+    const pages = await Promise.all(
+        types.map((typeEquals) =>
+            listAllPages(async (nextToken) => {
+                const page = await service.listInferenceProfiles({
+                    typeEquals,
+                    maxResults: LISTING_PAGE_SIZE,
+                    nextToken,
+                });
+                return { items: page.inferenceProfileSummaries, nextToken: page.nextToken };
+            }),
+        ),
+    );
+    return pages.flat();
+}
+
 function namedBedrockModel(model: string): string | undefined {
     if (!model.startsWith('arn:')) return model;
     for (const resource of [':foundation-model/', ':inference-profile/']) {
@@ -2222,12 +2272,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async listTrainableModels(): Promise<AIModel[]> {
         this.logger.debug('[Bedrock] listing trainable models');
-        return this._listModels((m) =>
+        const models = await this._listModels((m) =>
             m.customizationsSupported ? m.customizationsSupported.includes('FINE_TUNING') : false,
         );
+        return models.map(({ base_model_id: _baseModelId, ...model }) => model);
     }
 
-    async listModels(): Promise<AIModel[]> {
+    async listModels(): Promise<AvailableAIModel[]> {
         this.logger.debug('[Bedrock] listing models');
         // exclude trainable models since they are not executable
         // exclude embedding models, not to be used for typical completions.
@@ -2236,7 +2287,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this._listModels(filter);
     }
 
-    async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AIModel[]> {
+    async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AvailableAIModel[]> {
         const service = this.getService();
         // The foundation model listing is required, so its failure is kept and rethrown below: it carries the
         // provider's status and reason (rejected credentials, missing permission), which callers map to a status.
@@ -2246,11 +2297,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 foundationModelsError = error;
                 return undefined;
             }),
-            service.listCustomModels({}).catch(() => {
+            listAllCustomModels(service).catch(() => {
                 this.logger.warn("[Bedrock] Can't list custom models. Check if the user has the right permissions.");
                 return undefined;
             }),
-            service.listInferenceProfiles({}).catch(() => {
+            listAllInferenceProfiles(service).catch(() => {
                 this.logger.warn(
                     "[Bedrock] Can't list inference profiles. Check if the user has the right permissions.",
                 );
@@ -2365,7 +2416,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return {};
         };
 
-        const aiModels: AIModel[] = foundationModels.map((m) => {
+        const aiModels: AvailableAIModel[] = foundationModels.map((m) => {
             if (!m.modelId) {
                 throw new Error('modelId not found');
             }
@@ -2391,13 +2442,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
 
         //add custom models
-        if (customModelsList?.modelSummaries) {
-            customModelsList.modelSummaries.forEach((m) => {
+        if (customModelsList) {
+            customModelsList.forEach((m) => {
                 if (!m.modelArn) {
                     throw new Error('Model ID not found');
                 }
 
-                const capabilityModelId = m.baseModelName ?? m.modelArn;
+                const capabilityModelId = m.baseModelArn ?? m.baseModelName ?? m.modelArn;
                 if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
                 const modelMetadata = resolveModelListingMetadata(
                     capabilityModelId,
@@ -2405,8 +2456,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     baseModelLifecycle([m.baseModelArn]),
                 );
 
-                const model: AIModel = {
+                const model: AvailableAIModel = {
                     id: m.modelArn,
+                    ...(m.baseModelArn ? { base_model_id: m.baseModelArn } : {}),
                     name: m.modelName ?? m.modelArn,
                     provider: this.provider,
                     owner: 'custom',
@@ -2420,8 +2472,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         //add inference profiles
-        if (inferenceProfilesList?.inferenceProfileSummaries) {
-            inferenceProfilesList.inferenceProfileSummaries.forEach((p) => {
+        if (inferenceProfilesList) {
+            inferenceProfilesList.forEach((p) => {
                 if (!p.inferenceProfileArn) {
                     throw new Error('Profile ARN not found');
                 }
@@ -2429,42 +2481,45 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 // Apply the same filtering logic to inference profiles based on their name
                 const profileId = p.inferenceProfileId || '';
                 const profileName = p.inferenceProfileName || '';
+                const profileModelArns = (p.models ?? []).map((model) => model.modelArn);
+                const baseModelArn = isBedrockApplicationInferenceProfile(p.inferenceProfileArn)
+                    ? profileModelArns.find((arn) => arn?.includes(':foundation-model/'))
+                    : undefined;
+                const baseModelId = baseModelArn ? bedrockBaseModelId(baseModelArn) : undefined;
 
-                // Extract provider name from profile name or ID
-                let providerName = '';
-                for (const provider of supportedPublishers) {
-                    if (profileName.toLowerCase().includes(provider) || profileId.toLowerCase().includes(provider)) {
-                        providerName = provider;
-                        break;
-                    }
-                }
+                const providerName =
+                    (baseModelId ? getPublisherKey(baseModelId.split('.')[0]) : undefined) ??
+                    supportedPublishers.find(
+                        (provider) =>
+                            profileName.toLowerCase().includes(provider) || profileId.toLowerCase().includes(provider),
+                    );
 
                 // A cross-region profile routes to regions whose dates this listing does not know, so it gets a date
                 // only when every model it routes to is in this region.
-                const profileModelArns = (p.models ?? []).map((model) => model.modelArn);
                 const singleRegion =
                     profileModelArns.length > 0 &&
                     profileModelArns.every((arn) => arn?.includes(`:${this.options.region}:`));
                 const modelMetadata = resolveModelListingMetadata(
-                    p.inferenceProfileArn ?? p.inferenceProfileId,
+                    baseModelArn ?? p.inferenceProfileArn,
                     this.provider,
                     singleRegion ? baseModelLifecycle(profileModelArns) : {},
                 );
 
                 if (
                     providerName &&
-                    shouldIncludeModel(profileId, providerName) &&
+                    shouldIncludeModel(baseModelId ?? profileId, providerName) &&
                     !isEmbeddingModel(
                         {
-                            id: p.inferenceProfileArn ?? p.inferenceProfileId,
+                            id: baseModelArn ?? p.inferenceProfileArn,
                             input_modalities: modelMetadata.input_modalities,
                             output_modalities: modelMetadata.output_modalities,
                         },
                         this.provider,
                     )
                 ) {
-                    const model: AIModel = {
-                        id: p.inferenceProfileArn ?? p.inferenceProfileId,
+                    const model: AvailableAIModel = {
+                        id: p.inferenceProfileArn,
+                        ...(baseModelArn ? { base_model_id: baseModelArn } : {}),
                         name: p.inferenceProfileName ?? p.inferenceProfileArn,
                         provider: this.provider,
                         owner: publisherDisplayNames.get(providerName) ?? providerName,

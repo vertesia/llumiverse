@@ -471,6 +471,81 @@ describe('Bedrock Converse GPT options', () => {
     });
 });
 
+describe('Bedrock service tier options', () => {
+    it.each([
+        ['anthropic.claude-haiku-5-5', ['default']],
+        ['global.anthropic.claude-haiku-5-5', ['default']],
+        ['arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-haiku-5-5', ['default']],
+        ['us.anthropic.claude-opus-4-1-20250805-v1:0', ['default']],
+        ['global.anthropic.claude-sonnet-4-20250514-v1:0', ['default']],
+        ['us.anthropic.claude-haiku-4-5-20251001-v1:0', ['default', 'reserved']],
+        ['us.anthropic.claude-opus-4-5-20251101-v1:0', ['default', 'reserved']],
+        ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', ['default', 'reserved']],
+        ['global.anthropic.claude-opus-4-6-v1', ['default', 'reserved']],
+        ['global.anthropic.claude-sonnet-4-6', ['default', 'reserved']],
+        ['global.anthropic.claude-opus-4-7', ['default']],
+        ['us.amazon.nova-lite-v1:0', ['default']],
+        ['us.amazon.nova-pro-v1:0', ['default', 'flex', 'priority']],
+        ['us.amazon.nova-premier-v1:0', ['default', 'flex', 'priority']],
+        ['global.amazon.nova-2-lite-v1:0', ['default', 'flex', 'priority']],
+        ['deepseek.v3-v1:0', ['default']],
+        ['deepseek.v3.2', ['default', 'flex', 'priority']],
+        ['google.gemma-2-9b-it', ['default']],
+        ['google.gemma-3-4b-it', ['default', 'flex', 'priority']],
+        ['minimax.minimax-m1', ['default']],
+        ['minimax.minimax-m2', ['default', 'flex', 'priority']],
+        ['mistral.mistral-7b-instruct-v0:2', ['default', 'flex', 'priority']],
+        ['moonshotai.kimi-k1.5', ['default']],
+        ['moonshot.kimi-k2-thinking', ['default', 'flex', 'priority']],
+        ['moonshotai.kimi-k3', ['default', 'flex', 'priority']],
+        ['nvidia.nemotron-nano-9b-v1', ['default']],
+        ['nvidia.nemotron-nano-9b-v2', ['default', 'flex', 'priority']],
+        ['nvidia.nemotron-nano-3-30b', ['default', 'flex', 'priority']],
+        ['nvidia.nemotron-super-3-120b', ['default', 'flex', 'priority']],
+        ['openai.gpt-oss-120b-1:0', ['default', 'flex', 'priority']],
+        ['qwen.qwen3-coder-next', ['default']],
+        ['qwen.qwen3-coder-480b-a35b-v1:0', ['default', 'flex', 'priority']],
+        ['writer.palmyra-x5-v1:0', ['default']],
+        ['writer.palmyra-vision-7b', ['default', 'flex', 'priority']],
+        ['xai.grok-4.2', ['default']],
+        ['xai.grok-4.3', ['default', 'flex', 'priority']],
+        ['zai.glm-4.6', ['default']],
+        ['zai.glm-4.7', ['default', 'flex', 'priority']],
+        ['zai.glm-6', ['default', 'flex', 'priority']],
+        ['unverified.model-1', ['default']],
+    ])('lists the supported tiers for %s', (model, expected) => {
+        const tier = getOptions(model, Providers.bedrock).options.find((option) => option.name === 'service_tier');
+
+        expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(expected);
+    });
+
+    it('preserves tier selection for an application profile with an unknown backing model', () => {
+        const model = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz';
+        const tier = getOptions(model, Providers.bedrock).options.find((option) => option.name === 'service_tier');
+
+        expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual([
+            'default',
+            'flex',
+            'priority',
+            'reserved',
+        ]);
+        expect(tier?.description).toContain('Bedrock validates');
+    });
+
+    it.each(['custom-model', 'custom-model-deployment', 'provisioned-model'])(
+        'does not inherit foundation model tiers for a %s ARN',
+        (resource) => {
+            const model = {
+                id: `arn:aws:bedrock:us-east-1:123456789012:${resource}/abc123xyz`,
+                base_model_id: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+            };
+            const tier = getOptions(model, Providers.bedrock).options.find((option) => option.name === 'service_tier');
+
+            expect(tier?.type === OptionType.enum && Object.values(tier.enum)).toEqual(['default']);
+        },
+    );
+});
+
 describe('Bedrock open-weight model cards', () => {
     it.each([
         ['zai.glm-4.7', 203_000, 131_072],

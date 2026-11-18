@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { getBedrockModelKnowledge, getBedrockServiceTiers } from '../capability/bedrock-models.js';
 import { isMistralLargeGte } from '../capability/mistral.js';
 import type {
     BedrockAI21OptionsSchema,
@@ -77,6 +77,8 @@ export type BedrockOptions =
     | BedrockPalmyraOptions
     | BedrockGptOssOptions
     | TwelvelabsPegasusOptions;
+
+const SERVICE_TIER_OPTIONS = { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' } as const;
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
     const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;
@@ -163,7 +165,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     return undefined;
 }
 
-export function getBedrockOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+export function getBedrockOptions(model: string, option?: ModelOptions, baseModelId?: string): ModelOptionsInfo {
     if (isOpenAIGptVersionGTE(model, 5, 0)) {
         // Closed-weight GPT models use the same reasoning controls across Bedrock transports.
         const options = getBedrockMantleOptions(model);
@@ -312,6 +314,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
         };
     } else {
         const max_tokens_limit = getMaxTokensLimitBedrock(model);
+        const serviceTiers = getBedrockServiceTiers(model, baseModelId);
         //Not canvas, i.e normal AWS bedrock converse
         // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)
         // Opus 4.6 and Sonnet 4.6 still support these parameters
@@ -329,9 +332,13 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             {
                 name: 'service_tier',
                 type: OptionType.enum,
-                enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
+                enum: Object.fromEntries(
+                    Object.entries(SERVICE_TIER_OPTIONS).filter(([, tier]) => serviceTiers?.includes(tier) ?? true),
+                ),
                 default: 'default',
-                description: 'Select the Amazon Bedrock processing tier for this request.',
+                description: serviceTiers
+                    ? 'Select the Amazon Bedrock processing tier for this request.'
+                    : 'Select a tier supported by the backing model. Bedrock validates the tier when you run the request.',
             },
         ];
 

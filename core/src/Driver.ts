@@ -6,6 +6,7 @@
 
 import {
     type AIModel,
+    type AvailableAIModel,
     type Completion,
     type CompletionStream,
     type DataSource,
@@ -94,7 +95,7 @@ export interface Driver<PromptT = unknown> {
     getTrainingJob(jobId: string): Promise<TrainingJob>;
 
     //list models available for this environment
-    listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
+    listModels(params?: ModelSearchPayload): Promise<AvailableAIModel[]>;
 
     //list models that can be trained
     listTrainableModels(): Promise<AIModel[]>;
@@ -632,7 +633,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     //list models available for this environment
-    abstract listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
+    abstract listModels(params?: ModelSearchPayload): Promise<AvailableAIModel[]>;
 
     //check that it is possible to connect to the environment
     abstract validateConnection(): Promise<boolean>;
