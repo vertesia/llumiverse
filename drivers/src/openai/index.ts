@@ -1135,14 +1135,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 /** The completion of a non-streamed Responses request: results, tool calls, usage and finish reason. */
 export function extractOpenAIResponsesCompletion(
     context: Pick<OpenAIResponsesContext, 'provider' | 'logger'>,
-    _options: ExecutionOptions,
+    options: ExecutionOptions,
     result: OpenAI.Responses.Response,
 ): Completion {
     assertOpenAIResponseSucceeded(result);
     const tokenInfo = mapOpenAIResponsesUsage(result.usage, result.tool_usage);
     logOpenAIInputTransformations(context.logger, result.input_transformations, {
         provider: context.provider,
-        model: _options.model,
+        model: options.model,
     });
 
     // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
@@ -1162,7 +1162,7 @@ export function extractOpenAIResponsesCompletion(
     if (refusalDetails) {
         logModelRefusal(context.logger, {
             provider: context.provider,
-            model: _options.model,
+            model: options.model,
             streaming: false,
             finish_reason,
             provider_finish_reason: result.incomplete_details?.reason ?? result.status,
@@ -1171,11 +1171,11 @@ export function extractOpenAIResponsesCompletion(
         });
     }
     // Collect all parts in order (text and images)
-    const includeThoughts = (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
+    const includeThoughts = (options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
     const allResults = extractCompletionResults(
         result.output,
         includeThoughts,
-        (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
+        (options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
     );
 
     // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
@@ -1192,6 +1192,7 @@ export function extractOpenAIResponsesCompletion(
         tool_use: tools,
     };
 }
+
 /** The prompt for a Responses text request: the prompt copy of the result schema only where it is needed. */
 export function formatOpenAIResponsesPrompt(
     context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>,

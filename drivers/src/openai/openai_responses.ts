@@ -8,11 +8,6 @@ import { NON_OPENAI_ACCOUNT_OPTIONS } from './openai_compatible.js';
 export type { OpenAIResponsesDriverOptions } from '../driver-options.js';
 
 /**
- * A generic driver for OpenAI-compatible APIs.
- * This can be used with any service that implements the OpenAI API spec,
- * such as xAI (Grok), LM Studio, Ollama, vLLM, LocalAI, etc.
- */
-/**
  * Family rules for models served by OpenAI-compatible Responses endpoints such as OpenRouter. They apply to any such
  * endpoint serving the model ID, not to one host.
  */
@@ -27,6 +22,11 @@ const OPENAI_COMPATIBLE_RESPONSES_POLICY: OpenAIResponsesPolicy = {
     supplementsSchemaInPrompt: (model) => /^minimax\//i.test(model),
 };
 
+/**
+ * A generic driver for OpenAI-compatible APIs.
+ * This can be used with any service that implements the OpenAI API spec,
+ * such as xAI (Grok), LM Studio, Ollama, vLLM, LocalAI, etc.
+ */
 export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.openai_compatible;
