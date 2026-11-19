@@ -403,10 +403,14 @@ describe('Gemini XHIGH thinking', () => {
         ['publishers/google/models/gemini-4-hydrogen', true],
         ['google/gemini-4-hydrogen:batch', true],
         ['gemini-4.5-hydrogen-preview', true],
+        ['gemini-4-neon', true],
+        ['publishers/google/models/gemini-4-neon', true],
+        ['google/gemini-4-neon:batch', true],
         ['gemini-4-argon', false],
         ['gemini-4-carbon', false],
         ['gemini-4-flash', false],
         ['gemini-4-hydrogenx', false],
+        ['gemini-4-neonx', false],
     ])('%s -> %s', (model, expected) => {
         expect(supportsGeminiXHighThinking(model)).toBe(expected);
     });
