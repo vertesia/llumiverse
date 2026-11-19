@@ -297,3 +297,42 @@ describe('Vertex Meta Muse result schema across turns', () => {
         expect(copies[0]).toContain('"shade"');
     });
 });
+
+describe('Vertex Responses errors', () => {
+    const model = 'publishers/meta/models/muse-spark-1.3';
+
+    it('keeps the OpenAI-compatible format for publisher endpoint errors', async () => {
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(
+                    JSON.stringify({ error: { message: 'Quota exceeded', type: 'rate_limit', code: 'rate_limited' } }),
+                    { status: 429, headers: { 'Content-Type': 'application/json', 'x-request-id': 'req_1' } },
+                ),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: 'Say hello' }], {
+                model,
+                model_options: { _option_id: 'openai-text' },
+            }),
+        ).rejects.toMatchObject({
+            code: 429,
+            retryable: true,
+            message: expect.stringMatching(/^\[vertexai\] \[429\] .*Quota exceeded.*\(Request ID: req_1\)/),
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives other errors the Vertex driver's default format", () => {
+        const driver = new TestVertexAIDriver(vi.fn() as unknown as typeof fetch);
+        const formatted = driver.formatLlumiverseError(new Error('socket closed'), {
+            provider: 'vertexai',
+            model,
+            operation: 'execute',
+        });
+
+        expect(formatted).toMatchObject({ context: { provider: 'vertexai', model } });
+        expect(formatted.message).toContain('socket closed');
+    });
+});

@@ -674,10 +674,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.azure_openai
         | Providers.xai
         | Providers.azure_foundry
-        | Providers.bedrock
-        | Providers.bedrock_mantle
-        | Providers.openai_compatible
-        | Providers.vertexai;
+        | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 
@@ -1167,7 +1164,7 @@ export function promptCacheSourceModel(model: string): string {
 }
 
 /** The completion of a non-streamed Responses request: results, tool calls, usage and finish reason. */
-export function extractOpenAIResponsesCompletion(
+function extractOpenAIResponsesCompletion(
     context: Pick<OpenAIResponsesContext, 'provider' | 'logger'>,
     options: ExecutionOptions,
     result: OpenAI.Responses.Response,

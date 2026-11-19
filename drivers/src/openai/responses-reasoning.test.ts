@@ -240,15 +240,7 @@ describe('OpenAI Responses reasoning', () => {
     });
 
     it.each(
-        (
-            [
-                Providers.openai,
-                Providers.azure_openai,
-                Providers.xai,
-                Providers.bedrock_mantle,
-                Providers.openai_compatible,
-            ] as const
-        )
+        ([Providers.openai, Providers.azure_openai, Providers.xai, Providers.openai_compatible] as const)
             .flatMap((provider) => [
                 { provider, code: 'server_error' as const, retryable: true },
                 { provider, code: 'insufficient_quota' as const, retryable: false },
