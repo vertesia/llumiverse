@@ -18,8 +18,10 @@ import {
     isTransientApiError,
     MARKER,
     ownsReview,
+    PR_EVENT_WORKFLOW,
     READ_RETRY_DELAYS_MS,
     reconcile,
+    reconcileOptions,
     requiresHuman,
     submitApproval,
     targetBranches,
@@ -180,6 +182,162 @@ for (const [name, update] of [
         assert.deepEqual(api.writes, []);
     });
 }
+
+const noWait = async () => assert.fail('waiting cannot change this verdict');
+
+test('workflow completion for an older head checks CI once without waiting', async () => {
+    const api = fixture({ reviews: [approval] });
+    let checks = 0;
+    const result = await reconcile(api, 12, () => ++checks > 1, {
+        settle: true,
+        settleOptions: { trigger: { id: 41, head_sha: newer }, sleep: noWait },
+    });
+    assert.equal(result.approve, false);
+    assert.equal(checks, 1);
+    assert.deepEqual(
+        api.writes.map(([kind]) => kind),
+        ['dismiss', 'status'],
+    );
+});
+
+test('workflow completion stops waiting when CI is blocked by another unfinished run', async () => {
+    let checks = 0;
+    const result = await waitForCiToSettle(
+        fixture(),
+        12,
+        pr,
+        (_current, onReject) => {
+            checks++;
+            onReject({ reason: 'run 99 is in_progress', running: { id: 99, status: 'in_progress' } });
+            return false;
+        },
+        { trigger: { id: 41, head_sha: sha }, sleep: noWait },
+    );
+    assert.equal(result.passed, false);
+    assert.equal(checks, 1);
+});
+
+test('workflow completion keeps waiting while the triggering run itself reads as unfinished', async () => {
+    const sleeps = [];
+    let checks = 0;
+    const result = await waitForCiToSettle(
+        fixture(),
+        12,
+        pr,
+        (_current, onReject) => {
+            if (++checks > 2) return true;
+            onReject({ reason: 'run 41 is in_progress', running: { id: 41, status: 'in_progress' } });
+            return false;
+        },
+        {
+            trigger: { id: 41, head_sha: sha },
+            timeoutMs: 100,
+            pollMs: 10,
+            now: () => sleeps.length * 10,
+            sleep: async (ms) => sleeps.push(ms),
+        },
+    );
+    assert.equal(result.passed, true);
+    assert.deepEqual(sleeps, [10, 10]);
+});
+
+const lintJob = 'Lint / Check codebase';
+for (const [missing, partial] of [
+    ['job', []],
+    ['step', [{ name: lintJob, status: 'completed', conclusion: 'success', steps: [] }]],
+]) {
+    test(`workflow completion keeps waiting while the triggering run lacks a required ${missing}`, async () => {
+        const complete = [
+            {
+                name: lintJob,
+                status: 'completed',
+                conclusion: 'success',
+                steps: ['Test automerge CI policy', 'Check codebase'].map((name) => ({
+                    name,
+                    status: 'completed',
+                    conclusion: 'success',
+                })),
+            },
+        ];
+        const validation = {
+            id: 41,
+            head_sha: sha,
+            head_branch: 'feature',
+            event: 'pull_request',
+            status: 'completed',
+            conclusion: 'success',
+            path: '.github/workflows/pr-validation.yaml',
+            pull_requests: [{ number: 12, base: { ref: 'main', sha: 'base' } }],
+        };
+        let jobReads = 0;
+        const api = fixture();
+        api.pages = (endpoint) => {
+            if (endpoint.includes('/workflows/pr-validation.yaml/')) return [{ workflow_runs: [validation] }];
+            if (endpoint.includes('/workflows/')) return [{ workflow_runs: [] }];
+            return [{ jobs: jobReads++ === 0 ? partial : complete }];
+        };
+        const sleeps = [];
+        const result = await waitForCiToSettle(
+            api,
+            12,
+            pr,
+            (current, onReject) => verifyPrCi(api, current, ['lint.yml'], onReject),
+            {
+                trigger: { id: 41, head_sha: sha },
+                timeoutMs: 100,
+                pollMs: 10,
+                now: () => sleeps.length * 10,
+                sleep: async (ms) => sleeps.push(ms),
+            },
+        );
+        assert.equal(result.passed, true);
+        assert.deepEqual(sleeps, [10]);
+        assert.equal(jobReads, 2);
+    });
+}
+
+test('a PR event signal evaluates the PR as it is now, and a CI completion waits for its data', () => {
+    const env = { GITHUB_EVENT_NAME: 'workflow_run', CI_APPROVAL_BRANCH: 'feature' };
+    const signal = { id: 40, path: PR_EVENT_WORKFLOW };
+    const validation = { id: 41, path: '.github/workflows/pr-validation.yaml' };
+    assert.deepEqual(reconcileOptions(env, { workflow_run: signal }), {
+        settle: false,
+        settleOptions: { trigger: signal },
+        branch: 'feature',
+    });
+    assert.deepEqual(reconcileOptions(env, { workflow_run: validation }), {
+        settle: true,
+        settleOptions: { trigger: validation },
+        branch: 'feature',
+    });
+    const manual = reconcileOptions({ GITHUB_EVENT_NAME: 'repository_dispatch' }, { client_payload: {} });
+    assert.equal(manual.settle, false);
+});
+
+test('a PR event signal on a new head withdraws the old approval and waits for CI', async () => {
+    const human = { ...approval, id: 2, user: { type: 'User', login: 'reviewer' } };
+    const api = fixture({ pulls: [{ ...pr, head: { ...pr.head, sha: newer } }], reviews: [approval, human] });
+    const result = await reconcile(
+        api,
+        12,
+        () => false,
+        reconcileOptions(
+            { GITHUB_EVENT_NAME: 'workflow_run' },
+            {
+                workflow_run: { id: 40, path: PR_EVENT_WORKFLOW },
+            },
+        ),
+    );
+    assert.equal(result.approve, false);
+    assert.deepEqual(
+        api.writes.map(([kind, id]) => [kind, id]),
+        [
+            ['dismiss', 1],
+            ['status', newer],
+        ],
+    );
+    assert.equal(api.writes.at(-1)[2], 'pending');
+});
 
 test('CI settle defaults match the established three-minute automerge convergence window', () => {
     assert.equal(CI_SETTLE_TIMEOUT_MS, 180_000);
@@ -357,6 +515,54 @@ test('manual reconciliation rejects malformed PR numbers', async () => {
     );
 });
 
+test('membership transport treats only a 404 as a normal negative result', () => {
+    const membershipApi = (error) => {
+        const calls = [];
+        const api = githubApi(
+            {
+                GITHUB_REPOSITORY: 'vertesia/llumiverse',
+                GH_TOKEN: 'read',
+                GH_REVIEW_TOKEN: 'app',
+                GH_MEMBERS_TOKEN: 'members',
+            },
+            (_cmd, args) => {
+                calls.push(args);
+                throw error;
+            },
+            () => {},
+        );
+        return { api, calls };
+    };
+
+    const notFound = membershipApi(ghFailure('gh: Not Found (HTTP 404)'));
+    assert.equal(notFound.api.engineeringMember('outsider'), false);
+    assert.equal(notFound.calls.length, 1);
+
+    const forbidden = membershipApi(ghFailure('gh: Forbidden (HTTP 403)'));
+    assert.throws(
+        () => forbidden.api.engineeringMember('engineer'),
+        (error) => error.stderr === 'gh: Forbidden (HTTP 403)',
+    );
+    assert.equal(forbidden.calls.length, 1);
+
+    const serverError = membershipApi(ghFailure('gh: Server Error (HTTP 502)'));
+    assert.throws(
+        () => serverError.api.engineeringMember('engineer'),
+        (error) => error.stderr === 'gh: Server Error (HTTP 502)',
+    );
+    assert.equal(serverError.calls.length, READ_RETRY_DELAYS_MS.length + 1);
+    for (const calls of [notFound.calls, forbidden.calls, serverError.calls]) {
+        assert.ok(calls.every((args) => args[1].includes('/teams/engineering/memberships/')));
+    }
+});
+
+test('read retries outlast the 5xx incidents seen in CI', () => {
+    // Runs 42054194248 and 42061447529: 5xx responses kept coming for 28 s and 12 s after the first.
+    const total = READ_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
+    assert.ok(total >= 30_000, `reads wait ${total} ms in all`);
+    assert.ok(READ_RETRY_DELAYS_MS.every((ms, i) => i === 0 || ms >= READ_RETRY_DELAYS_MS[i - 1]));
+});
+
 test('API transport scopes approval and membership calls to dedicated App tokens', async () => {
     const calls = [];
     const api = githubApi(
@@ -467,7 +673,7 @@ test('approval read-back waits for visibility without replaying the POST', async
     );
     assert.equal(posts, 1);
     assert.equal(reads, 3);
-    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS);
+    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS.slice(0, 2));
 });
 
 test('unconfirmed approval fails after bounded reads and never retries its write', async () => {
@@ -621,7 +827,7 @@ test('a transient read failure is retried with backoff', () => {
     ]);
     assert.deepEqual(api.open('feature'), [pr]);
     assert.equal(calls.length, 3);
-    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS);
+    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS.slice(0, 2));
 });
 
 test('a read still failing after every retry surfaces the last error', () => {
@@ -662,7 +868,7 @@ test('only server errors and dropped connections count as transient', () => {
     assert.equal(isTransientApiError(new Error('Missing GitHub token')), false);
 });
 
-test('workflow executes only trusted scripts and observes pushes and CI completion', () => {
+test('workflow executes only trusted scripts and observes PR events and CI completion', () => {
     const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
     const coordinator = readFileSync(new URL('../workflows/pr-validation.yaml', import.meta.url), 'utf8');
     const build = readFileSync(new URL('../workflows/build-and-test.yml', import.meta.url), 'utf8');
@@ -673,8 +879,9 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
     assert.match(workflow, /GH_MEMBERS_TOKEN:/);
     assert.match(workflow, /continue-on-error: true/);
     assert.doesNotMatch(workflow, /schedule:|requested|in_progress/);
-    assert.match(workflow, /synchronize/);
-    assert.match(workflow, /converted_to_draft/);
+    assert.doesNotMatch(workflow, /^ {2}pull_request(_target)?:$/m);
+    assert.match(workflow, /"\(ci\) PR event"/);
+    assert.match(workflow, /github\.event\.workflow_run\.conclusion != 'skipped'/);
     assert.match(workflow, /permission-pull-requests: write/);
     assert.match(workflow, /Generate automerge hand-off token[\s\S]*permission-contents: write/);
     assert.doesNotMatch(workflow, /pull_request_review|checkout.*head|npm install/);
@@ -692,6 +899,37 @@ test('workflow executes only trusted scripts and observes pushes and CI completi
         assert.match(reusable, /^ {2}workflow_call:$/m);
         assert.doesNotMatch(reusable, /^ {2}pull_request:$/m);
     }
+});
+
+test('the PR event signal runs every change of an open PR without secrets or code', () => {
+    const file = readFileSync(new URL(`../../${PR_EVENT_WORKFLOW}`, import.meta.url), 'utf8');
+    const signal = file.replace(/^\s*#.*$/gm, '');
+    assert.match(signal, /^name: \(ci\) PR event$/m);
+    const triggers = signal.split(/^on:$/m)[1].split(/^permissions:/m)[0];
+    assert.deepEqual(triggers.match(/^ {2}\w+:$/gm), ['  pull_request:']);
+    assert.doesNotMatch(triggers, /branches|paths/);
+    const types = /^ {4}types: \[(.+)\]$/m.exec(triggers)[1].split(', ');
+    assert.deepEqual(types.toSorted(), [
+        'converted_to_draft',
+        'edited',
+        'labeled',
+        'opened',
+        'ready_for_review',
+        'reopened',
+        'synchronize',
+        'unlabeled',
+    ]);
+    assert.match(signal, /^permissions: \{\}$/m);
+    assert.doesNotMatch(signal, /secrets\.|github\.token|actions\/checkout|uses:/);
+    assert.match(signal, /if: github\.event\.action != 'edited' \|\| github\.event\.changes\.base != null/);
+});
+
+test('the gate isolates repository dispatch permission in a dedicated App token', () => {
+    const workflow = readFileSync(new URL('../workflows/ci-approve.yaml', import.meta.url), 'utf8');
+    assert.match(workflow, /actions: read/);
+    assert.match(workflow, /permission-contents: write/);
+    assert.match(workflow, /GH_HANDOFF_TOKEN: \$\{\{ steps\.handoff-token\.outputs\.token \}\}/);
+    assert.doesNotMatch(workflow, /^\s+contents: write/m);
 });
 
 test('additive ruleset requires CI without changing human review or thread rules', () => {
@@ -736,20 +974,13 @@ test('failure after submission dismisses the newly created review', async () => 
     assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === 100));
 });
 
-test('push withdraws only old approvals without reading CI or replacing the status', async () => {
-    const human = { ...approval, id: 2, user: { type: 'User', login: 'reviewer' } };
-    const api = fixture({
-        pulls: [{ ...pr, head: { ...pr.head, sha: newer } }],
-        reviews: [approval, human],
-    });
-    await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
-    assert.deepEqual(api.writes, [['dismiss', 1]]);
-});
-
-test('a delayed push preserves an approval already granted for the current head', async () => {
+test('a delayed PR event preserves an approval already granted for the current head', async () => {
     const api = fixture({ reviews: [approval] });
-    await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
-    assert.deepEqual(api.writes, []);
+    await reconcile(api, 12, () => true);
+    assert.deepEqual(
+        api.writes.map(([kind, commit, state]) => [kind, commit, state]),
+        [['status', sha, 'success']],
+    );
 });
 
 test('the tested commit comes from the review body, not the commit_id GitHub moves forward', () => {
@@ -761,8 +992,14 @@ test('the tested commit comes from the review body, not the commit_id GitHub mov
 test('an approval whose commit_id moved to the new head is withdrawn on push', async () => {
     const moved = { ...approval, commit_id: newer };
     const api = fixture({ pulls: [{ ...pr, head: { ...pr.head, sha: newer } }], reviews: [moved] });
-    await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
-    assert.deepEqual(api.writes, [['dismiss', 1]]);
+    await reconcile(api, 12, () => {
+        assert.deepEqual(api.writes, [['dismiss', 1]]);
+        return false;
+    });
+    assert.deepEqual(
+        api.writes.filter(([kind]) => kind !== 'status'),
+        [['dismiss', 1]],
+    );
 });
 
 test('a moved approval is replaced by one for the tested head once CI passes', async () => {
@@ -782,8 +1019,14 @@ test('a moved approval is replaced by one for the tested head once CI passes', a
 test('an owned approval without a tested commit in its body is never treated as current', async () => {
     const unnamed = { ...approval, body: `${MARKER}\nApproved` };
     const api = fixture({ reviews: [unnamed] });
-    await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
-    assert.deepEqual(api.writes, [['dismiss', 1]]);
+    await reconcile(api, 12, () => {
+        assert.deepEqual(api.writes, [['dismiss', 1]]);
+        return false;
+    });
+    assert.deepEqual(
+        api.writes.filter(([kind]) => kind !== 'status'),
+        [['dismiss', 1]],
+    );
 });
 
 const ciPolicies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
@@ -1056,12 +1299,34 @@ test('bot PRs routed to a specialized gate are handed off without this gate appr
     assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
 });
 
-test('no hand-off without a successful status, on a push, or for an unrouted branch', async () => {
+test('no hand-off without a successful status, for a draft, or for an unrouted branch', async () => {
     assert.equal((await reconcile(fixture({ pulls: [renovate] }), 12, () => false, { handoffs })).handoff, undefined);
-    const pushed = await reconcile(fixture({ pulls: [renovate] }), 12, () => true, { handoffs, pushed: true });
-    assert.equal(pushed.handoff, undefined);
     assert.equal((await reconcile(fixture(), 12, () => true, { handoffs })).handoff, undefined);
     assert.equal((await reconcile(fixture({ pulls: [renovate] }), 12, () => true)).handoff, undefined);
+    const draft = { ...renovate, draft: true };
+    assert.equal((await reconcile(fixture({ pulls: [draft] }), 12, () => true, { handoffs })).handoff, undefined);
+});
+
+test('a PR change during evaluation hands off nothing', async () => {
+    const moved = { ...renovate, head: { ...renovate.head, sha: newer } };
+    const result = await reconcile(fixture({ pulls: [renovate, moved] }), 12, () => true, { handoffs });
+    assert.equal(result.state, 'pending');
+    assert.equal(result.handoff, undefined);
+});
+
+test('a CI error publishes no success and hands off nothing', async () => {
+    const api = fixture({ pulls: [renovate] });
+    await assert.rejects(
+        reconcile(
+            api,
+            12,
+            () => {
+                throw new Error('CI read failed');
+            },
+            { handoffs },
+        ),
+    );
+    assert.equal(api.writes.at(-1)[2], 'error');
 });
 
 test('hand-off routing matches head-branch prefixes only', () => {

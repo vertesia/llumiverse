@@ -108,6 +108,7 @@ export async function waitForCiToSettle(
     expected,
     ci,
     {
+        trigger,
         timeoutMs = CI_SETTLE_TIMEOUT_MS,
         pollMs = CI_SETTLE_POLL_MS,
         sleep = sleepAsync,
@@ -117,21 +118,24 @@ export async function waitForCiToSettle(
     const deadline = now() + timeoutMs;
     let current = expected;
     for (;;) {
-        const passed = await ci(current);
+        // Waiting covers the triggering run's CI data lagging behind its completion event. It cannot
+        // help when that run tested an older head, or when CI waits on another run that has not
+        // finished: that run's own completion re-triggers the gate. Missing or failed data for the
+        // triggering run keeps polling, because no later event is guaranteed to re-check it.
+        let otherRunning = false;
+        const passed = await ci(current, ({ running }) => {
+            otherRunning = running !== undefined && running.id !== trigger?.id;
+        });
         current = await api.pr(number);
         if (!sameRevision(expected, current)) return { passed: false, changed: true };
         const remaining = deadline - now();
-        if (passed || remaining <= 0) return { passed, changed: false, pr: current };
+        const futile = trigger !== undefined && (trigger.head_sha !== current.head.sha || otherRunning);
+        if (passed || futile || remaining <= 0) return { passed, changed: false, pr: current };
         await sleep(Math.min(pollMs, remaining));
     }
 }
 
-export async function reconcile(
-    api,
-    number,
-    ci,
-    { pushed = false, settle = false, settleOptions, branch, handoffs } = {},
-) {
+export async function reconcile(api, number, ci, { settle = false, settleOptions, branch, handoffs } = {}) {
     // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
     if (branch && pr.head.ref !== branch) {
@@ -148,7 +152,7 @@ export async function reconcile(
     try {
         standing = (await api.reviews(number)).filter(ownsReview);
         let settled;
-        if (settle && !pushed) {
+        if (settle) {
             settled = await waitForCiToSettle(api, number, pr, ci, settleOptions);
             if (settled.changed) {
                 return {
@@ -161,10 +165,6 @@ export async function reconcile(
         }
         // Withdraw old-head approvals before spending time inspecting CI.
         await withdraw('The PR head changed; waiting for checks on the new commit.', false);
-        if (pushed) {
-            // A delayed push event must preserve a newer approval and its successful status.
-            return { reason: 'Removed old-commit approvals; CI completion handles approval.' };
-        }
         let firstEvaluation = true;
         const evaluateCi = (current) => {
             if (firstEvaluation && settled) {
@@ -232,10 +232,11 @@ export async function reconcile(
     }
 }
 
-// Delays before each retry of a read. A CI-completion event is the only trigger that re-checks a
-// finished head, so one transient 5xx on a read would otherwise leave its PR pending until a manual
-// dispatch.
-export const READ_RETRY_DELAYS_MS = [2000, 5000];
+// Delays before each retry of a read: exponential, 62 s in all. A CI-completion event is the only
+// trigger that re-checks a finished head, so a read that fails during a GitHub 5xx incident would
+// otherwise leave its PR pending until a manual dispatch. The old two retries (7 s) ran out in runs
+// 42054194248 and 42061447529, where 5xx responses kept coming for 28 s and 12 s after the first.
+export const READ_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 32000];
 
 export function isTransientApiError(error) {
     return /HTTP 5\d\d|error connecting to|connection reset|i\/o timeout|unexpected EOF/i.test(
@@ -390,7 +391,6 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
 }
 
 export async function targets(api, event, eventName, branch) {
-    if (event.pull_request) return [event.pull_request.number];
     if (eventName === 'repository_dispatch' && event.client_payload?.pr_number) {
         const number = Number(event.client_payload.pr_number);
         if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid PR number');
@@ -410,7 +410,6 @@ export async function targets(api, event, eventName, branch) {
 }
 
 export async function targetBranches(api, event, eventName) {
-    if (event.pull_request) return [event.pull_request.head.ref];
     if (event.workflow_run) {
         return event.workflow_run.head_repository?.full_name === api.repo ? [event.workflow_run.head_branch] : [];
     }
@@ -427,7 +426,7 @@ export async function handOff(api, { workflow, eventType, inputs }) {
     console.log(`PR #${inputs.pr_number}: started ${workflow} for ${inputs.head_sha}.`);
 }
 
-export function verifyPrCi(api, pr, workflows) {
+export function verifyPrCi(api, pr, workflows, onReject) {
     if (!pr.base?.sha || !pr.base?.ref) throw new Error('Missing PR base revision');
     return verifyCi(
         {
@@ -440,7 +439,18 @@ export function verifyPrCi(api, pr, workflows) {
         pr.number,
         workflows,
         api.pages,
+        onReject,
     );
+}
+
+// pr-event.yaml runs on pull_request without secrets, so a PR change reaches the gate as the
+// completion of that run. The completion carries no CI result to wait for, nor which change it was:
+// the gate evaluates the PR as it is now, which also withdraws an approval for an older head.
+export const PR_EVENT_WORKFLOW = '.github/workflows/pr-event.yaml';
+
+export function reconcileOptions(env, event) {
+    const ciCompletion = env.GITHUB_EVENT_NAME === 'workflow_run' && event.workflow_run.path !== PR_EVENT_WORKFLOW;
+    return { settle: ciCompletion, settleOptions: { trigger: event.workflow_run }, branch: env.CI_APPROVAL_BRANCH };
 }
 
 export async function main(env, { discover = false } = {}) {
@@ -452,18 +462,13 @@ export async function main(env, { discover = false } = {}) {
         return;
     }
     const policy = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
-    const ci = (pr) => verifyPrCi(api, pr, Object.keys(policy));
+    const ci = (pr, onReject) => verifyPrCi(api, pr, Object.keys(policy), onReject);
     const handoffsUrl = new URL('./ci-approve-handoffs.json', import.meta.url);
     const handoffs = existsSync(handoffsUrl) ? JSON.parse(readFileSync(handoffsUrl, 'utf8')) : {};
     const errors = [];
     for (const number of await targets(api, event, env.GITHUB_EVENT_NAME, env.CI_APPROVAL_BRANCH)) {
         try {
-            const result = await reconcile(api, number, ci, {
-                pushed: env.GITHUB_EVENT_NAME === 'pull_request_target' && event.action === 'synchronize',
-                settle: env.GITHUB_EVENT_NAME === 'workflow_run',
-                branch: env.CI_APPROVAL_BRANCH,
-                handoffs,
-            });
+            const result = await reconcile(api, number, ci, { ...reconcileOptions(env, event), handoffs });
             const summary = `PR #${number}: ${result.reason}`;
             console.log(summary);
             if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n\n`);

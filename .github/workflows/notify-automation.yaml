@@ -1,18 +1,24 @@
 name: Notify blocked automation
 
 on:
-  # zizmor: ignore[dangerous-triggers] Reads PR metadata only; never checks out or executes PR code.
-  pull_request_target:
-    types: [opened, converted_to_draft]
   # zizmor: ignore[dangerous-triggers] Reads failed run metadata; checkout is always the default branch.
   workflow_run:
     # Explicit on purpose: "*" also started a run for every automation workflow completion.
-    # Covers the push/PR CI workflows on main and the active release branches. Automerge
-    # workflows notify through their own notify-failure job. PR bookkeeping workflows are not
-    # CI, and the post-merge cherry-pick runs on a closed PR the notifier cannot resolve.
-    workflows: ["(ci) PR validation", "(test) Build and test", "(lint) Lint codebase", "(security) Zizmor"]
+    # Covers the push/PR CI workflows on main and the active release branches, and the cherry-pick
+    # that opens a backport with conflicts as a draft: pull_request_target, which saw the draft
+    # open, is blocked in public repositories from 2026-12-02. Automerge workflows notify through
+    # their own notify-failure job. PR bookkeeping workflows are not CI.
+    workflows:
+      [
+        "(ci) PR validation",
+        "(test) Build and test",
+        "(lint) Lint codebase",
+        "(security) Zizmor",
+        "(backport) Cherry-pick merged PR",
+      ]
     types: [completed]
-    branches: ["backport-*", "main", "release/**"]
+    # No branches filter: it matches the head branch of the completed run, and the cherry-pick runs
+    # on the branch of the merged PR, whatever its name. The job resolve filters the CI branches.
   workflow_call:
     secrets:
       APP_VERTESIA_SUBMODULE_SYNC_PEM:
@@ -53,12 +59,15 @@ jobs:
     name: Resolve notification recipient
     if: >-
       inputs.reason != '' ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.draft &&
-       startsWith(github.event.pull_request.head.ref, 'backport-') &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
-       contains(fromJSON('["vertesia-release-bot[bot]","app/vertesia-release-bot"]'), github.event.pull_request.user.login)) ||
-      (github.event_name == 'workflow_run' && contains(fromJSON('["pull_request","push"]'), github.event.workflow_run.event) &&
-       contains(fromJSON('["failure","timed_out","cancelled","action_required","startup_failure"]'), github.event.workflow_run.conclusion))
+      (github.event_name == 'workflow_run' && github.event.workflow_run.path == '.github/workflows/backport.yaml' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       contains(fromJSON('["success","failure"]'), github.event.workflow_run.conclusion)) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.path != '.github/workflows/backport.yaml' &&
+       contains(fromJSON('["pull_request","push"]'), github.event.workflow_run.event) &&
+       contains(fromJSON('["failure","timed_out","cancelled","action_required","startup_failure"]'), github.event.workflow_run.conclusion) &&
+       (startsWith(github.event.workflow_run.head_branch, 'backport-') ||
+        github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'release/')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
