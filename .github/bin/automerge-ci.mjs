@@ -5,9 +5,11 @@ import { pathToFileURL } from 'node:url';
 // A successful workflow can contain only skipped tests. Inspect the latest
 // substantive run and require the jobs/steps declared by this repository.
 export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSha, baseBranch }, explain = () => {}) {
-    // Every rejection names its cause, so a gate log shows which check withheld approval.
-    const reject = (reason) => {
-        explain(reason);
+    // Every rejection names its cause, so a gate log shows which check withheld approval. A rejection
+    // for a run that has not finished also passes that run, so a caller can tell CI that is still
+    // running apart from missing or failed CI data.
+    const reject = (reason, running) => {
+        explain(reason, running);
         return false;
     };
     const candidates = runs
@@ -38,7 +40,8 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
             }
         }
         const jobs = loadJobs(run.id);
-        // Ignore an intentionally empty companion run before evaluating the actual CI run.
+        // Ignore an intentionally empty run, such as a label router that did not invoke the
+        // pipeline, before evaluating the actual CI run.
         if (
             run.status === 'completed' &&
             (run.conclusion === 'success' || run.conclusion === 'skipped') &&
@@ -64,9 +67,11 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
         ) {
             continue;
         }
-        // The coordinator can fail because its other reusable workflow failed. Judge this policy's
-        // jobs independently once the run is terminal; legacy standalone runs must fully succeed.
-        if (run.status !== 'completed') return reject(`run ${run.id} is ${run.status}`);
+        // A coordinator run can fail or be cancelled because its *other* reusable workflow failed
+        // or was superseded. Judge this policy's jobs independently, but only after the run is
+        // terminal; missing, skipped, cancelled or failed required jobs still fail closed below.
+        // Any other run must succeed as a whole: its required jobs do not cover every job in it.
+        if (run.status !== 'completed') return reject(`run ${run.id} is ${run.status}`, run);
         const coordinator = Boolean(policy.workflow) && run.path === `.github/workflows/${policy.workflow}`;
         if (!coordinator && run.conclusion !== 'success') return reject(`run ${run.id} concluded ${run.conclusion}`);
         if (policy.jobs.length === 0) return reject('the CI policy declares no required jobs');
@@ -100,7 +105,7 @@ export function ghPages(endpoint) {
     );
 }
 
-export function main(env, pr, workflows, pages = ghPages) {
+export function main(env, pr, workflows, pages = ghPages, onReject = () => {}) {
     const { REPO: repo, HEAD_BRANCH: branch, HEAD_SHA: sha, BASE_SHA: baseSha, BASE_BRANCH: baseBranch } = env;
     if (!repo || !branch || !sha || !Number.isSafeInteger(pr) || pr <= 0 || workflows.length === 0) {
         throw new Error('Missing repository, branch, commit, PR or workflows');
@@ -128,17 +133,24 @@ export function main(env, pr, workflows, pages = ghPages) {
         const policy = policies[workflow];
         if (!policy) throw new Error(`No CI policy for ${workflow}`);
         const query = new URLSearchParams({ branch, head_sha: sha, event: 'pull_request', per_page: '100' });
-        const runs = [policy.workflow ?? workflow, ...(policy.fallbackWorkflows ?? [])].flatMap((source) =>
-            cachedPages(`repos/${repo}/actions/workflows/${source}/runs?${query}`).flatMap(
+        const runs = [
+            policy.workflow ?? workflow,
+            ...(policy.fallbackWorkflows ?? []),
+            ...(policy.companionWorkflows ?? []),
+        ].flatMap(
+            (source) => cachedPages(`repos/${repo}/actions/workflows/${source}/runs?${query}`).flatMap(
                 (page) => page.workflow_runs,
             ),
         );
         let reason = '';
-        const passed = verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSha, baseBranch }, (why) => {
+        let running;
+        const passed = verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSha, baseBranch }, (why, run) => {
             reason = why;
+            running = run;
         });
         if (!passed) {
             console.log(`Required jobs have not passed in ${workflow} for ${sha}: ${reason}.`);
+            onReject({ workflow, reason, running });
             return false;
         }
         console.log(`${workflow}: required CI jobs passed for ${sha}.`);
