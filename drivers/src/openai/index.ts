@@ -24,6 +24,7 @@ import {
     isOpenAIImageVersionGTE,
     type JSONSchema,
     LlumiverseError,
+    type LlumiverseErrorContext,
     type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
@@ -790,58 +791,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ResponseInputItem[] | undefined {
-        // Build assistant message from accumulated CompletionResult[]
-        const completionResults = result as CompletionResult[];
-
-        const textContent = completionResultsToText(completionResults);
-
-        assertConversationArray(options.conversation, {
-            provider: this.provider,
-            model: options.model,
-            operation: 'stream',
-        });
-        // Start with the conversation from options or the prompt
-        let conversation = mergeResponsesPrompt(options.conversation, prompt);
-
-        // Add assistant message as EasyInputMessage
-        if (textContent) {
-            const assistantMessage: EasyInputMessage = {
-                type: 'message',
-                role: 'assistant',
-                content: textContent,
-            };
-            conversation = updateConversation(conversation, [assistantMessage]);
-        }
-
-        // Add function calls as separate items (Response API format)
-        if (toolUse && toolUse.length > 0) {
-            const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map((t) => ({
-                type: 'function_call' as const,
-                call_id: t.id,
-                name: t.tool_name,
-                arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
-            }));
-            conversation = updateConversation(conversation, functionCalls);
-        }
-
-        // Increment turn counter
-        conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
-
-        // Apply stripping based on options
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        });
-
-        return processedConversation as ResponseInputItem[];
+        return buildOpenAIResponsesStreamingConversation(this.provider, prompt, result, toolUse, options);
     }
 
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -948,50 +898,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const normalized = normalizeEmbeddingsOptions(options);
-        const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
-
-        const texts: string[] = normalized.inputs.map((input) => {
-            if (input.type !== 'text') {
-                throw new Error(
-                    `Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`,
-                );
-            }
-            return input.text;
-        });
-
-        try {
-            const res = await this.service.embeddings.create({
-                input: texts,
-                model,
-                ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
-                encoding_format: 'float',
-            });
-
-            // OpenAI does not guarantee data is returned in the same order as the input,
-            // but does return a stable `index` per item. Sort by index to align with inputs.
-            const ordered = [...res.data].sort((a, b) => a.index - b.index);
-            const items = ordered.map((entry): EmbeddingResultItem => {
-                if (!entry.embedding || entry.embedding.length === 0) {
-                    throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
-                }
-                return { outputs: [{ values: entry.embedding, modality: 'text' }] };
-            });
-
-            const usage = res.usage
-                ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
-                : undefined;
-
-            return { model, results: items, usage };
-        } catch (error) {
-            if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && !hasNumericStatus(error)) throw error;
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model,
-                operation: 'execute',
-            });
-        }
+        return generateOpenAIEmbeddings(this.service, options, this.provider, (error, context) =>
+            this.formatLlumiverseError(error, context),
+        );
     }
 
     /**
@@ -1031,33 +940,18 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        const requestOptions = this.getDriverRequestOptions(options, signal);
-        const request = await imageRequest(
-            this.getImageService(),
-            prompt,
-            this.getResponsesRequestModel(options.model),
-            options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
-            this.getImageSourceModel(options.model),
-            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
-            this.getDriverFetch(),
-        );
-        const response = request.edit
-            ? await this.getImageService().images.edit(request.edit, requestOptions)
-            : await this.getImageService().images.generate(request.generate, requestOptions);
-        if (!response.data?.some((image) => image.b64_json || image.url)) {
-            throw new Error('Image response did not contain a completed image');
-        }
-        const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        return requestOpenAIImageGeneration(this.openAIImageContext(), prompt, options, signal);
+    }
+
+    /** What the shared image requests need from this driver. */
+    protected openAIImageContext(): OpenAIImageContext {
         return {
-            result: (response.data ?? []).flatMap((image): CompletionResult[] =>
-                image.b64_json
-                    ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
-                    : image.url
-                      ? [{ type: 'image', value: image.url }]
-                      : [],
-            ),
-            token_usage: mapOpenAIImageUsage(response.usage, response.svg_usage),
-            original_response: options.include_original_response ? response : undefined,
+            getImageService: () => this.getImageService(),
+            getResponsesRequestModel: (model) => this.getResponsesRequestModel(model),
+            getImageSourceModel: (model) => this.getImageSourceModel(model),
+            requestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
+            requestTimeoutMs: (httpTimeout) => this.getDriverRequestTimeoutMs(httpTimeout),
+            fetch: this.getDriverFetch(),
         };
     }
 
@@ -1087,49 +981,225 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        // GIF and SVG outputs cannot stream, so direct stream calls return the whole image as one chunk.
-        if (!canStreamImage(this.getImageSourceModel(options.model), options.model_options)) {
-            const { result, token_usage } = await this.requestImageGeneration(prompt, options, signal);
-            return {
-                async *[Symbol.asyncIterator]() {
-                    yield { result, token_usage } satisfies CompletionChunkObject;
-                },
-            };
+        return requestOpenAIImageStream(this.openAIImageContext(), prompt, options, signal);
+    }
+}
+
+/** What the shared Images API requests need from the driver they run for. */
+export interface OpenAIImageContext {
+    getImageService(): OpenAI;
+    getResponsesRequestModel(model: string): string;
+    getImageSourceModel(model: string): string;
+    requestOptions(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        signal?: AbortSignal,
+    ): { signal?: AbortSignal; timeout?: number } | undefined;
+    requestTimeoutMs(httpTimeout?: ExecutionOptions['httpTimeout']): number;
+    fetch: typeof fetch;
+}
+
+/** Text embeddings through an OpenAI SDK client's `POST /embeddings`, in input order. */
+export async function generateOpenAIEmbeddings(
+    service: OpenAI,
+    options: EmbeddingsOptions,
+    provider: Providers,
+    formatError: (error: unknown, context: LlumiverseErrorContext) => LlumiverseError,
+): Promise<EmbeddingsResult> {
+    const normalized = normalizeEmbeddingsOptions(options);
+    const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
+
+    const texts: string[] = normalized.inputs.map((input) => {
+        if (input.type !== 'text') {
+            throw new Error(`Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`);
         }
-        const requestOptions = this.getDriverRequestOptions(options, signal);
-        const request = await imageRequest(
-            this.getImageService(),
-            prompt,
-            this.getResponsesRequestModel(options.model),
-            options.model_options as OpenAiGptImageOptions | undefined,
-            this.getImageSourceModel(options.model),
-            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
-            this.getDriverFetch(),
-        );
-        const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
-        const stream = request.edit
-            ? await this.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
-            : await this.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
+        return input.text;
+    });
+
+    try {
+        const res = await service.embeddings.create({
+            input: texts,
+            model,
+            ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
+            encoding_format: 'float',
+        });
+
+        // OpenAI does not guarantee data is returned in the same order as the input,
+        // but does return a stable `index` per item. Sort by index to align with inputs.
+        const ordered = [...res.data].sort((a, b) => a.index - b.index);
+        const items = ordered.map((entry): EmbeddingResultItem => {
+            if (!entry.embedding || entry.embedding.length === 0) {
+                throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
+            }
+            return { outputs: [{ values: entry.embedding, modality: 'text' }] };
+        });
+
+        const usage = res.usage
+            ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
+            : undefined;
+
+        return { model, results: items, usage };
+    } catch (error) {
+        if (LlumiverseError.isLlumiverseError(error)) throw error;
+        if (error instanceof Error && !hasNumericStatus(error)) throw error;
+        throw formatError(error, {
+            provider,
+            model,
+            operation: 'execute',
+        });
+    }
+}
+
+/** The conversation after a streamed Responses request: the prompt, then the streamed answer and tool calls. */
+export function buildOpenAIResponsesStreamingConversation(
+    provider: Providers,
+    prompt: ResponseInputItem[],
+    result: unknown[],
+    toolUse: unknown[] | undefined,
+    options: ExecutionOptions,
+): ResponseInputItem[] | undefined {
+    // Build assistant message from accumulated CompletionResult[]
+    const completionResults = result as CompletionResult[];
+
+    const textContent = completionResultsToText(completionResults);
+
+    assertConversationArray(options.conversation, {
+        provider,
+        model: options.model,
+        operation: 'stream',
+    });
+    // Start with the conversation from options or the prompt
+    let conversation = mergeResponsesPrompt(options.conversation, prompt);
+
+    // Add assistant message as EasyInputMessage
+    if (textContent) {
+        const assistantMessage: EasyInputMessage = {
+            type: 'message',
+            role: 'assistant',
+            content: textContent,
+        };
+        conversation = updateConversation(conversation, [assistantMessage]);
+    }
+
+    // Add function calls as separate items (Response API format)
+    if (toolUse && toolUse.length > 0) {
+        const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map((t) => ({
+            type: 'function_call' as const,
+            call_id: t.id,
+            name: t.tool_name,
+            arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
+        }));
+        conversation = updateConversation(conversation, functionCalls);
+    }
+
+    // Increment turn counter
+    conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
+
+    // Apply stripping based on options
+    const currentTurn = getConversationMeta(conversation).turnNumber;
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+    };
+    let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+    processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+    processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+    });
+
+    return processedConversation as ResponseInputItem[];
+}
+
+/**
+ * Request image generation from the standalone Images API.
+ * Reference images select the edit operation; text-only prompts select generation.
+ */
+export async function requestOpenAIImageGeneration(
+    images: OpenAIImageContext,
+    prompt: ResponseInputItem[],
+    options: ExecutionOptions,
+    signal?: AbortSignal,
+): Promise<Completion> {
+    const requestOptions = images.requestOptions(options, signal);
+    const request = await imageRequest(
+        images.getImageService(),
+        prompt,
+        images.getResponsesRequestModel(options.model),
+        options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
+        images.getImageSourceModel(options.model),
+        { ...requestOptions, timeout: images.requestTimeoutMs(options.httpTimeout) },
+        images.fetch,
+    );
+    const response = request.edit
+        ? await images.getImageService().images.edit(request.edit, requestOptions)
+        : await images.getImageService().images.generate(request.generate, requestOptions);
+    if (!response.data?.some((image) => image.b64_json || image.url)) {
+        throw new Error('Image response did not contain a completed image');
+    }
+    const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+    return {
+        result: (response.data ?? []).flatMap((image): CompletionResult[] =>
+            image.b64_json
+                ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
+                : image.url
+                  ? [{ type: 'image', value: image.url }]
+                  : [],
+        ),
+        token_usage: mapOpenAIImageUsage(response.usage, response.svg_usage),
+        original_response: options.include_original_response ? response : undefined,
+    };
+}
+
+/** A streamed image request; GIF and SVG outputs cannot stream, so they return the whole image as one chunk. */
+export async function requestOpenAIImageStream(
+    images: OpenAIImageContext,
+    prompt: ResponseInputItem[],
+    options: ExecutionOptions,
+    signal?: AbortSignal,
+): Promise<DriverCompletionStream> {
+    // GIF and SVG outputs cannot stream, so direct stream calls return the whole image as one chunk.
+    if (!canStreamImage(images.getImageSourceModel(options.model), options.model_options)) {
+        const { result, token_usage } = await requestOpenAIImageGeneration(images, prompt, options, signal);
         return {
             async *[Symbol.asyncIterator]() {
-                let completed = false;
-                for await (const event of stream) {
-                    if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
-                    completed = true;
-                    yield {
-                        result: [
-                            {
-                                type: 'image',
-                                value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
-                            },
-                        ],
-                        token_usage: mapOpenAIImageStreamUsage(event.usage),
-                    } satisfies CompletionChunkObject;
-                }
-                if (!completed) throw new Error('Image stream ended without a completed image');
+                yield { result, token_usage } satisfies CompletionChunkObject;
             },
         };
     }
+    const requestOptions = images.requestOptions(options, signal);
+    const request = await imageRequest(
+        images.getImageService(),
+        prompt,
+        images.getResponsesRequestModel(options.model),
+        options.model_options as OpenAiGptImageOptions | undefined,
+        images.getImageSourceModel(options.model),
+        { ...requestOptions, timeout: images.requestTimeoutMs(options.httpTimeout) },
+        images.fetch,
+    );
+    const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+    const stream = request.edit
+        ? await images.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
+        : await images.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
+    return {
+        async *[Symbol.asyncIterator]() {
+            let completed = false;
+            for await (const event of stream) {
+                if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
+                completed = true;
+                yield {
+                    result: [
+                        {
+                            type: 'image',
+                            value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
+                        },
+                    ],
+                    token_usage: mapOpenAIImageStreamUsage(event.usage),
+                } satisfies CompletionChunkObject;
+            }
+            if (!completed) throw new Error('Image stream ended without a completed image');
+        },
+    };
 }
 
 /** The completion of a non-streamed Responses request: results, tool calls, usage and finish reason. */

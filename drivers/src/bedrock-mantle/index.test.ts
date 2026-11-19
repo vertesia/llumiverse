@@ -196,8 +196,7 @@ describe('BedrockMantleDriver auth', () => {
 
         expect(getTokenProvider).toHaveBeenCalledWith({ region: 'us-west-2' });
         expect(driver.service.baseURL).toBe('https://bedrock-mantle.us-west-2.api.aws/v1');
-        const responsesDelegate = getObjectProperty(driver, 'responsesDelegate');
-        const responsesService = getObjectProperty(responsesDelegate, 'service');
+        const responsesService = getObjectProperty(driver, 'responsesService');
         expect(responsesService.baseURL).toBe('https://bedrock-mantle.us-west-2.api.aws/openai/v1');
     });
 });
