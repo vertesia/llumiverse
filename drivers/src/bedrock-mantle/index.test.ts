@@ -3,9 +3,9 @@ import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import { getBedrockMantleProtocol, PromptRole, type PromptSegment, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
+import { RateLimitError } from 'openai/error';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from '../bedrock/index.js';
-import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import { BedrockMantleDriver, isBedrockMantleModel } from './index.js';
 
@@ -520,22 +520,81 @@ describe('BedrockMantleDriver protocol execution', () => {
     });
 });
 
-class TestResponsesDriver extends OpenAIResponsesDriverBase {
-    provider = Providers.bedrock_mantle as const;
-    declare service: OpenAI;
+type EmbeddingsCreate = (
+    params: OpenAI.Embeddings.EmbeddingCreateParams,
+) => Promise<Pick<OpenAI.Embeddings.CreateEmbeddingResponse, 'data' | 'usage'>>;
 
-    constructor(create: ResponsesCreate) {
-        super({});
-        Reflect.set(this, 'service', { responses: { create } });
-    }
+/** The real Mantle driver, with its OpenAI-compatible (`/openai/v1`) client replaced by a stub. */
+function mantleDriverWithOpenAIStub(stub: {
+    responses?: ResponsesCreate;
+    embeddings?: EmbeddingsCreate;
+}): BedrockMantleDriver {
+    const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+    Reflect.set(driver, 'responsesService', {
+        responses: { create: stub.responses },
+        embeddings: { create: stub.embeddings },
+    });
+    return driver;
 }
+
+describe('Bedrock Mantle OpenAI-compatible endpoint', () => {
+    it('sends embeddings to the OpenAI-compatible client and returns them in input order', async () => {
+        const create = vi.fn<EmbeddingsCreate>(async () => ({
+            data: [
+                { object: 'embedding', index: 1, embedding: [0.2] },
+                { object: 'embedding', index: 0, embedding: [0.1] },
+            ],
+            usage: { prompt_tokens: 3, total_tokens: 3 },
+        }));
+        const driver = mantleDriverWithOpenAIStub({ embeddings: create });
+
+        const result = await driver.generateEmbeddings({
+            model: 'openai.text-embedding-3-small',
+            inputs: [
+                { type: 'text', text: 'first' },
+                { type: 'text', text: 'second' },
+            ],
+        });
+
+        expect(create).toHaveBeenCalledWith({
+            input: ['first', 'second'],
+            model: 'openai.text-embedding-3-small',
+            encoding_format: 'float',
+        });
+        expect(result.results.map((item) => item.outputs[0]?.values)).toEqual([[0.1], [0.2]]);
+        expect(result.usage).toEqual({ input_tokens: 3, input_text_tokens: 3 });
+    });
+
+    it('formats OpenAI SDK errors from the Responses API with the Mantle provider', async () => {
+        const create = vi.fn<ResponsesCreate>(async () => {
+            throw new RateLimitError(429, { message: 'Too many requests' }, 'Too many requests', new Headers());
+        });
+        const driver = mantleDriverWithOpenAIStub({ responses: create });
+        const prompt = [
+            { type: 'message', role: 'user', content: 'hello' },
+        ] satisfies OpenAI.Responses.ResponseInputItem[];
+
+        const error = await driver.requestTextCompletion(prompt, { model: 'openai.gpt-5.5' }).then(
+            () => undefined,
+            (caught: unknown) => caught,
+        );
+        const formatted = driver.formatLlumiverseError(error, {
+            provider: Providers.bedrock_mantle,
+            model: 'openai.gpt-5.5',
+            operation: 'execute',
+        });
+
+        expect(formatted).toMatchObject({ code: 429, retryable: true });
+        expect(formatted.message).toContain('[bedrock_mantle] [429]');
+    });
+});
 
 describe('Bedrock Mantle Responses options', () => {
     it.each(['openai.gpt-5.5', 'openai.gpt-5.6-sol', 'openai.gpt-6-astra', 'openai.gpt-6-luna', 'openai.gpt-6.1-sol'])(
         'forwards effort and verbosity alongside structured output for %s',
         async (model) => {
             const create = vi.fn<ResponsesCreate>(async () => createResponse());
-            const driver = new TestResponsesDriver(create);
+            const driver = mantleDriverWithOpenAIStub({ responses: create });
             const prompt = [
                 { type: 'message', role: 'user', content: 'hello' },
             ] satisfies OpenAI.Responses.ResponseInputItem[];
@@ -578,7 +637,7 @@ describe('Bedrock Mantle Responses options', () => {
 
     it('forwards Grok reasoning effort through the Responses API', async () => {
         const create = vi.fn<ResponsesCreate>(async () => createResponse());
-        const driver = new TestResponsesDriver(create);
+        const driver = mantleDriverWithOpenAIStub({ responses: create });
         const prompt = [
             { type: 'message', role: 'user', content: 'hello' },
         ] satisfies OpenAI.Responses.ResponseInputItem[];

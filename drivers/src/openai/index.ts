@@ -940,18 +940,33 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        return requestOpenAIImageGeneration(this.openAIImageContext(), prompt, options, signal);
-    }
-
-    /** What the shared image requests need from this driver. */
-    protected openAIImageContext(): OpenAIImageContext {
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
+            this.getImageSourceModel(options.model),
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
+        );
+        const response = request.edit
+            ? await this.getImageService().images.edit(request.edit, requestOptions)
+            : await this.getImageService().images.generate(request.generate, requestOptions);
+        if (!response.data?.some((image) => image.b64_json || image.url)) {
+            throw new Error('Image response did not contain a completed image');
+        }
+        const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
         return {
-            getImageService: () => this.getImageService(),
-            getResponsesRequestModel: (model) => this.getResponsesRequestModel(model),
-            getImageSourceModel: (model) => this.getImageSourceModel(model),
-            requestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
-            requestTimeoutMs: (httpTimeout) => this.getDriverRequestTimeoutMs(httpTimeout),
-            fetch: this.getDriverFetch(),
+            result: (response.data ?? []).flatMap((image): CompletionResult[] =>
+                image.b64_json
+                    ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
+                    : image.url
+                      ? [{ type: 'image', value: image.url }]
+                      : [],
+            ),
+            token_usage: mapOpenAIImageUsage(response.usage, response.svg_usage),
+            original_response: options.include_original_response ? response : undefined,
         };
     }
 
@@ -964,8 +979,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
      * ID or of a configured deployment, rather than the deployment name.
      */
     getPromptCacheSourceModel(model: string): string {
-        const source = this.getImageSourceModel(model);
-        return source.split('::').pop() ?? source;
+        return promptCacheSourceModel(this.getImageSourceModel(model));
     }
 
     getImageService(): OpenAI {
@@ -981,21 +995,49 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return requestOpenAIImageStream(this.openAIImageContext(), prompt, options, signal);
+        // GIF and SVG outputs cannot stream, so direct stream calls return the whole image as one chunk.
+        if (!canStreamImage(this.getImageSourceModel(options.model), options.model_options)) {
+            const { result, token_usage } = await this.requestImageGeneration(prompt, options, signal);
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { result, token_usage } satisfies CompletionChunkObject;
+                },
+            };
+        }
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const request = await imageRequest(
+            this.getImageService(),
+            prompt,
+            this.getResponsesRequestModel(options.model),
+            options.model_options as OpenAiGptImageOptions | undefined,
+            this.getImageSourceModel(options.model),
+            { ...requestOptions, timeout: this.getDriverRequestTimeoutMs(options.httpTimeout) },
+            this.getDriverFetch(),
+        );
+        const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
+        const stream = request.edit
+            ? await this.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
+            : await this.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
+        return {
+            async *[Symbol.asyncIterator]() {
+                let completed = false;
+                for await (const event of stream) {
+                    if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
+                    completed = true;
+                    yield {
+                        result: [
+                            {
+                                type: 'image',
+                                value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
+                            },
+                        ],
+                        token_usage: mapOpenAIImageStreamUsage(event.usage),
+                    } satisfies CompletionChunkObject;
+                }
+                if (!completed) throw new Error('Image stream ended without a completed image');
+            },
+        };
     }
-}
-
-/** What the shared Images API requests need from the driver they run for. */
-export interface OpenAIImageContext {
-    getImageService(): OpenAI;
-    getResponsesRequestModel(model: string): string;
-    getImageSourceModel(model: string): string;
-    requestOptions(
-        options: Pick<ExecutionOptions, 'httpTimeout'>,
-        signal?: AbortSignal,
-    ): { signal?: AbortSignal; timeout?: number } | undefined;
-    requestTimeoutMs(httpTimeout?: ExecutionOptions['httpTimeout']): number;
-    fetch: typeof fetch;
 }
 
 /** Text embeddings through an OpenAI SDK client's `POST /embeddings`, in input order. */
@@ -1010,7 +1052,9 @@ export async function generateOpenAIEmbeddings(
 
     const texts: string[] = normalized.inputs.map((input) => {
         if (input.type !== 'text') {
-            throw new Error(`Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            throw new Error(
+                `Provider '${provider}' does not support '${input.type}' embeddings; only 'text' is supported.`,
+            );
         }
         return input.text;
     });
@@ -1111,95 +1155,9 @@ export function buildOpenAIResponsesStreamingConversation(
     return processedConversation as ResponseInputItem[];
 }
 
-/**
- * Request image generation from the standalone Images API.
- * Reference images select the edit operation; text-only prompts select generation.
- */
-export async function requestOpenAIImageGeneration(
-    images: OpenAIImageContext,
-    prompt: ResponseInputItem[],
-    options: ExecutionOptions,
-    signal?: AbortSignal,
-): Promise<Completion> {
-    const requestOptions = images.requestOptions(options, signal);
-    const request = await imageRequest(
-        images.getImageService(),
-        prompt,
-        images.getResponsesRequestModel(options.model),
-        options.model_options as OpenAiGptImageOptions | OpenAiDalleOptions | undefined,
-        images.getImageSourceModel(options.model),
-        { ...requestOptions, timeout: images.requestTimeoutMs(options.httpTimeout) },
-        images.fetch,
-    );
-    const response = request.edit
-        ? await images.getImageService().images.edit(request.edit, requestOptions)
-        : await images.getImageService().images.generate(request.generate, requestOptions);
-    if (!response.data?.some((image) => image.b64_json || image.url)) {
-        throw new Error('Image response did not contain a completed image');
-    }
-    const requested = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
-    return {
-        result: (response.data ?? []).flatMap((image): CompletionResult[] =>
-            image.b64_json
-                ? [{ type: 'image', value: imageDataUrl(image.b64_json, response.output_format, requested) }]
-                : image.url
-                  ? [{ type: 'image', value: image.url }]
-                  : [],
-        ),
-        token_usage: mapOpenAIImageUsage(response.usage, response.svg_usage),
-        original_response: options.include_original_response ? response : undefined,
-    };
-}
-
-/** A streamed image request; GIF and SVG outputs cannot stream, so they return the whole image as one chunk. */
-export async function requestOpenAIImageStream(
-    images: OpenAIImageContext,
-    prompt: ResponseInputItem[],
-    options: ExecutionOptions,
-    signal?: AbortSignal,
-): Promise<DriverCompletionStream> {
-    // GIF and SVG outputs cannot stream, so direct stream calls return the whole image as one chunk.
-    if (!canStreamImage(images.getImageSourceModel(options.model), options.model_options)) {
-        const { result, token_usage } = await requestOpenAIImageGeneration(images, prompt, options, signal);
-        return {
-            async *[Symbol.asyncIterator]() {
-                yield { result, token_usage } satisfies CompletionChunkObject;
-            },
-        };
-    }
-    const requestOptions = images.requestOptions(options, signal);
-    const request = await imageRequest(
-        images.getImageService(),
-        prompt,
-        images.getResponsesRequestModel(options.model),
-        options.model_options as OpenAiGptImageOptions | undefined,
-        images.getImageSourceModel(options.model),
-        { ...requestOptions, timeout: images.requestTimeoutMs(options.httpTimeout) },
-        images.fetch,
-    );
-    const requestedFormat = (options.model_options as OpenAiGptImageOptions | undefined)?.output_format;
-    const stream = request.edit
-        ? await images.getImageService().images.edit({ ...request.edit, stream: true }, requestOptions)
-        : await images.getImageService().images.generate({ ...request.generate, stream: true }, requestOptions);
-    return {
-        async *[Symbol.asyncIterator]() {
-            let completed = false;
-            for await (const event of stream) {
-                if (event.type !== 'image_generation.completed' && event.type !== 'image_edit.completed') continue;
-                completed = true;
-                yield {
-                    result: [
-                        {
-                            type: 'image',
-                            value: imageDataUrl(event.b64_json, event.output_format, requestedFormat),
-                        },
-                    ],
-                    token_usage: mapOpenAIImageStreamUsage(event.usage),
-                } satisfies CompletionChunkObject;
-            }
-            if (!completed) throw new Error('Image stream ended without a completed image');
-        },
-    };
+/** The source model of a composite `<deployment>::<model>` ID, whose prompt-cache support applies; others as is. */
+export function promptCacheSourceModel(model: string): string {
+    return model.split('::').pop() ?? model;
 }
 
 /** The completion of a non-streamed Responses request: results, tool calls, usage and finish reason. */
@@ -1648,12 +1606,12 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
 function supportsSchema(model: string, context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>): boolean {
-    const policy = context.responsesPolicy?.supportsSchema?.(model);
-    if (policy !== undefined) return policy;
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;
     }
+    const policy = context.responsesPolicy?.supportsSchema?.(model);
+    if (policy !== undefined) return policy;
     return supportsToolUse(model, context.provider);
 }
 

@@ -21,13 +21,13 @@ class TestResponsesDriver extends OpenAIResponsesDriverBase {
     }
 }
 
-/** A real driver class, whose provider rules apply, with its Responses client replaced by a stub. */
 /** Real drivers built by a test, destroyed after it so their HTTP agents do not outlive it. */
 const realDrivers: OpenAIResponsesDriverBase[] = [];
 afterEach(() => {
     for (const driver of realDrivers.splice(0)) driver.destroy();
 });
 
+/** A real driver class, whose provider rules apply, with its Responses client replaced by a stub. */
 function withResponsesStub<T extends OpenAIResponsesDriverBase>(
     driver: T,
     create: (...args: never[]) => Promise<unknown>,

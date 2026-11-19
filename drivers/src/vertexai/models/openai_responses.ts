@@ -16,6 +16,7 @@ import {
     type OpenAIResponsesContext,
     type OpenAIResponsesPolicy,
     OpenAIResponsesProtocol,
+    promptCacheSourceModel,
 } from '../../openai/index.js';
 import { formatOpenAICompatibleLlumiverseError } from '../../openai/openai_compatible.js';
 import type { VertexAIDriver } from '../index.js';
@@ -73,7 +74,7 @@ export class VertexAIResponsesModelDefinition implements ModelDefinition<VertexA
             responsesPolicy: VERTEX_RESPONSES_POLICY,
             getResponsesService: () => driver.getResponsesClient(this.publisher, this.region),
             getResponsesRequestModel: publisherRequestModel,
-            getPromptCacheSourceModel: (model) => model.split('::').pop() ?? model,
+            getPromptCacheSourceModel: promptCacheSourceModel,
         };
     }
 

@@ -26,6 +26,7 @@ import {
     generateOpenAIEmbeddings,
     type OpenAIResponsesContext,
     OpenAIResponsesProtocol,
+    promptCacheSourceModel,
 } from '../openai/index.js';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
@@ -139,7 +140,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             logger: this.logger,
             getResponsesService: () => this.responsesService,
             getResponsesRequestModel: (model) => model,
-            getPromptCacheSourceModel: (model) => model.split('::').pop() ?? model,
+            getPromptCacheSourceModel: promptCacheSourceModel,
         };
         this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
             this.getDriverRequestOptions(options, signal),
