@@ -297,3 +297,99 @@ describe('Vertex Meta Muse result schema across turns', () => {
         expect(copies[0]).toContain('"shade"');
     });
 });
+
+describe('Vertex Responses errors', () => {
+    const model = 'publishers/meta/models/muse-spark-1.3';
+
+    it('keeps the OpenAI-compatible format for publisher endpoint errors', async () => {
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(
+                    JSON.stringify({ error: { message: 'Quota exceeded', type: 'rate_limit', code: 'rate_limited' } }),
+                    { status: 429, headers: { 'Content-Type': 'application/json', 'x-request-id': 'req_1' } },
+                ),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: 'Say hello' }], {
+                model,
+                model_options: { _option_id: 'openai-text' },
+            }),
+        ).rejects.toMatchObject({
+            code: 429,
+            retryable: true,
+            message: expect.stringMatching(/^\[vertexai\] \[429\] .*Quota exceeded.*\(Request ID: req_1\)/),
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives other errors the Vertex driver's default format", () => {
+        const driver = new TestVertexAIDriver(vi.fn() as unknown as typeof fetch);
+        const formatted = driver.formatLlumiverseError(new Error('socket closed'), {
+            provider: 'vertexai',
+            model,
+            operation: 'execute',
+        });
+
+        expect(formatted).toMatchObject({ context: { provider: 'vertexai', model } });
+        expect(formatted.message).toContain('socket closed');
+    });
+});
+
+describe('Vertex OpenAI SDK auth errors', () => {
+    const model = 'publishers/meta/models/muse-spark-1.3';
+    const execute = (driver: VertexAIDriver) =>
+        driver.execute([{ role: PromptRole.user, content: 'Say hello' }], {
+            model,
+            model_options: { _option_id: 'openai-text' },
+        });
+
+    function driverWithAuth(getRequestHeaders: () => Promise<Headers>) {
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(JSON.stringify(responseBody('muse-spark-1.3')), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+        );
+        const driver = new TestVertexAIDriver(fetchMock as unknown as typeof fetch);
+        driver.googleAuth = { getRequestHeaders } as unknown as VertexAIDriver['googleAuth'];
+        return { driver, fetchMock };
+    }
+
+    it('reports the Google auth failure the SDK leaves out, and does not retry a revoked grant', async () => {
+        const secret = { refresh_token: 'never-in-the-error' };
+        const failure = Object.assign(new Error('invalid_grant: Token has been expired or revoked.'), {
+            config: { data: secret },
+        });
+        const { driver, fetchMock } = driverWithAuth(async () => {
+            throw failure;
+        });
+
+        const error = await execute(driver).then(
+            () => undefined,
+            (caught: unknown) => caught,
+        );
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(error).toMatchObject({
+            retryable: false,
+            message: '[vertexai] Vertex authentication failed: invalid_grant: Token has been expired or revoked.',
+        });
+        expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain('never-in-the-error');
+    });
+
+    it('forgets the failure once authentication succeeds again', async () => {
+        let fail = true;
+        const { driver } = driverWithAuth(async () => {
+            if (fail) throw new Error('invalid_grant: Bad Request');
+            return new Headers({ authorization: 'Bearer test-token' });
+        });
+        await expect(execute(driver)).rejects.toMatchObject({ retryable: false });
+
+        fail = false;
+        await expect(execute(driver)).resolves.toMatchObject({ result: [{ type: 'text', value: 'Bonjour' }] });
+        expect(Reflect.get(driver, 'lastOpenAIAuthFailure')).toBeUndefined();
+    });
+});

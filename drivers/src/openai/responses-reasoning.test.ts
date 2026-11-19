@@ -2,8 +2,10 @@ import { ModelOptionsSchema } from '@llumiverse/common/schemas';
 import { Base64DataSource, PromptRole, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { APIError } from 'openai/error';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AzureOpenAIDriver } from './azure_openai.js';
 import { OpenAIResponsesDriverBase } from './index.js';
+import { OpenAIResponsesDriver } from './openai_responses.js';
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {
     provider: OpenAIResponsesDriverBase['provider'];
@@ -18,6 +20,27 @@ class TestResponsesDriver extends OpenAIResponsesDriverBase {
         this.service = { responses: { create } } as unknown as OpenAI;
     }
 }
+
+/** Real drivers built by a test, destroyed after it so their HTTP agents do not outlive it. */
+const realDrivers: OpenAIResponsesDriverBase[] = [];
+afterEach(() => {
+    for (const driver of realDrivers.splice(0)) driver.destroy();
+});
+
+/** A real driver class, whose provider rules apply, with its Responses client replaced by a stub. */
+function withResponsesStub<T extends OpenAIResponsesDriverBase>(
+    driver: T,
+    create: (...args: never[]) => Promise<unknown>,
+): T {
+    realDrivers.push(driver);
+    vi.spyOn(driver as OpenAIResponsesDriverBase, 'getResponsesService').mockReturnValue({
+        responses: { create },
+    } as unknown as OpenAI);
+    return driver;
+}
+
+const compatibleDriver = (create: (...args: never[]) => Promise<unknown>) =>
+    withResponsesStub(new OpenAIResponsesDriver({ apiKey: 'key', endpoint: 'https://compatible.example/v1' }), create);
 
 const reasoningItem = {
     id: 'reason-1',
@@ -69,7 +92,7 @@ describe('OpenAI Responses reasoning', () => {
                 },
             ],
         }));
-        const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+        const driver = compatibleDriver(create);
         const options = {
             model: 'z-ai/glm-5.3',
             result_schema: {
@@ -217,15 +240,7 @@ describe('OpenAI Responses reasoning', () => {
     });
 
     it.each(
-        (
-            [
-                Providers.openai,
-                Providers.azure_openai,
-                Providers.xai,
-                Providers.bedrock_mantle,
-                Providers.openai_compatible,
-            ] as const
-        )
+        ([Providers.openai, Providers.azure_openai, Providers.xai, Providers.openai_compatible] as const)
             .flatMap((provider) => [
                 { provider, code: 'server_error' as const, retryable: true },
                 { provider, code: 'insufficient_quota' as const, retryable: false },
@@ -286,7 +301,7 @@ describe('OpenAI Responses reasoning', () => {
         'supplements native structured output for %s on OpenAI-compatible Responses',
         async (model) => {
             const create = vi.fn(async (_request: unknown) => response());
-            const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+            const driver = compatibleDriver(create);
             const options = {
                 model,
                 result_schema: { type: 'object' as const, properties: { value: { type: 'string' as const } } },
@@ -1112,16 +1127,17 @@ describe('Responses image generation', () => {
     );
     it('adds Azure deployment headers', async () => {
         const create = vi.fn(async (_request: unknown, _options?: unknown) => ({ ...response(), output: [image] }));
-        const driver = new TestResponsesDriver(create, Providers.azure_openai);
+        const driver = withResponsesStub(
+            new AzureOpenAIDriver({ apiKey: 'key', endpoint: 'https://resource.openai.azure.com' }),
+            create,
+        );
         await driver.requestTextCompletion([{ role: 'user', content: 'Draw' }], {
             model: 'gpt-5',
             model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
         });
-        expect(create.mock.calls[0][1]).toMatchObject({
-            headers: {
-                'x-ms-oai-image-generation-deployment': 'gpt-image-2.5-flare',
-                api_version: 'preview',
-            },
+        // The API version is a query parameter of the image-tool client, never a header.
+        expect((create.mock.calls[0][1] as { headers?: unknown } | undefined)?.headers).toEqual({
+            'x-ms-oai-image-generation-deployment': 'gpt-image-2.5-flare',
         });
     });
     it('returns streamed final images beside text without previews', async () => {

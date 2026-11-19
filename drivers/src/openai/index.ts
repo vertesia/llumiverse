@@ -21,9 +21,9 @@ import {
     isJSONObjectText,
     isOpenAIGptVersionGTE,
     isOpenAIImageVersionGTE,
-    isVertexOpenAIResponsesModel,
     type JSONSchema,
     LlumiverseError,
+    type LlumiverseErrorContext,
     type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
@@ -165,15 +165,14 @@ function openAIReasoning(
     isReasoningModel: boolean,
     context: OpenAIRequestOptions['reasoning_context'],
     model: string,
-    provider: Providers,
+    policy: OpenAIResponsesPolicy | undefined,
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
-        // Compatibility exception: retain reasoning summaries for the existing completion projection, except on
-        // Vertex's OpenAI models, whose docs list reasoning summaries as unsupported.
-        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/openai
-        ...(!(provider === Providers.vertexai && isVertexOpenAIResponsesModel(model)) && { summary: 'auto' }),
+        // Compatibility exception: retain reasoning summaries for the existing completion projection, unless the
+        // driver's policy says its endpoint does not offer them.
+        ...((policy?.requestsReasoningSummary?.(model) ?? true) && { summary: 'auto' }),
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
@@ -267,6 +266,34 @@ const supportFineTunning = new Set([
 
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
+/**
+ * Where a provider's Responses endpoint differs from OpenAI's. Each hook is optional, and an omitted one keeps
+ * OpenAI's behaviour, so a driver states only its own differences.
+ */
+export interface OpenAIResponsesPolicy {
+    /**
+     * Whether a model takes a native result schema; undefined keeps the default (its tool support). Realtime models
+     * never take one, whatever this returns.
+     */
+    supportsSchema?(model: string): boolean | undefined;
+    /** Whether a model also gets the result schema in the prompt, next to the native format. Default: no. */
+    supplementsSchemaInPrompt?(model: string): boolean;
+    /** Whether reasoning requests ask for reasoning summaries (`summary: 'auto'`). Default: yes. */
+    requestsReasoningSummary?(model: string): boolean;
+    /** Headers for a request, such as the image-generation deployment Azure needs. */
+    requestHeaders?(options: ExecutionOptions): Record<string, string> | undefined;
+}
+
+/** What the shared Responses protocol needs from the driver it runs for: transport, model mapping and policy. */
+export interface OpenAIResponsesContext {
+    readonly provider: Providers;
+    readonly logger: Logger;
+    readonly responsesPolicy?: OpenAIResponsesPolicy;
+    getResponsesService(options: ExecutionOptions): OpenAI;
+    /** The model ID the endpoint takes for a llumiverse model ID. */
+    getResponsesRequestModel(model: string): string;
+}
+
 /** Reusable Responses text protocol shared by OpenAI-compatible transports. */
 export class OpenAIResponsesProtocol {
     constructor(
@@ -277,26 +304,17 @@ export class OpenAIResponsesProtocol {
     ) {}
 
     private getRequestOptions(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): OpenAI.RequestOptions | undefined {
         const base = this.resolveRequestOptions(options, signal);
-        const imageTool = (options.model_options as OpenAIRequestOptions | undefined)?.image_generation;
-        if (!imageTool || (driver.provider !== Providers.azure_foundry && driver.provider !== Providers.azure_openai)) {
-            return base;
-        }
-        return {
-            ...base,
-            headers: {
-                'x-ms-oai-image-generation-deployment': driver.getResponsesRequestModel(imageTool.model),
-                api_version: 'preview',
-            },
-        };
+        const headers = driver.responsesPolicy?.requestHeaders?.(options);
+        return headers ? { ...base, headers } : base;
     }
 
     async requestTextCompletionStream(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
@@ -341,7 +359,7 @@ export class OpenAIResponsesProtocol {
         let strictMode = false;
         if (
             options.result_schema &&
-            supportsSchema(options.model, driver.provider) &&
+            supportsSchema(options.model, driver) &&
             options.prompt_cache_schema_suffix !== true
         ) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
@@ -357,7 +375,7 @@ export class OpenAIResponsesProtocol {
             isReasoningModel,
             reasoningContext,
             options.model,
-            driver.provider,
+            driver.responsesPolicy,
         );
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
@@ -442,7 +460,7 @@ export class OpenAIResponsesProtocol {
     }
 
     async requestTextCompletion(
-        driver: OpenAIResponsesDriverBase,
+        driver: OpenAIResponsesContext,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
         signal?: AbortSignal,
@@ -486,7 +504,7 @@ export class OpenAIResponsesProtocol {
         let strictMode = false;
         if (
             options.result_schema &&
-            supportsSchema(options.model, driver.provider) &&
+            supportsSchema(options.model, driver) &&
             options.prompt_cache_schema_suffix !== true
         ) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
@@ -502,7 +520,7 @@ export class OpenAIResponsesProtocol {
             isReasoningModel,
             reasoningContext,
             options.model,
-            driver.provider,
+            driver.responsesPolicy,
         );
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
@@ -576,7 +594,7 @@ export class OpenAIResponsesProtocol {
             ? await driver.getResponsesService(options).responses.create(request, requestOptions)
             : await driver.getResponsesService(options).responses.create(request);
 
-        const completion = driver.extractDataFromResponse(options, res);
+        const completion = extractOpenAIResponsesCompletion(driver, options, res);
         if (options.include_original_response) {
             completion.original_response = res;
         }
@@ -598,10 +616,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.azure_openai
         | Providers.xai
         | Providers.azure_foundry
-        | Providers.bedrock
-        | Providers.bedrock_mantle
-        | Providers.openai_compatible
-        | Providers.vertexai;
+        | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 
@@ -665,15 +680,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 result_schema: undefined,
             });
         }
-        const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
-        const nativeSchemaOnly =
-            supportsSchema(options.model, this.provider) && !supplementsSchemaInPrompt(options.model, this.provider);
-        const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
-        return formatOpenAILikeMultimodalPrompt(segments, {
-            ...options,
-            result_schema: resultSchema,
-            resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
-        });
+        return formatOpenAIResponsesPrompt(this, segments, options);
     }
 
     /** @internal Resolve the model identifier sent to the Responses transport. */
@@ -681,58 +688,12 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return model;
     }
 
-    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
-        assertOpenAIResponseSucceeded(result);
-        const tokenInfo = mapUsage(result.usage);
-
-        // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
-        // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
-        // streaming path does the same.
-        const lastCall =
-            result.status === 'incomplete'
-                ? result.output.filter((item) => item.type === 'function_call').at(-1)
-                : undefined;
-        const tools = collectTools(
-            lastCall && !isJSONObjectText(lastCall.arguments)
-                ? result.output.filter((item) => item !== lastCall)
-                : result.output,
-        );
-        const finish_reason = responseFinishReason(result, tools);
-        const refusalDetails = responseRefusalDetails(result);
-        if (refusalDetails) {
-            logModelRefusal(this.logger, {
-                provider: this.provider,
-                model: _options.model,
-                streaming: false,
-                finish_reason,
-                provider_finish_reason: result.incomplete_details?.reason ?? result.status,
-                response_id: result.id,
-                details: refusalDetails,
-            });
-        }
-        // Collect all parts in order (text and images)
-        const includeThoughts =
-            (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
-        const allResults = extractCompletionResults(
-            result.output,
-            includeThoughts,
-            (_options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
-        );
-
-        // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
-        if (allResults.length === 0 && !tools && !isCutOffFinishReason(finish_reason)) {
-            this.logger.error({ result }, '[OpenAI] Response is not valid');
-            throw new Error('Response is not valid: no data');
-        }
-
-        return {
-            result: allResults,
-            token_usage: tokenInfo,
-            service_tier: result.service_tier ?? undefined,
-            finish_reason,
-            tool_use: tools,
-        };
+    extractDataFromResponse(options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
+        return extractOpenAIResponsesCompletion(this, options, result);
     }
+
+    /** Per-driver differences from OpenAI's Responses endpoint; none by default. */
+    readonly responsesPolicy?: OpenAIResponsesPolicy;
 
     requestTextCompletionStream(
         prompt: ResponseInputItem[],
@@ -775,58 +736,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ResponseInputItem[] | undefined {
-        // Build assistant message from accumulated CompletionResult[]
-        const completionResults = result as CompletionResult[];
-
-        const textContent = completionResultsToText(completionResults);
-
-        assertConversationArray(options.conversation, {
-            provider: this.provider,
-            model: options.model,
-            operation: 'stream',
-        });
-        // Start with the conversation from options or the prompt
-        let conversation = mergeResponsesPrompt(options.conversation, prompt);
-
-        // Add assistant message as EasyInputMessage
-        if (textContent) {
-            const assistantMessage: EasyInputMessage = {
-                type: 'message',
-                role: 'assistant',
-                content: textContent,
-            };
-            conversation = updateConversation(conversation, [assistantMessage]);
-        }
-
-        // Add function calls as separate items (Response API format)
-        if (toolUse && toolUse.length > 0) {
-            const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map((t) => ({
-                type: 'function_call' as const,
-                call_id: t.id,
-                name: t.tool_name,
-                arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
-            }));
-            conversation = updateConversation(conversation, functionCalls);
-        }
-
-        // Increment turn counter
-        conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
-
-        // Apply stripping based on options
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        });
-
-        return processedConversation as ResponseInputItem[];
+        return buildOpenAIResponsesStreamingConversation(this.provider, prompt, result, toolUse, options);
     }
 
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -931,50 +841,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const normalized = normalizeEmbeddingsOptions(options);
-        const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
-
-        const texts: string[] = normalized.inputs.map((input) => {
-            if (input.type !== 'text') {
-                throw new Error(
-                    `Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`,
-                );
-            }
-            return input.text;
-        });
-
-        try {
-            const res = await this.service.embeddings.create({
-                input: texts,
-                model,
-                ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
-                encoding_format: 'float',
-            });
-
-            // OpenAI does not guarantee data is returned in the same order as the input,
-            // but does return a stable `index` per item. Sort by index to align with inputs.
-            const ordered = [...res.data].sort((a, b) => a.index - b.index);
-            const items = ordered.map((entry): EmbeddingResultItem => {
-                if (!entry.embedding || entry.embedding.length === 0) {
-                    throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
-                }
-                return { outputs: [{ values: entry.embedding, modality: 'text' }] };
-            });
-
-            const usage = res.usage
-                ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
-                : undefined;
-
-            return { model, results: items, usage };
-        } catch (error) {
-            if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && !hasNumericStatus(error)) throw error;
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model,
-                operation: 'execute',
-            });
-        }
+        return generateOpenAIEmbeddings(this.service, options, this.provider, (error, context) =>
+            this.formatLlumiverseError(error, context),
+        );
     }
 
     isImageModel(model: string): boolean {
@@ -1080,6 +949,196 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             },
         };
     }
+}
+
+/** Text embeddings through an OpenAI SDK client's `POST /embeddings`, in input order. */
+export async function generateOpenAIEmbeddings(
+    service: OpenAI,
+    options: EmbeddingsOptions,
+    provider: Providers,
+    formatError: (error: unknown, context: LlumiverseErrorContext) => LlumiverseError,
+): Promise<EmbeddingsResult> {
+    const normalized = normalizeEmbeddingsOptions(options);
+    const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
+
+    const texts: string[] = normalized.inputs.map((input) => {
+        if (input.type !== 'text') {
+            throw new Error(
+                `Provider '${provider}' does not support '${input.type}' embeddings; only 'text' is supported.`,
+            );
+        }
+        return input.text;
+    });
+
+    try {
+        const res = await service.embeddings.create({
+            input: texts,
+            model,
+            ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
+            encoding_format: 'float',
+        });
+
+        // OpenAI does not guarantee data is returned in the same order as the input,
+        // but does return a stable `index` per item. Sort by index to align with inputs.
+        const ordered = [...res.data].sort((a, b) => a.index - b.index);
+        const items = ordered.map((entry): EmbeddingResultItem => {
+            if (!entry.embedding || entry.embedding.length === 0) {
+                throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
+            }
+            return { outputs: [{ values: entry.embedding, modality: 'text' }] };
+        });
+
+        const usage = res.usage
+            ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
+            : undefined;
+
+        return { model, results: items, usage };
+    } catch (error) {
+        if (LlumiverseError.isLlumiverseError(error)) throw error;
+        if (error instanceof Error && !hasNumericStatus(error)) throw error;
+        throw formatError(error, {
+            provider,
+            model,
+            operation: 'execute',
+        });
+    }
+}
+
+/** The conversation after a streamed Responses request: the prompt, then the streamed answer and tool calls. */
+export function buildOpenAIResponsesStreamingConversation(
+    provider: Providers,
+    prompt: ResponseInputItem[],
+    result: unknown[],
+    toolUse: unknown[] | undefined,
+    options: ExecutionOptions,
+): ResponseInputItem[] | undefined {
+    // Build assistant message from accumulated CompletionResult[]
+    const completionResults = result as CompletionResult[];
+
+    const textContent = completionResultsToText(completionResults);
+
+    assertConversationArray(options.conversation, {
+        provider,
+        model: options.model,
+        operation: 'stream',
+    });
+    // Start with the conversation from options or the prompt
+    let conversation = mergeResponsesPrompt(options.conversation, prompt);
+
+    // Add assistant message as EasyInputMessage
+    if (textContent) {
+        const assistantMessage: EasyInputMessage = {
+            type: 'message',
+            role: 'assistant',
+            content: textContent,
+        };
+        conversation = updateConversation(conversation, [assistantMessage]);
+    }
+
+    // Add function calls as separate items (Response API format)
+    if (toolUse && toolUse.length > 0) {
+        const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map((t) => ({
+            type: 'function_call' as const,
+            call_id: t.id,
+            name: t.tool_name,
+            arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
+        }));
+        conversation = updateConversation(conversation, functionCalls);
+    }
+
+    // Increment turn counter
+    conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
+
+    // Apply stripping based on options
+    const currentTurn = getConversationMeta(conversation).turnNumber;
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+    };
+    let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+    processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+    processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+    });
+
+    return processedConversation as ResponseInputItem[];
+}
+
+/** The completion of a non-streamed Responses request: results, tool calls, usage and finish reason. */
+function extractOpenAIResponsesCompletion(
+    context: Pick<OpenAIResponsesContext, 'provider' | 'logger'>,
+    options: ExecutionOptions,
+    result: OpenAI.Responses.Response,
+): Completion {
+    assertOpenAIResponseSucceeded(result);
+    const tokenInfo = mapUsage(result.usage);
+
+    // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
+    // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
+    // streaming path does the same.
+    const lastCall =
+        result.status === 'incomplete'
+            ? result.output.filter((item) => item.type === 'function_call').at(-1)
+            : undefined;
+    const tools = collectTools(
+        lastCall && !isJSONObjectText(lastCall.arguments)
+            ? result.output.filter((item) => item !== lastCall)
+            : result.output,
+    );
+    const finish_reason = responseFinishReason(result, tools);
+    const refusalDetails = responseRefusalDetails(result);
+    if (refusalDetails) {
+        logModelRefusal(context.logger, {
+            provider: context.provider,
+            model: options.model,
+            streaming: false,
+            finish_reason,
+            provider_finish_reason: result.incomplete_details?.reason ?? result.status,
+            response_id: result.id,
+            details: refusalDetails,
+        });
+    }
+    // Collect all parts in order (text and images)
+    const includeThoughts = (options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
+    const allResults = extractCompletionResults(
+        result.output,
+        includeThoughts,
+        (options.model_options as OpenAIRequestOptions | undefined)?.image_generation?.output_format,
+    );
+
+    // A cut-off stop with nothing left to return is still a valid result: the stop is what the caller needs.
+    if (allResults.length === 0 && !tools && !isCutOffFinishReason(finish_reason)) {
+        context.logger.error({ result }, '[OpenAI] Response is not valid');
+        throw new Error('Response is not valid: no data');
+    }
+
+    return {
+        result: allResults,
+        token_usage: tokenInfo,
+        service_tier: result.service_tier ?? undefined,
+        finish_reason,
+        tool_use: tools,
+    };
+}
+
+/** The prompt for a Responses text request: the prompt copy of the result schema only where it is needed. */
+export function formatOpenAIResponsesPrompt(
+    context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>,
+    segments: PromptSegment[],
+    options: PromptOptions,
+): Promise<ResponseInputItem[]> {
+    const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
+    const nativeSchemaOnly =
+        supportsSchema(options.model, context) &&
+        !(context.responsesPolicy?.supplementsSchemaInPrompt?.(options.model) ?? false);
+    const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
+    return formatOpenAILikeMultimodalPrompt(segments, {
+        ...options,
+        result_schema: resultSchema,
+        resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
+    });
 }
 
 function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
@@ -1399,36 +1458,16 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
     return items;
 }
 
-/**
- * Prompt-schema supplement alongside native structured output. OpenRouter routes `minimax/` models across many
- * hosts, and most do not enforce a JSON schema: some downgrade it to JSON mode and return `{}`, others ignore it.
- * The prompt schema gives every host the shape, while hosts that enforce the schema still receive it natively.
- * A family rule: it applies to any OpenAI-compatible endpoint serving a `minimax/` model ID, not only OpenRouter.
- */
-function supplementsSchemaInPrompt(model: string, provider: Providers): boolean {
-    // Vertex constrains output to the schema without showing it to the model, and emits the properties
-    // alphabetically; without the schema in the prompt, Muse fills the constrained fields with wrong or garbled
-    // values. This applies to the models Vertex serves through a publisher's Responses API, except OpenAI's GPT
-    // models: OpenAI's Responses API enforces the schema natively, so they stay native-only until measured on Vertex.
-    if (provider === Providers.vertexai) return !isVertexOpenAIResponsesModel(model);
-    return provider === Providers.openai_compatible && /^minimax\//i.test(model);
-}
-
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
-function supportsSchema(model: string, provider: Providers): boolean {
+function supportsSchema(model: string, context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;
     }
-    // OpenRouter's OpenAI-compatible Responses surface advertises native structured output for
-    // GLM 5.3, but the model returns unconstrained prose and downstream validation fails. Keep
-    // this generation on the existing prompt-schema fallback; later GLM generations remain
-    // eligible for native support unless runtime evidence says otherwise.
-    if (provider === Providers.openai_compatible && /^z-ai\/glm-5\.3(?:$|[-/:])/.test(model)) {
-        return false;
-    }
-    return supportsToolUse(model, provider);
+    const policy = context.responsesPolicy?.supportsSchema?.(model);
+    if (policy !== undefined) return policy;
+    return supportsToolUse(model, context.provider);
 }
 
 /**
