@@ -14,7 +14,7 @@ import {
     incrementConversationTurn,
     isMetaMuseModel,
     isVertexOpenAIResponsesModel,
-    type LlumiverseError,
+    LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     type PromptSegment,
@@ -29,7 +29,8 @@ import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth } from 'google-auth-library';
 import OpenAI from 'openai';
-import { vertex } from 'openai/providers/vertex';
+import { OpenAIError } from 'openai/error';
+import { type GoogleClient, vertex } from 'openai/providers/vertex';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
@@ -113,6 +114,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     /** OpenAI SDK clients by API root, for Vertex's OpenAI-compatible and publisher endpoints. */
     private vertexOpenAIClients: Map<string, OpenAI> = new Map();
+    /** The message of the last Google auth failure behind an OpenAI SDK request; cleared by a success. */
+    private lastOpenAIAuthFailure: string | undefined;
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIServiceTier: string | undefined;
@@ -320,6 +323,26 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return client;
     }
 
+    /**
+     * The driver's Google credentials for the SDK's Vertex provider. The provider replaces an auth failure with a
+     * generic error and leaves out its cause, which can carry credential material, so this keeps the failure's message
+     * (never the error itself) for `formatLlumiverseError` to report.
+     */
+    private openAIAuthCredentials(): GoogleClient {
+        return {
+            getRequestHeaders: async (url) => {
+                try {
+                    const headers = await this.googleAuth.getRequestHeaders(url);
+                    this.lastOpenAIAuthFailure = undefined;
+                    return headers;
+                } catch (error) {
+                    this.lastOpenAIAuthFailure = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+                    throw error;
+                }
+            },
+        };
+    }
+
     /** One OpenAI SDK client per Vertex API root, authenticated by the SDK's Vertex provider. */
     private getVertexOpenAIClient(baseURL: string): OpenAI {
         let client = this.vertexOpenAIClients.get(baseURL);
@@ -327,7 +350,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // The provider authenticates every attempt with the driver's Google credentials, and keeps the SDK from
             // reading OpenAI settings such as `OPENAI_ORG_ID` from the environment and sending them to Google.
             client = new OpenAI({
-                provider: vertex({ baseURL, credentials: this.googleAuth }),
+                provider: vertex({ baseURL, credentials: this.openAIAuthCredentials() }),
                 fetch: this.getDriverFetch(),
                 maxRetries: 0,
                 timeout: this.getDriverRequestTimeoutMs(),
@@ -1066,6 +1089,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * @returns A standardized LlumiverseError
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        // The SDK's Vertex provider reports every auth failure with one generic message; add the cause it left out,
+        // which also decides retryability (an `invalid_grant` is never retried).
+        const authFailure = this.lastOpenAIAuthFailure;
+        if (authFailure && error instanceof OpenAIError && error.message.startsWith('Vertex authentication failed')) {
+            const message = `Vertex authentication failed: ${authFailure}`;
+            return new LlumiverseError(
+                `[${this.provider}] ${message}`,
+                this.isRetryableError(undefined, message),
+                context,
+                error,
+                undefined,
+                error.name,
+            );
+        }
+
         // Get the model definition for this request
         const modelDef = getModelDefinition(context.model);
         let formatted: LlumiverseError | undefined;
