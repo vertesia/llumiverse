@@ -28,6 +28,7 @@ import {
     type TrainingPromptOptions,
 } from '@llumiverse/common';
 import type { Agent } from 'undici';
+import { isPermanentAuthErrorMessage } from './auth-errors.js';
 import {
     DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     DefaultCompletionStream,
@@ -582,8 +583,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
         // Explicit auth failures should never be retried even when they arrive without
         // a numeric status code (for example, google-auth-library invalid_grant errors).
-        if (lowerMessage.includes('invalid_grant')) return false;
-        if (lowerMessage.includes("credential's issuer")) return false;
+        if (isPermanentAuthErrorMessage(message)) return false;
 
         // Numeric status codes
         if (statusCode !== undefined) {

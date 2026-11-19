@@ -10,6 +10,7 @@ import {
 import OpenAI, { AzureOpenAI } from 'openai';
 import { cognitiveServicesScope } from '../azure/entra-scope.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { azureResponsesPolicy } from './azure-responses-policy.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 export type { AzureOpenAIDriverOptions } from '../driver-options.js';
@@ -22,6 +23,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
     private imageService?: OpenAI;
     private sourceModel?: string;
     readonly provider = Providers.azure_openai;
+    override readonly responsesPolicy = azureResponsesPolicy((model) => this.getResponsesRequestModel(model));
 
     //Overload to allow independent instantiation with AzureOpenAI service
     constructor(serviceOrOpts: AzureOpenAI | AzureOpenAIDriverOptions) {

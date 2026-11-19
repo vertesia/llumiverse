@@ -161,6 +161,21 @@ describe('AbstractDriver Error Formatting', () => {
                 ).toBe(false);
             });
 
+            it.each([
+                'invalid_client',
+                'Error: invalid_client: The OAuth client was not found.',
+                'unauthorized_client: Client is unauthorized to retrieve access tokens using this method.',
+                'unsupported_grant_type',
+                'invalid_scope: Bad Request',
+            ])('should classify the OAuth error %s as non-retryable', (message) => {
+                expect(driver.isRetryableError(undefined, message)).toBe(false);
+            });
+
+            it('should leave OpenAI invalid_request_error messages to the status code', () => {
+                expect(driver.isRetryableError(undefined, 'Bad input (type: invalid_request_error)')).toBeUndefined();
+                expect(driver.isRetryableError(500, 'Upstream failed (type: invalid_request_error)')).toBe(true);
+            });
+
             it('should mark unknown messages as undefined (let consumer decide)', () => {
                 expect(driver.isRetryableError(undefined, 'Invalid API key')).toBeUndefined();
                 expect(driver.isRetryableError(undefined, 'Bad request')).toBeUndefined();

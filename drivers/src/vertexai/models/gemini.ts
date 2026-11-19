@@ -37,6 +37,7 @@ import {
     hasGeminiSamplingRestriction,
     incrementConversationTurn,
     isGeminiModelVersionGte,
+    isPermanentAuthErrorMessage,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -1593,7 +1594,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
     private isGeminiErrorRetryable(httpStatusCode: number, message?: string): boolean | undefined {
-        if (message && this.isNonRetryableAuthError(message)) return false;
+        if (message && isPermanentAuthErrorMessage(message)) return false;
 
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
@@ -1642,11 +1643,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         // Unknown status codes - let consumer decide retry strategy
         return undefined;
-    }
-
-    private isNonRetryableAuthError(message: string): boolean {
-        const lowerMessage = message.toLowerCase();
-        return lowerMessage.includes('invalid_grant') || lowerMessage.includes("credential's issuer");
     }
 
     /**
