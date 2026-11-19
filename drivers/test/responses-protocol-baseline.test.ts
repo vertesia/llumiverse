@@ -2,6 +2,9 @@
  * Records what each driver on the shared OpenAI Responses protocol sends and returns, so changes to how drivers reach
  * the protocol can be checked for unchanged wire behaviour: the request (URL, method, non-auth headers, body), the
  * completion, the stored conversation and the driver's log calls, per driver and scenario.
+ *
+ * A mismatch means a driver's wire behaviour changed. Update the snapshot (`vitest run <this file> -u`) only for a
+ * change that is meant to alter requests or results, and review the snapshot diff in the pull request.
  */
 import { type AbstractDriver, type ExecutionOptions, type JSONSchema, PromptRole } from '@llumiverse/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -241,6 +244,20 @@ const SCENARIOS: Scenario[] = [
     { name: 'error-network', failure: 'network' },
 ];
 
+/** Environment variables the provider SDKs read, which would otherwise make the recording depend on the machine. */
+const SDK_ENVIRONMENT = [
+    'OPENAI_API_KEY',
+    'OPENAI_BASE_URL',
+    'OPENAI_ORG_ID',
+    'OPENAI_PROJECT_ID',
+    'OPENAI_WEBHOOK_SECRET',
+    'AZURE_OPENAI_API_KEY',
+    'AZURE_OPENAI_ENDPOINT',
+    'OPENAI_API_VERSION',
+    'GOOGLE_CLOUD_PROJECT',
+    'GOOGLE_CLOUD_LOCATION',
+] as const;
+
 /** Headers that identify the client or carry credentials, which vary by SDK version and are not wire behaviour. */
 const IGNORED_HEADERS = /^(authorization|api-key|user-agent|x-stainless-|x-amz-|idempotency-key|content-length)/i;
 
@@ -282,6 +299,7 @@ describe('OpenAI Responses protocol baseline', () => {
         nextOutput = textOutput('Hello');
         compactResponse = false;
         failure = undefined;
+        for (const name of SDK_ENVIRONMENT) vi.stubEnv(name, undefined);
         vi.stubGlobal(
             'fetch',
             vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -328,7 +346,10 @@ describe('OpenAI Responses protocol baseline', () => {
             }),
         );
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
+    });
 
     for (const driverCase of DRIVERS) {
         for (const scenario of SCENARIOS) {
