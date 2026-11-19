@@ -43,34 +43,8 @@ export abstract class OpenAICompatibleDriverBase<
         if (!this.isCompatibleAPIError(error)) {
             return super.formatLlumiverseError(error, context);
         }
-
-        const httpStatusCode = error.status ?? error.statusCode;
-        const errorCode = error.code;
-        const errorParam = error.param;
-        const errorType = error.type;
-        let userMessage = error.message || String(error);
-
-        if (httpStatusCode) {
-            userMessage = `[${httpStatusCode}] ${userMessage}`;
-        }
-        if (errorCode && !userMessage.includes(errorCode)) {
-            userMessage += ` (code: ${errorCode})`;
-        }
-        if (errorParam && !userMessage.toLowerCase().includes(errorParam.toLowerCase())) {
-            userMessage += ` [param: ${errorParam}]`;
-        }
-        const requestId = error.requestID ?? error.requestId;
-        if (requestId) {
-            userMessage += ` (Request ID: ${requestId})`;
-        }
-
-        return new LlumiverseError(
-            `[${context.provider}] ${userMessage}`,
-            this.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType),
-            context,
-            error,
-            httpStatusCode,
-            error.constructor?.name || 'OpenAICompatibleError',
+        return compatibleAPIErrorToLlumiverseError(error, context, (status, code, type) =>
+            this.isOpenAIErrorRetryable(error, status, code, type),
         );
     }
 
@@ -87,6 +61,59 @@ export abstract class OpenAICompatibleDriverBase<
     protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
         return isCompatibleAPIError(error);
     }
+}
+
+/**
+ * An OpenAI SDK or OpenAI-compatible API error as a LlumiverseError, for code that is not an OpenAI-compatible driver
+ * but calls such an endpoint. Undefined for other errors, which the caller formats its own way.
+ */
+export function formatOpenAICompatibleLlumiverseError(
+    error: unknown,
+    context: LlumiverseErrorContext,
+): LlumiverseError | undefined {
+    if (!isCompatibleAPIError(error)) return undefined;
+    return compatibleAPIErrorToLlumiverseError(error, context, (status, code, type) =>
+        isCompatibleErrorRetryable(error, status, code, type),
+    );
+}
+
+function compatibleAPIErrorToLlumiverseError(
+    error: CompatibleAPIError,
+    context: LlumiverseErrorContext,
+    retryable: (
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined,
+    ) => boolean | undefined,
+): LlumiverseError {
+    const httpStatusCode = error.status ?? error.statusCode;
+    const errorCode = error.code;
+    const errorParam = error.param;
+    const errorType = error.type;
+    let userMessage = error.message || String(error);
+
+    if (httpStatusCode) {
+        userMessage = `[${httpStatusCode}] ${userMessage}`;
+    }
+    if (errorCode && !userMessage.includes(errorCode)) {
+        userMessage += ` (code: ${errorCode})`;
+    }
+    if (errorParam && !userMessage.toLowerCase().includes(errorParam.toLowerCase())) {
+        userMessage += ` [param: ${errorParam}]`;
+    }
+    const requestId = error.requestID ?? error.requestId;
+    if (requestId) {
+        userMessage += ` (Request ID: ${requestId})`;
+    }
+
+    return new LlumiverseError(
+        `[${context.provider}] ${userMessage}`,
+        retryable(httpStatusCode, errorCode, errorType),
+        context,
+        error,
+        httpStatusCode,
+        error.constructor?.name || 'OpenAICompatibleError',
+    );
 }
 
 function isCompatibleAPIError(error: unknown): error is CompatibleAPIError {

@@ -11,6 +11,7 @@ import OpenAI, { AzureOpenAI, type ClientOptions } from 'openai';
 import { cognitiveServicesScope } from '../azure/entra-scope.js';
 import { withoutKeyRedirects } from '../azure/key-redirect.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { azureResponsesPolicy } from './azure-responses-policy.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 export type { AzureOpenAIDriverOptions } from '../driver-options.js';
@@ -148,6 +149,7 @@ export class AzureOpenAIDriver<S extends AzureOpenAIService = AzureOpenAIService
     private readonly deploymentName?: string;
     private keyFetch?: typeof fetch;
     readonly provider = Providers.azure_openai;
+    override readonly responsesPolicy = azureResponsesPolicy((model) => this.getResponsesRequestModel(model));
 
     // Accepts an injected AzureOpenAI or v1 client, for independent instantiation, or the driver options.
     constructor(serviceOrOpts: AzureOpenAIDriverArgs<S>) {

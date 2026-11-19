@@ -14,7 +14,7 @@ import {
     incrementConversationTurn,
     isMetaMuseModel,
     isVertexOpenAIResponsesModel,
-    type LlumiverseError,
+    LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     type PromptSegment,
@@ -29,7 +29,8 @@ import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth } from 'google-auth-library';
 import OpenAI from 'openai';
-import { vertex } from 'openai/providers/vertex';
+import { OpenAIError } from 'openai/error';
+import { type GoogleClient, vertex } from 'openai/providers/vertex';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
@@ -53,7 +54,7 @@ import { formatGeminiDebugPrompt, isGeminiWithoutRegionalEndpoints } from './mod
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
-import { VertexAIResponsesDelegate, type VertexAIResponsesPrompt } from './models/openai_responses.js';
+import type { VertexAIResponsesPrompt } from './models/openai_responses.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -111,10 +112,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private anthropicClients: Map<string, AnthropicVertex> = new Map();
     fetchClient: FetchClient | undefined;
     private regionOverrideClients: Map<string, FetchClient> = new Map();
-    /** One Responses client per publisher and location, for publishers served by the OpenAI Responses API. */
-    private responsesDelegates: Map<string, VertexAIResponsesDelegate> = new Map();
     /** OpenAI SDK clients by API root, for Vertex's OpenAI-compatible and publisher endpoints. */
     private vertexOpenAIClients: Map<string, OpenAI> = new Map();
+    /** The message of the last Google auth failure behind an OpenAI SDK request; cleared by a success. */
+    private lastOpenAIAuthFailure: string | undefined;
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIServiceTier: string | undefined;
@@ -322,6 +323,26 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return client;
     }
 
+    /**
+     * The driver's Google credentials for the SDK's Vertex provider. The provider replaces an auth failure with a
+     * generic error and leaves out its cause, which can carry credential material, so this keeps the failure's message
+     * (never the error itself) for `formatLlumiverseError` to report.
+     */
+    private openAIAuthCredentials(): GoogleClient {
+        return {
+            getRequestHeaders: async (url) => {
+                try {
+                    const headers = await this.googleAuth.getRequestHeaders(url);
+                    this.lastOpenAIAuthFailure = undefined;
+                    return headers;
+                } catch (error) {
+                    this.lastOpenAIAuthFailure = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+                    throw error;
+                }
+            },
+        };
+    }
+
     /** One OpenAI SDK client per Vertex API root, authenticated by the SDK's Vertex provider. */
     private getVertexOpenAIClient(baseURL: string): OpenAI {
         let client = this.vertexOpenAIClients.get(baseURL);
@@ -329,7 +350,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // The provider authenticates every attempt with the driver's Google credentials, and keeps the SDK from
             // reading OpenAI settings such as `OPENAI_ORG_ID` from the environment and sending them to Google.
             client = new OpenAI({
-                provider: vertex({ baseURL, credentials: this.googleAuth }),
+                provider: vertex({ baseURL, credentials: this.openAIAuthCredentials() }),
                 fetch: this.getDriverFetch(),
                 maxRetries: 0,
                 timeout: this.getDriverRequestTimeoutMs(),
@@ -355,16 +376,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         );
     }
 
-    /** The Responses API of a publisher (`.../publishers/meta/v1/responses`), through the OpenAI SDK. */
-    public getResponsesDelegate(publisher: string, region: string): VertexAIResponsesDelegate {
-        const cacheKey = `${publisher}:${region}:${this.options.project}`;
-        let delegate = this.responsesDelegates.get(cacheKey);
-        if (!delegate) {
-            const service = this.getOpenAIClientForRegion(region, 'v1', undefined, `/publishers/${publisher}/v1`);
-            delegate = new VertexAIResponsesDelegate(this.options, service);
-            this.responsesDelegates.set(cacheKey, delegate);
-        }
-        return delegate;
+    /** The OpenAI SDK client for a publisher's Responses API (`.../publishers/meta/v1/responses`). */
+    public getResponsesClient(publisher: string, region: string): OpenAI {
+        return this.getOpenAIClientForRegion(region, 'v1', undefined, `/publishers/${publisher}/v1`);
+    }
+
+    /** Per-request SDK options (signal, and the timeout of an execution-level `httpTimeout`). */
+    public getRequestOptions(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        signal?: AbortSignal,
+    ): { signal?: AbortSignal; timeout?: number } | undefined {
+        return this.getDriverRequestOptions(options, signal);
     }
 
     public getRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
@@ -1067,6 +1089,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * @returns A standardized LlumiverseError
      */
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        // The SDK's Vertex provider reports every auth failure with one generic message; add the cause it left out,
+        // which also decides retryability (an `invalid_grant` is never retried).
+        const authFailure = this.lastOpenAIAuthFailure;
+        if (authFailure && error instanceof OpenAIError && error.message.startsWith('Vertex authentication failed')) {
+            const message = `Vertex authentication failed: ${authFailure}`;
+            return new LlumiverseError(
+                `[${this.provider}] ${message}`,
+                this.isRetryableError(undefined, message),
+                context,
+                error,
+                undefined,
+                error.name,
+            );
+        }
+
         // Get the model definition for this request
         const modelDef = getModelDefinition(context.model);
         let formatted: LlumiverseError | undefined;

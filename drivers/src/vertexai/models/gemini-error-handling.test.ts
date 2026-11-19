@@ -565,6 +565,18 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.code).toBe(400);
             expect(error.name).toBe('invalid_grant');
         });
+
+        it('should not retry other permanent OAuth errors, even under a retryable status', () => {
+            const googleError = { status: 503, message: 'invalid_client: The OAuth client was not found.' };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'locations/global/publishers/google/models/gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+        });
     });
 
     describe('isGeminiErrorRetryable', () => {
