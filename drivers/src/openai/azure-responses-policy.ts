@@ -1,3 +1,4 @@
+import type { OpenAiImageGenerationOptions } from '@llumiverse/core';
 import type { OpenAIResponsesPolicy } from './index.js';
 
 /**
@@ -7,7 +8,7 @@ import type { OpenAIResponsesPolicy } from './index.js';
 export function azureResponsesPolicy(requestModel: (model: string) => string): OpenAIResponsesPolicy {
     return {
         requestHeaders: (options) => {
-            const imageTool = (options.model_options as { image_generation?: { model: string } } | undefined)
+            const imageTool = (options.model_options as { image_generation?: OpenAiImageGenerationOptions } | undefined)
                 ?.image_generation;
             if (!imageTool) return undefined;
             return {

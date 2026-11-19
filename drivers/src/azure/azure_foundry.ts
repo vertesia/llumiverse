@@ -27,8 +27,8 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
-import { canStreamImage } from '../openai/images.js';
 import { azureResponsesPolicy } from '../openai/azure-responses-policy.js';
+import { canStreamImage } from '../openai/images.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     normalizeOpenAIChatCompletionsResponse,

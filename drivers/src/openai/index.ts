@@ -160,14 +160,15 @@ function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
     context: OpenAIRequestOptions['reasoning_context'],
-    requestSummary: boolean,
+    model: string,
+    policy: OpenAIResponsesPolicy | undefined,
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel && context === undefined) return undefined;
     return {
         effort,
         // Compatibility exception: retain reasoning summaries for the existing completion projection, unless the
         // driver's policy says its endpoint does not offer them.
-        ...(requestSummary && { summary: 'auto' }),
+        ...((policy?.requestsReasoningSummary?.(model) ?? true) && { summary: 'auto' }),
         ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
@@ -266,7 +267,10 @@ export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
  * OpenAI's behaviour, so a driver states only its own differences.
  */
 export interface OpenAIResponsesPolicy {
-    /** Whether a model takes a native result schema; undefined keeps the default (its tool support). */
+    /**
+     * Whether a model takes a native result schema; undefined keeps the default (its tool support). Realtime models
+     * never take one, whatever this returns.
+     */
     supportsSchema?(model: string): boolean | undefined;
     /** Whether a model also gets the result schema in the prompt, next to the native format. Default: no. */
     supplementsSchemaInPrompt?(model: string): boolean;
@@ -381,7 +385,8 @@ export class OpenAIResponsesProtocol {
             requestedEffort,
             isReasoningModel,
             reasoningContext,
-            driver.responsesPolicy?.requestsReasoningSummary?.(options.model) ?? true,
+            options.model,
+            driver.responsesPolicy,
         );
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
@@ -527,7 +532,8 @@ export class OpenAIResponsesProtocol {
             requestedEffort,
             isReasoningModel,
             reasoningContext,
-            driver.responsesPolicy?.requestsReasoningSummary?.(options.model) ?? true,
+            options.model,
+            driver.responsesPolicy,
         );
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
 
