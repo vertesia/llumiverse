@@ -465,6 +465,39 @@ describe('GeminiModelDefinition Error Handling', () => {
             },
         );
 
+        it.each([
+            'Cannot fetch content from the provided URL. Please ensure the URL is valid and accessible by Vertex AI. ' +
+                'Vertex AI respects robots.txt rules, so confirm the URL is allowed to be crawled. ' +
+                'Status: URL_TIMEOUT-TIMEOUT_WEB',
+            'Cannot fetch content from the provided URL. The request to crawl the page timed out. Please try again later.',
+        ])('should mark URL fetcher timeouts as retryable: %s', (message) => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 400, message },
+                { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
+            );
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should keep a URL the fetcher could not find (URL_ERROR-ERROR_NOT_FOUND) non-retryable', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                {
+                    status: 400,
+                    message:
+                        'Cannot fetch content from the provided URL. Please ensure the URL is valid and accessible ' +
+                        'by Vertex AI. Vertex AI respects robots.txt rules, so confirm the URL is allowed to be ' +
+                        'crawled. Status: URL_ERROR-ERROR_NOT_FOUND',
+                },
+                { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
+            );
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(false);
+        });
+
         it('should keep permanent URL_REJECTED rejections (robots-denied) non-retryable', () => {
             // A URL_REJECTED status without a throttle marker is a permanent failure
             // (e.g. robots.txt denied) and must not be retried.
