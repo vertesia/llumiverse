@@ -15,7 +15,6 @@ import {
     ModelType,
     type PromptSegment,
     Providers,
-    resolveModelProfile,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
@@ -25,11 +24,8 @@ import {
     buildOpenAIResponsesStreamingConversation,
     formatOpenAIResponsesPrompt,
     generateOpenAIEmbeddings,
-    type OpenAIImageContext,
     type OpenAIResponsesContext,
     OpenAIResponsesProtocol,
-    requestOpenAIImageGeneration,
-    requestOpenAIImageStream,
 } from '../openai/index.js';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
@@ -37,7 +33,7 @@ import {
     OpenAISDKChatCompletionsProtocol,
 } from '../openai/openai_chat_completions.js';
 import { formatOpenAICompatibleLlumiverseError } from '../openai/openai_compatible.js';
-import { formatOpenAIDebugPrompt, formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
+import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
 import { claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
     buildClaudeStreamingConversation,
@@ -101,10 +97,9 @@ export function isBedrockMantleModel(model: string): boolean {
 
 export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptions, BedrockMantlePrompt> {
     service: BedrockOpenAI;
-    /** The OpenAI-compatible endpoint (`/openai/v1`): Responses, Images and Embeddings. */
+    /** The OpenAI-compatible endpoint (`/openai/v1`): Responses and Embeddings. */
     private readonly responsesService: BedrockOpenAI;
     private readonly responsesContext: OpenAIResponsesContext;
-    private readonly imageContext: OpenAIImageContext;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
     private readonly chatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
     private readonly alignedChatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
@@ -145,14 +140,6 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             getResponsesService: () => this.responsesService,
             getResponsesRequestModel: (model) => model,
             getPromptCacheSourceModel: (model) => model.split('::').pop() ?? model,
-        };
-        this.imageContext = {
-            getImageService: () => this.responsesService,
-            getResponsesRequestModel: (model) => model,
-            getImageSourceModel: (model) => model,
-            requestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
-            requestTimeoutMs: (httpTimeout) => this.getDriverRequestTimeoutMs(httpTimeout),
-            fetch: driverFetch,
         };
         this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
             this.getDriverRequestOptions(options, signal),
@@ -195,21 +182,9 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             : this.chatCompletionsProtocol;
     }
 
-    /** Mantle serves OpenAI's image models (`openai.gpt-image-*`) through its OpenAI Images endpoint. */
-    private isOpenAIImageModel(model: string): boolean {
-        return resolveModelProfile(model, this.provider).family === 'image';
-    }
-
     protected async formatPrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<BedrockMantlePrompt> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                if (this.isOpenAIImageModel(options.model)) {
-                    return formatOpenAILikeMultimodalPrompt(segments, {
-                        ...options,
-                        imageGeneration: true,
-                        result_schema: undefined,
-                    });
-                }
                 return formatOpenAIResponsesPrompt(this.responsesContext, segments, options);
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).createPrompt(this, segments, options);
@@ -233,14 +208,6 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     ): Promise<Completion> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                if (this.isOpenAIImageModel(options.model)) {
-                    return requestOpenAIImageGeneration(
-                        this.imageContext,
-                        requireResponsesPrompt(prompt),
-                        options,
-                        signal,
-                    );
-                }
                 return this.responsesProtocol.requestTextCompletion(
                     this.responsesContext,
                     requireResponsesPrompt(prompt),
@@ -275,9 +242,6 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     ): Promise<DriverCompletionStream> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                if (this.isOpenAIImageModel(options.model)) {
-                    return requestOpenAIImageStream(this.imageContext, requireResponsesPrompt(prompt), options, signal);
-                }
                 return this.responsesProtocol.requestTextCompletionStream(
                     this.responsesContext,
                     requireResponsesPrompt(prompt),
