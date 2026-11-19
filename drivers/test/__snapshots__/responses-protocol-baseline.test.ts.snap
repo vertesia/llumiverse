@@ -7768,6 +7768,175 @@ exports[`OpenAI Responses protocol baseline > bedrock-mantle: effort 1`] = `
 }
 `;
 
+exports[`OpenAI Responses protocol baseline > bedrock-mantle: error-network 1`] = `
+{
+  "logs": [
+    [
+      "debug",
+      "[bedrock_mantle] Executing prompt on openai.gpt-6.1-terra, text pathway.",
+    ],
+  ],
+  "requests": [
+    {
+      "body": {
+        "include": [
+          "reasoning.encrypted_content",
+        ],
+        "input": [
+          {
+            "content": [
+              {
+                "text": "Say hello",
+                "type": "input_text",
+              },
+            ],
+            "role": "user",
+            "type": "message",
+          },
+        ],
+        "model": "openai.gpt-6.1-terra",
+        "reasoning": {
+          "summary": "auto",
+        },
+        "stream": false,
+      },
+      "headers": {
+        "accept": "application/json",
+        "content-type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses",
+    },
+  ],
+  "turns": [
+    {
+      "error": {
+        "code": undefined,
+        "error": "APIConnectionError",
+        "message": "[bedrock_mantle] Connection error.",
+        "retryable": true,
+      },
+    },
+  ],
+}
+`;
+
+exports[`OpenAI Responses protocol baseline > bedrock-mantle: error-rate-limit 1`] = `
+{
+  "logs": [
+    [
+      "debug",
+      "[bedrock_mantle] Executing prompt on openai.gpt-6.1-terra, text pathway.",
+    ],
+  ],
+  "requests": [
+    {
+      "body": {
+        "include": [
+          "reasoning.encrypted_content",
+        ],
+        "input": [
+          {
+            "content": [
+              {
+                "text": "Say hello",
+                "type": "input_text",
+              },
+            ],
+            "role": "user",
+            "type": "message",
+          },
+        ],
+        "model": "openai.gpt-6.1-terra",
+        "reasoning": {
+          "summary": "auto",
+        },
+        "stream": false,
+      },
+      "headers": {
+        "accept": "application/json",
+        "content-type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses",
+    },
+  ],
+  "turns": [
+    {
+      "error": {
+        "code": 429,
+        "error": "RateLimitError",
+        "message": "[bedrock_mantle] [429] 429 Rate limit reached (code: rate_limit_exceeded)",
+        "retryable": true,
+      },
+    },
+  ],
+}
+`;
+
+exports[`OpenAI Responses protocol baseline > bedrock-mantle: error-rate-limit-stream 1`] = `
+{
+  "logs": [
+    [
+      "debug",
+      {
+        "model": "openai.gpt-6.1-terra",
+        "model_options": {
+          "_option_id": "openai-text",
+        },
+      },
+      "Executing prompt with provider bedrock_mantle",
+    ],
+    [
+      "debug",
+      "[bedrock_mantle] Streaming Execution of openai.gpt-6.1-terra with prompt",
+    ],
+  ],
+  "requests": [
+    {
+      "body": {
+        "include": [
+          "reasoning.encrypted_content",
+        ],
+        "input": [
+          {
+            "content": [
+              {
+                "text": "Say hello",
+                "type": "input_text",
+              },
+            ],
+            "role": "user",
+            "type": "message",
+          },
+        ],
+        "model": "openai.gpt-6.1-terra",
+        "reasoning": {
+          "summary": "auto",
+        },
+        "stream": true,
+      },
+      "headers": {
+        "accept": "application/json",
+        "content-type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses",
+    },
+  ],
+  "turns": [
+    {
+      "error": {
+        "code": 429,
+        "error": "RateLimitError",
+        "message": "[bedrock_mantle] [429] 429 Rate limit reached (code: rate_limit_exceeded)",
+        "retryable": true,
+      },
+    },
+  ],
+}
+`;
+
 exports[`OpenAI Responses protocol baseline > bedrock-mantle: execute 1`] = `
 {
   "logs": [

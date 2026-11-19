@@ -116,11 +116,14 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         const timeout = this.getDriverRequestTimeoutMs();
         const v1BaseURL = `https://bedrock-mantle.${opts.region}.api.aws/v1`;
 
+        // Callers own retries, as for every other OpenAI SDK client in Llumiverse: the SDK's own retries would repeat a
+        // failed request with backoff before the caller's retry policy sees it.
         this.service = new BedrockOpenAI({
             baseURL: v1BaseURL,
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
+            maxRetries: 0,
             timeout,
         });
         const responsesService = new BedrockOpenAI({
@@ -128,6 +131,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
+            maxRetries: 0,
             timeout,
         });
         this.responsesDelegate = new BedrockMantleResponsesDelegate(opts, responsesService);

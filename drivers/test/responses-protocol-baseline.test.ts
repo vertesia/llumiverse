@@ -109,8 +109,6 @@ const DRIVERS: DriverCase[] = [
     {
         name: 'bedrock-mantle',
         model: 'openai.gpt-6.1-terra',
-        // Mantle's SDK client retries failed requests with backoff, so its error scenarios would wait on real timers.
-        skip: ['error-rate-limit', 'error-rate-limit-stream', 'error-network'],
         create: (logger) =>
             new BedrockMantleDriver({
                 region: 'us-west-2',
