@@ -270,13 +270,18 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     if (model.includes('nvidia.nemotron-nano-')) return { context_window: 128_000, max_output_tokens: 8_192 };
     if (isFamilyVersionGte(model, 'openai.gpt-', 5) && !model.includes('gpt-oss')) {
         // 272K is the long-context pricing threshold, not the model context limit.
-        // The GPT-5.6 and GPT-6.1+ Sol cards specify 1M (6.1+ with a 131,072 output limit); every other variant,
-        // GPT-6 Sol included, specifies 1.05M.
-        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html
+        // Model-specific exception: the GPT-5.6 and GPT-6.1 Sol cards specify 1M (6.1 with a 131,072 output limit);
+        // every other variant, GPT-6 and GPT-6.2 Sol included, specifies 1.05M with a 128K output limit.
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html
         // Daybreak Blue: GPT-5.6 Sol is not a plain Sol model: its card specifies 1.05M, so isSol stays false for it.
         // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
         const isSol = /^openai\.gpt-[\d.]+-sol(?:[-:]|$)/.test(model);
-        if (isSol && isFamilyVersionGte(model, 'openai.gpt-', 6, 1)) {
+        if (
+            isSol &&
+            isFamilyVersionGte(model, 'openai.gpt-', 6, 1) &&
+            !isFamilyVersionGte(model, 'openai.gpt-', 6, 2)
+        ) {
             return { context_window: 1_000_000, max_output_tokens: 131_072 };
         }
         if (isFamilyVersionGte(model, 'openai.gpt-', 5, 5)) {

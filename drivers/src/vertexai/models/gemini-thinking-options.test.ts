@@ -56,6 +56,16 @@ describe('Gemini thinking configuration', () => {
                 (option) => option.name === 'effort',
             ),
         ).toMatchObject({ enum: { 'Extra high': 'xhigh' } });
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-neon
+        expect(geminiThinkingConfig(options('gemini-4-neon', { effort: 'xhigh' }))).toEqual({
+            includeThoughts: true,
+            thinkingLevel: ThinkingLevel.XHIGH,
+        });
+        expect(
+            getOptions('publishers/google/models/gemini-4-neon', Providers.vertexai).options.find(
+                (option) => option.name === 'effort',
+            ),
+        ).toMatchObject({ enum: { 'Extra high': 'xhigh' } });
     });
 
     it('passes through caller effort even when advisory metadata does not offer it', () => {

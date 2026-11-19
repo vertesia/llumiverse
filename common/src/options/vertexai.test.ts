@@ -299,6 +299,7 @@ describe('Vertex Gemini reasoning metadata', () => {
         ['gemini-4-carbon', ['low', 'medium', 'high']],
         ['gemini-4-hydrogen', ['low', 'medium', 'high', 'xhigh']],
         ['gemini-4.5-hydrogen-preview', ['low', 'medium', 'high', 'xhigh']],
+        ['gemini-4-neon', ['low', 'medium', 'high', 'xhigh']],
         ['gemini-3-pro-preview', ['low', 'high']],
         ['gemini-3.1-pro-preview', ['low', 'medium', 'high']],
         ['gemini-3.1-flash-lite-image', ['minimal', 'high']],

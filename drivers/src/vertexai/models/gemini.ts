@@ -1654,6 +1654,19 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
         }
 
+        // The fetcher also reports its own timeouts outside the URL_REJECTED family, as
+        //   Status: URL_TIMEOUT-TIMEOUT_WEB
+        // or without any status: "The request to crawl the page timed out. Please try again later."
+        // Both mean the fetcher ran out of time, not that the URL is wrong, so they are retried.
+        // Other fetcher failures such as URL_ERROR-ERROR_NOT_FOUND stay non-retryable.
+        if (
+            httpStatusCode === 400 &&
+            message &&
+            (message.includes('URL_TIMEOUT') || message.includes('request to crawl the page timed out'))
+        ) {
+            return true;
+        }
+
         // A transport-level abort/cancel (request-timeout / dropped connection, sometimes reported
         // as 499 client-closed) or a deadline-exceeded is transient and should be retried,
         // even though it carries a 4xx status. Honor it before the 4xx -> non-retryable rule.

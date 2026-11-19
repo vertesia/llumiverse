@@ -134,6 +134,16 @@ describe('central model directory', () => {
         expect(
             resolveModelProfile('google/gemini-5-hydrogen:batch', Providers.openai_compatible).reasoning_effort_levels,
         ).toEqual(['low', 'medium', 'high', 'xhigh']);
+        // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-neon lists LOW, MEDIUM, HIGH
+        // and XHIGH.
+        for (const model of ['google/gemini-4-neon', 'google/gemini-4-neon:batch']) {
+            expect(resolveModelProfile(model, Providers.openai_compatible).reasoning_effort_levels).toEqual([
+                'low',
+                'medium',
+                'high',
+                'xhigh',
+            ]);
+        }
         expect(resolveModelProfile('anthropic/claude-opus-6', Providers.openai_compatible).family).toBe('claude');
     });
 
