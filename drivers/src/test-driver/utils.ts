@@ -23,6 +23,21 @@ export function createValidationErrorCompletion(segments: PromptSegment[]) {
     } as ExecutionResponse<PromptSegment[]>;
 }
 
-export function sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits for `ms`, or rejects with the reason of the signal as soon as it aborts. */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(signal.reason);
+            return;
+        }
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal?.reason);
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
 }
