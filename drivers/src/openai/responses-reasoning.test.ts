@@ -1144,11 +1144,9 @@ describe('Responses image generation', () => {
             model: 'gpt-5',
             model_options: { image_generation: { model: 'gpt-image-2.5-flare' } },
         });
-        expect(create.mock.calls[0][1]).toMatchObject({
-            headers: {
-                'x-ms-oai-image-generation-deployment': 'gpt-image-2.5-flare',
-                api_version: 'preview',
-            },
+        // The API version is a query parameter of the image-tool client, never a header.
+        expect((create.mock.calls[0][1] as { headers?: unknown } | undefined)?.headers).toEqual({
+            'x-ms-oai-image-generation-deployment': 'gpt-image-2.5-flare',
         });
     });
     it('returns streamed final images beside text without previews', async () => {
