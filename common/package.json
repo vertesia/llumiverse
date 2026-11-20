@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/common",
-    "version": "1.6.0-dev",
+    "version": "1.6.0-dev.20261120.123957Z",
     "type": "module",
     "description": "Public types, enums and options used by Llumiverse API.",
     "files": [
@@ -63,10 +63,10 @@
         "typescript": "catalog:",
         "vitest": "catalog:"
     },
-    "gitHead": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
+    "gitHead": "0ce7479c70befd45b7ad6170d2c7d8a44fb552e8",
     "releaseIdentity": {
-        "source_sha": "1c5d8982ba36aaa1ab1bb76162845690492ef46c",
+        "source_sha": "0ce7479c70befd45b7ad6170d2c7d8a44fb552e8",
         "dependency_sha": "",
-        "lock_sha256": "d7263c7c8fc749f233a5362f162186fd66d341776955bede0f5dd63ce31c623f"
+        "lock_sha256": "d48950d69964961eb706669d72435d651d0b9e28e267b08966d2106483f43662"
     }
 }
