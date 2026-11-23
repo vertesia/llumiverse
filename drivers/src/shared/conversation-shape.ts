@@ -13,3 +13,18 @@ export function assertConversationArray(conversation: unknown, context: Llumiver
     cause.name = 'InvalidConversationError';
     throw new LlumiverseError(message, false, context, cause, 400, cause.name);
 }
+
+/**
+ * Refuses a conversation that a Chat Completions driver cannot continue: anything but no conversation, a stored
+ * `{ messages }` container, or a bare message array. A conversation another API wrote — such as a Responses
+ * conversation, an array wrapped with conversation metadata — has no `messages`, so reading it would silently
+ * continue with no history.
+ */
+export function assertChatCompletionsConversation(conversation: unknown, context: LlumiverseErrorContext): void {
+    if (conversation === undefined || conversation === null || Array.isArray(conversation)) return;
+    if (typeof conversation === 'object' && Array.isArray((conversation as { messages?: unknown }).messages)) return;
+    const message = `[${context.provider}] The conversation was not written by a Chat Completions driver`;
+    const cause = new Error(message);
+    cause.name = 'InvalidConversationError';
+    throw new LlumiverseError(message, false, context, cause, 400, cause.name);
+}

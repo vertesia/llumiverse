@@ -39,6 +39,7 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
+import { assertChatCompletionsConversation } from '../shared/conversation-shape.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { resolveOpenAIEffort } from '../shared/model-option-exceptions.js';
 import { logModelRefusal } from '../shared/refusal-log.js';
@@ -573,10 +574,36 @@ export function splitOpenAIChatCompletionsThinkBlocks(value: string, includeThou
     return results;
 }
 
+/**
+ * Splits streamed Chat Completions content into `text` and `thoughts` results, moving `<think>...</think>` blocks that
+ * a model writes inline into `thoughts`.
+ *
+ * Whitespace rules. They are deliberate, each one fixes a provider quirk, and changing one can break another, so read
+ * all of them and run the streaming tests in `openai_chat_completions.test.ts` before touching them:
+ *
+ * 1. Whitespace before the answer starts is dropped. Models emit `"\n"`, `"\n\n"` or `" "` deltas before the first
+ *    word, or before an inline `<think>` block; dropping them keeps the answer from starting with blank lines and
+ *    keeps whitespace-only `text` results out of the stream.
+ * 2. Text right before an inline `<think>` loses its trailing whitespace (`trimEnd()` in {@link push}), and the first
+ *    text after `</think>` loses its leading whitespace (`trimNextTextStart`). Models separate the block from the answer
+ *    with newlines that are not part of the answer.
+ * 3. Once text has been emitted, a whitespace-only delta is kept. Some servers (seen with a local server running a
+ *    GGUF model) stream the space before a number as a delta of its own: `" returned"`, `" "`, `"100"`. Dropping it
+ *    produced `"returned100"`. Do not reintroduce a blanket `!value.trim()` check.
+ * 4. `thoughts` are never trimmed: reasoning text is passed through exactly as streamed.
+ *
+ * Known gaps, left as they are because no provider has needed them yet:
+ * - Rule 1 drops only deltas that are entirely whitespace. A first delta such as `"\nHello"` keeps its leading
+ *   newline.
+ * - Trailing whitespace at the end of the answer is kept, while the non-streaming path
+ *   ({@link splitOpenAIChatCompletionsThinkBlocks}) trims every text segment. A streamed and a non-streamed answer
+ *   to the same prompt can therefore differ in surrounding whitespace.
+ */
 class OpenAIThinkStreamProjector {
     private buffer = '';
     private inThoughts = false;
     private trimNextTextStart = false;
+    private emittedText = false;
 
     push(value: string, final = false): CompletionResult[] {
         this.buffer += value;
@@ -644,8 +671,11 @@ class OpenAIThinkStreamProjector {
             value = value.trimStart();
             if (value) this.trimNextTextStart = false;
         }
-        if (type === 'text' && !value.trim()) return;
-        if (value) results.push({ type, value });
+        // Rules 1 and 3 in the class comment: whitespace-only text is dropped only until the answer has started.
+        if (type === 'text' && !this.emittedText && !value.trim()) return;
+        if (!value) return;
+        results.push({ type, value });
+        if (type === 'text') this.emittedText = true;
     }
 }
 
@@ -1032,6 +1062,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        assertChatCompletionsConversation(options.conversation, {
+            provider: getOpenAIChatDriverProvider(driver),
+            model: options.model,
+            operation: 'execute',
+        });
         let conversation = mergeOpenAIChatCompletionsPrompt(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
@@ -1122,6 +1157,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        assertChatCompletionsConversation(options.conversation, {
+            provider: getOpenAIChatDriverProvider(driver),
+            model: options.model,
+            operation: 'stream',
+        });
         let conversation = mergeOpenAIChatCompletionsPrompt(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,

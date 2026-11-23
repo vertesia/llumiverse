@@ -2,8 +2,9 @@ import type { GoogleGenAI } from '@google/genai';
 import { LlumiverseError, type Logger, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIDriver } from '../openai/openai.js';
+import { OpenAIChatCompletionsDriver } from '../openai/openai_chat_completions.js';
 import { VertexAIDriver } from '../vertexai/index.js';
-import { assertConversationArray } from './conversation-shape.js';
+import { assertChatCompletionsConversation, assertConversationArray } from './conversation-shape.js';
 
 const context = { provider: 'openai', model: 'gpt-test', operation: 'execute' } as const;
 const segments = [{ role: PromptRole.user, content: 'Hi' }];
@@ -23,6 +24,36 @@ function expectInvalidConversation(error: unknown, provider: string) {
     });
 }
 
+/** A conversation as the Responses drivers store it: the item array, wrapped with the turn metadata. */
+const RESPONSES_CONVERSATION = {
+    _arrayConversation: [
+        { role: 'user', content: 'Hi' },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello' }] },
+    ],
+    _llumiverse_meta: { turnNumber: 1 },
+};
+
+/** A conversation as the Chat Completions drivers store it. */
+const CHAT_COMPLETIONS_CONVERSATION = {
+    _is_openai_chat_completions: true,
+    messages: [
+        { role: 'user', content: 'Hi' },
+        { role: 'assistant', content: 'Hello' },
+    ],
+    _llumiverse_meta: { turnNumber: 1 },
+};
+
+function expectForeignChatConversation(error: unknown, provider: string) {
+    expect(error).toBeInstanceOf(LlumiverseError);
+    expect(error).toMatchObject({
+        name: 'InvalidConversationError',
+        code: 400,
+        retryable: false,
+        context: { provider },
+        message: `[${provider}] The conversation was not written by a Chat Completions driver`,
+    });
+}
+
 describe('assertConversationArray', () => {
     it.each([
         ['no conversation', undefined],
@@ -38,6 +69,7 @@ describe('assertConversationArray', () => {
         ['an object', { '': [null] }],
         ['a string', 'Hi'],
         ['a number', 0],
+        ['a Chat Completions conversation', CHAT_COMPLETIONS_CONVERSATION],
     ])('refuses %s as a non-retryable 400', (_label, conversation) => {
         let thrown: unknown;
         try {
@@ -100,5 +132,68 @@ describe('a conversation that is not an array', () => {
         expectInvalidConversation(error, 'vertexai');
         expect(generateContent).not.toHaveBeenCalled();
         expect(generateContentStream).not.toHaveBeenCalled();
+    });
+});
+
+describe('assertChatCompletionsConversation', () => {
+    it.each([
+        ['no conversation', undefined],
+        ['null', null],
+        ['a Chat Completions conversation', CHAT_COMPLETIONS_CONVERSATION],
+        ['a legacy array of messages', [{ role: 'user', content: 'Hi' }]],
+    ])('accepts %s', (_label, conversation) => {
+        expect(() => assertChatCompletionsConversation(conversation, context)).not.toThrow();
+    });
+
+    it.each([
+        ['a Responses conversation', RESPONSES_CONVERSATION],
+        ['an object without messages', { '': [null] }],
+        ['an object whose messages is not an array', { messages: 'Hi' }],
+        ['a string', 'Hi'],
+        ['a number', 0],
+    ])('refuses %s as a non-retryable 400', (_label, conversation) => {
+        let thrown: unknown;
+        try {
+            assertChatCompletionsConversation(conversation, context);
+        } catch (error) {
+            thrown = error;
+        }
+        expectForeignChatConversation(thrown, 'openai');
+    });
+});
+
+describe('a Responses conversation sent to a Chat Completions driver', () => {
+    function chatDriver() {
+        const driver = new OpenAIChatCompletionsDriver({
+            apiKey: 'test-key',
+            endpoint: 'https://compatible.example/v1',
+            logger: testLogger(),
+        });
+        return { driver, create: vi.spyOn(driver.service.chat.completions, 'create') };
+    }
+
+    it('fails an execution before calling the provider', async () => {
+        const { driver, create } = chatDriver();
+
+        const error = await driver
+            .execute(segments, { model: 'some-model', conversation: RESPONSES_CONVERSATION })
+            .catch((e: unknown) => e);
+
+        expectForeignChatConversation(error, 'openai_compatible');
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('fails a stream before calling the provider', async () => {
+        const { driver, create } = chatDriver();
+
+        const error = await (async () => {
+            const stream = await driver.stream(segments, { model: 'some-model', conversation: RESPONSES_CONVERSATION });
+            for await (const _chunk of stream) {
+                // drain
+            }
+        })().catch((e: unknown) => e);
+
+        expectForeignChatConversation(error, 'openai_compatible');
+        expect(create).not.toHaveBeenCalled();
     });
 });

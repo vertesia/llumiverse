@@ -2,6 +2,7 @@ import { getMistralModelKnowledge } from '../capability/mistral.js';
 import { getGeminiModelLimits } from './gemini-limits.js';
 import {
     isDeepSeekVersionGte,
+    isInklingModel,
     isKimiVersionGte,
     isMetaMuseModel,
     isModelFamilyVersionGTE,
@@ -102,6 +103,8 @@ export function getMaxOutputTokens(model: string): number | undefined {
     if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 64_000;
     // Meta publishes no Muse output limit, and hosting providers report different caps.
     if (isMetaMuseModel(model)) return undefined;
+    // Thinking Machines publishes no Inkling output limit; local servers set their own.
+    if (isInklingModel(model)) return undefined;
     // Gemma
     if (model.includes('gemma-4')) return 128_000;
     // Llama
@@ -182,6 +185,8 @@ export function getContextWindowSize(model: string): number | undefined {
     if (isMetaMuseModel(model)) return 1_048_576;
     if (isModelFamilyVersionGTE(model, 'mimo-v', 2, 6)) return 1_050_000;
     if (isModelFamilyVersionGTE(model, 'step-', 5, 0)) return 1_048_576;
+    // Thinking Machines Inkling publishes a 1M-token context; no output limit is published.
+    if (isInklingModel(model)) return 1_048_576;
     // Gemma
     if (model.includes('gemma-4')) return 256_000;
     // Gemma 3 1B is 32K; the larger Gemma 3 models are 128K.
