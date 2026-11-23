@@ -24,3 +24,25 @@ jobs:
     permissions:
       contents: read
       id-token: write # Authenticate Turbo, GCP and AWS through short-lived OIDC credentials.
+
+  license-check:
+    name: License check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # Reports dependencies this PR adds whose license is not on Vertesia's allow list. Warn-only until
+      # legal approves the policy; the list mirrors the allowed and review-with-notice licenses there.
+      - name: Check licenses of added dependencies
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          license-check: true
+          vulnerability-check: false
+          warn-only: true
+          allow-licenses: >-
+            0BSD, Apache-2.0, BlueOak-1.0.0, BSD-2-Clause, BSD-3-Clause, BSL-1.0, CC0-1.0, ISC, MIT, MIT-0,
+            OFL-1.1, PSF-2.0, Python-2.0, Unlicense, W3C, WTFPL, X11, Zlib,
+            Artistic-2.0, CC-BY-3.0, CC-BY-4.0, CDDL-1.0, CDDL-1.1, EPL-1.0, EPL-2.0,
+            LGPL-2.0-only, LGPL-2.0-or-later, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later,
+            MPL-1.1, MPL-2.0
