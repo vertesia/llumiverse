@@ -27,6 +27,7 @@ import {
     PromptRole,
     type PromptSegment,
     Providers,
+    ReplayedToolNames,
     readStreamAsBase64,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
@@ -707,6 +708,46 @@ export function convertToolsToOpenAIChatCompletionsFormat(
     });
 }
 
+/**
+ * Give every replayed assistant tool call a name Chat Completions accepts (`[a-zA-Z0-9_-]{1,64}`), without
+ * touching the caller's messages. Tool results pair by tool_call_id and carry no name.
+ */
+export function sanitizeChatCompletionsToolCallNames<T extends { tool_calls?: OpenAIChatCompletionsToolCall[] }>(
+    messages: T[],
+    names: ReplayedToolNames,
+): T[] {
+    return messages.map((message) => {
+        if (!message.tool_calls?.length) return message;
+        return {
+            ...message,
+            tool_calls: message.tool_calls.map((call) => {
+                const name = names.safe(call.function?.name);
+                return name === call.function?.name ? call : { ...call, function: { ...call.function, name } };
+            }),
+        };
+    });
+}
+
+/**
+ * The messages as the request sends them.
+ *
+ * Compatibility exception: a replayed call to an undeclared tool whose name the provider rejects (empty,
+ * `multi_tool_use.parallel`, dotted) would fail every later turn with a 400, such as
+ * `Invalid 'messages[4].tool_calls[1].function.name': empty string`, so the request carries a safe name.
+ * The stored conversation keeps the emitted name.
+ */
+function replayableChatMessages(
+    messages: OpenAIChatCompletionsMessage[],
+    options: ExecutionOptions,
+    provider: string,
+    logger: Logger | undefined,
+): OpenAIChatCompletionsRequestMessage[] {
+    const names = new ReplayedToolNames(options.tools);
+    const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(messages), names);
+    names.logRewrites(logger, { provider, model: options.model });
+    return converted;
+}
+
 export function convertToOpenAIChatCompletionsMessages(
     messages: OpenAIChatCompletionsMessage[],
 ): OpenAIChatCompletionsRequestMessage[] {
@@ -1268,7 +1309,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
-            messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
+            messages: replayableChatMessages(conversation.messages, options, provider, logger),
             // Compatibility exception: some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,

@@ -46,6 +46,7 @@ import {
     type PromptOptions,
     PromptRole,
     type PromptSegment,
+    ReplayedToolNames,
     readStreamAsBase64,
     type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
@@ -347,6 +348,12 @@ export function getGeminiPayload(
     // which would otherwise trip Gemini's functionCall/functionResponse pairing.
     if (payloadContents) {
         payloadContents = stripGeneratedFunctionCallIds(fixOrphanedToolResults(payloadContents));
+        // Compatibility exception: a replayed call to an undeclared tool whose name Gemini rejects (empty,
+        // dotted) would fail every later turn, so the request carries a safe name. The stored conversation keeps
+        // the emitted name.
+        const replayedToolNames = new ReplayedToolNames(options.tools);
+        payloadContents = sanitizeGeminiFunctionNames(payloadContents, replayedToolNames);
+        replayedToolNames.logRewrites(logger, { provider: 'vertexai', model: options.model });
     }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
@@ -611,6 +618,35 @@ function isGeneratedFunctionCallId(id: string | undefined): boolean {
  * Vertex only ever receives call ids it issued; parts that had none pair by name and position as
  * they always have.
  */
+/**
+ * Give every replayed functionCall and functionResponse part a name Gemini accepts, without touching the
+ * caller's contents. Gemini pairs a response with its call by name, so both get the same rewrite.
+ */
+export function sanitizeGeminiFunctionNames(contents: Content[], names: ReplayedToolNames): Content[] {
+    return contents.map((content) => {
+        if (!content.parts?.some((part) => part.functionCall || part.functionResponse)) return content;
+        return {
+            ...content,
+            parts: content.parts.map((part) => {
+                if (part.functionCall) {
+                    const name = names.safe(part.functionCall.name);
+                    return name === part.functionCall.name
+                        ? part
+                        : { ...part, functionCall: { ...part.functionCall, name } };
+                }
+                // A response without a name pairs by id; leave it without one.
+                if (part.functionResponse?.name !== undefined) {
+                    const name = names.safe(part.functionResponse.name);
+                    return name === part.functionResponse.name
+                        ? part
+                        : { ...part, functionResponse: { ...part.functionResponse, name } };
+                }
+                return part;
+            }),
+        };
+    });
+}
+
 export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
     return contents.map((content) => {
         const hasGeneratedId = content.parts?.some(

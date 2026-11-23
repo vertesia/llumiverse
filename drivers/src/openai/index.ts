@@ -37,6 +37,7 @@ import {
     type PromptOptions,
     type PromptSegment,
     Providers,
+    ReplayedToolNames,
     resolveModelProfile,
     setConversationMeta,
     stripBase64ImagesFromConversation,
@@ -393,7 +394,11 @@ export class OpenAIResponsesProtocol {
 
         // Prompt-cache support follows the source model, not a deployment alias that names another version.
         const promptCacheModel = driver.getPromptCacheSourceModel(options.model);
-        const promptCache = configureOpenAIPromptCaching(conversation, promptCacheModel, promptCacheKey);
+        const promptCache = configureOpenAIPromptCaching(
+            replayableResponsesInput(conversation, options, driver),
+            promptCacheModel,
+            promptCacheKey,
+        );
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
             promptCacheModel,
@@ -539,7 +544,11 @@ export class OpenAIResponsesProtocol {
 
         // Prompt-cache support follows the source model, not a deployment alias that names another version.
         const promptCacheModel = driver.getPromptCacheSourceModel(options.model);
-        const promptCache = configureOpenAIPromptCaching(conversation, promptCacheModel, promptCacheKey);
+        const promptCache = configureOpenAIPromptCaching(
+            replayableResponsesInput(conversation, options, driver),
+            promptCacheModel,
+            promptCacheKey,
+        );
         const toolChoice = getOpenAIResponseToolChoice(model_options);
         const promptCacheRequestOptions = getPromptCacheRequestOptions(
             promptCacheModel,
@@ -647,7 +656,7 @@ export class OpenAIResponsesProtocol {
         logModelOptionException(driver.logger, options.model, options, ['compaction'], 'openai_on_demand_compaction');
         const request: OpenAI.Responses.ResponseCompactParams = {
             model: driver.getResponsesRequestModel(options.model),
-            input: conversation,
+            input: replayableResponsesInput(conversation, options, driver),
             prompt_cache_key: model_options?.prompt_cache_key ?? options.prompt_cache_key,
         };
         const requestOptions = this.getRequestOptions(driver, options, signal);
@@ -1623,6 +1632,39 @@ function supportsSchema(model: string, context: Pick<OpenAIResponsesContext, 'pr
  * Preserves tool call information while removing structured items that require
  * tools to be defined in the API request.
  */
+/**
+ * Give every replayed function_call item a name the Responses API accepts (`[a-zA-Z0-9_-]{1,64}`), without
+ * touching the caller's items. function_call_output items pair by call_id and carry no name.
+ */
+export function sanitizeResponsesToolCallNames(
+    items: ResponseInputItem[],
+    names: ReplayedToolNames,
+): ResponseInputItem[] {
+    return items.map((item) => {
+        if (item.type !== 'function_call') return item;
+        const name = names.safe(item.name);
+        return name === item.name ? item : { ...item, name };
+    });
+}
+
+/**
+ * The conversation as the request sends it.
+ *
+ * Compatibility exception: a replayed call to an undeclared tool whose name the provider rejects (empty,
+ * `multi_tool_use.parallel`, dotted) would fail every later turn with a 400, so the request carries a safe
+ * name. The stored conversation keeps the emitted name.
+ */
+function replayableResponsesInput(
+    conversation: ResponseInputItem[],
+    options: ExecutionOptions,
+    driver: Pick<OpenAIResponsesContext, 'logger' | 'provider'>,
+): ResponseInputItem[] {
+    const names = new ReplayedToolNames(options.tools);
+    const input = sanitizeResponsesToolCallNames(conversation, names);
+    names.logRewrites(driver.logger, { provider: driver.provider, model: options.model });
+    return input;
+}
+
 export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
     const hasFunctionItems = items.some((item) => {
         const type = (item as OpenAIFunctionItem).type;
