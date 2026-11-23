@@ -302,7 +302,7 @@ Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CO
 
 ## License
 
-Apache 2.0
+Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Coordinated submodule updates
 
