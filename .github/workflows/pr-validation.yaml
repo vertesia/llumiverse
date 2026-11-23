@@ -24,3 +24,18 @@ jobs:
     permissions:
       contents: read
       id-token: write # Authenticate Turbo, GCP and AWS through short-lived OIDC credentials.
+
+  package-licenses:
+    name: Package licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fails when a package declares a license other than Apache-2.0, or a published package lacks the
+      # full license text.
+      - name: Check package licenses
+        run: node scripts/check-package-licenses.mjs
