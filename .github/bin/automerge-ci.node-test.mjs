@@ -189,6 +189,37 @@ test('legacy PR workflows remain valid while release branches adopt the coordina
         assert.equal(main({ REPO: 'owner/repo', HEAD_BRANCH: 'fix', HEAD_SHA: 'head' }, 12, [name], pages), true);
     }
 });
+test('withholds approval for a failed license check on main, not on release lines without one', () => {
+    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    const names = Object.keys(policies);
+    const verify = (base, licenseConclusion) => {
+        const jobs = Object.values(policies)
+            .flatMap((configured) => configured.jobs)
+            .filter((required) => licenseConclusion || required.example !== 'License check')
+            .map((required) => ({
+                ...job(required.example, required.example === 'License check' ? licenseConclusion : 'success'),
+                steps: required.steps.map((step) => job(step)),
+            }));
+        const pages = (endpoint) => {
+            if (endpoint.includes('/pr-validation.yaml/')) {
+                const pullRequests = [{ number: 12, base: { ref: base, sha: 'base' } }];
+                // The coordinator fails with its license job; lint and tests still pass.
+                const coordinator = run(1, { path: coordinatorPath, conclusion: 'failure', pull_requests: pullRequests });
+                return [{ workflow_runs: [coordinator] }];
+            }
+            if (endpoint.includes('/workflows/')) return [{ workflow_runs: [] }];
+            return [{ jobs }];
+        };
+        const env = { REPO: 'owner/repo', HEAD_BRANCH: 'fix', HEAD_SHA: 'head', BASE_SHA: 'base', BASE_BRANCH: base };
+        return main(env, 12, names, pages);
+    };
+    assert.equal(verify('main', 'failure'), false);
+    assert.equal(verify('main', 'success'), true);
+    // A main PR whose run has no license job at all is not approved either.
+    assert.equal(verify('main', undefined), false);
+    assert.equal(verify('release/1.6', undefined), true);
+});
+
 test('all automerge workflows use trusted policy and the shared gate', () => {
     const dir = new URL('../workflows/', import.meta.url);
     for (const file of readdirSync(dir).filter((name) => name.includes('automerge'))) {
