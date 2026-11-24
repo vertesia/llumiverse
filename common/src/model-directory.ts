@@ -16,6 +16,7 @@ import {
     isDeepSeekVersionGte,
     isGeminiModelVersionGte,
     isGeminiOmniVideoModel,
+    isInklingModel,
     isKimiVersionGte,
     isMetaMuseModel,
     isModelFamilyVersionGTE,
@@ -142,6 +143,7 @@ function inferFamily(model: string): { family: string; source_provider?: string 
     if (isMetaMuseModel(normalized)) return { family: 'muse', source_provider: 'meta' };
     if (/(?:^|[-_.])mimo-v\d/.test(normalized)) return { family: 'mimo', source_provider: 'xiaomi' };
     if (/(?:^|[-_.])step-\d/.test(normalized)) return { family: 'step', source_provider: 'stepfun' };
+    if (isInklingModel(normalized)) return { family: 'inkling', source_provider: 'thinkingmachines' };
     for (const family of ['llama', 'qwen', 'deepseek', 'gemma', 'mistral', 'kimi', 'minimax', 'glm']) {
         if (normalized.includes(family)) return { family };
     }
@@ -373,6 +375,15 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
         case 'step':
             return {
                 input: { text: true, image: true, video: true },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        case 'inkling':
+            // Thinking Machines Inkling. Tool calls are served through Chat Completions and Responses; no image input
+            // is published for the Mini, so input stays text until a provider documents more.
+            return {
+                input: { text: true },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,

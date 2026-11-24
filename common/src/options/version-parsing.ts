@@ -77,6 +77,11 @@ export function isMetaMuseModel(model: string): boolean {
     return /(?:^|[-_.])muse-/.test(model);
 }
 
+/** Thinking Machines Inkling, under any publisher prefix or local quantization suffix (`Inkling-2-Mini-GGUF`). */
+export function isInklingModel(model: string): boolean {
+    return /(?:^|[-_./])inkling(?:[-_.:]|$)/i.test(model);
+}
+
 /** Kimi versions use a dotted minor (`kimi-k2.5`); a dash introduces a date snapshot (`kimi-k2-0905`). */
 export function isKimiVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
     const match = model.match(/kimi-k(\d+)(?:\.(\d+))?/);
