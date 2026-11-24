@@ -338,6 +338,8 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                     branch ? `&head=${repo.split('/')[0]}:${encodeURIComponent(branch)}` : ''
                 }`,
             ),
+        closed: (branch) =>
+            list(`repos/${repo}/pulls?state=closed&head=${repo.split('/')[0]}:${encodeURIComponent(branch)}`),
         reviews: (number) => list(`repos/${repo}/pulls/${number}/reviews`),
         engineeringMember(login) {
             try {
@@ -399,10 +401,21 @@ export async function targets(api, event, eventName, branch) {
     if (event.workflow_run) {
         const run = event.workflow_run;
         if (run.head_repository?.full_name !== api.repo) return [];
+        const sameBranch = (pr) => pr.head.repo?.full_name === api.repo && pr.head.ref === run.head_branch;
         // Query current PRs: event.pull_requests can be empty and events may arrive out of order.
-        return (await api.open(run.head_branch))
-            .filter((pr) => pr.head.repo?.full_name === api.repo && pr.head.ref === run.head_branch)
-            .map((pr) => pr.number);
+        const numbers = (await api.open(run.head_branch)).filter(sameBranch).map((pr) => pr.number);
+        if (run.path === PR_EVENT_WORKFLOW) {
+            // A signal can come from closing a PR. Evaluating the closed PR withdraws the approval and
+            // resets the status, so a reopening at the same commit starts pending instead of approved
+            // until the gate runs. Only the PR at the signalled head counts: an older PR closed on the
+            // same branch was settled when it closed. A merged PR cannot reopen.
+            for (const pr of await api.closed(run.head_branch)) {
+                if (sameBranch(pr) && !pr.merged_at && pr.head.sha === run.head_sha && !numbers.includes(pr.number)) {
+                    numbers.push(pr.number);
+                }
+            }
+        }
+        return numbers;
     }
     return (await api.open(branch))
         .filter((pr) => pr.head.repo?.full_name === api.repo && supportedBase(pr.base.ref))

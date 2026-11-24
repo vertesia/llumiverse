@@ -26,16 +26,18 @@ Pull requests run lint and build/test under the single `(ci) PR validation`
 coordinator. When it finishes, the gate approves the current head only if all required
 lint, build and test jobs pass; otherwise it withdraws its approval. Every other change
 of a PR reaches the gate through `pr-event.yaml` (`(ci) PR event`): a push, a label,
-draft or ready for review, a reopening, or a new base. That workflow runs on
+draft or ready for review, a closing, a reopening, or a new base. That workflow runs on
 `pull_request` with no secret, no token permission and no checkout, and the gate
 listens to its completion through `workflow_run`, so the gate always runs the trusted
 copy of the default branch. `pull_request_target`, which the gate used before, is
 blocked in public repositories from 2026-12-02. The completion names the head branch
 but not the change, so the gate evaluates the PR as it is now: it removes its approvals
 for older commits, then checks CI for the current head without waiting. An edit that
-keeps the base skips the signal job, and the gate ignores skipped runs. A closed PR
-keeps its approval, since the gate only looks up open PRs; reopening it triggers a new
-evaluation. The default-branch-only `ci-approve-reconcile` repository event recovers
+keeps the base skips the signal job, and the gate ignores skipped runs. For a signal,
+the gate also evaluates the closed, unmerged PR at the signalled head: a closed PR loses
+its approval and its status returns to pending, so a PR reopened at the same commit
+starts pending until the gate runs again. A CI completion only targets open PRs, and a
+merged PR cannot reopen. The default-branch-only `ci-approve-reconcile` repository event recovers
 missed events or API failures. There is no scheduled reconciliation or rerun-start
 handler.
 

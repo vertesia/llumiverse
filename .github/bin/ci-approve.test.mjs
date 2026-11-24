@@ -50,7 +50,7 @@ const approval = {
     user: { login: APP_LOGIN, type: 'Bot' },
 };
 
-function fixture({ pulls = [pr], reviews = [], files = [], engineeringMembers = ['engineer'] } = {}) {
+function fixture({ pulls = [pr], closedPulls = [], reviews = [], files = [], engineeringMembers = ['engineer'] } = {}) {
     let reads = 0;
     let stored = [...reviews];
     const writes = [];
@@ -68,6 +68,11 @@ function fixture({ pulls = [pr], reviews = [], files = [], engineeringMembers = 
         async open(branch) {
             this.opened.push(branch);
             return pulls;
+        },
+        closedLookups: [],
+        async closed(branch) {
+            this.closedLookups.push(branch);
+            return closedPulls;
         },
         status: async (...args) => writes.push(['status', ...args]),
         dismiss: async (_number, id) => {
@@ -508,6 +513,54 @@ test('workflow events resolve current PRs even when the event has no PR list or 
     );
 });
 
+test('a close signal targets the closed, unmerged PR at the signalled head only', async () => {
+    const closed = { ...pr, state: 'closed', merged_at: null };
+    const signal = (overrides = {}) => ({
+        workflow_run: {
+            head_repository: { full_name: fixture().repo },
+            head_branch: 'feature',
+            head_sha: sha,
+            path: PR_EVENT_WORKFLOW,
+            ...overrides,
+        },
+    });
+    const run = async (closedPulls, event = signal()) => {
+        const api = fixture({ pulls: [], closedPulls });
+        return { numbers: await targets(api, event, 'workflow_run'), api };
+    };
+    assert.deepEqual((await run([closed])).numbers, [12]);
+    assert.deepEqual((await run([{ ...closed, merged_at: '2026-11-24T00:00:00Z' }])).numbers, []);
+    assert.deepEqual((await run([{ ...closed, head: { ...closed.head, sha: newer } }])).numbers, []);
+    assert.deepEqual((await run([{ ...closed, head: { ...closed.head, ref: 'other' } }])).numbers, []);
+    // A CI completion never re-evaluates a closed PR.
+    const ci = await run([closed], signal({ path: '.github/workflows/test.yaml' }));
+    assert.deepEqual(ci.numbers, []);
+    assert.deepEqual(ci.api.closedLookups, []);
+});
+
+test('closing withdraws the approval, so a reopening at the same commit starts pending', async () => {
+    const closed = { ...pr, state: 'closed', merged_at: null };
+    const atClose = fixture({ pulls: [closed], reviews: [approval] });
+    const options = reconcileOptions(
+        { GITHUB_EVENT_NAME: 'workflow_run' },
+        { workflow_run: { id: 40, path: PR_EVENT_WORKFLOW } },
+    );
+    assert.equal((await reconcile(atClose, 12, () => true, options)).approve, false);
+    assert.deepEqual(
+        atClose.writes.map(([kind, id]) => [kind, id]),
+        [
+            ['dismiss', 1],
+            ['status', sha],
+        ],
+    );
+    assert.equal(atClose.writes.at(-1)[2], 'pending');
+    // Reopened at the same commit after a label made it a human review: nothing carries forward.
+    const reopened = { ...pr, labels: [{ name: 'human-review-required' }] };
+    const atReopen = fixture({ pulls: [reopened] });
+    assert.equal((await reconcile(atReopen, 12, () => true, options)).approve, false);
+    assert.ok(!atReopen.writes.some(([kind]) => kind === 'approve'));
+});
+
 test('manual reconciliation rejects malformed PR numbers', async () => {
     await assert.rejects(
         targets(fixture(), { client_payload: { pr_number: '-1' } }, 'repository_dispatch'),
@@ -901,7 +954,7 @@ test('workflow executes only trusted scripts and observes PR events and CI compl
     }
 });
 
-test('the PR event signal runs every change of an open PR without secrets or code', () => {
+test('the PR event signal runs every change of a PR without secrets or code', () => {
     const file = readFileSync(new URL(`../../${PR_EVENT_WORKFLOW}`, import.meta.url), 'utf8');
     const signal = file.replace(/^\s*#.*$/gm, '');
     assert.match(signal, /^name: \(ci\) PR event$/m);
@@ -910,6 +963,7 @@ test('the PR event signal runs every change of an open PR without secrets or cod
     assert.doesNotMatch(triggers, /branches|paths/);
     const types = /^ {4}types: \[(.+)\]$/m.exec(triggers)[1].split(', ');
     assert.deepEqual(types.toSorted(), [
+        'closed',
         'converted_to_draft',
         'edited',
         'labeled',
