@@ -33,6 +33,14 @@
                 "steps": [
                     "Check licenses of added dependencies"
                 ]
+            },
+            {
+                "name": "^Package licenses$",
+                "example": "Package licenses",
+                "baseBranches": ["main"],
+                "steps": [
+                    "Check package licenses"
+                ]
             }
         ]
     }
