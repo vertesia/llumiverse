@@ -21,8 +21,11 @@ import {
     PR_EVENT_WORKFLOW,
     READ_RETRY_DELAYS_MS,
     reconcile,
+    reconcileCurrent,
     reconcileOptions,
     requiresHuman,
+    StatusSupersededError,
+    SUPERSEDED_REEVALUATIONS,
     submitApproval,
     targetBranches,
     targets,
@@ -1168,6 +1171,102 @@ test('a transient 5xx while publishing the status is retried and keeps the appro
         1,
         'never replays the approval',
     );
+});
+
+function statusRecord(id, state, description, login = 'github-actions[bot]') {
+    return { id, context: CONTEXT, state, description, creator: { login } };
+}
+
+// Statuses read back after a failed write: `reads` answers the first read, the second, and so on.
+function statusWrite(reads) {
+    return routedApi(
+        gateRoute({
+            [`GET repos/vertesia/studio/commits/${sha}/statuses`]: (attempt) =>
+                reads[Math.min(attempt, reads.length) - 1],
+            [`POST repos/vertesia/studio/statuses/${sha}`]: (attempt) => {
+                if (attempt === 1) throw ghFailure('gh: Server Error (HTTP 502)');
+                return {};
+            },
+        }),
+    );
+}
+
+test('a status write applied despite a 5xx is confirmed by reading it back, not sent again', async () => {
+    const older = statusRecord(1, 'pending', 'Waiting for CI.');
+    const { api, calls, sleeps } = statusWrite([[older], [statusRecord(2, 'success', 'Passed.'), older]]);
+    await api.status(sha, 'success', 'Passed.');
+    assert.equal(statusPosts(calls).length, 1);
+    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS.slice(0, 1));
+});
+
+test('a status write is sent again only when nothing was published since', async () => {
+    const older = statusRecord(1, 'pending', 'Waiting for CI.');
+    const { api, calls } = statusWrite([[older], [older]]);
+    await api.status(sha, 'success', 'Passed.');
+    assert.equal(statusPosts(calls).length, 2);
+});
+
+test('a failed status write never overwrites a verdict another run published meanwhile', async () => {
+    // A run for another branch at the same commit publishes success during this run's backoff.
+    const older = statusRecord(1, 'pending', 'PR head changed.');
+    const newer = statusRecord(2, 'success', 'Passed.');
+    const { api, calls } = statusWrite([[older], [newer, older]]);
+    await assert.rejects(api.status(sha, 'pending', 'Waiting for CI.'), StatusSupersededError);
+    assert.equal(statusPosts(calls).length, 1, 'the older pending verdict is not replayed over success');
+});
+
+test('a superseded status keeps the approval and asks for another evaluation', async () => {
+    const api = fixture();
+    api.status = async () => {
+        throw new StatusSupersededError('Another run published pending.');
+    };
+    const result = await reconcile(api, 12, () => true);
+    assert.equal(result.superseded, true);
+    assert.equal(result.handoff, undefined);
+    assert.deepEqual(
+        api.writes.map(([kind]) => kind),
+        ['approve'],
+        'no dismissal and no error status',
+    );
+});
+
+test('a superseded status is resolved by evaluating the PR again from scratch', async () => {
+    const api = fixture();
+    const status = api.status;
+    let superseded = 1;
+    api.status = async (...args) => {
+        if (superseded-- > 0) throw new StatusSupersededError('Another run published pending.');
+        return status(...args);
+    };
+    const settles = [];
+    const result = await reconcileCurrent(
+        api,
+        12,
+        (_current, onReject) => {
+            settles.push(onReject !== undefined);
+            return true;
+        },
+        { settle: true, settleOptions: { sleep: async () => {} } },
+    );
+    assert.equal(result.state, 'success');
+    assert.deepEqual(
+        api.writes.map(([kind, , state]) => (kind === 'status' ? `status:${state}` : kind)),
+        ['approve', 'status:success'],
+        'the second pass keeps the approval and publishes its own verdict',
+    );
+    assert.equal(settles.filter(Boolean).length, 1, 'only the first pass waits for CI data');
+});
+
+test('re-evaluation after superseded statuses is bounded', async () => {
+    const api = fixture();
+    let attempts = 0;
+    api.status = async () => {
+        attempts++;
+        throw new StatusSupersededError('Another run published pending.');
+    };
+    const result = await reconcileCurrent(api, 12, () => true);
+    assert.equal(result.superseded, true);
+    assert.equal(attempts, 1 + SUPERSEDED_REEVALUATIONS);
 });
 
 test('only server errors and dropped connections count as transient', () => {

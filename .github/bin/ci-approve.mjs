@@ -156,7 +156,13 @@ export async function settleClosed(api, number, pr) {
         await api.dismiss(number, review.id, CLOSED_REASON);
     }
     const owns = await ownsCommitStatus(api, pr);
-    if (owns) await api.status(pr.head.sha, 'pending', CLOSED_REASON);
+    if (owns) {
+        try {
+            await api.status(pr.head.sha, 'pending', CLOSED_REASON);
+        } catch (error) {
+            return supersededResult(error);
+        }
+    }
     return {
         state: 'pending',
         approve: false,
@@ -244,7 +250,14 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
                 if (!result.approve) await withdraw(result.reason);
             }
         }
-        if (await ownsCommitStatus(api, pr)) await api.status(pr.head.sha, result.state, result.reason);
+        if (await ownsCommitStatus(api, pr)) {
+            try {
+                await api.status(pr.head.sha, result.state, result.reason);
+            } catch (error) {
+                // The approval stays: the next evaluation keeps or withdraws it like any other.
+                return supersededResult(error);
+            }
+        }
         // Hand off only once the successful status for this exact revision is published.
         const handoff = result.state === 'success' ? handoffFor(pr, handoffs) : undefined;
         return handoff ? { ...result, handoff } : result;
@@ -264,11 +277,12 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
             }
             const subject = latest?.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
             if (await ownsCommitStatus(api, subject).catch(() => false)) {
-                await api.status(
-                    pr.head.sha,
-                    'error',
-                    'Could not verify approval eligibility; inspect the workflow log.',
-                );
+                // A verdict another run published while this write was failing stands; the job still fails.
+                await api
+                    .status(pr.head.sha, 'error', 'Could not verify approval eligibility; inspect the workflow log.')
+                    .catch((statusError) => {
+                        if (!(statusError instanceof StatusSupersededError)) throw statusError;
+                    });
             }
         } finally {
             await withdraw('Approval eligibility could not be verified.');
@@ -282,6 +296,34 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
 // otherwise leave its PR pending until a manual dispatch. The old two retries (7 s) ran out in runs
 // 42054194248 and 42061447529, where 5xx responses kept coming for 28 s and 12 s after the first.
 export const READ_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 32000];
+
+// Raised when a status write failed and, by the time it is read back, a different verdict for the commit
+// has been published by another run. Which verdict is current is unknown, so the PR is evaluated again.
+export class StatusSupersededError extends Error {
+    name = 'StatusSupersededError';
+}
+
+export const SUPERSEDED_REEVALUATIONS = 2;
+
+export async function reconcileCurrent(api, number, ci, options = {}) {
+    let result = await reconcile(api, number, ci, options);
+    for (let pass = 0; result.superseded && pass < SUPERSEDED_REEVALUATIONS; pass++) {
+        console.log(`PR #${number}: ${result.reason}`);
+        // The first pass already waited for its CI data, so later passes evaluate the PR as it is now.
+        result = await reconcile(api, number, ci, { ...options, settle: false });
+    }
+    return result;
+}
+
+function supersededResult(error) {
+    if (!(error instanceof StatusSupersededError)) throw error;
+    return {
+        state: 'pending',
+        approve: false,
+        superseded: true,
+        reason: `${error.message} Evaluating the PR again.`,
+    };
+}
 
 export function isTransientApiError(error) {
     return /HTTP 5\d\d|error connecting to|connection reset|i\/o timeout|unexpected EOF/i.test(
@@ -337,15 +379,7 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
     const owner = repo.split('/')[0];
     const request = (
         endpoint,
-        {
-            method = 'GET',
-            body,
-            handoff = false,
-            membership = false,
-            review = false,
-            pages = false,
-            idempotent = method === 'GET',
-        } = {},
+        { method = 'GET', body, handoff = false, membership = false, review = false, pages = false } = {},
     ) => {
         const token = handoff
             ? env.GH_HANDOFF_TOKEN
@@ -365,9 +399,8 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                 env: { ...env, GH_TOKEN: token },
                 input: body ? JSON.stringify(body) : undefined,
             });
-        // Only reads and idempotent writes are retried: a write answered with a 5xx may still have been
-        // applied, so replaying one that creates something (a review, a dispatch) could duplicate it.
-        const delays = idempotent ? READ_RETRY_DELAYS_MS : [];
+        // Only reads are retried here: a write answered with a 5xx may still have been applied.
+        const delays = method === 'GET' ? READ_RETRY_DELAYS_MS : [];
         for (let attempt = 0; ; attempt++) {
             try {
                 const output = send();
@@ -430,21 +463,49 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
             }),
         async status(sha, state, description) {
             description = description.slice(0, 140);
-            const old = list(`repos/${repo}/commits/${sha}/statuses`).find((status) => status.context === CONTEXT);
-            if (old?.creator?.login === 'github-actions[bot]' && old.state === state && old.description === description)
-                return;
-            // Publishing the same state, description and context again replaces the status with an
-            // identical one, so a 5xx is retried instead of failing the run and withdrawing the approval.
-            request(`repos/${repo}/statuses/${sha}`, {
-                method: 'POST',
-                idempotent: true,
-                body: {
-                    state,
-                    description,
-                    context: CONTEXT,
-                    target_url: `${env.GITHUB_SERVER_URL}/${repo}/actions/runs/${env.GITHUB_RUN_ID}`,
-                },
-            });
+            // GitHub lists a commit's statuses newest first, and the newest one for the context decides the gate.
+            const current = () =>
+                list(`repos/${repo}/commits/${sha}/statuses`).find((status) => status.context === CONTEXT);
+            const published = (status) =>
+                status?.creator?.login === 'github-actions[bot]' &&
+                status.state === state &&
+                status.description === description;
+            const old = current();
+            if (published(old)) return;
+            const body = {
+                state,
+                description,
+                context: CONTEXT,
+                target_url: `${env.GITHUB_SERVER_URL}/${repo}/actions/runs/${env.GITHUB_RUN_ID}`,
+            };
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    request(`repos/${repo}/statuses/${sha}`, { method: 'POST', body });
+                    return;
+                } catch (error) {
+                    if (attempt >= READ_RETRY_DELAYS_MS.length || !isTransientApiError(error)) throw error;
+                    // A 5xx does not mean the write failed, and runs for other branches can publish a
+                    // verdict for the same commit meanwhile: a blind replay could overwrite a newer one.
+                    // Read the status back and replay only when nothing has been published since.
+                    sleep(READ_RETRY_DELAYS_MS[attempt]);
+                    let latest;
+                    try {
+                        latest = current();
+                    } catch (readError) {
+                        throw new AggregateError(
+                            [error, readError],
+                            'Could not confirm the commit status after a failed write',
+                        );
+                    }
+                    if (published(latest)) return;
+                    if (latest?.id !== old?.id) {
+                        throw new StatusSupersededError(
+                            `Another run published ${latest?.state ?? 'another verdict'} for ${sha} while this status write was failing.`,
+                        );
+                    }
+                    console.warn(`Retrying the ${CONTEXT} status for ${sha} after a transient error: ${error.message}`);
+                }
+            }
         },
     };
 }
@@ -538,7 +599,7 @@ export async function main(env, { discover = false } = {}) {
     const errors = [];
     for (const number of await targets(api, event, env.GITHUB_EVENT_NAME, env.CI_APPROVAL_BRANCH)) {
         try {
-            const result = await reconcile(api, number, ci, { ...reconcileOptions(env, event), handoffs });
+            const result = await reconcileCurrent(api, number, ci, { ...reconcileOptions(env, event), handoffs });
             const summary = `PR #${number}: ${result.reason}`;
             console.log(summary);
             if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n\n`);

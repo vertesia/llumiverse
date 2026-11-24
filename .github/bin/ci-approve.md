@@ -51,10 +51,15 @@ Because a CI completion is the only event that re-checks a finished head, its PR
 lookup queries open PRs by head branch (`head=<owner>:<branch>`) rather than paging
 through every open PR, and every read is retried 5 times on a 5xx or dropped
 connection, after 2, 4, 8, 16 and 32 seconds (62 seconds in all, longer than the 5xx
-incidents seen in CI). Publishing the commit status is retried the same way, because
-sending the same status again only replaces it with an identical one. Other writes are
-not retried: a write answered with a 5xx may already have been applied, and the next
-event reconciles it.
+incidents seen in CI). Writes are not replayed blindly: a write answered with a
+5xx may already have been applied, and the next event reconciles it.
+
+The commit status is the exception, because a lost status write withdraws an approval
+the run has just granted. After a 5xx the gate waits with the same backoff and reads the
+commit's status back. If its own verdict is there, the write was applied. If nothing
+has been published since, it sends the write again. If another run (for another
+branch at the same commit) has published a different verdict meanwhile, it does not
+overwrite it: it evaluates the PR again from scratch, up to twice.
 
 Approval creation has a read-back recovery path for dropped connections, 5xx
 responses, and GitHub's specific 422 internal-error response. The POST is sent only
