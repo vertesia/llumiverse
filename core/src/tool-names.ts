@@ -1,15 +1,21 @@
 import type { Logger } from '@llumiverse/common';
 
 /**
- * The longest tool name OpenAI, Bedrock Converse, Mistral and Gemini accept.
+ * The longest tool name OpenAI, Bedrock Converse and Mistral accept.
  */
 export const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
 
+/** The longest tool name Vertex AI Gemini accepts (`FunctionDeclaration.name`, v1beta1). */
+export const GEMINI_TOOL_NAME_MAX_LENGTH = 128;
+
 /** What a provider accepts as a tool name, for {@link providerSafeToolName}. */
 export interface ToolNameRules {
-    /** Matches every character the provider rejects; must be a global regex. */
+    /** Matches a character the provider rejects. Every match is replaced; flags and `lastIndex` are ignored. */
     rejectedChars: RegExp;
-    /** Matches the characters a name may start with, when the provider restricts them. */
+    /**
+     * Matches, at the first character, the characters a name may start with, when the provider restricts them.
+     * Flags and `lastIndex` are ignored.
+     */
     validStart?: RegExp;
     maxLength: number;
 }
@@ -22,13 +28,18 @@ export const DEFAULT_TOOL_NAME_RULES: ToolNameRules = {
 
 /**
  * Gemini: letters, digits, underscores, dots, colons and dashes, starting with a letter or an underscore,
- * at most 64 characters.
+ * at most 128 characters.
  */
 export const GEMINI_TOOL_NAME_RULES: ToolNameRules = {
     rejectedChars: /[^a-zA-Z0-9_.:-]/g,
     validStart: /^[a-zA-Z_]/,
-    maxLength: PROVIDER_TOOL_NAME_MAX_LENGTH,
+    maxLength: GEMINI_TOOL_NAME_MAX_LENGTH,
 };
+
+/** A fresh copy of `pattern` with the given flags, so a caller's flags and `lastIndex` never leak in. */
+function withFlags(pattern: RegExp, flags: string): RegExp {
+    return new RegExp(pattern.source, flags);
+}
 
 /**
  * The tool name to send to a provider for a tool call replayed from conversation history.
@@ -56,8 +67,9 @@ export function providerSafeToolName(
     if (raw && declaredNames.has(raw)) {
         return raw;
     }
-    let safe = raw.replace(rules.rejectedChars, '_');
-    if (safe && rules.validStart && !rules.validStart.test(safe)) {
+    let safe = raw.replace(withFlags(rules.rejectedChars, 'g'), '_');
+    // A sticky regex tests exactly the first character, whatever the pattern's own anchors.
+    if (safe && rules.validStart && !withFlags(rules.validStart, 'y').test(safe)) {
         safe = `_${safe}`;
     }
     return safe.slice(0, rules.maxLength) || '_';

@@ -51,7 +51,28 @@ describe('providerSafeToolName', () => {
         it('starts a name with "_" when it does not start with a letter or an underscore', () => {
             expect(gemini('.x')).toBe('_.x');
             expect(gemini('1tool')).toBe('_1tool');
-            expect(gemini('-'.repeat(70))).toHaveLength(64);
+            expect(gemini('-'.repeat(200))).toHaveLength(128);
+        });
+
+        it('keeps a name up to the 128 characters Gemini accepts', () => {
+            const long = `mcp.${'x'.repeat(124)}`;
+            expect(gemini(long)).toBe(long);
+            expect(gemini(`${long}y`)).toBe(long);
+            // The default rule still cuts at 64.
+            expect(providerSafeToolName('x'.repeat(65), declared)).toHaveLength(64);
+        });
+    });
+
+    describe('with rules built from stateful regexes', () => {
+        it('gives the same name every time, whatever the flags and lastIndex', () => {
+            const rules = { rejectedChars: /[^a-z_]/, validStart: /^[a-z_]/g, maxLength: 64 };
+            const names = new Set(Array.from({ length: 4 }, () => providerSafeToolName('search', declared, rules)));
+            expect([...names]).toEqual(['search']);
+            expect(providerSafeToolName('a.b.c', declared, rules)).toBe('a_b_c');
+            // An unanchored pattern is still checked at the first character only.
+            const unanchored = { rejectedChars: /[^a-z0-9_]/g, validStart: /[a-z_]/g, maxLength: 64 };
+            expect(providerSafeToolName('9x', declared, unanchored)).toBe('_9x');
+            expect(providerSafeToolName('9x', declared, unanchored)).toBe('_9x');
         });
     });
 
