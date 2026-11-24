@@ -70,7 +70,11 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
         const coordinator = Boolean(policy.workflow) && run.path === `.github/workflows/${policy.workflow}`;
         if (!coordinator && run.conclusion !== 'success') return reject(`run ${run.id} concluded ${run.conclusion}`);
         if (policy.jobs.length === 0) return reject('the CI policy declares no required jobs');
+        // A job a policy requires only on some base branches (the license check, which maintained release
+        // lines do not run) is required when the run's recorded base is unknown, so a gap fails closed.
+        const testedBase = run.pull_requests.find((item) => item.number === pr)?.base?.ref ?? baseBranch;
         for (const required of policy.jobs) {
+            if (required.baseBranches && testedBase && !required.baseBranches.includes(testedBase)) continue;
             const matches = jobs.filter((job) => new RegExp(required.name).test(job.name));
             if (matches.length === 0) return reject(`run ${run.id} has no job matching ${required.name}`);
             for (const job of matches) {
