@@ -561,6 +561,56 @@ test('closing withdraws the approval, so a reopening at the same commit starts p
     assert.ok(!atReopen.writes.some(([kind]) => kind === 'approve'));
 });
 
+test('a closed PR never overrides the status of an open PR at the same commit', async () => {
+    const open = { ...pr, number: 13 };
+    const closed = { ...pr, state: 'closed', merged_at: null };
+    const byNumber = { 12: closed, 13: open };
+    const reviewsOf = { 12: [approval], 13: [] };
+    const writes = [];
+    const api = {
+        ...fixture(),
+        writes,
+        pr: async (number) => structuredClone(byNumber[number]),
+        open: async () => [open],
+        closed: async () => [closed],
+        reviews: async (number) => structuredClone(reviewsOf[number]),
+        status: async (...args) => writes.push(['status', ...args]),
+        dismiss: async (number, id) => {
+            writes.push(['dismiss', number, id]);
+            reviewsOf[number] = reviewsOf[number].filter((review) => review.id !== id);
+        },
+        approve: async (number, commit, body) => {
+            writes.push(['approve', number, commit]);
+            const review = { ...approval, id: 100 + number, commit_id: commit, body };
+            reviewsOf[number].push(review);
+            return review;
+        },
+    };
+    const event = {
+        workflow_run: {
+            head_repository: { full_name: api.repo },
+            head_branch: 'feature',
+            head_sha: sha,
+            path: PR_EVENT_WORKFLOW,
+        },
+    };
+    const numbers = await targets(api, event, 'workflow_run');
+    assert.deepEqual(numbers, [13, 12]);
+    const options = reconcileOptions({ GITHUB_EVENT_NAME: 'workflow_run' }, event);
+    for (const number of numbers) await reconcile(api, number, () => true, options);
+    // The closed PR loses its approval, and the open PR keeps the last word on the commit status.
+    assert.ok(writes.some(([kind, number, id]) => kind === 'dismiss' && number === 12 && id === 1));
+    assert.deepEqual(
+        writes.filter(([kind]) => kind === 'status').map(([, commit, state]) => [commit, state]),
+        [[sha, 'success']],
+    );
+    // Without an open PR at that commit, the closed PR resets it.
+    const alone = fixture({ pulls: [closed], reviews: [approval] });
+    alone.open = async () => [];
+    await reconcile(alone, 12, () => true, options);
+    assert.deepEqual(alone.writes.at(-1).slice(0, 3), ['status', sha, 'pending']);
+});
+
 test('manual reconciliation rejects malformed PR numbers', async () => {
     await assert.rejects(
         targets(fixture(), { client_payload: { pr_number: '-1' } }, 'repository_dispatch'),
@@ -992,6 +1042,8 @@ test('additive ruleset requires CI without changing human review or thread rules
     assert.equal(ruleset.rules[0].type, 'required_status_checks');
     assert.equal(ruleset.rules[0].parameters.required_status_checks[0].context, CONTEXT);
     assert.deepEqual(ruleset.conditions.ref_name.include, ['refs/heads/main', 'refs/heads/release/**']);
+    // Retired lines have no pr-event.yaml: requiring the gate there would leave their PRs without a signal.
+    assert.deepEqual(ruleset.conditions.ref_name.exclude, ['refs/heads/release/1.3', 'refs/heads/release/1.4']);
 });
 
 test('approval does not depend on listing changed files', async () => {

@@ -135,12 +135,34 @@ export async function waitForCiToSettle(
     }
 }
 
+export const CLOSED_REASON = 'The PR is closed; reopening it starts a new evaluation.';
+
+// A closed PR keeps no approval from this gate, so a reopening at the same commit starts from
+// pending. The commit status belongs to the commit, not the PR: an open PR at the same commit owns
+// it, so it is reset only when no open PR shares the commit. This path never publishes an error
+// status, which would also land on that open PR.
+export async function settleClosed(api, number, pr) {
+    for (const review of (await api.reviews(number)).filter(ownsReview)) {
+        await api.dismiss(number, review.id, CLOSED_REASON);
+    }
+    const shared = (await api.open()).some(
+        (open) => open.number !== number && open.state === 'open' && open.head.sha === pr.head.sha,
+    );
+    if (!shared && pr.head.repo?.full_name === api.repo) await api.status(pr.head.sha, 'pending', CLOSED_REASON);
+    return {
+        state: 'pending',
+        approve: false,
+        reason: shared ? `${CLOSED_REASON} An open PR at the same commit owns its status.` : CLOSED_REASON,
+    };
+}
+
 export async function reconcile(api, number, ci, { settle = false, settleOptions, branch, handoffs } = {}) {
     // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
     if (branch && pr.head.ref !== branch) {
         return { reason: 'PR head branch changed; waiting for another event with its branch lock.' };
     }
+    if (pr.state !== 'open') return settleClosed(api, number, pr);
     // Only the marked reviews from this App are ever candidates for dismissal.
     let standing = [];
     async function withdraw(reason, all = true) {

@@ -35,8 +35,8 @@ but not the change, so the gate evaluates the PR as it is now: it removes its ap
 for older commits, then checks CI for the current head without waiting. An edit that
 keeps the base skips the signal job, and the gate ignores skipped runs. For a signal,
 the gate also evaluates the closed, unmerged PR at the signalled head: a closed PR loses
-its approval and its status returns to pending, so a PR reopened at the same commit
-starts pending until the gate runs again. A CI completion only targets open PRs, and a
+its approval, and its commit status returns to pending unless an open PR shares the
+commit, so a PR reopened at the same commit starts pending until the gate runs again. A CI completion only targets open PRs, and a
 merged PR cannot reopen. The default-branch-only `ci-approve-reconcile` repository event recovers
 missed events or API failures. There is no scheduled reconciliation or rerun-start
 handler.
@@ -151,8 +151,10 @@ implementation in all three.
    update, and verify that only this gate's approval disappears until CI passes.
 4. Once the status is being emitted, import `.github/rulesets/ci-approval.json` as
    an additional ruleset. It requires `PR approval gate` from GitHub Actions
-   (integration ID 15368) on `main` and `release/**`, with the PR branch required to
-   be up to date. Keep
+   (integration ID 15368) on `main` and `release/**` except the retired `release/1.3`
+   and `release/1.4`, which have no `pr-event.yaml`, with the PR branch required to
+   be up to date. When a line is retired, add it to `exclude`; a new line needs
+   `pr-event.yaml` before the ruleset covers it. Keep
    `dismiss_stale_reviews_on_push` false in existing rulesets. This template makes
    no changes to review counts, conversation resolution, or Copilot configuration.
 
