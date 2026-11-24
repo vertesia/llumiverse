@@ -611,6 +611,61 @@ test('a closed PR never overrides the status of an open PR at the same commit', 
     assert.deepEqual(alone.writes.at(-1).slice(0, 3), ['status', sha, 'pending']);
 });
 
+test('a PR that closes during a run never overrides an open PR at the same commit', async () => {
+    const closed = { ...pr, state: 'closed', merged_at: null };
+    const sharing = { ...pr, number: 13 };
+    const run = async (pulls, ci, options = {}, reviews = [], tamper = () => {}) => {
+        const api = fixture({ pulls, reviews });
+        api.open = async () => [sharing];
+        tamper(api);
+        let error;
+        try {
+            await reconcile(api, 12, ci, options);
+        } catch (caught) {
+            error = caught;
+        }
+        return { statuses: api.writes.filter(([kind]) => kind === 'status'), writes: api.writes, error };
+    };
+    const completion = reconcileOptions(
+        { GITHUB_EVENT_NAME: 'workflow_run' },
+        { workflow_run: { id: 41, head_sha: sha, path: '.github/workflows/test.yaml' } },
+    );
+    // Closed while the gate waited for CI data.
+    const settling = await run([pr, closed], () => true, completion, [approval]);
+    assert.deepEqual(settling.statuses, []);
+    assert.ok(settling.writes.some(([kind, id]) => kind === 'dismiss' && id === 1));
+    // Closed between the first verdict and the re-read before approving.
+    const evaluating = await run([pr, closed], () => true);
+    assert.deepEqual(evaluating.statuses, []);
+    assert.ok(!evaluating.writes.some(([kind]) => kind === 'approve'));
+    // Closed while the approval was being submitted: the new approval is withdrawn.
+    const approving = await run([pr, pr, closed], () => true);
+    assert.deepEqual(approving.statuses, []);
+    assert.deepEqual(
+        approving.writes.map(([kind]) => kind),
+        ['approve', 'dismiss'],
+    );
+    // An error after the PR closed publishes no error status on the shared commit.
+    const failing = await run(
+        [pr, closed],
+        () => true,
+        {},
+        [approval],
+        (api) => {
+            api.dismiss = async () => {
+                throw new Error('dismissal failed');
+            };
+        },
+    );
+    assert.match(failing.error.message, /dismissal failed/);
+    assert.deepEqual(failing.statuses, []);
+    // Without an open PR at that commit, the PR that closed mid-run still resets it.
+    const alone = fixture({ pulls: [pr, closed] });
+    alone.open = async () => [];
+    await reconcile(alone, 12, () => true);
+    assert.deepEqual(alone.writes.at(-1).slice(0, 3), ['status', sha, 'pending']);
+});
+
 test('manual reconciliation rejects malformed PR numbers', async () => {
     await assert.rejects(
         targets(fixture(), { client_payload: { pr_number: '-1' } }, 'repository_dispatch'),

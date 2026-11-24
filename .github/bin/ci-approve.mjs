@@ -137,22 +137,30 @@ export async function waitForCiToSettle(
 
 export const CLOSED_REASON = 'The PR is closed; reopening it starts a new evaluation.';
 
+// The commit status belongs to the commit, not the PR. An open PR always owns the status of its
+// head; a closed PR owns it only when no open PR shares the commit, or it would overwrite that PR's
+// verdict. The PR can close at any read of a run, not only the first one.
+export async function ownsCommitStatus(api, pr) {
+    if (pr.head.repo?.full_name !== api.repo) return false;
+    if (pr.state === 'open') return true;
+    return !(await api.open()).some(
+        (open) => open.number !== pr.number && open.state === 'open' && open.head.sha === pr.head.sha,
+    );
+}
+
 // A closed PR keeps no approval from this gate, so a reopening at the same commit starts from
-// pending. The commit status belongs to the commit, not the PR: an open PR at the same commit owns
-// it, so it is reset only when no open PR shares the commit. This path never publishes an error
-// status, which would also land on that open PR.
+// pending. This path never publishes an error status, which would also land on an open PR at the
+// same commit.
 export async function settleClosed(api, number, pr) {
     for (const review of (await api.reviews(number)).filter(ownsReview)) {
         await api.dismiss(number, review.id, CLOSED_REASON);
     }
-    const shared = (await api.open()).some(
-        (open) => open.number !== number && open.state === 'open' && open.head.sha === pr.head.sha,
-    );
-    if (!shared && pr.head.repo?.full_name === api.repo) await api.status(pr.head.sha, 'pending', CLOSED_REASON);
+    const owns = await ownsCommitStatus(api, pr);
+    if (owns) await api.status(pr.head.sha, 'pending', CLOSED_REASON);
     return {
         state: 'pending',
         approve: false,
-        reason: shared ? `${CLOSED_REASON} An open PR at the same commit owns its status.` : CLOSED_REASON,
+        reason: owns ? CLOSED_REASON : `${CLOSED_REASON} An open PR at the same commit owns its status.`,
     };
 }
 
@@ -229,18 +237,21 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
                     reason: 'PR changed during approval; waiting for another check.',
                 };
             } else {
-                result = await evaluate(api, after, ci);
+                // The latest read decides who owns the commit status: the PR may have closed.
+                pr = after;
+                result = await evaluate(api, pr, ci);
                 if (!result.approve) await withdraw(result.reason);
             }
         }
-        if (pr.head.repo?.full_name === api.repo) await api.status(pr.head.sha, result.state, result.reason);
+        if (await ownsCommitStatus(api, pr)) await api.status(pr.head.sha, result.state, result.reason);
         // Hand off only once the successful status for this exact revision is published.
         const handoff = result.state === 'success' ? handoffFor(pr, handoffs) : undefined;
         return handoff ? { ...result, handoff } : result;
     } catch (error) {
         // Best-effort cleanup: status/review writes can also fail during an API outage.
         try {
-            if (pr.head.repo?.full_name === api.repo) {
+            // A failed lookup counts as not owning it: an error must not land on another PR's verdict.
+            if (await ownsCommitStatus(api, pr).catch(() => false)) {
                 await api.status(
                     pr.head.sha,
                     'error',
