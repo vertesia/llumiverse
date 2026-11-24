@@ -192,12 +192,13 @@ test('legacy PR workflows remain valid while release branches adopt the coordina
 test('withholds approval for a failed license check on main, not on release lines without one', () => {
     const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
     const names = Object.keys(policies);
+    const licenseJobs = new Set(['License check', 'Package licenses']);
     const verify = (base, licenseConclusion) => {
         const jobs = Object.values(policies)
             .flatMap((configured) => configured.jobs)
-            .filter((required) => licenseConclusion || required.example !== 'License check')
+            .filter((required) => licenseConclusion || !licenseJobs.has(required.example))
             .map((required) => ({
-                ...job(required.example, required.example === 'License check' ? licenseConclusion : 'success'),
+                ...job(required.example, licenseJobs.has(required.example) ? licenseConclusion : 'success'),
                 steps: required.steps.map((step) => job(step)),
             }));
         const pages = (endpoint) => {
