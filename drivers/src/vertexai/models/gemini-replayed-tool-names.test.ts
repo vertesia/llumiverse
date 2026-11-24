@@ -1,8 +1,16 @@
 import type { Content } from '@google/genai';
-import type { ExecutionOptions, ToolDefinition } from '@llumiverse/core';
+import {
+    type ExecutionOptions,
+    incrementConversationTurn,
+    PromptRole,
+    type PromptSegment,
+    type ToolDefinition,
+} from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
-import { getGeminiPayload } from './gemini.js';
+import type { VertexAIDriver } from '../index.js';
+import { GEMINI_GENERATED_CALL_ID_PREFIX, GeminiModelDefinition, getGeminiPayload } from './gemini.js';
 
+const MODEL = 'gemini-2.5-flash';
 const tools: ToolDefinition[] = [
     { name: 'web_search', input_schema: { type: 'object' } },
     { name: 'mcp.github.search', input_schema: { type: 'object' } },
@@ -27,7 +35,7 @@ const history = (): Content[] => [
 describe('Gemini replayed tool names', () => {
     it('rewrites a call and its response to the same safe name, without changing the conversation', () => {
         const contents = history();
-        const options: ExecutionOptions = { model: 'gemini-2.5-flash', tools };
+        const options: ExecutionOptions = { model: MODEL, tools };
 
         const payload = getGeminiPayload(options, { contents });
 
@@ -37,19 +45,69 @@ describe('Gemini replayed tool names', () => {
         expect(contents).toEqual(history());
     });
 
-    it('leaves a response that pairs by id without a name', () => {
+    it.each([
+        ['a provider-issued', 'vertex-call-1', true],
+        ['a generated', `${GEMINI_GENERATED_CALL_ID_PREFIX}1`, true],
+        ['a provider-issued', 'vertex-call-1', false],
+    ])(
+        'keeps the tool result of an empty-name call with %s id paired with it (wrapped=%s)',
+        async (_kind, id, wrapped) => {
+            const stored: Content[] = [
+                { role: 'user', parts: [{ text: 'go' }] },
+                { role: 'model', parts: [{ functionCall: { id, name: '', args: {} } }] },
+            ];
+            // Stored conversations are wrapped with their turn metadata; a plain array is accepted too.
+            const conversation = wrapped ? incrementConversationTurn(stored) : stored;
+            const options: ExecutionOptions = { model: MODEL, tools, conversation };
+            const result: PromptSegment = {
+                role: PromptRole.tool,
+                tool_use_id: id,
+                content: '{"error":"Tool not found"}',
+            };
+
+            // The driver sends the stored conversation followed by the new turn.
+            const prompt = await new GeminiModelDefinition(MODEL).createPrompt(
+                null as unknown as VertexAIDriver,
+                [result],
+                options,
+            );
+            const payload = getGeminiPayload(options, { contents: stored.concat(prompt.contents) });
+
+            const sent = payload.contents as Content[];
+            const call = sent[1].parts?.[0].functionCall;
+            const response = sent[2]?.parts?.[0].functionResponse;
+            expect(call?.name).toBe('_');
+            expect(response?.name).toBe('_');
+            // Vertex only receives the call ids it issued.
+            expect(call?.id).toBe(id.startsWith(GEMINI_GENERATED_CALL_ID_PREFIX) ? undefined : id);
+            expect(response?.id).toBe(call?.id);
+        },
+    );
+
+    it("gives a response that carries only a call id its call's safe name", () => {
         const payload = getGeminiPayload(
-            { model: 'gemini-2.5-flash', tools },
+            { model: MODEL, tools },
             {
                 contents: [
-                    { role: 'model', parts: [{ functionCall: { id: 'c0', name: 'web_search', args: {} } }] },
-                    { role: 'user', parts: [{ functionResponse: { id: 'c0', response: {} } }] },
+                    {
+                        role: 'model',
+                        parts: [
+                            { functionCall: { id: 'c0', name: 'functions.x', args: {} } },
+                            { functionCall: { id: 'c1', name: 'web_search', args: {} } },
+                        ],
+                    },
+                    {
+                        role: 'user',
+                        parts: [
+                            { functionResponse: { id: 'c0', response: {} } },
+                            { functionResponse: { id: 'c1', response: {} } },
+                        ],
+                    },
                 ],
             },
         );
 
-        const response = (payload.contents as Content[])[1].parts?.[0].functionResponse;
-        expect(response).toBeDefined();
-        expect(response?.name).toBeUndefined();
+        const responses = (payload.contents as Content[])[1].parts?.map((part) => part.functionResponse?.name);
+        expect(responses).toEqual(['functions_x', 'web_search']);
     });
 });

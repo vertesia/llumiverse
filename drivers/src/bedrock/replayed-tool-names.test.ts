@@ -57,6 +57,16 @@ describe('Bedrock Converse replayed tool names', () => {
         );
     });
 
+    it('keeps the emitted names when a request without tools sends the history as text', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+
+        const request = driver.preparePayload(conversation(), { model: MODEL });
+
+        const text = JSON.stringify(request.messages);
+        expect(text).toContain('[Tool call: multi_tool_use.parallel(');
+        expect(text).not.toContain('multi_tool_use_parallel');
+    });
+
     it('logs nothing when every replayed name is declared', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const info = vi.fn();

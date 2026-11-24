@@ -347,12 +347,13 @@ export function getGeminiPayload(
     // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
     // which would otherwise trip Gemini's functionCall/functionResponse pairing.
     if (payloadContents) {
-        payloadContents = stripGeneratedFunctionCallIds(fixOrphanedToolResults(payloadContents));
         // Compatibility exception: a replayed call to an undeclared tool whose name Gemini rejects (empty,
         // dotted) would fail every later turn, so the request carries a safe name. The stored conversation keeps
         // the emitted name.
         const replayedToolNames = new ReplayedToolNames(options.tools);
-        payloadContents = sanitizeGeminiFunctionNames(payloadContents, replayedToolNames);
+        payloadContents = stripGeneratedFunctionCallIds(
+            sanitizeGeminiFunctionNames(fixOrphanedToolResults(payloadContents), replayedToolNames),
+        );
         replayedToolNames.logRewrites(logger, { provider: 'vertexai', model: options.model });
     }
 
@@ -603,7 +604,8 @@ function functionCallNamesById(contents: Content[]): Map<string, string> {
     for (const content of contents) {
         for (const part of content.parts ?? []) {
             const call = part.functionCall;
-            if (call?.id && call.name) names.set(call.id, call.name);
+            // An empty name is still the call's name: its result must pair with it, not fall back to the id.
+            if (call?.id && call.name !== undefined) names.set(call.id, call.name);
         }
     }
     return names;
@@ -618,35 +620,6 @@ function isGeneratedFunctionCallId(id: string | undefined): boolean {
  * Vertex only ever receives call ids it issued; parts that had none pair by name and position as
  * they always have.
  */
-/**
- * Give every replayed functionCall and functionResponse part a name Gemini accepts, without touching the
- * caller's contents. Gemini pairs a response with its call by name, so both get the same rewrite.
- */
-export function sanitizeGeminiFunctionNames(contents: Content[], names: ReplayedToolNames): Content[] {
-    return contents.map((content) => {
-        if (!content.parts?.some((part) => part.functionCall || part.functionResponse)) return content;
-        return {
-            ...content,
-            parts: content.parts.map((part) => {
-                if (part.functionCall) {
-                    const name = names.safe(part.functionCall.name);
-                    return name === part.functionCall.name
-                        ? part
-                        : { ...part, functionCall: { ...part.functionCall, name } };
-                }
-                // A response without a name pairs by id; leave it without one.
-                if (part.functionResponse?.name !== undefined) {
-                    const name = names.safe(part.functionResponse.name);
-                    return name === part.functionResponse.name
-                        ? part
-                        : { ...part, functionResponse: { ...part.functionResponse, name } };
-                }
-                return part;
-            }),
-        };
-    });
-}
-
 export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
     return contents.map((content) => {
         const hasGeneratedId = content.parts?.some(
@@ -665,6 +638,38 @@ export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
                 if (isGeneratedFunctionCallId(part.functionResponse?.id)) {
                     const { id: _generated, ...functionResponse } = part.functionResponse ?? {};
                     return { ...part, functionResponse };
+                }
+                return part;
+            }),
+        };
+    });
+}
+
+/**
+ * Give every replayed functionCall and functionResponse part a name Gemini accepts, without touching the
+ * caller's contents. Gemini pairs a response with its call by name, so both get the same rewrite; a response
+ * that carries only a call id is given its call's name, which Vertex requires. Run it before
+ * {@link stripGeneratedFunctionCallIds}, while every response still has the id it pairs by.
+ */
+export function sanitizeGeminiFunctionNames(contents: Content[], names: ReplayedToolNames): Content[] {
+    const callNames = functionCallNamesById(contents);
+    return contents.map((content) => {
+        if (!content.parts?.some((part) => part.functionCall || part.functionResponse)) return content;
+        return {
+            ...content,
+            parts: content.parts.map((part) => {
+                if (part.functionCall) {
+                    const name = names.safe(part.functionCall.name);
+                    return name === part.functionCall.name
+                        ? part
+                        : { ...part, functionCall: { ...part.functionCall, name } };
+                }
+                const response = part.functionResponse;
+                if (response) {
+                    const emitted = response.name ?? (response.id ? callNames.get(response.id) : undefined);
+                    if (emitted === undefined) return part;
+                    const name = names.safe(emitted);
+                    return name === response.name ? part : { ...part, functionResponse: { ...response, name } };
                 }
                 return part;
             }),
@@ -729,7 +734,7 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
     for (const content of contents) {
         if (content.role === 'model') {
             const calls = (content.parts ?? []).flatMap((part) => (part.functionCall ? [part.functionCall] : []));
-            allowedNames = new Set(calls.flatMap((call) => (call.name ? [call.name] : [])));
+            allowedNames = new Set(calls.flatMap((call) => (call.name !== undefined ? [call.name] : [])));
             allowedIds = new Set(calls.flatMap((call) => (call.id ? [call.id] : [])));
             result.push(content);
             continue;
@@ -1025,7 +1030,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const safety: Content[] = [];
         // Media an earlier turn inlined is still in the history sent with this request.
         const inlineBudget: InlineMediaBudget = { bytes: conversationInlineBytes(options.conversation) };
-        const callNamesById = functionCallNamesById(unwrapConversationArray<Content>(options.conversation) ?? []);
+        // Read the history the same way updateConversation does: wrapped, or a plain array.
+        const history =
+            unwrapConversationArray<Content>(options.conversation) ??
+            (Array.isArray(options.conversation) ? (options.conversation as Content[]) : []);
+        const callNamesById = functionCallNamesById(history);
 
         for (const msg of segments) {
             // Role specific handling
