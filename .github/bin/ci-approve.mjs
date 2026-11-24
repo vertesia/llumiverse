@@ -252,10 +252,11 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
         // Best-effort cleanup: status/review writes can also fail during an API outage.
         try {
             // A review write can fail before the run reads the PR again, so read it once more: the PR
-            // may have closed. A head that moved since leaves this run's commit to whoever is open at
-            // it. A failed lookup counts as not owning it: an error must not land on another PR's verdict.
-            const latest = await api.pr(number).catch(() => pr);
-            const subject = latest.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
+            // may have closed. When that read fails, or the head moved since, the run cannot tell
+            // whether this PR is still open at its commit, so it publishes only when no other open PR
+            // is. A failed lookup counts as not owning it: an error must not land on another PR's verdict.
+            const latest = await api.pr(number).catch(() => undefined);
+            const subject = latest?.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
             if (await ownsCommitStatus(api, subject).catch(() => false)) {
                 await api.status(
                     pr.head.sha,

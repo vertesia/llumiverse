@@ -697,6 +697,10 @@ test('a failed review cleanup never publishes an error over an open PR at the sa
     // The first dismissal fails before the run reads the PR again, and the PR closed meanwhile.
     const olderApproval = { ...approval, body: approvalBody(newer) };
     assert.deepEqual(await run([pr, closed], [olderApproval]), []);
+    // The PR closes during the failed dismissal, and the error path's read fails too: its last read
+    // still shows it open, so the open PR at the same commit decides.
+    assert.deepEqual(await run([pr, closed], [olderApproval], [sharing], { reads: 1 }), []);
+    assert.deepEqual(await run([pr], [olderApproval], [], { reads: 1 }), [[sha, 'error']]);
     // An open PR, or a closed one that shares its commit with no open PR, still reports the error.
     assert.deepEqual(await run([pr, pr], [olderApproval]), [[sha, 'error']]);
     assert.deepEqual(await run([pr, closed], [olderApproval], []), [[sha, 'error']]);
