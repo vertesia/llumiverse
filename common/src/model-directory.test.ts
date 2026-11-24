@@ -656,3 +656,30 @@ describe('Foundry Claude source capabilities', () => {
         },
     );
 });
+
+describe('Thinking Machines Inkling', () => {
+    // The ids an aggregator and local servers report for it (local servers use the repository the weights came
+    // from, with an optional quantization tag), and a later generation.
+    it.each([
+        'thinkingmachines/inkling',
+        'thinkingmachines/inkling-2-mini',
+        'Inkling-2-Mini-GGUF',
+        'lmstudio-community/Inkling-2-Mini-GGUF',
+        'unsloth/Inkling-2-Mini-GGUF:Q4_K_M',
+        'thinkingmachines/inkling-3',
+    ])('describes %s as a tool-capable 1M-token text model', (model) => {
+        const profile = resolveModelProfile(model, Providers.openai_compatible);
+        expect(profile).toMatchObject({
+            family: 'inkling',
+            source_provider: 'thinkingmachines',
+            context_window: 1_048_576,
+            capabilities: { tool_support: true, tool_support_streaming: true, input: { text: true } },
+        });
+        expect(profile.capabilities.input.image).toBeFalsy();
+        expect(profile.max_output_tokens).toBeUndefined();
+    });
+
+    it.each(['inklingly-7b', 'blinkling-2'])('does not take %s for Inkling', (model) => {
+        expect(resolveModelProfile(model, Providers.openai_compatible).family).not.toBe('inkling');
+    });
+});
