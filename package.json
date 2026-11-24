@@ -29,7 +29,7 @@
         "typescript": "catalog:",
         "vitest": "catalog:"
     },
-    "packageManager": "pnpm@12.19.0",
+    "packageManager": "pnpm@12.21.0",
     "gitHead": "902a175a2ee3064428c4ddf820bbc383a5bef94d",
     "releaseIdentity": {
         "source_sha": "902a175a2ee3064428c4ddf820bbc383a5bef94d",
