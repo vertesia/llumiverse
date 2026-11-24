@@ -15,8 +15,9 @@ const tools: ToolDefinition[] = [
     { name: 'web_search', input_schema: { type: 'object' } },
     { name: 'mcp.github.search', input_schema: { type: 'object' } },
 ];
-const EMITTED = ['', 'functions.x', 'mcp.github.search', 'web_search'];
-const SENT = ['_', 'functions_x', 'mcp.github.search', 'web_search'];
+// Gemini accepts dots and colons, so only the empty name, the `/` and the leading digit need a rewrite.
+const EMITTED = ['', 'functions.x', 'a/b', '1tool', 'mcp.github.search', 'web_search'];
+const SENT = ['_', 'functions.x', 'a_b', '_1tool', 'mcp.github.search', 'web_search'];
 
 const history = (): Content[] => [
     { role: 'user', parts: [{ text: 'go' }] },
@@ -127,7 +128,7 @@ describe('Gemini replayed tool names', () => {
                     {
                         role: 'model',
                         parts: [
-                            { functionCall: { id: 'c0', name: 'functions.x', args: {} } },
+                            { functionCall: { id: 'c0', name: 'a/b', args: {} } },
                             { functionCall: { id: 'c1', name: 'web_search', args: {} } },
                         ],
                     },
@@ -143,7 +144,7 @@ describe('Gemini replayed tool names', () => {
         );
 
         const responses = (payload.contents as Content[])[1].parts?.map((part) => part.functionResponse?.name);
-        expect(responses).toEqual(['functions_x', 'web_search']);
+        expect(responses).toEqual(['a_b', 'web_search']);
     });
 
     it('sends the same rewritten history on the next turn, so the cached prefix still matches', () => {

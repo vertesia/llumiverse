@@ -32,6 +32,7 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    GEMINI_TOOL_NAME_RULES,
     getConversationMeta,
     type HttpTimeoutOptions,
     hasGeminiSamplingRestriction,
@@ -347,10 +348,10 @@ export function getGeminiPayload(
     // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
     // which would otherwise trip Gemini's functionCall/functionResponse pairing.
     if (payloadContents) {
-        // Compatibility exception: a replayed call to an undeclared tool whose name Gemini rejects (empty,
-        // dotted) would fail every later turn, so the request carries a safe name. The stored conversation keeps
+        // Compatibility exception: a replayed call to an undeclared tool whose name Gemini rejects (empty, or
+        // with a character such as `/`) would fail every later turn, so the request carries a safe name. The stored conversation keeps
         // the emitted name.
-        const replayedToolNames = new ReplayedToolNames(options.tools);
+        const replayedToolNames = new ReplayedToolNames(options.tools, GEMINI_TOOL_NAME_RULES);
         payloadContents = stripGeneratedFunctionCallIds(
             sanitizeGeminiFunctionNames(fixOrphanedToolResults(payloadContents), replayedToolNames),
         );
