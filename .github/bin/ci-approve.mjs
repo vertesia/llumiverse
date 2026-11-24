@@ -255,7 +255,13 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
             // may have closed. When that read fails, or the head moved since, the run cannot tell
             // whether this PR is still open at its commit, so it publishes only when no other open PR
             // is. A failed lookup counts as not owning it: an error must not land on another PR's verdict.
-            const latest = await api.pr(number).catch(() => undefined);
+            // The transport is synchronous, so a lookup that fails throws here instead of rejecting.
+            let latest;
+            try {
+                latest = await api.pr(number);
+            } catch {
+                latest = undefined;
+            }
             const subject = latest?.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
             if (await ownsCommitStatus(api, subject).catch(() => false)) {
                 await api.status(
@@ -331,7 +337,15 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
     const owner = repo.split('/')[0];
     const request = (
         endpoint,
-        { method = 'GET', body, handoff = false, membership = false, review = false, pages = false } = {},
+        {
+            method = 'GET',
+            body,
+            handoff = false,
+            membership = false,
+            review = false,
+            pages = false,
+            idempotent = method === 'GET',
+        } = {},
     ) => {
         const token = handoff
             ? env.GH_HANDOFF_TOKEN
@@ -351,8 +365,9 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                 env: { ...env, GH_TOKEN: token },
                 input: body ? JSON.stringify(body) : undefined,
             });
-        // Only reads are retried: a write answered with a 5xx may still have been applied.
-        const delays = method === 'GET' ? READ_RETRY_DELAYS_MS : [];
+        // Only reads and idempotent writes are retried: a write answered with a 5xx may still have been
+        // applied, so replaying one that creates something (a review, a dispatch) could duplicate it.
+        const delays = idempotent ? READ_RETRY_DELAYS_MS : [];
         for (let attempt = 0; ; attempt++) {
             try {
                 const output = send();
@@ -418,8 +433,11 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
             const old = list(`repos/${repo}/commits/${sha}/statuses`).find((status) => status.context === CONTEXT);
             if (old?.creator?.login === 'github-actions[bot]' && old.state === state && old.description === description)
                 return;
+            // Publishing the same state, description and context again replaces the status with an
+            // identical one, so a 5xx is retried instead of failing the run and withdrawing the approval.
             request(`repos/${repo}/statuses/${sha}`, {
                 method: 'POST',
+                idempotent: true,
                 body: {
                     state,
                     description,

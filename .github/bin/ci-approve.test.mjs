@@ -1056,6 +1056,120 @@ test('client errors and writes are not retried', () => {
     assert.deepEqual(writes.sleeps, []);
 });
 
+// The real transport is synchronous: it returns values and throws errors instead of returning promises.
+// The route sees each `gh api` call as its method and endpoint and answers it, or throws a gh failure.
+function routedApi(route) {
+    const calls = [];
+    const sleeps = [];
+    const api = githubApi(
+        {
+            GITHUB_REPOSITORY: 'vertesia/studio',
+            GH_TOKEN: 'read',
+            GH_REVIEW_TOKEN: 'app',
+            GH_MEMBERS_TOKEN: 'members',
+        },
+        (_cmd, args) => {
+            const call = { method: args[3], endpoint: args[1] };
+            calls.push(call);
+            const answer = route(
+                call,
+                calls.filter((c) => c.method === call.method && c.endpoint === call.endpoint),
+            );
+            return JSON.stringify(args.includes('--paginate') ? [answer] : answer);
+        },
+        (ms) => sleeps.push(ms),
+    );
+    return { api, calls, sleeps };
+}
+
+function gateRoute(overrides = {}) {
+    return (call, same) => {
+        const override = overrides[`${call.method} ${call.endpoint.split('?')[0]}`];
+        if (override) return override(same.length);
+        if (call.method === 'GET' && call.endpoint === 'repos/vertesia/studio/pulls/12') return pr;
+        if (call.method === 'GET' && call.endpoint.startsWith('repos/vertesia/studio/pulls?')) return [pr];
+        if (call.endpoint.startsWith('repos/vertesia/studio/pulls/12/reviews?')) return [];
+        if (call.endpoint.startsWith(`orgs/vertesia/teams/${ENGINEERING_TEAM_SLUG}/memberships/`)) {
+            return { state: 'active' };
+        }
+        if (call.method === 'POST' && call.endpoint === 'repos/vertesia/studio/pulls/12/reviews') {
+            return { ...approval, id: 100 };
+        }
+        if (call.endpoint.startsWith(`repos/vertesia/studio/commits/${sha}/statuses`)) return [];
+        if (call.method === 'POST' && call.endpoint === `repos/vertesia/studio/statuses/${sha}`) return {};
+        if (call.method === 'PUT' && call.endpoint.endsWith('/dismissals')) return {};
+        throw new Error(`Unexpected ${call.method} ${call.endpoint}`);
+    };
+}
+
+const statusPosts = (calls) =>
+    calls.filter(({ method, endpoint }) => method === 'POST' && endpoint === `repos/vertesia/studio/statuses/${sha}`);
+
+test('a failure with the real transport reports the original error after a successful PR lookup', async () => {
+    const unavailable = ghFailure('gh: Server Error (HTTP 502)');
+    const { api, calls } = routedApi(
+        gateRoute({
+            [`GET orgs/vertesia/teams/${ENGINEERING_TEAM_SLUG}/memberships/engineer`]: () => {
+                throw unavailable;
+            },
+        }),
+    );
+    await assert.rejects(
+        reconcile(api, 12, () => true),
+        (error) => error === unavailable,
+    );
+    assert.equal(statusPosts(calls).length, 1, 'publishes one blocking error status');
+});
+
+test('a 5xx from the PR lookup after a failure keeps the original error', async () => {
+    const unavailable = ghFailure('gh: Server Error (HTTP 502)');
+    let failing = false;
+    const { api, calls, sleeps } = routedApi(
+        gateRoute({
+            [`GET orgs/vertesia/teams/${ENGINEERING_TEAM_SLUG}/memberships/engineer`]: () => {
+                failing = true;
+                throw unavailable;
+            },
+            'GET repos/vertesia/studio/pulls/12': () => {
+                if (failing) throw ghFailure('gh: Server Error (HTTP 503)');
+                return pr;
+            },
+        }),
+    );
+    await assert.rejects(
+        reconcile(api, 12, () => true),
+        (error) => error === unavailable,
+    );
+    const lookups = calls.filter(
+        ({ method, endpoint }) => method === 'GET' && endpoint === 'repos/vertesia/studio/pulls/12',
+    );
+    assert.equal(lookups.length, 1 + READ_RETRY_DELAYS_MS.length + 1, 'retries the failing PR lookup');
+    assert.ok(sleeps.length > 0);
+    // Without a current PR, only an open-PR listing that shows no other PR at the commit lets the error land.
+    assert.equal(statusPosts(calls).length, 1);
+});
+
+test('a transient 5xx while publishing the status is retried and keeps the approval', async () => {
+    const { api, calls, sleeps } = routedApi(
+        gateRoute({
+            [`POST repos/vertesia/studio/statuses/${sha}`]: (attempt) => {
+                if (attempt === 1) throw ghFailure('gh: Server Error (HTTP 502)');
+                return {};
+            },
+        }),
+    );
+    const result = await reconcile(api, 12, () => true);
+    assert.equal(result.state, 'success');
+    assert.equal(statusPosts(calls).length, 2);
+    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS.slice(0, 1));
+    assert.ok(!calls.some(({ endpoint }) => endpoint.endsWith('/dismissals')), 'keeps the new approval');
+    assert.equal(
+        calls.filter(({ method, endpoint }) => method === 'POST' && endpoint.endsWith('/pulls/12/reviews')).length,
+        1,
+        'never replays the approval',
+    );
+});
+
 test('only server errors and dropped connections count as transient', () => {
     assert.equal(isTransientApiError(ghFailure('gh: Bad Gateway (HTTP 502)')), true);
     assert.equal(isTransientApiError(ghFailure('Post "https://api.github.com/graphql": unexpected EOF')), true);
