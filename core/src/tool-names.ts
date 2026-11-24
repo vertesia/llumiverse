@@ -10,11 +10,11 @@ export const GEMINI_TOOL_NAME_MAX_LENGTH = 128;
 
 /** What a provider accepts as a tool name, for {@link providerSafeToolName}. */
 export interface ToolNameRules {
-    /** Matches a character the provider rejects. Every match is replaced; flags and `lastIndex` are ignored. */
+    /** Matches a character the provider rejects. Every match is replaced; `g`, `y` and `lastIndex` are ignored. */
     rejectedChars: RegExp;
     /**
      * Matches, at the first character, the characters a name may start with, when the provider restricts them.
-     * Flags and `lastIndex` are ignored.
+     * `g`, `y` and `lastIndex` are ignored.
      */
     validStart?: RegExp;
     maxLength: number;
@@ -36,9 +36,12 @@ export const GEMINI_TOOL_NAME_RULES: ToolNameRules = {
     maxLength: GEMINI_TOOL_NAME_MAX_LENGTH,
 };
 
-/** A fresh copy of `pattern` with the given flags, so a caller's flags and `lastIndex` never leak in. */
-function withFlags(pattern: RegExp, flags: string): RegExp {
-    return new RegExp(pattern.source, flags);
+/**
+ * A fresh copy of `pattern` whose `g` and `y` flags are replaced by `mode`, so a caller's `lastIndex` never leaks
+ * in. Flags that change what matches (`i`, `u`, `v`, `s`, `m`) are kept.
+ */
+function withMode(pattern: RegExp, mode: 'g' | 'y'): RegExp {
+    return new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, '') + mode);
 }
 
 /**
@@ -67,9 +70,9 @@ export function providerSafeToolName(
     if (raw && declaredNames.has(raw)) {
         return raw;
     }
-    let safe = raw.replace(withFlags(rules.rejectedChars, 'g'), '_');
+    let safe = raw.replace(withMode(rules.rejectedChars, 'g'), '_');
     // A sticky regex tests exactly the first character, whatever the pattern's own anchors.
-    if (safe && rules.validStart && !withFlags(rules.validStart, 'y').test(safe)) {
+    if (safe && rules.validStart && !withMode(rules.validStart, 'y').test(safe)) {
         safe = `_${safe}`;
     }
     return safe.slice(0, rules.maxLength) || '_';

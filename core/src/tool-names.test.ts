@@ -74,6 +74,15 @@ describe('providerSafeToolName', () => {
             expect(providerSafeToolName('9x', declared, unanchored)).toBe('_9x');
             expect(providerSafeToolName('9x', declared, unanchored)).toBe('_9x');
         });
+
+        it('keeps the flags that change what matches, such as case-insensitivity', () => {
+            const rules = { rejectedChars: /[^a-z_]/gi, validStart: /^[a-z_]/i, maxLength: 64 };
+            expect(providerSafeToolName('Search', declared, rules)).toBe('Search');
+            expect(providerSafeToolName('Search', declared, rules)).toBe('Search');
+            expect(providerSafeToolName('9Search', declared, { ...rules, rejectedChars: /[^a-z0-9_]/gi })).toBe(
+                '_9Search',
+            );
+        });
     });
 
     it('treats every name as undeclared when the request declares no tools', () => {
