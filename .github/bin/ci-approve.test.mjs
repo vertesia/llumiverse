@@ -666,6 +666,42 @@ test('a PR that closes during a run never overrides an open PR at the same commi
     assert.deepEqual(alone.writes.at(-1).slice(0, 3), ['status', sha, 'pending']);
 });
 
+test('a failed review cleanup never publishes an error over an open PR at the same commit', async () => {
+    const closed = { ...pr, state: 'closed', merged_at: null };
+    const sharing = { ...pr, number: 13 };
+    const run = async (pulls, reviews, sharers = [sharing], { reads = Infinity } = {}) => {
+        const api = fixture({ pulls, reviews });
+        api.open = async () => sharers;
+        const read = api.pr;
+        let count = 0;
+        api.pr = async (number) => {
+            if (++count > reads) throw new Error('gh: Server Error (HTTP 502)');
+            return read(number);
+        };
+        api.dismiss = async () => {
+            throw new Error('dismissal failed');
+        };
+        await assert.rejects(
+            reconcile(api, 12, () => true),
+            /dismissal failed/,
+        );
+        return api.writes.filter(([kind]) => kind === 'status').map(([, commit, state]) => [commit, state]);
+    };
+    // The fresh read sees the PR closed on a moved base; the dismissal of the approval fails.
+    const movedBase = { ...closed, base: { ...closed.base, sha: 'moved' } };
+    assert.deepEqual(await run([pr, movedBase], [approval]), []);
+    // Same, with the error path's own read failing too: the run must already hold the fresh read.
+    assert.deepEqual(await run([pr, movedBase], [approval], [sharing], { reads: 2 }), []);
+    // Same, when the PR closes on a moved base while the new approval is being submitted.
+    assert.deepEqual(await run([pr, pr, movedBase], [], [sharing], { reads: 3 }), []);
+    // The first dismissal fails before the run reads the PR again, and the PR closed meanwhile.
+    const olderApproval = { ...approval, body: approvalBody(newer) };
+    assert.deepEqual(await run([pr, closed], [olderApproval]), []);
+    // An open PR, or a closed one that shares its commit with no open PR, still reports the error.
+    assert.deepEqual(await run([pr, pr], [olderApproval]), [[sha, 'error']]);
+    assert.deepEqual(await run([pr, closed], [olderApproval], []), [[sha, 'error']]);
+});
+
 test('manual reconciliation rejects malformed PR numbers', async () => {
     await assert.rejects(
         targets(fixture(), { client_payload: { pr_number: '-1' } }, 'repository_dispatch'),

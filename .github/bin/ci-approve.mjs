@@ -208,8 +208,9 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
         if (result.approve) {
             const fresh = await api.pr(number);
             if (!sameRevision(pr, fresh)) {
-                await withdraw('The PR changed during evaluation.');
+                // Keep the latest read before any write: if a dismissal fails, it decides who owns the status.
                 pr = fresh;
+                await withdraw('The PR changed during evaluation.');
                 result = {
                     state: 'pending',
                     approve: false,
@@ -229,8 +230,8 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
             if (review.commit_id !== pr.head.sha) throw new Error('Approval commit does not match the tested head');
             const after = await api.pr(number);
             if (!sameRevision(pr, after)) {
-                await withdraw('The PR changed while the approval was being submitted.');
                 pr = after;
+                await withdraw('The PR changed while the approval was being submitted.');
                 result = {
                     state: 'pending',
                     approve: false,
@@ -250,8 +251,12 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
     } catch (error) {
         // Best-effort cleanup: status/review writes can also fail during an API outage.
         try {
-            // A failed lookup counts as not owning it: an error must not land on another PR's verdict.
-            if (await ownsCommitStatus(api, pr).catch(() => false)) {
+            // A review write can fail before the run reads the PR again, so read it once more: the PR
+            // may have closed. A head that moved since leaves this run's commit to whoever is open at
+            // it. A failed lookup counts as not owning it: an error must not land on another PR's verdict.
+            const latest = await api.pr(number).catch(() => pr);
+            const subject = latest.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
+            if (await ownsCommitStatus(api, subject).catch(() => false)) {
                 await api.status(
                     pr.head.sha,
                     'error',
