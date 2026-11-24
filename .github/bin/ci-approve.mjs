@@ -108,6 +108,7 @@ export async function waitForCiToSettle(
     expected,
     ci,
     {
+        trigger,
         timeoutMs = CI_SETTLE_TIMEOUT_MS,
         pollMs = CI_SETTLE_POLL_MS,
         sleep = sleepAsync,
@@ -117,26 +118,59 @@ export async function waitForCiToSettle(
     const deadline = now() + timeoutMs;
     let current = expected;
     for (;;) {
-        const passed = await ci(current);
+        // Waiting covers the triggering run's CI data lagging behind its completion event. It cannot
+        // help when that run tested an older head, or when CI waits on another run that has not
+        // finished: that run's own completion re-triggers the gate. Missing or failed data for the
+        // triggering run keeps polling, because no later event is guaranteed to re-check it.
+        let otherRunning = false;
+        const passed = await ci(current, ({ running }) => {
+            otherRunning = running !== undefined && running.id !== trigger?.id;
+        });
         current = await api.pr(number);
         if (!sameRevision(expected, current)) return { passed: false, changed: true };
         const remaining = deadline - now();
-        if (passed || remaining <= 0) return { passed, changed: false, pr: current };
+        const futile = trigger !== undefined && (trigger.head_sha !== current.head.sha || otherRunning);
+        if (passed || futile || remaining <= 0) return { passed, changed: false, pr: current };
         await sleep(Math.min(pollMs, remaining));
     }
 }
 
-export async function reconcile(
-    api,
-    number,
-    ci,
-    { pushed = false, settle = false, settleOptions, branch, handoffs } = {},
-) {
+export const CLOSED_REASON = 'The PR is closed; reopening it starts a new evaluation.';
+
+// The commit status belongs to the commit, not the PR. An open PR always owns the status of its
+// head; a closed PR owns it only when no open PR shares the commit, or it would overwrite that PR's
+// verdict. The PR can close at any read of a run, not only the first one.
+export async function ownsCommitStatus(api, pr) {
+    if (pr.head.repo?.full_name !== api.repo) return false;
+    if (pr.state === 'open') return true;
+    return !(await api.open()).some(
+        (open) => open.number !== pr.number && open.state === 'open' && open.head.sha === pr.head.sha,
+    );
+}
+
+// A closed PR keeps no approval from this gate, so a reopening at the same commit starts from
+// pending. This path never publishes an error status, which would also land on an open PR at the
+// same commit.
+export async function settleClosed(api, number, pr) {
+    for (const review of (await api.reviews(number)).filter(ownsReview)) {
+        await api.dismiss(number, review.id, CLOSED_REASON);
+    }
+    const owns = await ownsCommitStatus(api, pr);
+    if (owns) await api.status(pr.head.sha, 'pending', CLOSED_REASON);
+    return {
+        state: 'pending',
+        approve: false,
+        reason: owns ? CLOSED_REASON : `${CLOSED_REASON} An open PR at the same commit owns its status.`,
+    };
+}
+
+export async function reconcile(api, number, ci, { settle = false, settleOptions, branch, handoffs } = {}) {
     // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
     if (branch && pr.head.ref !== branch) {
         return { reason: 'PR head branch changed; waiting for another event with its branch lock.' };
     }
+    if (pr.state !== 'open') return settleClosed(api, number, pr);
     // Only the marked reviews from this App are ever candidates for dismissal.
     let standing = [];
     async function withdraw(reason, all = true) {
@@ -148,7 +182,7 @@ export async function reconcile(
     try {
         standing = (await api.reviews(number)).filter(ownsReview);
         let settled;
-        if (settle && !pushed) {
+        if (settle) {
             settled = await waitForCiToSettle(api, number, pr, ci, settleOptions);
             if (settled.changed) {
                 return {
@@ -161,10 +195,6 @@ export async function reconcile(
         }
         // Withdraw old-head approvals before spending time inspecting CI.
         await withdraw('The PR head changed; waiting for checks on the new commit.', false);
-        if (pushed) {
-            // A delayed push event must preserve a newer approval and its successful status.
-            return { reason: 'Removed old-commit approvals; CI completion handles approval.' };
-        }
         let firstEvaluation = true;
         const evaluateCi = (current) => {
             if (firstEvaluation && settled) {
@@ -178,8 +208,9 @@ export async function reconcile(
         if (result.approve) {
             const fresh = await api.pr(number);
             if (!sameRevision(pr, fresh)) {
-                await withdraw('The PR changed during evaluation.');
+                // Keep the latest read before any write: if a dismissal fails, it decides who owns the status.
                 pr = fresh;
+                await withdraw('The PR changed during evaluation.');
                 result = {
                     state: 'pending',
                     approve: false,
@@ -199,26 +230,34 @@ export async function reconcile(
             if (review.commit_id !== pr.head.sha) throw new Error('Approval commit does not match the tested head');
             const after = await api.pr(number);
             if (!sameRevision(pr, after)) {
-                await withdraw('The PR changed while the approval was being submitted.');
                 pr = after;
+                await withdraw('The PR changed while the approval was being submitted.');
                 result = {
                     state: 'pending',
                     approve: false,
                     reason: 'PR changed during approval; waiting for another check.',
                 };
             } else {
-                result = await evaluate(api, after, ci);
+                // The latest read decides who owns the commit status: the PR may have closed.
+                pr = after;
+                result = await evaluate(api, pr, ci);
                 if (!result.approve) await withdraw(result.reason);
             }
         }
-        if (pr.head.repo?.full_name === api.repo) await api.status(pr.head.sha, result.state, result.reason);
+        if (await ownsCommitStatus(api, pr)) await api.status(pr.head.sha, result.state, result.reason);
         // Hand off only once the successful status for this exact revision is published.
         const handoff = result.state === 'success' ? handoffFor(pr, handoffs) : undefined;
         return handoff ? { ...result, handoff } : result;
     } catch (error) {
         // Best-effort cleanup: status/review writes can also fail during an API outage.
         try {
-            if (pr.head.repo?.full_name === api.repo) {
+            // A review write can fail before the run reads the PR again, so read it once more: the PR
+            // may have closed. When that read fails, or the head moved since, the run cannot tell
+            // whether this PR is still open at its commit, so it publishes only when no other open PR
+            // is. A failed lookup counts as not owning it: an error must not land on another PR's verdict.
+            const latest = await api.pr(number).catch(() => undefined);
+            const subject = latest?.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
+            if (await ownsCommitStatus(api, subject).catch(() => false)) {
                 await api.status(
                     pr.head.sha,
                     'error',
@@ -232,10 +271,11 @@ export async function reconcile(
     }
 }
 
-// Delays before each retry of a read. A CI-completion event is the only trigger that re-checks a
-// finished head, so one transient 5xx on a read would otherwise leave its PR pending until a manual
-// dispatch.
-export const READ_RETRY_DELAYS_MS = [2000, 5000];
+// Delays before each retry of a read: exponential, 62 s in all. A CI-completion event is the only
+// trigger that re-checks a finished head, so a read that fails during a GitHub 5xx incident would
+// otherwise leave its PR pending until a manual dispatch. The old two retries (7 s) ran out in runs
+// 42054194248 and 42061447529, where 5xx responses kept coming for 28 s and 12 s after the first.
+export const READ_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 32000];
 
 export function isTransientApiError(error) {
     return /HTTP 5\d\d|error connecting to|connection reset|i\/o timeout|unexpected EOF/i.test(
@@ -337,6 +377,8 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                     branch ? `&head=${repo.split('/')[0]}:${encodeURIComponent(branch)}` : ''
                 }`,
             ),
+        closed: (branch) =>
+            list(`repos/${repo}/pulls?state=closed&head=${repo.split('/')[0]}:${encodeURIComponent(branch)}`),
         reviews: (number) => list(`repos/${repo}/pulls/${number}/reviews`),
         engineeringMember(login) {
             try {
@@ -390,7 +432,6 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
 }
 
 export async function targets(api, event, eventName, branch) {
-    if (event.pull_request) return [event.pull_request.number];
     if (eventName === 'repository_dispatch' && event.client_payload?.pr_number) {
         const number = Number(event.client_payload.pr_number);
         if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid PR number');
@@ -399,10 +440,21 @@ export async function targets(api, event, eventName, branch) {
     if (event.workflow_run) {
         const run = event.workflow_run;
         if (run.head_repository?.full_name !== api.repo) return [];
+        const sameBranch = (pr) => pr.head.repo?.full_name === api.repo && pr.head.ref === run.head_branch;
         // Query current PRs: event.pull_requests can be empty and events may arrive out of order.
-        return (await api.open(run.head_branch))
-            .filter((pr) => pr.head.repo?.full_name === api.repo && pr.head.ref === run.head_branch)
-            .map((pr) => pr.number);
+        const numbers = (await api.open(run.head_branch)).filter(sameBranch).map((pr) => pr.number);
+        if (run.path === PR_EVENT_WORKFLOW) {
+            // A signal can come from closing a PR. Evaluating the closed PR withdraws the approval and
+            // resets the status, so a reopening at the same commit starts pending instead of approved
+            // until the gate runs. Only the PR at the signalled head counts: an older PR closed on the
+            // same branch was settled when it closed. A merged PR cannot reopen.
+            for (const pr of await api.closed(run.head_branch)) {
+                if (sameBranch(pr) && !pr.merged_at && pr.head.sha === run.head_sha && !numbers.includes(pr.number)) {
+                    numbers.push(pr.number);
+                }
+            }
+        }
+        return numbers;
     }
     return (await api.open(branch))
         .filter((pr) => pr.head.repo?.full_name === api.repo && supportedBase(pr.base.ref))
@@ -410,7 +462,6 @@ export async function targets(api, event, eventName, branch) {
 }
 
 export async function targetBranches(api, event, eventName) {
-    if (event.pull_request) return [event.pull_request.head.ref];
     if (event.workflow_run) {
         return event.workflow_run.head_repository?.full_name === api.repo ? [event.workflow_run.head_branch] : [];
     }
@@ -427,7 +478,7 @@ export async function handOff(api, { workflow, eventType, inputs }) {
     console.log(`PR #${inputs.pr_number}: started ${workflow} for ${inputs.head_sha}.`);
 }
 
-export function verifyPrCi(api, pr, workflows) {
+export function verifyPrCi(api, pr, workflows, onReject) {
     if (!pr.base?.sha || !pr.base?.ref) throw new Error('Missing PR base revision');
     return verifyCi(
         {
@@ -440,7 +491,18 @@ export function verifyPrCi(api, pr, workflows) {
         pr.number,
         workflows,
         api.pages,
+        onReject,
     );
+}
+
+// pr-event.yaml runs on pull_request without secrets, so a PR change reaches the gate as the
+// completion of that run. The completion carries no CI result to wait for, nor which change it was:
+// the gate evaluates the PR as it is now, which also withdraws an approval for an older head.
+export const PR_EVENT_WORKFLOW = '.github/workflows/pr-event.yaml';
+
+export function reconcileOptions(env, event) {
+    const ciCompletion = env.GITHUB_EVENT_NAME === 'workflow_run' && event.workflow_run.path !== PR_EVENT_WORKFLOW;
+    return { settle: ciCompletion, settleOptions: { trigger: event.workflow_run }, branch: env.CI_APPROVAL_BRANCH };
 }
 
 export async function main(env, { discover = false } = {}) {
@@ -452,18 +514,13 @@ export async function main(env, { discover = false } = {}) {
         return;
     }
     const policy = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
-    const ci = (pr) => verifyPrCi(api, pr, Object.keys(policy));
+    const ci = (pr, onReject) => verifyPrCi(api, pr, Object.keys(policy), onReject);
     const handoffsUrl = new URL('./ci-approve-handoffs.json', import.meta.url);
     const handoffs = existsSync(handoffsUrl) ? JSON.parse(readFileSync(handoffsUrl, 'utf8')) : {};
     const errors = [];
     for (const number of await targets(api, event, env.GITHUB_EVENT_NAME, env.CI_APPROVAL_BRANCH)) {
         try {
-            const result = await reconcile(api, number, ci, {
-                pushed: env.GITHUB_EVENT_NAME === 'pull_request_target' && event.action === 'synchronize',
-                settle: env.GITHUB_EVENT_NAME === 'workflow_run',
-                branch: env.CI_APPROVAL_BRANCH,
-                handoffs,
-            });
+            const result = await reconcile(api, number, ci, { ...reconcileOptions(env, event), handoffs });
             const summary = `PR #${number}: ${result.reason}`;
             console.log(summary);
             if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n\n`);

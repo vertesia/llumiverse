@@ -60,6 +60,30 @@ for (const conclusion of ['failure', 'cancelled', 'skipped', 'neutral', 'timed_o
         assert.equal(verifyWorkflow([run(2, { conclusion })], () => tested, coordinatorPolicy, context), false);
     });
 }
+test('a rejection reports the blocking run only when that run has not finished', () => {
+    const rejectFor = (validation, jobs) => {
+        const rejections = [];
+        const pages = (endpoint) => {
+            if (endpoint.includes('/workflows/pr-validation.yaml/')) return [{ workflow_runs: [validation] }];
+            if (endpoint.includes('/workflows/')) return [{ workflow_runs: [] }];
+            return [{ jobs }];
+        };
+        const env = { REPO: 'owner/repo', HEAD_BRANCH: 'fix', HEAD_SHA: 'head' };
+        assert.equal(main(env, 12, ['lint.yml'], pages, (r) => rejections.push(r)), false);
+        assert.equal(rejections.length, 1);
+        return rejections[0];
+    };
+    const running = run(1, { status: 'in_progress', conclusion: null });
+    assert.deepEqual(rejectFor(running, []), {
+        workflow: 'lint.yml',
+        reason: 'run 1 is in_progress',
+        running,
+    });
+    // Missing jobs or steps on a finished run are data to wait for, not CI that is still running.
+    assert.equal(rejectFor(run(1), []).running, undefined);
+    assert.equal(rejectFor(run(1), [job('Lint / Check codebase')]).running, undefined);
+});
+
 test('does not accept required jobs from an active coordinator run', () => {
     assert.equal(
         verifyWorkflow(

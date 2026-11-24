@@ -24,13 +24,24 @@ The tested commit is the one named in that review body, never the review's
 on push, so it can name a commit this gate never tested. An owned review whose body
 names no commit is treated as stale.
 
-On a new push, the gate removes its approvals for older commits without inspecting
-CI. Pull requests run lint and build/test under the single `(ci) PR validation`
+Pull requests run lint and build/test under the single `(ci) PR validation`
 coordinator. When it finishes, the gate approves the current head only if all required
-lint, build and test jobs pass; otherwise it withdraws its approval. Draft and
-eligibility changes also trigger reassessment. The default-branch-only
-`ci-approve-reconcile` repository event recovers missed events or API failures.
-There is no scheduled reconciliation or rerun-start handler.
+lint, build and test jobs pass; otherwise it withdraws its approval. Every other change
+of a PR reaches the gate through `pr-event.yaml` (`(ci) PR event`): a push, a label,
+draft or ready for review, a closing, a reopening, or a new base. That workflow runs on
+`pull_request` with no secret, no token permission and no checkout, and the gate
+listens to its completion through `workflow_run`, so the gate always runs the trusted
+copy of the default branch. `pull_request_target`, which the gate used before, is
+blocked in public repositories from 2026-12-02. The completion names the head branch
+but not the change, so the gate evaluates the PR as it is now: it removes its approvals
+for older commits, then checks CI for the current head without waiting. An edit that
+keeps the base skips the signal job, and the gate ignores skipped runs. For a signal,
+the gate also evaluates the closed, unmerged PR at the signalled head: a closed PR loses
+its approval, and its commit status returns to pending unless an open PR shares the
+commit, so a PR reopened at the same commit starts pending until the gate runs again. A CI completion only targets open PRs, and a
+merged PR cannot reopen. The default-branch-only `ci-approve-reconcile` repository event recovers
+missed events or API failures. There is no scheduled reconciliation or rerun-start
+handler.
 
 The policy retains the standalone lint and build/test workflow names as fallbacks
 while maintained release branches adopt the coordinator. Each half is evaluated by
@@ -38,8 +49,9 @@ its required jobs, so an unrelated failure in the other half cannot mask its res
 
 Because a CI completion is the only event that re-checks a finished head, its PR
 lookup queries open PRs by head branch (`head=<owner>:<branch>`) rather than paging
-through every open PR, and every read is retried twice (after 2s and 5s) on a 5xx
-or dropped connection. Writes are not retried: a write answered with a 5xx may
+through every open PR, and every read is retried 5 times on a 5xx or dropped
+connection, after 2, 4, 8, 16 and 32 seconds (62 seconds in all, longer than the 5xx
+incidents seen in CI). Writes are not retried: a write answered with a 5xx may
 already have been applied, and the next event reconciles it.
 
 Approval creation has a read-back recovery path for dropped connections, 5xx
@@ -55,14 +67,17 @@ through the jobs API. Completion-triggered reconciliation therefore re-runs the
 full CI verifier every 10 seconds for up to 180 seconds. It publishes no status or
 review changes while waiting, stops as soon as CI is visible, and abandons the
 event without writing if the PR head or base revision moves, including during the
-last verification. The deadline uses elapsed time, including API calls and read
+last verification. It also stops waiting when the completed run tested an older
+head, or when CI waits on another run that has not finished: the completion of that run
+triggers the gate again. The deadline uses elapsed time, including API calls and read
 retries; an in-flight API call may finish after the deadline. Other triggers remain
-immediate. Read failures during settling still publish an error and withdraw this
+immediate, including the PR event signal. Read failures during settling still publish an error and withdraw this
 gate's owned approvals through the normal cleanup handler.
 
 During a same-commit rerun, an existing approval can remain until CI finishes.
-Runner queues can delay withdrawal after a push. A delayed push event preserves
-an approval already granted for the current commit. If the target branch advances
+After a push, the withdrawal waits for the signal run and then the gate to start, and
+runner queues can delay both. A delayed signal evaluates the latest PR state, so it
+keeps an approval already granted for the current commit. If the target branch advances
 or the PR is retargeted, run CI with the updated base (typically by updating the PR
 branch). Re-running an old workflow may retain its original base metadata. Base
 updates alone do not trigger this gate; the strict required-status ruleset blocks
@@ -88,8 +103,8 @@ gate has published a successful `PR approval gate` status. Instead of letting th
 race the gate on the same CI completion, the gate starts them: after publishing
 success for a PR whose head branch matches a prefix in
 `ci-approve-handoffs.json`, it sends a `repository_dispatch` event with the PR
-number, head branch, head commit, base branch and base commit it evaluated. A push, a pending
-or error result, or a PR change during evaluation hands off nothing. A failed
+number, head branch, head commit, base branch and base commit it evaluated. A pending
+or error result, a draft, or a PR change during evaluation hands off nothing. A failed
 dispatch fails the job without changing the status or any approval. To retry safely,
 send the `ci-approve-reconcile` repository event, optionally with a `pr_number` client payload.
 
@@ -106,7 +121,8 @@ branch.
 ## Permissions and trusted code
 
 The workflow checks out `github.workflow_sha`, never PR code, and installs no
-packages. Node 24 on `ubuntu-slim` runs the dependency-free scripts directly.
+packages. `pr-event.yaml` runs the PR's own copy, so it has `permissions: {}`, uses no
+action and only prints the change. Node 24 on `ubuntu-slim` runs the dependency-free scripts directly.
 `GITHUB_TOKEN` reads PR/CI metadata and writes the `PR approval gate` commit status.
 Engineering-team membership reads and review creation and dismissal use separate
 App tokens. The membership token requests `members: read`; the review token is
@@ -116,9 +132,11 @@ creation fails, reconciliation continues, fails eligibility closed, and uses the
 independent review token to withdraw owned approvals. The App must remain a
 distinct identity from the PR author.
 
-The script and tests are identical across studio, composableai and llumiverse,
-following the existing `automerge-ci.mjs` distribution pattern. CI requirements
-remain repository-local; update the shared approval implementation in all three.
+The scripts `ci-approve.mjs`, `automerge-ci.mjs` and `automation-notification.mjs` are
+identical across studio, composableai and llumiverse. Their tests share the generic
+cases and differ only where they name repository-local workflows, policies and
+hand-offs. CI requirements remain repository-local; update the shared approval
+implementation in all three.
 
 ## Activation
 
@@ -126,15 +144,19 @@ remain repository-local; update the shared approval implementation in all three.
    `renovate-automerge` environment provides
    `APP_VERTESIA_RENOVATE_AUTOMERGE_PEM`, and the environment/repository/organization
    supplies `APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID` for the existing App.
-2. Merge the scripts and workflows into `main` in all three repositories, and
-   backport them to each maintained `release/X.Y` base. `pull_request_target` uses
-   the base branch's workflow; `workflow_run` uses the default branch.
+2. Add `pr-event.yaml` to each maintained `release/X.Y` base first: a `pull_request`
+   run uses the workflow of the PR's merge commit, so a base without it sends no
+   signal. Then merge the scripts and workflows into `main` in all three repositories.
+   `workflow_run` and `repository_dispatch` run the default branch's workflow, so the
+   gate itself needs no backport.
 3. Exercise a same-repository PR: observe the marked approval after CI, push an
    update, and verify that only this gate's approval disappears until CI passes.
 4. Once the status is being emitted, import `.github/rulesets/ci-approval.json` as
    an additional ruleset. It requires `PR approval gate` from GitHub Actions
-   (integration ID 15368) on `main` and `release/**`, with the PR branch required to
-   be up to date. Keep
+   (integration ID 15368) on `main` and `release/**` except the retired `release/1.3`
+   and `release/1.4`, which have no `pr-event.yaml`, with the PR branch required to
+   be up to date. When a line is retired, add it to `exclude`; a new line needs
+   `pr-event.yaml` before the ruleset covers it. Keep
    `dismiss_stale_reviews_on_push` false in existing rulesets. This template makes
    no changes to review counts, conversation resolution, or Copilot configuration.
 

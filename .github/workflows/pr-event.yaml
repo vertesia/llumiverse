@@ -1,0 +1,35 @@
+name: (ci) PR event
+
+# Signals a pull request change to "(ci) Approve tested pull requests", which listens to this
+# workflow through workflow_run and so runs the trusted copy of the default branch, with its
+# secrets. The gate used pull_request_target before, which GitHub blocks in public repositories from
+# 2026-12-02. This run reads no secret, gets no token permission and checks out nothing, so a fork
+# can trigger it safely; the gate ignores forks anyway. Closing a PR also signals: the gate then
+# withdraws its approval and resets its status, so a reopened PR starts pending.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
+
+permissions: {}
+
+jobs:
+  signal:
+    name: Signal a pull request change
+    # The gate never reads the title or the description: of all edits, only a new base can change
+    # its verdict. The skipped run still completes, and the gate ignores a skipped run.
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    # One signal per PR at a time. A newer signal replaces a pending one, and nothing is lost: the
+    # gate evaluates the PR as it is when it runs. The concurrency is on the job, so that a skipped
+    # edit never replaces a pending signal.
+    concurrency:
+      group: pr-event-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - name: Print the change
+        env:
+          ACTION: ${{ github.event.action }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "PR #$NUMBER: $ACTION"
