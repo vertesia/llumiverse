@@ -25,6 +25,22 @@
                     "Test automerge CI policy",
                     "Check codebase"
                 ]
+            },
+            {
+                "name": "^License check$",
+                "example": "License check",
+                "baseBranches": ["main"],
+                "steps": [
+                    "Check licenses of added dependencies"
+                ]
+            },
+            {
+                "name": "^Package licenses$",
+                "example": "Package licenses",
+                "baseBranches": ["main"],
+                "steps": [
+                    "Check package licenses"
+                ]
             }
         ]
     }

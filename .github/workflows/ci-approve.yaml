@@ -3,11 +3,10 @@ name: (ci) Approve tested pull requests
 on:
   # zizmor: ignore[dangerous-triggers] Runs only trusted default-branch scripts; never executes PR code or artifacts.
   workflow_run:
-    workflows: ["(ci) PR validation", "(test) Build and test", "(lint) Lint codebase"]
+    # "(ci) PR event" signals a PR change, such as a push, a label or a new base: pull_request_target
+    # is blocked in public repositories from 2026-12-02. The others are CI completions.
+    workflows: ["(ci) PR event", "(ci) PR validation", "(test) Build and test", "(lint) Lint codebase"]
     types: [completed]
-  # zizmor: ignore[dangerous-triggers] Withdraws this gate's approval on PR changes; checkout is pinned to the trusted workflow commit.
-  pull_request_target:
-    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
   # Default-branch-only manual reconciliation. Send client_payload.pr_number to select one PR;
   # omit it to reconcile all open PRs.
   repository_dispatch:
@@ -20,10 +19,14 @@ jobs:
     name: Resolve approval branches
     # Discovery only reads metadata; publishing jobs use the actual branch lock below.
     concurrency:
-      group: ci-approve-discovery-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.event.client_payload.pr_number || 'manual' }}
+      group: ci-approve-discovery-${{ github.repository }}-${{ github.event.workflow_run.head_branch || github.event.client_payload.pr_number || 'manual' }}
       cancel-in-progress: false
       queue: max
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    # A skipped run changes nothing: the signal skips an edit that keeps the base, and a skipped CI
+    # run tested nothing.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'skipped')
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:

@@ -32,6 +32,7 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    GEMINI_TOOL_NAME_RULES,
     getConversationMeta,
     type HttpTimeoutOptions,
     hasGeminiSamplingRestriction,
@@ -46,6 +47,7 @@ import {
     type PromptOptions,
     PromptRole,
     type PromptSegment,
+    ReplayedToolNames,
     readStreamAsBase64,
     type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
@@ -346,7 +348,14 @@ export function getGeminiPayload(
     // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
     // which would otherwise trip Gemini's functionCall/functionResponse pairing.
     if (payloadContents) {
-        payloadContents = stripGeneratedFunctionCallIds(fixOrphanedToolResults(payloadContents));
+        // Compatibility exception: a replayed call to an undeclared tool whose name Gemini rejects (empty, or
+        // with a character such as `/`) would fail every later turn, so the request carries a safe name. The stored conversation keeps
+        // the emitted name.
+        const replayedToolNames = new ReplayedToolNames(options.tools, GEMINI_TOOL_NAME_RULES);
+        payloadContents = stripGeneratedFunctionCallIds(
+            sanitizeGeminiFunctionNames(fixOrphanedToolResults(payloadContents), replayedToolNames),
+        );
+        replayedToolNames.logRewrites(logger, { provider: 'vertexai', model: options.model });
     }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
@@ -596,7 +605,9 @@ function functionCallNamesById(contents: Content[]): Map<string, string> {
     for (const content of contents) {
         for (const part of content.parts ?? []) {
             const call = part.functionCall;
-            if (call?.id && call.name) names.set(call.id, call.name);
+            // `name` is optional on a Vertex FunctionCall. An empty or omitted name is still the call's name: its
+            // result must pair with it, not fall back to the id.
+            if (call?.id) names.set(call.id, call.name ?? '');
         }
     }
     return names;
@@ -629,6 +640,40 @@ export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
                 if (isGeneratedFunctionCallId(part.functionResponse?.id)) {
                     const { id: _generated, ...functionResponse } = part.functionResponse ?? {};
                     return { ...part, functionResponse };
+                }
+                return part;
+            }),
+        };
+    });
+}
+
+/**
+ * Give every replayed functionCall and functionResponse part a name Gemini accepts, without touching the
+ * caller's contents. Gemini pairs a response with its call by name, so both get the same rewrite; a response
+ * without a name is given its call's name, which Vertex requires. Run it before
+ * {@link stripGeneratedFunctionCallIds}, while every response still has the id it pairs by.
+ */
+export function sanitizeGeminiFunctionNames(contents: Content[], names: ReplayedToolNames): Content[] {
+    const callNames = functionCallNamesById(contents);
+    return contents.map((content) => {
+        if (!content.parts?.some((part) => part.functionCall || part.functionResponse)) return content;
+        return {
+            ...content,
+            parts: content.parts.map((part) => {
+                if (part.functionCall) {
+                    const name = names.safe(part.functionCall.name);
+                    return name === part.functionCall.name
+                        ? part
+                        : { ...part, functionCall: { ...part.functionCall, name } };
+                }
+                const response = part.functionResponse;
+                if (response) {
+                    // A response without a name answers a call without one: by id, or (with no id) because
+                    // fixOrphanedToolResults kept it as a match for an empty name. Either way it goes out as the
+                    // call does.
+                    const emitted = response.name ?? (response.id ? callNames.get(response.id) : undefined) ?? '';
+                    const name = names.safe(emitted);
+                    return name === response.name ? part : { ...part, functionResponse: { ...response, name } };
                 }
                 return part;
             }),
@@ -693,7 +738,7 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
     for (const content of contents) {
         if (content.role === 'model') {
             const calls = (content.parts ?? []).flatMap((part) => (part.functionCall ? [part.functionCall] : []));
-            allowedNames = new Set(calls.flatMap((call) => (call.name ? [call.name] : [])));
+            allowedNames = new Set(calls.map((call) => call.name ?? ''));
             allowedIds = new Set(calls.flatMap((call) => (call.id ? [call.id] : [])));
             result.push(content);
             continue;
@@ -989,7 +1034,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const safety: Content[] = [];
         // Media an earlier turn inlined is still in the history sent with this request.
         const inlineBudget: InlineMediaBudget = { bytes: conversationInlineBytes(options.conversation) };
-        const callNamesById = functionCallNamesById(unwrapConversationArray<Content>(options.conversation) ?? []);
+        // Read the history the same way updateConversation does: wrapped, or a plain array.
+        const history =
+            unwrapConversationArray<Content>(options.conversation) ??
+            (Array.isArray(options.conversation) ? (options.conversation as Content[]) : []);
+        const callNamesById = functionCallNamesById(history);
 
         for (const msg of segments) {
             // Role specific handling

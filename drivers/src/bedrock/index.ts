@@ -64,6 +64,7 @@ import {
     type PromptSegment,
     Providers,
     parseClaudeVersion,
+    ReplayedToolNames,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -109,6 +110,7 @@ import {
     isMessagesApiConversation,
     relocateConverseToolImages,
     sanitizeConverseMessages,
+    sanitizeConverseToolUseNames,
     shouldIncludeSchemaInConversePrompt,
     supportsConverseOutputConfig,
 } from './converse.js';
@@ -2011,6 +2013,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         if (prompt.messages) {
             request.messages = relocateConverseToolImages(prompt.messages, options.model);
+            // Compatibility exception: a replayed call to an undeclared tool whose name Converse rejects (empty,
+            // dotted) would fail every later turn with a 400, so the request carries a safe name. Only structured
+            // toolUse blocks need it: without tools they become text below, which keeps the emitted name. The
+            // stored conversation keeps the emitted name.
+            if (tool_defs?.length) {
+                const replayedToolNames = new ReplayedToolNames(options.tools);
+                request.messages = sanitizeConverseToolUseNames(request.messages, replayedToolNames);
+                replayedToolNames.logRewrites(this.logger, { provider: this.provider, model: options.model });
+            }
         }
 
         if (prompt.system) {

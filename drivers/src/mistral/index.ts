@@ -14,6 +14,7 @@ import {
     isEmbeddingModel,
     type JSONObject,
     LlumiverseError,
+    type Logger,
     MISTRAL_DEFAULT_EMBEDDING_MODEL,
     type MistralTextOptions,
     ModelType,
@@ -23,6 +24,7 @@ import {
     PromptRole,
     type PromptSegment,
     Providers,
+    ReplayedToolNames,
     readStreamAsBase64,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
@@ -88,7 +90,10 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         signal?: AbortSignal,
     ): Promise<Completion> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const request = buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens);
+        const request = buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens, {
+            logger: this.logger,
+            provider: this.provider,
+        });
         const driverRequestOptions = this.getDriverRequestOptions(options, signal);
         const requestOptions = driverRequestOptions
             ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
@@ -122,7 +127,10 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const request = buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens);
+        const request = buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens, {
+            logger: this.logger,
+            provider: this.provider,
+        });
         const driverRequestOptions = this.getDriverRequestOptions(options, signal);
         const requestOptions =
             driverRequestOptions?.timeout !== undefined
@@ -378,11 +386,47 @@ function prepareMistralConversation(
     return { messages: [...existing, ...promptMessages] };
 }
 
+/**
+ * Give every replayed assistant tool call a name Mistral accepts (`[a-zA-Z0-9_-]{1,64}`), without touching
+ * the caller's messages. Tool results pair by toolCallId.
+ */
+export function sanitizeMistralToolCallNames(
+    messages: ChatCompletionRequestMessage[],
+    names: ReplayedToolNames,
+): ChatCompletionRequestMessage[] {
+    return messages.map((message) => {
+        if (message.role !== 'assistant' || !message.toolCalls?.length) return message;
+        return {
+            ...message,
+            toolCalls: message.toolCalls.map((call) => {
+                const name = names.safe(call.function.name);
+                return name === call.function.name ? call : { ...call, function: { ...call.function, name } };
+            }),
+        };
+    });
+}
+
+/**
+ * Compatibility exception: a replayed call to an undeclared tool whose name Mistral rejects (empty, dotted)
+ * would fail every later turn, so the request carries a safe name. The stored conversation keeps the emitted name.
+ */
+function replayableMistralMessages(
+    messages: ChatCompletionRequestMessage[],
+    options: ExecutionOptions,
+    log: { logger: Logger; provider: string } | undefined,
+): ChatCompletionRequestMessage[] {
+    const names = new ReplayedToolNames(options.tools);
+    const sanitized = sanitizeMistralToolCallNames(messages, names);
+    names.logRewrites(log?.logger, { provider: log?.provider ?? Providers.mistralai, model: options.model });
+    return sanitized;
+}
+
 function buildMistralRequest(
     conversation: MistralPrompt,
     options: ExecutionOptions,
     stream: boolean,
     defaultMaxTokens?: number,
+    log?: { logger: Logger; provider: string },
 ): ChatCompletionRequest {
     // Continue reading effort from the previously advertised OpenAI-compatible shape so persisted configurations
     // remain usable; Mistral-native fields are only accepted through the transport-specific discriminator.
@@ -395,7 +439,7 @@ function buildMistralRequest(
         : mistralOptions?.tool_choice;
     return {
         model: options.model,
-        messages: conversation.messages,
+        messages: replayableMistralMessages(conversation.messages, options, log),
         maxTokens: modelOptions?.max_tokens ?? defaultMaxTokens,
         temperature: modelOptions?.temperature,
         topP: modelOptions?.top_p,
