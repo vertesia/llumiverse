@@ -247,23 +247,20 @@ test('workflow completion keeps waiting while the triggering run itself reads as
 });
 
 const lintJob = 'Lint / Check codebase';
+const ciPolicy = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+const lintPolicyJobs = ciPolicy['lint.yml'].jobs;
 for (const [missing, partial] of [
     ['job', []],
     ['step', [{ name: lintJob, status: 'completed', conclusion: 'success', steps: [] }]],
 ]) {
     test(`workflow completion keeps waiting while the triggering run lacks a required ${missing}`, async () => {
-        const complete = [
-            {
-                name: lintJob,
-                status: 'completed',
-                conclusion: 'success',
-                steps: ['Test automerge CI policy', 'Check codebase'].map((name) => ({
-                    name,
-                    status: 'completed',
-                    conclusion: 'success',
-                })),
-            },
-        ];
+        // Every job the policy requires on main, so a newly required job cannot leave the run incomplete.
+        const complete = lintPolicyJobs.map((job) => ({
+            name: job.example,
+            status: 'completed',
+            conclusion: 'success',
+            steps: job.steps.map((name) => ({ name, status: 'completed', conclusion: 'success' })),
+        }));
         const validation = {
             id: 41,
             head_sha: sha,
