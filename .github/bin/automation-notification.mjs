@@ -147,13 +147,15 @@ export async function notification({ repo, eventName, event, inputs = {}, runUrl
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+    // gh output is buffered whole: a commit response lists every changed file, and a large commit is
+    // past execFileSync's 1 MiB default (ENOBUFS).
     const result = await notification({
         repo: process.env.GITHUB_REPOSITORY,
         eventName: process.env.GITHUB_EVENT_NAME,
         event,
         inputs: JSON.parse(process.env.NOTIFICATION_INPUTS || '{}'),
         runUrl: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
-    }, async (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8' })));
+    }, async (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })));
     if (result) {
         appendFileSync(process.env.GITHUB_OUTPUT, `login=${result.login}\nmessage=${JSON.stringify(result.message)}\n`);
     }
