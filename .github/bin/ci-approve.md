@@ -7,7 +7,9 @@ this repository's `automerge-ci-policy.json` against the current base branch and
 commit. The CI run's recorded PR base must match; missing or older base metadata
 blocks approval. Studio uses its selected-suite
 validator; composableai also requires plugin template tests; llumiverse includes
-curated live provider smoke tests. A green workflow with skipped required jobs
+curated live provider smoke tests. PRs to `main` also need the `License check` job
+(a policy job with `baseBranches`); maintained release lines do not run it, and a run
+whose base is unknown must have it. A green workflow with skipped required jobs
 or steps does not qualify. Copilot and review threads are not prerequisites.
 
 ## Review ownership
