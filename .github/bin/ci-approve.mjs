@@ -140,9 +140,12 @@ export const CLOSED_REASON = 'The PR is closed; reopening it starts a new evalua
 // The commit status belongs to the commit, not the PR. An open PR always owns the status of its
 // head; a closed PR owns it only when no open PR shares the commit, or it would overwrite that PR's
 // verdict. The PR can close at any read of a run, not only the first one.
-export async function ownsCommitStatus(api, pr) {
+// A run that saw another run publish a different verdict for the commit while its own write was failing
+// is contested: that run evaluated another open PR at the same commit, so this PR owns the shared status
+// only once no other open PR has that head. The other PR's verdict stands until its own next evaluation.
+export async function ownsCommitStatus(api, pr, { contested = false } = {}) {
     if (pr.head.repo?.full_name !== api.repo) return false;
-    if (pr.state === 'open') return true;
+    if (pr.state === 'open' && !contested) return true;
     return !(await api.open()).some(
         (open) => open.number !== pr.number && open.state === 'open' && open.head.sha === pr.head.sha,
     );
@@ -151,11 +154,11 @@ export async function ownsCommitStatus(api, pr) {
 // A closed PR keeps no approval from this gate, so a reopening at the same commit starts from
 // pending. This path never publishes an error status, which would also land on an open PR at the
 // same commit.
-export async function settleClosed(api, number, pr) {
+export async function settleClosed(api, number, pr, contested) {
     for (const review of (await api.reviews(number)).filter(ownsReview)) {
         await api.dismiss(number, review.id, CLOSED_REASON);
     }
-    const owns = await ownsCommitStatus(api, pr);
+    const owns = await ownsCommitStatus(api, pr, { contested: isContested(contested, 'pending') });
     if (owns) {
         try {
             await api.status(pr.head.sha, 'pending', CLOSED_REASON);
@@ -170,13 +173,13 @@ export async function settleClosed(api, number, pr) {
     };
 }
 
-export async function reconcile(api, number, ci, { settle = false, settleOptions, branch, handoffs } = {}) {
+export async function reconcile(api, number, ci, { settle = false, settleOptions, branch, handoffs, contested } = {}) {
     // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
     if (branch && pr.head.ref !== branch) {
         return { reason: 'PR head branch changed; waiting for another event with its branch lock.' };
     }
-    if (pr.state !== 'open') return settleClosed(api, number, pr);
+    if (pr.state !== 'open') return settleClosed(api, number, pr, contested);
     // Only the marked reviews from this App are ever candidates for dismissal.
     let standing = [];
     async function withdraw(reason, all = true) {
@@ -250,16 +253,22 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
                 if (!result.approve) await withdraw(result.reason);
             }
         }
-        if (await ownsCommitStatus(api, pr)) {
+        const owns = await ownsCommitStatus(api, pr, { contested: isContested(contested, result.state) });
+        if (owns) {
             try {
                 await api.status(pr.head.sha, result.state, result.reason);
             } catch (error) {
                 // The approval stays: the next evaluation keeps or withdraws it like any other.
                 return supersededResult(error);
             }
+        } else if (contested) {
+            result = {
+                ...result,
+                reason: `${result.reason} Another open PR at this commit published ${contested.state} for it; that verdict stands.`,
+            };
         }
         // Hand off only once the successful status for this exact revision is published.
-        const handoff = result.state === 'success' ? handoffFor(pr, handoffs) : undefined;
+        const handoff = owns && result.state === 'success' ? handoffFor(pr, handoffs) : undefined;
         return handoff ? { ...result, handoff } : result;
     } catch (error) {
         // Best-effort cleanup: status/review writes can also fail during an API outage.
@@ -276,7 +285,8 @@ export async function reconcile(api, number, ci, { settle = false, settleOptions
                 latest = undefined;
             }
             const subject = latest?.head.sha === pr.head.sha ? latest : { ...pr, state: 'closed' };
-            if (await ownsCommitStatus(api, subject).catch(() => false)) {
+            const owner = ownsCommitStatus(api, subject, { contested: isContested(contested, 'error') });
+            if (await owner.catch(() => false)) {
                 // A verdict another run published while this write was failing stands; the job still fails.
                 await api
                     .status(pr.head.sha, 'error', 'Could not verify approval eligibility; inspect the workflow log.')
@@ -301,6 +311,16 @@ export const READ_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 32000];
 // has been published by another run. Which verdict is current is unknown, so the PR is evaluated again.
 export class StatusSupersededError extends Error {
     name = 'StatusSupersededError';
+
+    constructor(message, status) {
+        super(message);
+        this.status = status;
+    }
+}
+
+// Only a different verdict contests the shared status; publishing the same state changes nothing.
+function isContested(contested, state) {
+    return contested !== undefined && contested.state !== state;
 }
 
 export const SUPERSEDED_REEVALUATIONS = 2;
@@ -309,8 +329,9 @@ export async function reconcileCurrent(api, number, ci, options = {}) {
     let result = await reconcile(api, number, ci, options);
     for (let pass = 0; result.superseded && pass < SUPERSEDED_REEVALUATIONS; pass++) {
         console.log(`PR #${number}: ${result.reason}`);
-        // The first pass already waited for its CI data, so later passes evaluate the PR as it is now.
-        result = await reconcile(api, number, ci, { ...options, settle: false });
+        // The first pass already waited for its CI data, so later passes evaluate the PR as it is now. They
+        // carry the competing verdict, so they never publish over another open PR at the same commit.
+        result = await reconcile(api, number, ci, { ...options, settle: false, contested: result.contested });
     }
     return result;
 }
@@ -321,6 +342,7 @@ function supersededResult(error) {
         state: 'pending',
         approve: false,
         superseded: true,
+        contested: error.status,
         reason: `${error.message} Evaluating the PR again.`,
     };
 }
@@ -483,11 +505,12 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                     request(`repos/${repo}/statuses/${sha}`, { method: 'POST', body });
                     return;
                 } catch (error) {
-                    if (attempt >= READ_RETRY_DELAYS_MS.length || !isTransientApiError(error)) throw error;
+                    if (!isTransientApiError(error)) throw error;
                     // A 5xx does not mean the write failed, and runs for other branches can publish a
                     // verdict for the same commit meanwhile: a blind replay could overwrite a newer one.
-                    // Read the status back and replay only when nothing has been published since.
-                    sleep(READ_RETRY_DELAYS_MS[attempt]);
+                    // Read the status back and replay only when nothing has been published since. The
+                    // retry budget caps the writes, never the read-back of the last one.
+                    sleep(READ_RETRY_DELAYS_MS[Math.min(attempt, READ_RETRY_DELAYS_MS.length - 1)]);
                     let latest;
                     try {
                         latest = current();
@@ -501,8 +524,10 @@ export function githubApi(env, call = execFileSync, sleep = sleepSync) {
                     if (latest?.id !== old?.id) {
                         throw new StatusSupersededError(
                             `Another run published ${latest?.state ?? 'another verdict'} for ${sha} while this status write was failing.`,
+                            latest,
                         );
                     }
+                    if (attempt >= READ_RETRY_DELAYS_MS.length) throw error;
                     console.warn(`Retrying the ${CONTEXT} status for ${sha} after a transient error: ${error.message}`);
                 }
             }

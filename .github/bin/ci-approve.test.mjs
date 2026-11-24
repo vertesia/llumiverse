@@ -1235,7 +1235,8 @@ test('a superseded status is resolved by evaluating the PR again from scratch', 
     const status = api.status;
     let superseded = 1;
     api.status = async (...args) => {
-        if (superseded-- > 0) throw new StatusSupersededError('Another run published pending.');
+        // No other open PR has this head, so the second pass owns the status despite the competing verdict.
+        if (superseded-- > 0) throw new StatusSupersededError('Another run published pending.', { state: 'pending' });
         return status(...args);
     };
     const settles = [];
@@ -1255,6 +1256,66 @@ test('a superseded status is resolved by evaluating the PR again from scratch', 
         'the second pass keeps the approval and publishes its own verdict',
     );
     assert.equal(settles.filter(Boolean).length, 1, 'only the first pass waits for CI data');
+});
+
+test('re-evaluation never publishes over the verdict of another open PR at the same commit', async () => {
+    // Another branch's PR at the same commit published success while this pending write was failing.
+    const other = { ...pr, number: 13, head: { ...pr.head, ref: 'other' } };
+    const api = fixture();
+    api.open = async () => [pr, other];
+    const status = api.status;
+    let superseded = 1;
+    api.status = async (...args) => {
+        if (superseded-- > 0) throw new StatusSupersededError('Another run published success.', { state: 'success' });
+        return status(...args);
+    };
+    const result = await reconcileCurrent(api, 12, () => false);
+    assert.equal(result.state, 'pending');
+    assert.equal(result.superseded, undefined);
+    assert.match(result.reason, /Another open PR at this commit published success/);
+    assert.deepEqual(api.writes, [], 'the competing success stands');
+});
+
+test('a contested pass agreeing with the competing verdict publishes as usual', async () => {
+    const other = { ...pr, number: 13, head: { ...pr.head, ref: 'other' } };
+    const api = fixture();
+    api.open = async () => [pr, other];
+    const result = await reconcile(api, 12, () => true, { contested: { state: 'success' } });
+    assert.equal(result.state, 'success');
+    assert.ok(api.writes.some(([kind, , state]) => kind === 'status' && state === 'success'));
+});
+
+test('the last failed status write is still read back before it counts as failed', async () => {
+    // Every POST answers 502, and GitHub saved the last one.
+    let posts = 0;
+    const saved = statusRecord(2, 'success', 'Passed.');
+    const { api, calls, sleeps } = routedApi(
+        gateRoute({
+            [`GET repos/vertesia/studio/commits/${sha}/statuses`]: () =>
+                posts > READ_RETRY_DELAYS_MS.length ? [saved] : [],
+            [`POST repos/vertesia/studio/statuses/${sha}`]: () => {
+                posts++;
+                throw ghFailure('gh: Server Error (HTTP 502)');
+            },
+        }),
+    );
+    await api.status(sha, 'success', 'Passed.');
+    assert.equal(statusPosts(calls).length, 1 + READ_RETRY_DELAYS_MS.length, 'the retry budget caps the writes');
+    assert.equal(sleeps.length, 1 + READ_RETRY_DELAYS_MS.length);
+});
+
+test('a status write that fails every attempt and was never saved surfaces the last error', async () => {
+    const failures = [];
+    const { api, calls } = routedApi(
+        gateRoute({
+            [`POST repos/vertesia/studio/statuses/${sha}`]: () => {
+                failures.push(ghFailure('gh: Server Error (HTTP 502)'));
+                throw failures.at(-1);
+            },
+        }),
+    );
+    await assert.rejects(api.status(sha, 'success', 'Passed.'), (error) => error === failures.at(-1));
+    assert.equal(statusPosts(calls).length, 1 + READ_RETRY_DELAYS_MS.length);
 });
 
 test('re-evaluation after superseded statuses is bounded', async () => {

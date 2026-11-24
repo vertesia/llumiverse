@@ -59,7 +59,10 @@ the run has just granted. After a 5xx the gate waits with the same backoff and r
 commit's status back. If its own verdict is there, the write was applied. If nothing
 has been published since, it sends the write again. If another run (for another
 branch at the same commit) has published a different verdict meanwhile, it does not
-overwrite it: it evaluates the PR again from scratch, up to twice.
+overwrite it: it evaluates the PR again from scratch, up to twice, and those passes publish
+only when no other open PR has the same head, so the other PR's verdict stands until its
+own next evaluation. The retry budget caps the writes, not the read-back: the last failed
+write is still read back before the run counts it as failed.
 
 Approval creation has a read-back recovery path for dropped connections, 5xx
 responses, and GitHub's specific 422 internal-error response. The POST is sent only
