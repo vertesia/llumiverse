@@ -84,4 +84,22 @@ describe('Bedrock Converse replayed tool names', () => {
 
         expect(info).not.toHaveBeenCalled();
     });
+
+    it('sends the same rewritten history on the next turn, so the cached prefix still matches', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const turn1 = conversation();
+        const turn2: ConverseRequest = {
+            ...turn1,
+            messages: [
+                ...(turn1.messages ?? []),
+                { role: 'assistant', content: [{ text: 'Those tools do not exist.' }] },
+                { role: 'user', content: [{ text: 'Use web_search instead.' }] },
+            ],
+        };
+
+        const first = driver.preparePayload(turn1, { model: MODEL, tools }).messages ?? [];
+        const second = driver.preparePayload(turn2, { model: MODEL, tools }).messages ?? [];
+
+        expect(second.slice(0, first.length)).toEqual(first);
+    });
 });

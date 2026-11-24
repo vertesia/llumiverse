@@ -145,4 +145,18 @@ describe('Gemini replayed tool names', () => {
         const responses = (payload.contents as Content[])[1].parts?.map((part) => part.functionResponse?.name);
         expect(responses).toEqual(['functions_x', 'web_search']);
     });
+
+    it('sends the same rewritten history on the next turn, so the cached prefix still matches', () => {
+        const options: ExecutionOptions = { model: MODEL, tools };
+        const turn2: Content[] = [
+            ...history(),
+            { role: 'model', parts: [{ text: 'Those tools do not exist.' }] },
+            { role: 'user', parts: [{ text: 'Use web_search instead.' }] },
+        ];
+
+        const first = getGeminiPayload(options, { contents: history() }).contents as Content[];
+        const second = getGeminiPayload(options, { contents: turn2 }).contents as Content[];
+
+        expect(second.slice(0, first.length)).toEqual(first);
+    });
 });

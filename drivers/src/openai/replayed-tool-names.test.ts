@@ -72,6 +72,39 @@ describe('OpenAI Responses replayed tool names', () => {
         expect(names).toEqual(SENT);
         expect(conversation).toEqual(history());
     });
+
+    it('sends the same rewritten history on the next turn, so the cached prefix still matches', async () => {
+        const answer = {
+            id: 'r',
+            status: 'completed',
+            output: [
+                {
+                    id: 'm',
+                    type: 'message',
+                    role: 'assistant',
+                    status: 'completed',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+        };
+        const create = vi.fn(async (_request: unknown) => answer);
+        const driver = new TestResponsesDriver(create);
+        const prompt1: OpenAI.Responses.ResponseInputItem[] = [{ type: 'message', role: 'user', content: 'again' }];
+        const prompt2: OpenAI.Responses.ResponseInputItem[] = [{ type: 'message', role: 'user', content: 'and again' }];
+
+        await driver.requestTextCompletion(prompt1, { model: 'gpt-5', tools, conversation: history() });
+        await driver.requestTextCompletion(prompt2, {
+            model: 'gpt-5',
+            tools,
+            conversation: [...history(), ...prompt1, { type: 'message', role: 'assistant', content: 'ok' }],
+        });
+
+        const [first, second] = create.mock.calls.map(
+            ([request]) => (request as { input: OpenAI.Responses.ResponseInputItem[] }).input,
+        );
+        expect(second.slice(0, first.length)).toEqual(first);
+    });
 });
 
 describe('OpenAI Chat Completions replayed tool names', () => {
@@ -131,5 +164,26 @@ describe('OpenAI Chat Completions replayed tool names', () => {
         const sent = protocol.payloads[0].messages.find((message) => message.tool_calls?.length);
         expect(sent?.tool_calls?.map((call) => call.function.name)).toEqual(SENT);
         expect(conversation).toEqual(history());
+    });
+
+    it('sends the same rewritten history on the next turn, so the cached prefix still matches', async () => {
+        const protocol = new TestProtocol();
+        const options = { model: 'test/model', model_options: { _option_id: 'text-fallback' as const }, tools };
+        const prompt1: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'again' }],
+        };
+        const prompt2: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'and again' }],
+        };
+
+        await protocol.requestTextCompletion(undefined, prompt1, { ...options, conversation: history() });
+        const turn2 = history();
+        turn2.messages.push(...prompt1.messages, { role: 'assistant', content: 'ok' });
+        await protocol.requestTextCompletion(undefined, prompt2, { ...options, conversation: turn2 });
+
+        const [first, second] = protocol.payloads.map((payload) => payload.messages);
+        expect(second.slice(0, first.length)).toEqual(first);
     });
 });
