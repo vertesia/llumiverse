@@ -103,6 +103,22 @@ describe('Gemini replayed tool names', () => {
         expect(sent[1]?.parts?.[0].functionResponse?.name).toBe('_');
     });
 
+    it('gives a response with no id and no name the same safe name as its unnamed call', () => {
+        const payload = getGeminiPayload(
+            { model: MODEL, tools },
+            {
+                contents: [
+                    { role: 'model', parts: [{ functionCall: { args: {} } }] },
+                    { role: 'user', parts: [{ functionResponse: { response: {} } }] },
+                ],
+            },
+        );
+
+        const sent = payload.contents as Content[];
+        expect(sent[0].parts?.[0].functionCall?.name).toBe('_');
+        expect(sent[1]?.parts?.[0].functionResponse?.name).toBe('_');
+    });
+
     it("gives a response that carries only a call id its call's safe name", () => {
         const payload = getGeminiPayload(
             { model: MODEL, tools },

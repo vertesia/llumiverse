@@ -649,7 +649,7 @@ export function stripGeneratedFunctionCallIds(contents: Content[]): Content[] {
 /**
  * Give every replayed functionCall and functionResponse part a name Gemini accepts, without touching the
  * caller's contents. Gemini pairs a response with its call by name, so both get the same rewrite; a response
- * that carries only a call id is given its call's name, which Vertex requires. Run it before
+ * without a name is given its call's name, which Vertex requires. Run it before
  * {@link stripGeneratedFunctionCallIds}, while every response still has the id it pairs by.
  */
 export function sanitizeGeminiFunctionNames(contents: Content[], names: ReplayedToolNames): Content[] {
@@ -667,8 +667,10 @@ export function sanitizeGeminiFunctionNames(contents: Content[], names: Replayed
                 }
                 const response = part.functionResponse;
                 if (response) {
-                    const emitted = response.name ?? (response.id ? callNames.get(response.id) : undefined);
-                    if (emitted === undefined) return part;
+                    // A response without a name answers a call without one: by id, or (with no id) because
+                    // fixOrphanedToolResults kept it as a match for an empty name. Either way it goes out as the
+                    // call does.
+                    const emitted = response.name ?? (response.id ? callNames.get(response.id) : undefined) ?? '';
                     const name = names.safe(emitted);
                     return name === response.name ? part : { ...part, functionResponse: { ...response, name } };
                 }
