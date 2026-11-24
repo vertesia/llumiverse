@@ -604,8 +604,9 @@ function functionCallNamesById(contents: Content[]): Map<string, string> {
     for (const content of contents) {
         for (const part of content.parts ?? []) {
             const call = part.functionCall;
-            // An empty name is still the call's name: its result must pair with it, not fall back to the id.
-            if (call?.id && call.name !== undefined) names.set(call.id, call.name);
+            // `name` is optional on a Vertex FunctionCall. An empty or omitted name is still the call's name: its
+            // result must pair with it, not fall back to the id.
+            if (call?.id) names.set(call.id, call.name ?? '');
         }
     }
     return names;
@@ -734,7 +735,7 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
     for (const content of contents) {
         if (content.role === 'model') {
             const calls = (content.parts ?? []).flatMap((part) => (part.functionCall ? [part.functionCall] : []));
-            allowedNames = new Set(calls.flatMap((call) => (call.name !== undefined ? [call.name] : [])));
+            allowedNames = new Set(calls.map((call) => call.name ?? ''));
             allowedIds = new Set(calls.flatMap((call) => (call.id ? [call.id] : [])));
             result.push(content);
             continue;

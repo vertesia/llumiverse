@@ -46,15 +46,18 @@ describe('Gemini replayed tool names', () => {
     });
 
     it.each([
-        ['a provider-issued', 'vertex-call-1', true],
-        ['a generated', `${GEMINI_GENERATED_CALL_ID_PREFIX}1`, true],
-        ['a provider-issued', 'vertex-call-1', false],
+        { kind: 'empty', name: '', id: 'vertex-call-1', wrapped: true },
+        { kind: 'empty', name: '', id: `${GEMINI_GENERATED_CALL_ID_PREFIX}1`, wrapped: true },
+        { kind: 'empty', name: '', id: 'vertex-call-1', wrapped: false },
+        { kind: 'omitted', name: undefined, id: 'vertex-call-1', wrapped: true },
+        { kind: 'omitted', name: undefined, id: `${GEMINI_GENERATED_CALL_ID_PREFIX}1`, wrapped: true },
     ])(
-        'keeps the tool result of an empty-name call with %s id paired with it (wrapped=%s)',
-        async (_kind, id, wrapped) => {
+        'keeps the tool result of a call with an $kind name and id $id paired with it (wrapped=$wrapped)',
+        async ({ name, id, wrapped }) => {
+            const call = name === undefined ? { id, args: {} } : { id, name, args: {} };
             const stored: Content[] = [
                 { role: 'user', parts: [{ text: 'go' }] },
-                { role: 'model', parts: [{ functionCall: { id, name: '', args: {} } }] },
+                { role: 'model', parts: [{ functionCall: call }] },
             ];
             // Stored conversations are wrapped with their turn metadata; a plain array is accepted too.
             const conversation = wrapped ? incrementConversationTurn(stored) : stored;
@@ -74,15 +77,31 @@ describe('Gemini replayed tool names', () => {
             const payload = getGeminiPayload(options, { contents: stored.concat(prompt.contents) });
 
             const sent = payload.contents as Content[];
-            const call = sent[1].parts?.[0].functionCall;
+            const sentCall = sent[1].parts?.[0].functionCall;
             const response = sent[2]?.parts?.[0].functionResponse;
-            expect(call?.name).toBe('_');
+            expect(sentCall?.name).toBe('_');
             expect(response?.name).toBe('_');
             // Vertex only receives the call ids it issued.
-            expect(call?.id).toBe(id.startsWith(GEMINI_GENERATED_CALL_ID_PREFIX) ? undefined : id);
-            expect(response?.id).toBe(call?.id);
+            expect(sentCall?.id).toBe(id.startsWith(GEMINI_GENERATED_CALL_ID_PREFIX) ? undefined : id);
+            expect(response?.id).toBe(sentCall?.id);
         },
     );
+
+    it('gives an id-only response to a call with no name the same safe name as the call', () => {
+        const payload = getGeminiPayload(
+            { model: MODEL, tools },
+            {
+                contents: [
+                    { role: 'model', parts: [{ functionCall: { id: 'c0', args: {} } }] },
+                    { role: 'user', parts: [{ functionResponse: { id: 'c0', response: {} } }] },
+                ],
+            },
+        );
+
+        const sent = payload.contents as Content[];
+        expect(sent[0].parts?.[0].functionCall?.name).toBe('_');
+        expect(sent[1]?.parts?.[0].functionResponse?.name).toBe('_');
+    });
 
     it("gives a response that carries only a call id its call's safe name", () => {
         const payload = getGeminiPayload(
