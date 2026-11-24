@@ -12,6 +12,7 @@ import {
     type ExecutionOptions,
     PromptRole,
     type PromptSegment,
+    type ReplayedToolNames,
     readStreamAsString,
     readStreamAsUint8Array,
 } from '@llumiverse/core';
@@ -385,6 +386,24 @@ export function sanitizeConverseMessages(messages: Message[]): Message[] {
         }
     }
     return converseConcatMessages(changed ? kept : messages);
+}
+
+/**
+ * Give every replayed toolUse block a name Converse accepts (`[a-zA-Z0-9_-]{1,64}`), without touching the
+ * caller's messages. toolResult blocks pair by toolUseId and carry no name.
+ */
+export function sanitizeConverseToolUseNames(messages: Message[], names: ReplayedToolNames): Message[] {
+    return messages.map((message) => {
+        if (!message.content?.some((block) => block.toolUse)) return message;
+        return {
+            ...message,
+            content: message.content.map((block): ContentBlock => {
+                if (!block.toolUse) return block;
+                const name = names.safe(block.toolUse.name);
+                return name === block.toolUse.name ? block : { toolUse: { ...block.toolUse, name } };
+            }),
+        };
+    });
 }
 
 /** Keep tool images visible on models that only accept them as ordinary user content. */
