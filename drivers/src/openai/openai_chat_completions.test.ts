@@ -1020,6 +1020,76 @@ describe('OpenAIChatCompletionsProtocol', () => {
         ]);
     });
 
+    it('keeps a whitespace-only delta inside the streamed text', async () => {
+        const deltas = ['The', ' search', ' returned', ' ', '100', ' results', ' out', ' of', ' ', '550', '.'];
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream(
+                deltas.map((content, index) => ({
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { content },
+                                finish_reason: index === deltas.length - 1 ? 'stop' : null,
+                            },
+                        ],
+                    }),
+                })),
+            ),
+        );
+
+        const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
+
+        const text = chunks
+            .flatMap((chunk) => chunk.result)
+            .filter((result) => result.type === 'text')
+            .map((result) => result.value)
+            .join('');
+        expect(text).toBe('The search returned 100 results out of 550.');
+    });
+
+    it('drops whitespace before the streamed answer and after a think block', async () => {
+        const deltas = ['\n', ' ', '<think>plan</think>', '\n\n', ' ', 'Paris', ' ', 'is', ' ', 'sunny'];
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream(
+                deltas.map((content, index) => ({
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { content },
+                                finish_reason: index === deltas.length - 1 ? 'stop' : null,
+                            },
+                        ],
+                    }),
+                })),
+            ),
+        );
+
+        const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
+
+        const results = chunks.flatMap((chunk) => chunk.result);
+        expect(results.filter((result) => result.type === 'thoughts')).toEqual([{ type: 'thoughts', value: 'plan' }]);
+        expect(
+            results
+                .filter((result) => result.type === 'text')
+                .map((result) => result.value)
+                .join(''),
+        ).toBe('Paris is sunny');
+    });
+
     it('normalizes non-streaming tool-call finish reasons', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',

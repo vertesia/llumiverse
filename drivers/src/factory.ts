@@ -17,8 +17,8 @@ import type {
     GroqDriverOptions,
     HuggingFaceIEDriverOptions,
     MistralAIDriverOptions,
+    OpenAICompatibleDriverOptions,
     OpenAIDriverOptions,
-    OpenAIResponsesDriverOptions,
     OpenRouterDriverOptions,
     ReplicateDriverOptions,
     TogetherAIDriverOptions,
@@ -38,7 +38,7 @@ export interface DriverFactoryOptions {
     huggingface_ie: HuggingFaceIEDriverOptions;
     mistralai: MistralAIDriverOptions;
     openai: OpenAIDriverOptions;
-    openai_compatible: OpenAIResponsesDriverOptions;
+    openai_compatible: OpenAICompatibleDriverOptions;
     openrouter: OpenRouterDriverOptions;
     replicate: ReplicateDriverOptions;
     /** The in-process test driver takes no options. */
@@ -61,7 +61,17 @@ const loaders: { [P in DriverFactoryProvider]: (options: DriverFactoryOptions[P]
     huggingface_ie: async (options) => new (await import('./huggingface_ie.js')).HuggingFaceIEDriver(options),
     mistralai: async (options) => new (await import('./mistral/index.js')).MistralAIDriver(options),
     openai: async (options) => new (await import('./openai/drivers.js')).OpenAIDriver(options),
-    openai_compatible: async (options) => new (await import('./openai/drivers.js')).OpenAIResponsesDriver(options),
+    openai_compatible: async ({ openai_api, ...options }) => {
+        const drivers = await import('./openai/drivers.js');
+        switch (openai_api ?? 'responses') {
+            case 'responses':
+                return new drivers.OpenAIResponsesDriver(options);
+            case 'chat_completions':
+                return new drivers.OpenAIChatCompletionsDriver(options);
+            default:
+                throw new Error(`Unsupported openai_api for an OpenAI-compatible driver: ${String(openai_api)}`);
+        }
+    },
     openrouter: async (options) => new (await import('./openrouter/index.js')).OpenRouterDriver(options),
     replicate: async (options) => new (await import('./replicate.js')).ReplicateDriver(options),
     test: async () => new (await import('./test-driver/index.js')).TestDriver(),

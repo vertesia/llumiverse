@@ -158,6 +158,18 @@ export interface OpenAIResponsesDriverOptions extends DriverOptions {
     default_headers?: Record<string, string>;
 }
 
+/** The OpenAI HTTP API an OpenAI-compatible endpoint is called through. */
+export type OpenAICompatibleApi = 'responses' | 'chat_completions';
+
+/** The options of an `openai_compatible` driver created through the driver factory. */
+export interface OpenAICompatibleDriverOptions extends OpenAIResponsesDriverOptions {
+    /**
+     * The API requests are sent through. Omitted means `responses`; use `chat_completions` for services that
+     * implement only the Chat Completions API.
+     */
+    openai_api?: OpenAICompatibleApi;
+}
+
 export interface OpenRouterDriverOptions extends OpenAIChatCompletionsDriverOptions {
     apiKey: string;
     endpoint?: string;
