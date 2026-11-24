@@ -4,11 +4,11 @@ name: (ci) PR event
 # workflow through workflow_run and so runs the trusted copy of the default branch, with its
 # secrets. The gate used pull_request_target before, which GitHub blocks in public repositories from
 # 2026-12-02. This run reads no secret, gets no token permission and checks out nothing, so a fork
-# can trigger it safely; the gate ignores forks anyway. A closed PR needs no signal: the gate only
-# evaluates open PRs.
+# can trigger it safely; the gate ignores forks anyway. Closing a PR also signals: the gate then
+# withdraws its approval and resets its status, so a reopened PR starts pending.
 on:
   pull_request:
-    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
 
 permissions: {}
 
