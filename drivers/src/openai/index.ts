@@ -1235,7 +1235,8 @@ function extractOpenAIResponsesCompletion(
 
 /** The prompt for a Responses text request: the prompt copy of the result schema only where it is needed. */
 export function formatOpenAIResponsesPrompt(
-    context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>,
+    context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'> &
+        Partial<Pick<OpenAIResponsesContext, 'logger'>>,
     segments: PromptSegment[],
     options: PromptOptions,
 ): Promise<ResponseInputItem[]> {
@@ -1246,6 +1247,7 @@ export function formatOpenAIResponsesPrompt(
     const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
     return formatOpenAILikeMultimodalPrompt(segments, {
         ...options,
+        logger: context.logger,
         result_schema: resultSchema,
         resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
     });

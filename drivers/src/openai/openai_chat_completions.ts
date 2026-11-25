@@ -50,6 +50,7 @@ import {
     mergeResultSchemaInstructions,
 } from '../shared/result-schema-instruction.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
+import { splitToolResultFiles, withAttachmentNotes } from '../shared/tool-result-attachments.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { NON_OPENAI_ACCOUNT_OPTIONS, OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -962,6 +963,13 @@ function getOpenAIChatDriverProvider(driver: unknown): string {
     return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
 }
 
+/** The driver's logger, when the protocol runs on a driver that has one. */
+function loggerOf(driver: unknown): Pick<Logger, 'warn'> | undefined {
+    if (typeof driver !== 'object' || driver === null || !('logger' in driver)) return undefined;
+    const logger = (driver as { logger?: Pick<Logger, 'warn'> }).logger;
+    return typeof logger?.warn === 'function' ? logger : undefined;
+}
+
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
@@ -970,7 +978,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     }
 
     async createPrompt(
-        _driver: DriverT,
+        driver: DriverT,
         segments: PromptSegment[],
         _options: PromptOptions,
     ): Promise<OpenAIChatCompletionsPrompt> {
@@ -1015,15 +1023,18 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 }
 
                 const content: OpenAIChatCompletionsContentPart[] = [];
+                // A stored tool result is replayed on every later turn: an attachment the API cannot take (audio,
+                // bmp, …) becomes a note in the tool output instead of failing or vanishing.
+                const { files, notes } = splitToolResultFiles(
+                    segment.files,
+                    'openai_chat',
+                    _options.model,
+                    loggerOf(driver),
+                );
+                content.push({ type: 'text', text: withAttachmentNotes(segment.content, notes) });
 
-                if (segment.content) {
-                    content.push({ type: 'text', text: segment.content });
-                } else {
-                    content.push({ type: 'text', text: '' });
-                }
-
-                if (segment.files && segment.files.length > 0) {
-                    for (const file of segment.files) {
+                if (files.length > 0) {
+                    for (const file of files) {
                         if (file.mime_type?.startsWith('image/')) {
                             const stream = await file.getStream();
                             const data = await readStreamAsBase64(stream);

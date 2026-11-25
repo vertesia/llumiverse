@@ -83,7 +83,7 @@ describe('formatOpenAILikeMultimodalPrompt - tool result attachments', () => {
         ]);
     });
 
-    it('skips a media type the API cannot carry instead of mislabelling it as an image', async () => {
+    it('notes a media type the API cannot carry instead of mislabelling it as an image', async () => {
         // The tool-result attachment resolver lets audio/video through; sending either as
         // `input_image` is rejected by the API, which would fail the whole turn.
         const prompt = await formatOpenAILikeMultimodalPrompt(
@@ -91,7 +91,10 @@ describe('formatOpenAILikeMultimodalPrompt - tool result attachments', () => {
             OPTIONS,
         );
 
-        expect(functionCallOutput(prompt).output).toBe('{"artifact_path":"out/plot.png"}');
+        expect(functionCallOutput(prompt).output).toBe(
+            '{"artifact_path":"out/plot.png"}\n' +
+                '[attachment omitted: clip.mp4 (video/mp4) — gpt-5.6 cannot read this type in a tool result]',
+        );
     });
 
     it('still requires a tool_use_id', async () => {
@@ -163,5 +166,42 @@ describe('Responses tool output conversion to Chat Completions', () => {
         expect(
             convertResponseItemsToChatMessages([{ type: 'function_call_output', call_id: 'call_1', output: 'result' }]),
         ).toEqual([{ role: 'tool', tool_call_id: 'call_1', content: 'result' }]);
+    });
+});
+
+describe('formatOpenAILikeMultimodalPrompt - tool result attachments the model cannot read', () => {
+    it('replaces audio and bmp with a note in the tool output and keeps the png', async () => {
+        const audio = source('report.wav', 'audio/wav');
+        const bitmap = source('scan.bmp', 'image/bmp');
+        const warn = vi.fn();
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([audio, bitmap, source('chart.png', 'image/png')], 'Fetched')],
+            { ...OPTIONS, logger: { warn } },
+        );
+
+        expect(functionCallOutput(prompt).output).toEqual([
+            {
+                type: 'input_text',
+                text:
+                    'Fetched\n' +
+                    '[attachment omitted: report.wav (audio/wav) — gpt-5.6 cannot read this type in a tool result]\n' +
+                    '[attachment omitted: scan.bmp (image/bmp) — gpt-5.6 cannot read this type in a tool result]',
+            },
+            { type: 'input_image', image_url: 'data:image/png;base64,AQID', detail: 'auto' },
+        ]);
+        expect(audio.getStream).not.toHaveBeenCalled();
+        expect(bitmap.getStream).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the plain-string output when every attachment was omitted', async () => {
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([source('clip.mp4', 'video/mp4')], 'Fetched')],
+            OPTIONS,
+        );
+
+        expect(functionCallOutput(prompt).output).toBe(
+            'Fetched\n[attachment omitted: clip.mp4 (video/mp4) — gpt-5.6 cannot read this type in a tool result]',
+        );
     });
 });

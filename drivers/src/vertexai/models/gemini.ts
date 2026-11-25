@@ -32,6 +32,7 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    formatOmittedAttachmentNote,
     GEMINI_TOOL_NAME_RULES,
     getConversationMeta,
     type HttpTimeoutOptions,
@@ -39,6 +40,7 @@ import {
     incrementConversationTurn,
     isGeminiModelVersionGte,
     isPermanentAuthErrorMessage,
+    isToolResultAttachmentSupported,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -65,6 +67,7 @@ import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { logModelOptionException } from '../../shared/model-option-exceptions.js';
 import { logModelRefusal } from '../../shared/refusal-log.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
+import { splitToolResultFiles, withAttachmentNotes } from '../../shared/tool-result-attachments.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
@@ -355,6 +358,9 @@ export function getGeminiPayload(
         payloadContents = stripGeneratedFunctionCallIds(
             sanitizeGeminiFunctionNames(fixOrphanedToolResults(payloadContents), replayedToolNames),
         );
+        // A tool result stored by an earlier turn may hold an attachment this model cannot read (an older release, or
+        // a switch to another model): it would fail or be misread on every turn, so it is replaced with a note.
+        payloadContents = omitUnreadableFunctionResponseParts(payloadContents, options.model, logger);
         replayedToolNames.logRewrites(logger, { provider: 'vertexai', model: options.model });
     }
 
@@ -995,7 +1001,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     }
 
     async createPrompt(
-        _driver: VertexAIDriver,
+        driver: VertexAIDriver,
         segments: PromptSegment[],
         options: ExecutionOptions,
     ): Promise<GenerateContentPrompt> {
@@ -1063,15 +1069,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // promoted into the conversation. Gemini takes those as `FunctionResponse.parts`;
                 // sending the JSON response alone drops them and leaves the model unable to see
                 // what it just asked for.
+                // `parts` takes only inlineData/fileData, and a type the model cannot read fails or is misread on
+                // every later turn: such an attachment becomes a note in `response.output` instead.
+                const { files, notes } = splitToolResultFiles(msg.files, 'gemini', modelName, driver?.logger);
                 const responseParts: FunctionResponsePart[] = [];
-                for (const f of msg.files ?? []) {
+                for (const f of files) {
                     responseParts.push(await fileToMediaPart(f, inlineBudget));
                 }
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
                     functionResponse: {
                         ...resolveFunctionResponseTarget(msg.tool_use_id, callNamesById),
-                        response: formatFunctionResponse(msg.content || ''),
+                        response: withResponseAttachmentNotes(formatFunctionResponse(msg.content || ''), notes),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
                     // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
@@ -1960,6 +1969,70 @@ async function fileToMediaPart(file: DataSource, budget: InlineMediaBudget): Pro
  * If “output” and “error” keys are not specified, then whole “response” is treated as function output.
  * @see https://googleapis.github.io/python-genai/genai.html#genai.types.FunctionResponse
  */
+/**
+ * The function response with a note for each omitted attachment appended to its `output`, never to `parts`, which
+ * takes only inlineData/fileData. A response without a string `output` is sent as JSON text in `output`, since adding
+ * an `output` key beside its fields would change what Gemini reads as the function's output.
+ */
+function withResponseAttachmentNotes<T extends Record<string, unknown>>(
+    response: T,
+    notes: string[],
+): T | { output: string } {
+    if (notes.length === 0) return response;
+    if (typeof response.output === 'string') {
+        return { ...response, output: withAttachmentNotes(response.output, notes) };
+    }
+    return { output: withAttachmentNotes(JSON.stringify(response), notes) };
+}
+
+/**
+ * Replace each functionResponse attachment the model cannot read with a note in the response's `output`, without
+ * touching the caller's contents. New tool results are already filtered when the prompt is built; this catches the
+ * ones a stored conversation carries.
+ */
+export function omitUnreadableFunctionResponseParts(contents: Content[], model: string, logger?: Logger): Content[] {
+    const omitted: Array<{ file_name?: string; mime_type?: string }> = [];
+    const result = contents.map((content) => {
+        if (!content.parts?.some((part) => part.functionResponse?.parts?.length)) return content;
+        return {
+            ...content,
+            parts: content.parts.map((part) => {
+                const response = part.functionResponse;
+                if (!response?.parts?.length) return part;
+                const kept: FunctionResponsePart[] = [];
+                const notes: string[] = [];
+                for (const responsePart of response.parts) {
+                    const media = responsePart.inlineData ?? responsePart.fileData;
+                    if (media && isToolResultAttachmentSupported('gemini', media.mimeType, model)) {
+                        kept.push(responsePart);
+                        continue;
+                    }
+                    const attachment = { name: media?.displayName, mime_type: media?.mimeType };
+                    notes.push(formatOmittedAttachmentNote(attachment, model));
+                    omitted.push({ file_name: attachment.name, mime_type: attachment.mime_type });
+                }
+                if (notes.length === 0) return part;
+                const { parts: _omitted, ...rest } = response;
+                return {
+                    ...part,
+                    functionResponse: {
+                        ...rest,
+                        response: withResponseAttachmentNotes(response.response ?? {}, notes),
+                        ...(kept.length > 0 && { parts: kept }),
+                    },
+                };
+            }),
+        };
+    });
+    if (omitted.length > 0) {
+        logger?.warn(
+            { model, omitted_attachments: omitted },
+            '[VertexAI] Stored Gemini tool result attachments the model cannot read were replaced with a note',
+        );
+    }
+    return result;
+}
+
 function formatFunctionResponse(response: string): JSONObject {
     response = response.trim();
     if (response.startsWith('{') && response.endsWith('}')) {

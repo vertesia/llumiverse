@@ -30,7 +30,9 @@ import type { MessageCreateParamsBase, RawMessageStreamEvent, Tool } from '@anth
 import {
     AGENT_PROMPT_CACHE_KEY_PREFIX,
     getClaudeMaxTokensLimit,
+    isTextAttachmentMimeType,
     JSON_SCHEMA_INSTRUCTION_PREFIX,
+    normalizeAttachmentMimeType,
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
 } from '@llumiverse/common';
 import {
@@ -108,6 +110,7 @@ import {
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { logModelOptionException } from './model-option-exceptions.js';
 import { createToolChoiceConfigurationError } from './tool-choice-error.js';
+import { splitToolResultFiles, withAttachmentNotes } from './tool-result-attachments.js';
 
 // ============================================================================
 // Types
@@ -572,20 +575,11 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 // File / multimodal block helpers
 // ============================================================================
 
-const TEXT_APPLICATION_TYPES = new Set([
-    'application/json',
-    'application/xml',
-    'application/yaml',
-    'application/x-yaml',
-]);
+const CLAUDE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+type ClaudeImageType = (typeof CLAUDE_IMAGE_TYPES)[number];
 
-/** Text formats sent as plain-text documents: text/*, JSON, XML and YAML (including +json / +xml types). */
-function isTextMimeType(mimeType: string | undefined): boolean {
-    if (!mimeType) return false;
-    const type = mimeType.split(';')[0].trim().toLowerCase();
-    return (
-        type.startsWith('text/') || TEXT_APPLICATION_TYPES.has(type) || type.endsWith('+json') || type.endsWith('+xml')
-    );
+function isClaudeImageType(mimeType: string): mimeType is ClaudeImageType {
+    return (CLAUDE_IMAGE_TYPES as readonly string[]).includes(mimeType);
 }
 
 async function collectFileBlocks(
@@ -595,14 +589,12 @@ async function collectFileBlocks(
     const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
 
     for (const file of segment.files || []) {
-        if (file.mime_type?.startsWith('image/')) {
-            const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-            // image/jpg is a common non-standard alias.
-            const normalizedType = file.mime_type === 'image/jpg' ? 'image/jpeg' : file.mime_type;
-            if (!allowedTypes.includes(normalizedType)) {
+        // Lower-cased and trimmed, with image/jpg mapped to image/jpeg.
+        const mimeType = normalizeAttachmentMimeType(file.mime_type);
+        if (mimeType.startsWith('image/')) {
+            if (!isClaudeImageType(mimeType)) {
                 throw new Error(`Unsupported image type: ${file.mime_type}`);
             }
-            const mimeType = normalizedType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
             contentBlocks.push({
                 type: 'image',
                 source: {
@@ -611,9 +603,9 @@ async function collectFileBlocks(
                     media_type: mimeType,
                 },
             } satisfies ImageBlockParam);
-        } else if (file.mime_type?.startsWith('audio/')) {
+        } else if (mimeType.startsWith('audio/')) {
             throw new Error('Claude does not support audio input; supply a transcript instead');
-        } else if (file.mime_type?.startsWith('video/')) {
+        } else if (mimeType.startsWith('video/')) {
             logger?.warn(
                 {
                     file_name: file.name,
@@ -621,7 +613,7 @@ async function collectFileBlocks(
                 },
                 '[Claude] Skipping unsupported video attachment',
             );
-        } else if (file.mime_type === 'application/pdf') {
+        } else if (mimeType === 'application/pdf') {
             contentBlocks.push({
                 title: file.name,
                 type: 'document',
@@ -631,7 +623,7 @@ async function collectFileBlocks(
                     media_type: 'application/pdf',
                 },
             } satisfies DocumentBlockParam);
-        } else if (isTextMimeType(file.mime_type)) {
+        } else if (isTextAttachmentMimeType(mimeType)) {
             contentBlocks.push({
                 title: file.name,
                 type: 'document',
@@ -726,11 +718,15 @@ export async function formatClaudePrompt(
             if (!segment.tool_use_id) {
                 throw new Error('Tool prompt segment must have a tool use ID');
             }
+            // A stored tool result is replayed on every later turn: an attachment Claude rejects (audio, bmp, …)
+            // becomes a note instead of failing the request.
+            const { files, notes } = splitToolResultFiles(segment.files, 'claude', options.model, logger);
+            const text = withAttachmentNotes(segment.content, notes);
             const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
-            if (segment.content) {
-                contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
+            if (text) {
+                contentBlocks.push({ type: 'text', text } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
+            contentBlocks.push(...(await collectFileBlocks({ ...segment, files }, logger)));
             messages.push({
                 role: 'user',
                 content: [

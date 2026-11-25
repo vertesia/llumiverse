@@ -16,6 +16,7 @@ import {
     GEMINI_INLINE_MEDIA_MAX_BYTES,
     GEMINI_INLINE_MEDIA_TOTAL_MAX_BYTES,
     GeminiModelDefinition,
+    getGeminiPayload,
 } from './gemini.js';
 
 const OPTIONS = { model: 'gemini-3-pro' } as unknown as ExecutionOptions;
@@ -213,5 +214,131 @@ describe('Gemini tool result attachments', () => {
         const contents = await createPrompt(segments);
 
         expect(contents[0].parts).toEqual([{ text: 'Look' }, { inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }]);
+    });
+});
+
+describe('Gemini tool result attachments the model cannot read', () => {
+    function namedSource(name: string, mimeType: string): DataSource {
+        return { ...source('https://signed.example/file', mimeType), name };
+    }
+
+    async function promptFor(model: string, segments: PromptSegment[], warn = vi.fn()): Promise<Content[]> {
+        const definition = new GeminiModelDefinition(model);
+        const driver = { logger: { warn } } as unknown as VertexAIDriver;
+        const { contents } = await definition.createPrompt(driver, segments, { model } as ExecutionOptions);
+        return contents;
+    }
+
+    const note = (name: string, mimeType: string, model = 'gemini-3.5-flash') =>
+        `[attachment omitted: ${name} (${mimeType}) — ${model} cannot read this type in a tool result]`;
+
+    it('keeps readable attachments in parts and puts a note for the others in response.output', async () => {
+        const audio = namedSource('report.wav', 'audio/wav');
+        const archive = namedSource('logs.zip', 'Application/Zip');
+        const warn = vi.fn();
+        const contents = await promptFor(
+            'gemini-3.5-flash',
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'fetch',
+                    content: 'Fetched',
+                    files: [audio, namedSource('scan.bmp', 'image/bmp'), archive, namedSource('clip.mp4', 'video/mp4')],
+                } as unknown as PromptSegment,
+            ],
+            warn,
+        );
+
+        expect(contents[0].parts?.[0].functionResponse).toEqual({
+            name: 'fetch',
+            response: { output: `Fetched\n${note('report.wav', 'audio/wav')}\n${note('logs.zip', 'application/zip')}` },
+            parts: [
+                { inlineData: { data: 'AQID', mimeType: 'image/bmp' } },
+                { inlineData: { data: 'AQID', mimeType: 'video/mp4' } },
+            ],
+        });
+        expect(audio.getStream).not.toHaveBeenCalled();
+        expect(archive.getStream).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                omitted_attachments: [
+                    { file_name: 'report.wav', mime_type: 'audio/wav' },
+                    { file_name: 'logs.zip', mime_type: 'application/zip' },
+                ],
+            }),
+            '[llumiverse] Tool result attachments the model cannot read were replaced with a note',
+        );
+    });
+
+    it('sends a JSON tool result without an output field as text in output, beside the note', async () => {
+        const contents = await promptFor('gemini-3.5-flash', [toolSegment([namedSource('report.wav', 'audio/wav')])]);
+
+        expect(contents[0].parts?.[0].functionResponse).toEqual({
+            name: 'view_image',
+            response: { output: `{"artifact_path":"out/plot.png"}\n${note('report.wav', 'audio/wav')}` },
+        });
+    });
+
+    it('replaces every attachment with a note for Gemini 2.5, which does not read functionResponse.parts', async () => {
+        const contents = await promptFor('gemini-2.5-flash', [
+            {
+                role: PromptRole.tool,
+                tool_use_id: 'fetch',
+                content: 'Fetched',
+                files: [namedSource('chart.png', 'image/png')],
+            } as unknown as PromptSegment,
+        ]);
+
+        expect(contents[0].parts?.[0].functionResponse).toEqual({
+            name: 'fetch',
+            response: { output: `Fetched\n${note('chart.png', 'image/png', 'gemini-2.5-flash')}` },
+        });
+    });
+
+    it('replaces an unreadable attachment stored in a replayed history before the request goes out', () => {
+        // A tool result stored by an earlier turn (or by a release without this filter) is replayed every turn.
+        const history: Content[] = [
+            { role: 'user', parts: [{ text: 'Fetch the meeting recording' }] },
+            { role: 'model', parts: [{ functionCall: { name: 'fetch', args: {} } }] },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        functionResponse: {
+                            name: 'fetch',
+                            response: { output: 'Fetched' },
+                            parts: [
+                                { inlineData: { data: 'AQID', mimeType: 'audio/mpeg', displayName: 'memo.mp3' } },
+                                { inlineData: { data: 'AQID', mimeType: 'image/png' } },
+                            ],
+                        },
+                    },
+                ],
+            },
+            { role: 'model', parts: [{ text: 'It is a recording.' }] },
+            { role: 'user', parts: [{ text: 'Summarise it' }] },
+        ];
+        const warn = vi.fn();
+        const options = {
+            model: 'gemini-3.5-flash',
+            tools: [{ name: 'fetch', description: '', input_schema: { type: 'object', properties: {} } }],
+        } as unknown as ExecutionOptions;
+
+        const payload = getGeminiPayload(options, { contents: history }, 'execute', {
+            warn,
+        } as unknown as Parameters<typeof getGeminiPayload>[3]);
+
+        const contents = payload.contents as Content[];
+        expect(contents[2].parts?.[0].functionResponse).toEqual({
+            name: 'fetch',
+            response: { output: `Fetched\n${note('memo.mp3', 'audio/mpeg')}` },
+            parts: [{ inlineData: { data: 'AQID', mimeType: 'image/png' } }],
+        });
+        // The caller's history is not modified.
+        expect(history[2].parts?.[0].functionResponse?.parts).toHaveLength(2);
+        expect(warn).toHaveBeenCalledWith(
+            { model: 'gemini-3.5-flash', omitted_attachments: [{ file_name: 'memo.mp3', mime_type: 'audio/mpeg' }] },
+            '[VertexAI] Stored Gemini tool result attachments the model cannot read were replaced with a note',
+        );
     });
 });

@@ -6,6 +6,7 @@ import { readStreamAsBase64, readStreamAsString } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 import { buildResultSchemaInstruction } from '../shared/result-schema-instruction.js';
+import { splitToolResultFiles, withAttachmentNotes } from '../shared/tool-result-attachments.js';
 
 // Types for Response API
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -134,9 +135,16 @@ export async function formatOpenAILikeMultimodalPrompt(
     for (const msg of segments) {
         const fileParts: ResponseInputContent[] = [];
 
+        // A stored tool result is replayed on every later turn: an attachment the API cannot take (audio, bmp, …)
+        // becomes a note in the tool output instead of failing or vanishing.
+        const { files, notes } =
+            msg.role === PromptRole.tool
+                ? splitToolResultFiles(msg.files, 'openai_responses', opts.model, opts.logger)
+                : { files: msg.files, notes: [] };
+
         //generate the parts based on PromptSegment
-        if (msg.files) {
-            for (const file of msg.files) {
+        if (files) {
+            for (const file of files) {
                 const part = await fileToInputContent(file);
                 if (part) fileParts.push(part);
             }
@@ -206,6 +214,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             // conversation, a document it fetched. The Responses API accepts those as a content
             // list on `function_call_output`; emitting only the text would silently drop them and
             // leave the model insisting it cannot see the image it just asked for.
+            const text = withAttachmentNotes(msg.content, notes);
             const toolOutputMsg: OpenAI.Responses.ResponseInputItem.FunctionCallOutput = {
                 type: 'function_call_output',
                 call_id: msg.tool_use_id,
@@ -213,8 +222,8 @@ export async function formatOpenAILikeMultimodalPrompt(
                 // keep the plain-string form the API has always accepted.
                 output:
                     fileParts.length > 0
-                        ? [...(msg.content ? [{ type: 'input_text' as const, text: msg.content }] : []), ...fileParts]
-                        : msg.content || '',
+                        ? [...(text ? [{ type: 'input_text' as const, text }] : []), ...fileParts]
+                        : text,
             };
             others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative) {
@@ -253,6 +262,8 @@ export async function formatOpenAILikeMultimodalPrompt(
 }
 
 export interface OpenAIPromptFormatterOptions {
+    /** Receives a warning when a tool result attachment is replaced with a note. */
+    logger?: { warn: (data: Record<string, unknown>, message: string) => void };
     imageGeneration?: boolean;
     multimodal?: boolean;
     useToolForFormatting?: boolean;

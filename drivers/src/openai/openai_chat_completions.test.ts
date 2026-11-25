@@ -1,4 +1,11 @@
-import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
+import {
+    type CompletionChunkObject,
+    type DataSource,
+    type ExecutionOptions,
+    getConversationMeta,
+    PromptRole,
+    type PromptSegment,
+} from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
@@ -1464,5 +1471,56 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 additionalProperties: false,
             },
         });
+    });
+});
+
+describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot read', () => {
+    function source(name: string, mimeType: string): DataSource {
+        return {
+            name,
+            mime_type: mimeType,
+            getStream: vi.fn().mockResolvedValue(
+                new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new Uint8Array([1, 2, 3]));
+                        controller.close();
+                    },
+                }),
+            ),
+            getURL: vi.fn(),
+            getURI: vi.fn(),
+        };
+    }
+
+    it('replaces audio and bmp with a note in the tool message and keeps the png', async () => {
+        const audio = source('report.wav', 'audio/wav');
+        const prompt = await new TestOpenAIChatCompletionsProtocol().createPrompt(
+            undefined,
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'call_1',
+                    content: 'Fetched',
+                    files: [audio, source('scan.bmp', 'image/bmp'), source('chart.png', 'image/png')],
+                } as PromptSegment,
+            ],
+            { model: 'llama-5' },
+        );
+
+        expect(prompt.messages).toContainEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: [
+                {
+                    type: 'text',
+                    text:
+                        'Fetched\n' +
+                        '[attachment omitted: report.wav (audio/wav) — llama-5 cannot read this type in a tool result]\n' +
+                        '[attachment omitted: scan.bmp (image/bmp) — llama-5 cannot read this type in a tool result]',
+                },
+                { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID', detail: 'auto' } },
+            ],
+        });
+        expect(audio.getStream).not.toHaveBeenCalled();
     });
 });

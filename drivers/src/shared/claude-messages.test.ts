@@ -1015,3 +1015,160 @@ describe('streamClaudeCompletion errors', () => {
         expect(error).toBe(overloaded);
     });
 });
+
+describe('Claude tool result attachments the model cannot read', () => {
+    const fileSource = (name: string, mime_type: string, bytes = [1, 2, 3]): DataSource => ({
+        name,
+        mime_type,
+        getStream: vi.fn().mockResolvedValue(
+            new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new Uint8Array(bytes));
+                    controller.close();
+                },
+            }),
+        ),
+        getURL: vi.fn(),
+        getURI: vi.fn(),
+    });
+
+    // The run's stored history: the assistant asked for the recording, and the tool result that answered it is
+    // replayed with every later turn.
+    const replayedHistory: MessageParam[] = [
+        { role: 'user', content: [{ type: 'text', text: 'Fetch the meeting recording' }] },
+        {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'toolu_fetch', name: 'fetch_recording', input: {} }],
+        },
+    ];
+
+    it('replaces audio and bmp with a note, keeps the png, and never throws on a replayed result', async () => {
+        const audio = fileSource('report.wav', 'audio/wav');
+        const bitmap = fileSource('scan.bmp', 'IMAGE/BMP ');
+        const png = fileSource('chart.png', 'image/png');
+        const warn = vi.fn();
+        const options = {
+            model: 'claude-sonnet-5-5',
+            conversation: { messages: replayedHistory },
+            tools: [{ name: 'fetch_recording', description: 'Fetch', input_schema: { type: 'object' } }],
+        } as unknown as ExecutionOptions;
+
+        const prompt = await formatClaudePrompt(
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'toolu_fetch',
+                    content: 'Recording fetched',
+                    files: [audio, bitmap, png],
+                },
+            ],
+            options,
+            { warn },
+        );
+        const { payload } = getClaudePayload(options, updateClaudeConversation({ messages: replayedHistory }, prompt));
+
+        expect(payload.messages.slice(0, 2)).toEqual(replayedHistory);
+        expect(payload.messages[2]).toMatchObject({
+            role: 'user',
+            content: [
+                {
+                    type: 'tool_result',
+                    tool_use_id: 'toolu_fetch',
+                    content: [
+                        {
+                            type: 'text',
+                            text:
+                                'Recording fetched\n' +
+                                '[attachment omitted: report.wav (audio/wav) — claude-sonnet-5-5 cannot read this type ' +
+                                'in a tool result]\n' +
+                                '[attachment omitted: scan.bmp (image/bmp) — claude-sonnet-5-5 cannot read this type ' +
+                                'in a tool result]',
+                        },
+                        { type: 'image', source: { type: 'base64', data: 'AQID', media_type: 'image/png' } },
+                    ],
+                },
+            ],
+        });
+        expect(audio.getStream).not.toHaveBeenCalled();
+        expect(bitmap.getStream).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+            {
+                model: 'claude-sonnet-5-5',
+                api: 'claude',
+                omitted_attachments: [
+                    { file_name: 'report.wav', mime_type: 'audio/wav' },
+                    { file_name: 'scan.bmp', mime_type: 'image/bmp' },
+                ],
+            },
+            '[llumiverse] Tool result attachments the model cannot read were replaced with a note',
+        );
+    });
+
+    it('turns a tool result holding only an unreadable attachment into its note', async () => {
+        const prompt = await formatClaudePrompt(
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'toolu_fetch',
+                    content: '',
+                    files: [fileSource('clip.mp4', 'video/mp4')],
+                },
+            ],
+            { model: 'claude-sonnet-5-5' },
+        );
+        expect(prompt.messages[0].content).toEqual([
+            {
+                type: 'tool_result',
+                tool_use_id: 'toolu_fetch',
+                content: [
+                    {
+                        type: 'text',
+                        text: '[attachment omitted: clip.mp4 (video/mp4) — claude-sonnet-5-5 cannot read this type in a tool result]',
+                    },
+                ],
+            },
+        ]);
+    });
+
+    it('keeps PDF and text attachments of a tool result', async () => {
+        const prompt = await formatClaudePrompt(
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'toolu_fetch',
+                    content: 'ok',
+                    files: [fileSource('a.pdf', 'application/pdf'), fileSource('a.csv', 'text/csv', [104, 105])],
+                },
+            ],
+            { model: 'claude-sonnet-5-5' },
+        );
+        expect(prompt.messages[0].content).toEqual([
+            {
+                type: 'tool_result',
+                tool_use_id: 'toolu_fetch',
+                content: [
+                    { type: 'text', text: 'ok' },
+                    {
+                        title: 'a.pdf',
+                        type: 'document',
+                        source: { type: 'base64', data: 'AQID', media_type: 'application/pdf' },
+                    },
+                    {
+                        title: 'a.csv',
+                        type: 'document',
+                        source: { type: 'text', data: 'hi', media_type: 'text/plain' },
+                    },
+                ],
+            },
+        ]);
+    });
+
+    it('still refuses audio uploaded by the user, who can act on the error', async () => {
+        await expect(
+            formatClaudePrompt(
+                [{ role: PromptRole.user, content: 'Listen', files: [fileSource('memo.wav', 'audio/wav')] }],
+                { model: 'claude-sonnet-5-5' },
+            ),
+        ).rejects.toThrow('Claude does not support audio input');
+    });
+});
