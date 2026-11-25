@@ -12,11 +12,11 @@ import {
     type ExecutionResponse,
     getConversationMeta,
     incrementConversationTurn,
+    isCompleteCutOffToolArguments,
     isCutOffFinishReason,
     isDedicatedInferenceModel,
     isDeepSeekVersionGte,
     isEmbeddingModel,
-    isJSONObjectText,
     type JSONObject,
     type JSONSchema,
     type Logger,
@@ -1125,12 +1125,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const message = choice?.message;
         const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
         // A cut-off stop may have ended inside the last tool call. Leave that call out when its arguments are not
-        // complete JSON, rather than return it with invented empty input; earlier calls had finished. The streaming
-        // path does the same.
+        // complete JSON or are an empty object, rather than return it with invented empty input; earlier calls had
+        // finished. The streaming path does the same.
         const cutOff = isCutOffFinishReason(choice?.finish_reason);
         const lastCall = cutOff ? message?.tool_calls?.at(-1) : undefined;
         const tool_use = parseOpenAIChatCompletionsToolCalls(
-            lastCall?.type === 'function' && !isJSONObjectText(lastCall.function?.arguments)
+            lastCall?.type === 'function' && !isCompleteCutOffToolArguments(lastCall.function?.arguments)
                 ? message?.tool_calls?.slice(0, -1)
                 : message?.tool_calls,
         );

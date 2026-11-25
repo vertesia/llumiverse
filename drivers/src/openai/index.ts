@@ -17,6 +17,7 @@ import {
     getConversationMeta,
     getOpenAIPromptCacheTtls,
     incrementConversationTurn,
+    isCompleteCutOffToolArguments,
     isCutOffFinishReason,
     isDedicatedInferenceModel,
     isJSONObjectText,
@@ -1186,14 +1187,14 @@ function extractOpenAIResponsesCompletion(
     });
 
     // An incomplete response may have stopped inside its last function call. Leave that call out when its arguments
-    // are not complete JSON, rather than return it with invented empty input; earlier calls had finished. The
-    // streaming path does the same.
+    // are not complete JSON or are an empty object, rather than return it with invented empty input; earlier calls
+    // had finished. The streaming path does the same.
     const lastCall =
         result.status === 'incomplete'
             ? result.output.filter((item) => item.type === 'function_call').at(-1)
             : undefined;
     const tools = collectTools(
-        lastCall && !isJSONObjectText(lastCall.arguments)
+        lastCall && !isCompleteCutOffToolArguments(lastCall.arguments)
             ? result.output.filter((item) => item !== lastCall)
             : result.output,
     );
