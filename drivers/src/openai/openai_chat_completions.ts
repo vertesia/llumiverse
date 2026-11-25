@@ -840,15 +840,18 @@ function omitUnreadableToolImages(
 
 /** The caption a turn without tools puts before the parts of a tool result with images. */
 const FLATTENED_TOOL_RESULT_CAPTION = /^Tool result \S+:$/;
-/** A tool call a turn without tools wrote as text: one whole line, after the message's own text. */
-const FLATTENED_TOOL_CALL = /^\[Tool call: [^\n]*\(.*\)\]$/;
+/**
+ * The tool calls a turn without tools wrote as text, after the message's own text: each `[Tool call: name(args)]`
+ * starts a line, and its arguments are kept as given (newlines included, cut after 500 characters).
+ */
+const FLATTENED_TOOL_CALLS = /^\[Tool call: [^\n(]*\([\s\S]*\)\]$/;
 
 /**
  * A tool result with images that a turn without tools turned into a user message before
  * {@link OpenAIChatCompletionsMessage.tool_result_call_id} was recorded. Such a history keeps no other trace of its
  * origin, so the whole shape that turn wrote is required, not a caption alone: the message starts with the
  * `Tool result <id>:` caption, and goes back, over the other tool results of its call, to an assistant message that
- * ends with its tool calls written as whole `[Tool call: name(args)]` lines. Callers apply it to stored messages
+ * ends with its tool calls written as `[Tool call: name(args)]`, each starting a line. Callers apply it to stored messages
  * only: that shape is never written any more, so a message of the new prompt (a user's upload) is never one.
  */
 function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[], index: number): boolean {
@@ -868,11 +871,10 @@ function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[],
     return false;
 }
 
-/** Text whose lines, from the first `[Tool call: …]` line on, are all tool calls, and that has at least one. */
+/** Text that, from the first line starting with `[Tool call: ` to its end, holds only tool calls written as text. */
 function endsWithFlattenedToolCalls(text: string): boolean {
-    const lines = text.split('\n');
-    const first = lines.findIndex((line) => FLATTENED_TOOL_CALL.test(line));
-    return first >= 0 && lines.slice(first).every((line) => FLATTENED_TOOL_CALL.test(line));
+    const calls = /(?:^|\n)(\[Tool call: [\s\S]*)$/.exec(text)?.[1];
+    return calls !== undefined && FLATTENED_TOOL_CALLS.test(calls);
 }
 
 function isFlattenedToolResultWithImages(message: OpenAIChatCompletionsMessage): boolean {
