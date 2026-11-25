@@ -472,3 +472,62 @@ function modelDeployment(name: string, modelName: string, capabilities: Record<s
         capabilities,
     };
 }
+
+describe('AzureFoundryDriver tool result attachments', () => {
+    function file(name: string, mimeType: string) {
+        return {
+            name,
+            mime_type: mimeType,
+            getStream: vi.fn(
+                async () =>
+                    new ReadableStream({
+                        start(controller) {
+                            controller.enqueue(new Uint8Array([1, 2, 3]));
+                            controller.close();
+                        },
+                    }),
+            ),
+            getURL: vi.fn(),
+            getURI: vi.fn(),
+        };
+    }
+
+    it.each([
+        ['Meta', 'llama-deployment::Llama-4-Maverick-17B-128E-Instruct-FP8', 'a note in place of', false],
+        ['OpenAI', 'gpt-deployment::gpt-5', 'an input_file for', true],
+    ])('a %s deployment gets %s a tool-result PDF', async (publisher, model, _label, keepsPdf) => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: publisher })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        try {
+            const prompt = await driver.createPrompt(
+                [
+                    {
+                        role: PromptRole.tool,
+                        tool_use_id: 'call_1',
+                        content: 'Fetched',
+                        files: [file('report.pdf', 'application/pdf'), file('chart.png', 'image/png')],
+                    },
+                ],
+                { model },
+            );
+
+            const output = (prompt as Array<{ type?: string; output?: unknown }>).find(
+                (item) => item.type === 'function_call_output',
+            )?.output as Array<{ type: string; text?: string }>;
+            expect(output.map((part) => part.type)).toEqual(
+                keepsPdf ? ['input_text', 'input_file', 'input_image'] : ['input_text', 'input_image'],
+            );
+            const text = output.find((part) => part.type === 'input_text')?.text;
+            if (keepsPdf) {
+                expect(text).toBe('Fetched');
+            } else {
+                expect(text).toContain('[attachment omitted: report.pdf (application/pdf)');
+            }
+        } finally {
+            driver.destroy();
+        }
+    });
+});

@@ -29,13 +29,14 @@ export function splitToolResultFiles(
     files: DataSource[] | undefined,
     api: ToolResultAttachmentApi,
     model: string,
-    logger?: WarnLogger,
+    options: { logger?: WarnLogger; provider?: string } = {},
 ): ToolResultFiles {
+    const { logger, provider } = options;
     const kept: DataSource[] = [];
     const notes: string[] = [];
     const omitted: Array<{ file_name: string; mime_type: string }> = [];
     for (const file of files ?? []) {
-        if (isToolResultAttachmentSupported(api, file.mime_type, model)) {
+        if (isToolResultAttachmentSupported(api, file.mime_type, model, provider)) {
             kept.push(file);
         } else {
             notes.push(formatOmittedAttachmentNote(file, model));
@@ -44,7 +45,7 @@ export function splitToolResultFiles(
     }
     if (omitted.length > 0) {
         logger?.warn(
-            { model, api, omitted_attachments: omitted },
+            { model, api, provider, omitted_attachments: omitted },
             '[llumiverse] Tool result attachments the model cannot read were replaced with a note',
         );
     }

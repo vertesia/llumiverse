@@ -348,14 +348,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const explicitImageSource =
             (options.model.includes('::') || this.options.sourceModel !== undefined) &&
             this.isImageModel(options.model);
-        if (
-            !explicitImageSource &&
-            (await this.getDeploymentProtocol(options.model, signal, options.httpTimeout)) === 'messages'
-        ) {
+        const protocol = explicitImageSource
+            ? undefined
+            : await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
+        if (protocol === 'messages') {
             return formatClaudePrompt(segments, { ...options, model: this.getSourceModel(options.model) }, this.logger);
         }
         return formatOpenAILikeMultimodalPrompt(segments, {
             ...options,
+            logger: this.logger,
+            provider: this.provider,
+            // A Chat Completions deployment gets this prompt converted to Chat Completions, which takes no PDF.
+            toolResultApi: protocol === 'chat_completions' ? 'openai_chat' : 'openai_responses',
             imageGeneration: this.isImageModel(options.model),
             result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
         });

@@ -81,6 +81,23 @@ describe('isToolResultAttachmentSupported', () => {
     });
 });
 
+describe('isToolResultAttachmentSupported with a provider', () => {
+    it.each([
+        ['openai_chat', 'openai.gpt-oss-120b', 'bedrock_mantle', false],
+        ['openai_chat', 'gpt-oss-120b', 'groq', false],
+        ['openai_responses', 'openai.gpt-5.6', 'bedrock_mantle', true],
+        ['openai_chat', 'llama-5', 'groq', true],
+        // A model the capability tables do not know keeps its images.
+        ['openai_chat', 'totally-new-model', 'openrouter', true],
+    ] as const)('%s image for %s on %s → %s', (api, model, provider, expected) => {
+        expect(isToolResultAttachmentSupported(api, 'image/png', model, provider)).toBe(expected);
+    });
+
+    it('keeps images when no provider is given', () => {
+        expect(isToolResultAttachmentSupported('openai_chat', 'image/png', 'openai.gpt-oss-120b')).toBe(true);
+    });
+});
+
 describe('toolResultAttachmentApi', () => {
     it.each([
         ['anthropic', 'claude-sonnet-5-5', 'claude'],

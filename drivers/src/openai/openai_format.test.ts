@@ -218,3 +218,48 @@ describe('formatOpenAILikeMultimodalPrompt - tool result attachments the model c
         ]);
     });
 });
+
+describe('convertResponseItemsToChatMessages - tool outputs with attachments', () => {
+    it('keeps the tool message text-only and moves its images after the consecutive tool messages', () => {
+        const image = 'data:image/png;base64,AQID';
+        const messages = convertResponseItemsToChatMessages([
+            {
+                type: 'function_call_output',
+                call_id: 'call_1',
+                output: [
+                    { type: 'input_text', text: 'Fetched' },
+                    { type: 'input_image', image_url: image, detail: 'auto' },
+                    { type: 'input_file', filename: 'report.pdf', file_data: 'data:application/pdf;base64,AQID' },
+                ],
+            },
+            { type: 'function_call_output', call_id: 'call_2', output: 'done' },
+            { role: 'user', content: 'Next' },
+        ]);
+
+        expect(messages).toEqual([
+            { role: 'tool', tool_call_id: 'call_1', content: 'Fetched\n[Image 1 attached below]' },
+            { role: 'tool', tool_call_id: 'call_2', content: 'done' },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Image 1 from tool result call_1:' },
+                    { type: 'image_url', image_url: { url: image } },
+                ],
+            },
+            { role: 'user', content: 'Next' },
+        ]);
+    });
+});
+
+describe('formatOpenAILikeMultimodalPrompt - models known to take no image', () => {
+    it('replaces a tool-result image with a note for a text-only model of the provider', async () => {
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([source('chart.png', 'image/png')], 'Fetched')],
+            { model: 'openai.gpt-oss-120b', provider: 'bedrock_mantle', toolResultApi: 'openai_chat' } as never,
+        );
+
+        expect(functionCallOutput(prompt).output).toBe(
+            'Fetched\n[attachment omitted: chart.png (image/png) — openai.gpt-oss-120b cannot read this type in a tool result]',
+        );
+    });
+});

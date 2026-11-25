@@ -965,6 +965,12 @@ function getOpenAIChatDriverProvider(driver: unknown): string {
 }
 
 /** The driver's logger, when the protocol runs on a driver that has one. */
+function providerOf(driver: unknown): string | undefined {
+    if (typeof driver !== 'object' || driver === null || !('provider' in driver)) return undefined;
+    const provider = (driver as { provider?: unknown }).provider;
+    return typeof provider === 'string' ? provider : undefined;
+}
+
 function loggerOf(driver: unknown): Pick<Logger, 'warn'> | undefined {
     if (typeof driver !== 'object' || driver === null || !('logger' in driver)) return undefined;
     const logger = (driver as { logger?: Pick<Logger, 'warn'> }).logger;
@@ -1026,12 +1032,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 const content: OpenAIChatCompletionsContentPart[] = [];
                 // A stored tool result is replayed on every later turn: an attachment the API cannot take (audio,
                 // bmp, …) becomes a note in the tool output instead of failing or vanishing.
-                const { files, notes } = splitToolResultFiles(
-                    segment.files,
-                    'openai_chat',
-                    _options.model,
-                    loggerOf(driver),
-                );
+                const { files, notes } = splitToolResultFiles(segment.files, 'openai_chat', _options.model, {
+                    logger: loggerOf(driver),
+                    provider: providerOf(driver),
+                });
                 content.push({ type: 'text', text: withAttachmentNotes(segment.content, notes) });
 
                 if (files.length > 0) {

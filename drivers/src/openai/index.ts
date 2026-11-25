@@ -1248,6 +1248,7 @@ export function formatOpenAIResponsesPrompt(
     return formatOpenAILikeMultimodalPrompt(segments, {
         ...options,
         logger: context.logger,
+        provider: context.provider,
         result_schema: resultSchema,
         resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
     });

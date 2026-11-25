@@ -1071,7 +1071,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // what it just asked for.
                 // `parts` takes only inlineData/fileData, and a type the model cannot read fails or is misread on
                 // every later turn: such an attachment becomes a note in `response.output` instead.
-                const { files, notes } = splitToolResultFiles(msg.files, 'gemini', modelName, driver?.logger);
+                const { files, notes } = splitToolResultFiles(msg.files, 'gemini', modelName, {
+                    logger: driver?.logger,
+                });
                 const responseParts: FunctionResponsePart[] = [];
                 for (const f of files) {
                     responseParts.push(await fileToMediaPart(f, inlineBudget));

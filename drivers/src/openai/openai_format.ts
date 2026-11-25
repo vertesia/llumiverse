@@ -146,7 +146,10 @@ export async function formatOpenAILikeMultimodalPrompt(
         // becomes a note in the tool output instead of failing or vanishing.
         const { files, notes } =
             msg.role === PromptRole.tool
-                ? splitToolResultFiles(msg.files, 'openai_responses', opts.model, opts.logger)
+                ? splitToolResultFiles(msg.files, opts.toolResultApi ?? 'openai_responses', opts.model, {
+                      logger: opts.logger,
+                      provider: opts.provider,
+                  })
                 : { files: msg.files, notes: [] };
 
         //generate the parts based on PromptSegment
@@ -271,6 +274,13 @@ export async function formatOpenAILikeMultimodalPrompt(
 export interface OpenAIPromptFormatterOptions {
     /** Receives a warning when a tool result attachment is replaced with a note. */
     logger?: { warn: (data: Record<string, unknown>, message: string) => void };
+    /** The driver's provider, so tool-result images are not sent to a model known to take none. */
+    provider?: string;
+    /**
+     * The API whose tool-result attachment rules apply: Chat Completions when the prompt is converted to it
+     * (`convertResponseItemsToChatMessages`). Responses by default.
+     */
+    toolResultApi?: 'openai_responses' | 'openai_chat';
     imageGeneration?: boolean;
     multimodal?: boolean;
     useToolForFormatting?: boolean;
@@ -293,8 +303,17 @@ type ChatCompletionContentPart = OpenAI.Chat.Completions.ChatCompletionContentPa
  */
 export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): ChatCompletionMessageParam[] {
     const messages: ChatCompletionMessageParam[] = [];
+    // A Chat Completions tool message carries text only: the images of consecutive tool outputs follow them in one
+    // user message, so every tool call is still answered right after the assistant message that made it.
+    let toolImages: ChatCompletionContentPart[] = [];
+    const flushToolImages = () => {
+        if (toolImages.length === 0) return;
+        messages.push({ role: 'user', content: toolImages });
+        toolImages = [];
+    };
 
     for (const item of items) {
+        if (!('type' in item && item.type === 'function_call_output')) flushToolImages();
         // Handle EasyInputMessage (has role and content)
         if ('role' in item && 'content' in item) {
             const msg = item as EasyInputMessage;
@@ -378,7 +397,10 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
             messages.push({
                 role: 'tool',
                 tool_call_id: output.call_id ?? output.id ?? '',
-                content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
+                content:
+                    typeof output.output === 'string'
+                        ? output.output
+                        : toolOutputText(output.output, output.call_id, toolImages),
             });
             continue;
         }
@@ -403,5 +425,34 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
         }
     }
 
+    flushToolImages();
     return messages;
+}
+
+/**
+ * The text of a Responses tool output given as content parts, with each image replaced by a reference and moved to
+ * `images`. Any other part (a file the caller should have filtered out) is dropped: serializing it as JSON would put
+ * its base64 bytes in the tool message.
+ */
+function toolOutputText(
+    parts: OpenAI.Responses.ResponseInputItem.FunctionCallOutput['output'],
+    callId: string,
+    images: ChatCompletionContentPart[],
+): string {
+    if (!Array.isArray(parts)) return JSON.stringify(parts);
+    const text: string[] = [];
+    let imageIndex = 0;
+    for (const part of parts) {
+        if (part.type === 'input_text') {
+            text.push(part.text);
+        } else if (part.type === 'input_image' && part.image_url) {
+            imageIndex++;
+            images.push(
+                { type: 'text', text: `Image ${imageIndex} from tool result ${callId}:` },
+                { type: 'image_url', image_url: { url: part.image_url } },
+            );
+            text.push(`[Image ${imageIndex} attached below]`);
+        }
+    }
+    return text.join('\n');
 }

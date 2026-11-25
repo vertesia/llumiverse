@@ -1,5 +1,7 @@
+import { getModelCapabilities } from '../capability.js';
 import { getBedrockMantleProtocol } from '../options/bedrock_mantle.js';
 import { getGeminiModelVersion, parseGeminiVersion } from '../options/version-parsing.js';
+import type { Providers } from '../types.js';
 
 /**
  * Which attachments a tool result may carry to the model, per provider API.
@@ -62,11 +64,29 @@ function geminiReadsFunctionResponseParts(model: string): boolean {
     return !parsed || parsed.major >= 3;
 }
 
-/** Whether `api` can read an attachment of this MIME type in a tool result sent to `model`. */
+/**
+ * Whether a model is known to take no image input on `provider`. A model the capability tables do not know is assumed
+ * to take images, so a new model is not cut off from them.
+ */
+function isKnownTextOnlyModel(model: string, provider: string | undefined): boolean {
+    if (!provider) return false;
+    try {
+        return getModelCapabilities(model, provider as Providers).input.image === false;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Whether `api` can read an attachment of this MIME type in a tool result sent to `model`. With `provider`, an image
+ * is also refused on the OpenAI APIs when the capability tables know the model takes no image input (gpt-oss, for
+ * example); the Claude and Gemini families all take images.
+ */
 export function isToolResultAttachmentSupported(
     api: ToolResultAttachmentApi,
     mimeType: string | undefined,
     model: string,
+    provider?: string,
 ): boolean {
     const type = normalizeAttachmentMimeType(mimeType);
     if (!type) return false;
@@ -82,10 +102,12 @@ export function isToolResultAttachmentSupported(
                     isTextAttachmentMimeType(type))
             );
         case 'openai_responses':
-            return COMMON_IMAGE_TYPES.has(type) || type === 'application/pdf' || type.startsWith('text/');
+            if (COMMON_IMAGE_TYPES.has(type)) return !isKnownTextOnlyModel(model, provider);
+            return type === 'application/pdf' || type.startsWith('text/');
         case 'openai_chat':
             // A tool message carries text only: the driver moves each image into the user message that follows it.
-            return COMMON_IMAGE_TYPES.has(type) || type.startsWith('text/');
+            if (COMMON_IMAGE_TYPES.has(type)) return !isKnownTextOnlyModel(model, provider);
+            return type.startsWith('text/');
     }
 }
 

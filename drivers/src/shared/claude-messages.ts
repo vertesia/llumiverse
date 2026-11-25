@@ -720,7 +720,7 @@ export async function formatClaudePrompt(
             }
             // A stored tool result is replayed on every later turn: an attachment Claude rejects (audio, bmp, …)
             // becomes a note instead of failing the request.
-            const { files, notes } = splitToolResultFiles(segment.files, 'claude', options.model, logger);
+            const { files, notes } = splitToolResultFiles(segment.files, 'claude', options.model, { logger });
             const text = withAttachmentNotes(segment.content, notes);
             const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
             if (text) {
