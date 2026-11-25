@@ -1608,4 +1608,62 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
         // The stored conversation keeps the image.
         expect(conversation.messages[1].content).toContainEqual(image);
     });
+
+    function gptOssProtocol() {
+        return new TestOpenAIChatCompletionsProtocol({
+            id: 'chat_1',
+            object: 'chat.completion',
+            created: 0,
+            model: 'gpt-oss-120b',
+            choices: [
+                { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop', logprobs: null },
+            ],
+        } as unknown as OpenAIChatCompletionsResponse);
+    }
+
+    async function sentMessages(conversation: unknown) {
+        const protocol = gptOssProtocol();
+        await protocol.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages: [] } as unknown as OpenAIChatCompletionsPrompt,
+            { model: 'gpt-oss-120b', conversation, tools: [{ name: 'fetch', input_schema: { type: 'object' } }] },
+        );
+        return JSON.stringify(protocol.payloads[0].messages);
+    }
+
+    it('filters a tool image a turn without tools saved before its origin was recorded', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        // The shape a turn without tools stored: tool calls and results written as text, no tool_result_call_id.
+        const conversation = {
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'user', content: 'chart it' },
+                { role: 'assistant', content: '[Tool call: fetch({})]\n[Tool call: fetch({"page":2})]' },
+                { role: 'user', content: '[Tool result: page 1 has no chart]' },
+                {
+                    role: 'user',
+                    content: [{ type: 'text', text: 'Tool result call_2:' }, { type: 'text', text: 'Fetched' }, image],
+                },
+            ],
+        };
+        const sent = await sentMessages(conversation);
+
+        expect(sent).not.toContain('base64');
+        expect(sent).toContain('gpt-oss-120b cannot read this type in a tool result');
+        expect(conversation.messages[3].content).toContainEqual(image);
+    });
+
+    it('keeps a user upload whose caption looks like a flattened tool result', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: 'Send me the chart.' },
+                { role: 'user', content: 'Here it is' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
 });

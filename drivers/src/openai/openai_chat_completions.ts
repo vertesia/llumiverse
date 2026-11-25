@@ -808,8 +808,11 @@ function omitUnreadableToolImages(
     logger: Logger | undefined,
 ): OpenAIChatCompletionsMessage[] {
     let omitted = 0;
-    const result = messages.map((message) => {
-        const fromTool = message.role === 'tool' || message.tool_result_call_id !== undefined;
+    const result = messages.map((message, index) => {
+        const fromTool =
+            message.role === 'tool' ||
+            message.tool_result_call_id !== undefined ||
+            isUnmarkedFlattenedToolResult(messages, index);
         if (!fromTool || !Array.isArray(message.content)) return message;
         let changed = false;
         const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
@@ -831,6 +834,44 @@ function omitUnreadableToolImages(
         );
     }
     return result;
+}
+
+/** The caption a turn without tools puts before the parts of a tool result with images. */
+const FLATTENED_TOOL_RESULT_CAPTION = /^Tool result \S+:$/;
+const FLATTENED_TOOL_CALL = '[Tool call: ';
+
+/**
+ * A tool result with images that a turn without tools turned into a user message before
+ * {@link OpenAIChatCompletionsMessage.tool_result_call_id} was recorded. Such a history keeps no other trace of its
+ * origin, so the whole shape that turn wrote is required, not a caption alone: the message starts with the
+ * `Tool result <id>:` caption, and goes back, over the other tool results of its call, to an assistant message whose
+ * tool calls were written as `[Tool call: …]` text. A user's own upload sits after a user turn, so it never matches.
+ */
+function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[], index: number): boolean {
+    if (!isFlattenedToolResultWithImages(messages[index])) return false;
+    for (let i = index - 1; i >= 0; i--) {
+        const previous = messages[i];
+        if (previous.role === 'assistant') {
+            return (
+                !previous.tool_calls?.length &&
+                typeof previous.content === 'string' &&
+                previous.content.includes(FLATTENED_TOOL_CALL)
+            );
+        }
+        const textResult = typeof previous.content === 'string' && previous.content.startsWith('[Tool result: ');
+        if (previous.role !== 'user' || !(textResult || isFlattenedToolResultWithImages(previous))) return false;
+    }
+    return false;
+}
+
+function isFlattenedToolResultWithImages(message: OpenAIChatCompletionsMessage): boolean {
+    if (message.role !== 'user' || !Array.isArray(message.content)) return false;
+    const [caption, ...parts] = message.content;
+    return (
+        caption?.type === 'text' &&
+        FLATTENED_TOOL_RESULT_CAPTION.test(caption.text) &&
+        parts.some((part) => part.type === 'image_url')
+    );
 }
 
 export function convertToOpenAIChatCompletionsMessages(
