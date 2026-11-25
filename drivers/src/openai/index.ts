@@ -70,7 +70,7 @@ import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { logOpenAIInputTransformations } from './input-transformations.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
-import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
+import { formatOpenAILikeMultimodalPrompt, getImageMasks, omitUnreadableToolOutputParts } from './openai_format.js';
 import { openAIResponsesContextManagement, trimOpenAIConversationToCompaction } from './responses-compaction.js';
 import { formatOpenAISchema } from './schema.js';
 import { mapOpenAIImageStreamUsage, mapOpenAIImageUsage, mapOpenAIResponsesUsage } from './usage.js';
@@ -1236,7 +1236,8 @@ function extractOpenAIResponsesCompletion(
 
 /** The prompt for a Responses text request: the prompt copy of the result schema only where it is needed. */
 export function formatOpenAIResponsesPrompt(
-    context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>,
+    context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'> &
+        Partial<Pick<OpenAIResponsesContext, 'logger'>>,
     segments: PromptSegment[],
     options: PromptOptions,
 ): Promise<ResponseInputItem[]> {
@@ -1247,6 +1248,8 @@ export function formatOpenAIResponsesPrompt(
     const resultSchema = nativeSchemaOnly && !schemaSuffix ? undefined : options.result_schema;
     return formatOpenAILikeMultimodalPrompt(segments, {
         ...options,
+        logger: context.logger,
+        provider: context.provider,
         result_schema: resultSchema,
         resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
     });
@@ -1655,15 +1658,25 @@ export function sanitizeResponsesToolCallNames(
  * `multi_tool_use.parallel`, dotted) would fail every later turn with a 400, so the request carries a safe
  * name. The stored conversation keeps the emitted name.
  */
+/**
+ * The request input for a conversation. Only the request copy changes; the conversation returned to the caller keeps
+ * what it holds, so a later turn on another model still has every attachment:
+ * - tool calls get names the endpoint accepts;
+ * - tool outputs keep only the attachments the model can read, judged on the source model of a deployment alias
+ *   ({@link omitUnreadableToolOutputParts}).
+ */
 function replayableResponsesInput(
     conversation: ResponseInputItem[],
     options: ExecutionOptions,
-    driver: Pick<OpenAIResponsesContext, 'logger' | 'provider'>,
+    driver: Pick<OpenAIResponsesContext, 'logger' | 'provider' | 'getPromptCacheSourceModel'>,
 ): ResponseInputItem[] {
     const names = new ReplayedToolNames(options.tools);
     const input = sanitizeResponsesToolCallNames(conversation, names);
     names.logRewrites(driver.logger, { provider: driver.provider, model: options.model });
-    return input;
+    return omitUnreadableToolOutputParts(input, 'openai_responses', driver.getPromptCacheSourceModel(options.model), {
+        provider: driver.provider,
+        logger: driver.logger,
+    });
 }
 
 export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {

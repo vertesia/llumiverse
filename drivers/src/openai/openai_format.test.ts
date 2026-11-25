@@ -10,7 +10,11 @@
 
 import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
-import { convertResponseItemsToChatMessages, formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import {
+    convertResponseItemsToChatMessages,
+    formatOpenAILikeMultimodalPrompt,
+    omitUnreadableToolOutputParts,
+} from './openai_format.js';
 
 const OPTIONS = { model: 'gpt-5.6' } as unknown as PromptOptions;
 
@@ -83,7 +87,7 @@ describe('formatOpenAILikeMultimodalPrompt - tool result attachments', () => {
         ]);
     });
 
-    it('skips a media type the API cannot carry instead of mislabelling it as an image', async () => {
+    it('notes a media type the API cannot carry instead of mislabelling it as an image', async () => {
         // The tool-result attachment resolver lets audio/video through; sending either as
         // `input_image` is rejected by the API, which would fail the whole turn.
         const prompt = await formatOpenAILikeMultimodalPrompt(
@@ -91,7 +95,10 @@ describe('formatOpenAILikeMultimodalPrompt - tool result attachments', () => {
             OPTIONS,
         );
 
-        expect(functionCallOutput(prompt).output).toBe('{"artifact_path":"out/plot.png"}');
+        expect(functionCallOutput(prompt).output).toBe(
+            '{"artifact_path":"out/plot.png"}\n' +
+                '[attachment omitted: clip.mp4 (video/mp4) — gpt-5.6 cannot read this type in a tool result]',
+        );
     });
 
     it('still requires a tool_use_id', async () => {
@@ -163,5 +170,149 @@ describe('Responses tool output conversion to Chat Completions', () => {
         expect(
             convertResponseItemsToChatMessages([{ type: 'function_call_output', call_id: 'call_1', output: 'result' }]),
         ).toEqual([{ role: 'tool', tool_call_id: 'call_1', content: 'result' }]);
+    });
+});
+
+describe('formatOpenAILikeMultimodalPrompt - tool result attachments the model cannot read', () => {
+    it('replaces audio and bmp with a note in the tool output and keeps the png', async () => {
+        const audio = source('report.wav', 'audio/wav');
+        const bitmap = source('scan.bmp', 'image/bmp');
+        const warn = vi.fn();
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([audio, bitmap, source('chart.png', 'image/png')], 'Fetched')],
+            { ...OPTIONS, logger: { warn } },
+        );
+
+        expect(functionCallOutput(prompt).output).toEqual([
+            {
+                type: 'input_text',
+                text:
+                    'Fetched\n' +
+                    '[attachment omitted: report.wav (audio/wav) — gpt-5.6 cannot read this type in a tool result]\n' +
+                    '[attachment omitted: scan.bmp (image/bmp) — gpt-5.6 cannot read this type in a tool result]',
+            },
+            { type: 'input_image', image_url: 'data:image/png;base64,AQID', detail: 'auto' },
+        ]);
+        expect(audio.getStream).not.toHaveBeenCalled();
+        expect(bitmap.getStream).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the plain-string output when every attachment was omitted', async () => {
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([source('clip.mp4', 'video/mp4')], 'Fetched')],
+            OPTIONS,
+        );
+
+        expect(functionCallOutput(prompt).output).toBe(
+            'Fetched\n[attachment omitted: clip.mp4 (video/mp4) — gpt-5.6 cannot read this type in a tool result]',
+        );
+    });
+
+    it('sends a kept attachment whose MIME type needs normalising instead of dropping it', async () => {
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([source('chart.png', 'IMAGE/PNG'), source('report.pdf', 'application/pdf; charset=utf-8')])],
+            OPTIONS,
+        );
+
+        expect(functionCallOutput(prompt).output).toEqual([
+            { type: 'input_text', text: '{"artifact_path":"out/plot.png"}' },
+            { type: 'input_image', image_url: 'data:image/png;base64,AQID', detail: 'auto' },
+            { type: 'input_file', filename: 'report.pdf', file_data: 'data:application/pdf;base64,AQID' },
+        ]);
+    });
+});
+
+describe('convertResponseItemsToChatMessages - tool outputs with attachments', () => {
+    it('keeps the tool message text-only and moves its images after the consecutive tool messages', () => {
+        const image = 'data:image/png;base64,AQID';
+        const messages = convertResponseItemsToChatMessages([
+            {
+                type: 'function_call_output',
+                call_id: 'call_1',
+                output: [
+                    { type: 'input_text', text: 'Fetched' },
+                    { type: 'input_image', image_url: image, detail: 'auto' },
+                    { type: 'input_file', filename: 'report.pdf', file_data: 'data:application/pdf;base64,AQID' },
+                ],
+            },
+            { type: 'function_call_output', call_id: 'call_2', output: 'done' },
+            { role: 'user', content: 'Next' },
+        ]);
+
+        expect(messages).toEqual([
+            {
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content:
+                    'Fetched\n[Image 1 attached below]\n[attachment omitted: report.pdf (application/pdf) — a Chat Completions tool result cannot carry a file]',
+            },
+            { role: 'tool', tool_call_id: 'call_2', content: 'done' },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Image 1 from tool result call_1:' },
+                    { type: 'image_url', image_url: { url: image } },
+                ],
+            },
+            { role: 'user', content: 'Next' },
+        ]);
+    });
+});
+
+describe('formatOpenAILikeMultimodalPrompt - models known to take no image', () => {
+    it('replaces a tool-result image with a note for a text-only model of the provider', async () => {
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([source('chart.png', 'image/png')], 'Fetched')],
+            { model: 'openai.gpt-oss-120b', provider: 'bedrock_mantle', toolResultApi: 'openai_chat' } as never,
+        );
+
+        expect(functionCallOutput(prompt).output).toBe(
+            'Fetched\n[attachment omitted: chart.png (image/png) — openai.gpt-oss-120b cannot read this type in a tool result]',
+        );
+    });
+});
+
+describe('omitUnreadableToolOutputParts', () => {
+    const image = { type: 'input_image' as const, image_url: 'data:image/png;base64,AQID', detail: 'auto' as const };
+    const pdf = { type: 'input_file' as const, filename: 'report.pdf', file_data: 'data:application/pdf;base64,AQID' };
+    const items = [
+        {
+            type: 'function_call_output' as const,
+            call_id: 'call_1',
+            output: [{ type: 'input_text' as const, text: 'Fetched' }, image, pdf],
+        },
+    ];
+
+    it('replaces stored parts the model cannot read and leaves the input untouched', () => {
+        const warn = vi.fn();
+        const result = omitUnreadableToolOutputParts(items, 'openai_chat', 'gpt-oss-120b', {
+            provider: 'groq',
+            logger: { warn },
+        });
+
+        expect(result).toEqual([
+            {
+                type: 'function_call_output',
+                call_id: 'call_1',
+                output: [
+                    { type: 'input_text', text: 'Fetched' },
+                    {
+                        type: 'input_text',
+                        text:
+                            '[attachment omitted: image (image/png) — gpt-oss-120b cannot read this type in a tool result]\n' +
+                            '[attachment omitted: report.pdf (application/pdf) — gpt-oss-120b cannot read this type in a tool result]',
+                    },
+                ],
+            },
+        ]);
+        expect(items[0].output).toHaveLength(3);
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('returns the same items when every part is readable', () => {
+        expect(omitUnreadableToolOutputParts(items, 'openai_responses', 'gpt-5.6', { provider: 'openai' })[0]).toBe(
+            items[0],
+        );
     });
 });

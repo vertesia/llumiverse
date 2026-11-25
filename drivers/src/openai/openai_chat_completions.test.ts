@@ -1,8 +1,16 @@
-import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
+import {
+    type CompletionChunkObject,
+    type DataSource,
+    type ExecutionOptions,
+    getConversationMeta,
+    PromptRole,
+    type PromptSegment,
+} from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import {
+    convertToOpenAIChatCompletionsMessages,
     normalizeOpenAIChatCompletionsResponse,
     normalizeOpenAIChatCompletionsStream,
     type OpenAIChatCompletionsPayload,
@@ -1477,5 +1485,285 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 additionalProperties: false,
             },
         });
+    });
+});
+
+describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot read', () => {
+    function source(name: string, mimeType: string): DataSource {
+        return {
+            name,
+            mime_type: mimeType,
+            getStream: vi.fn().mockResolvedValue(
+                new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new Uint8Array([1, 2, 3]));
+                        controller.close();
+                    },
+                }),
+            ),
+            getURL: vi.fn(),
+            getURI: vi.fn(),
+        };
+    }
+
+    it('replaces audio and bmp with a note in the tool message and keeps the png', async () => {
+        const audio = source('report.wav', 'audio/wav');
+        const prompt = await new TestOpenAIChatCompletionsProtocol().createPrompt(
+            undefined,
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'call_1',
+                    content: 'Fetched',
+                    files: [audio, source('scan.bmp', 'image/bmp'), source('chart.png', 'image/png')],
+                } as PromptSegment,
+            ],
+            { model: 'llama-5' },
+        );
+
+        expect(prompt.messages).toContainEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: [
+                {
+                    type: 'text',
+                    text:
+                        'Fetched\n' +
+                        '[attachment omitted: report.wav (audio/wav) — llama-5 cannot read this type in a tool result]\n' +
+                        '[attachment omitted: scan.bmp (image/bmp) — llama-5 cannot read this type in a tool result]',
+                },
+                { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID', detail: 'auto' } },
+            ],
+        });
+        expect(audio.getStream).not.toHaveBeenCalled();
+    });
+
+    it('keeps an IMAGE/PNG and sends it in the user message after the text-only tool message', async () => {
+        const prompt = await new TestOpenAIChatCompletionsProtocol().createPrompt(
+            undefined,
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'call_1',
+                    content: 'Fetched',
+                    files: [source('chart.png', 'IMAGE/PNG')],
+                } as PromptSegment,
+            ],
+            { model: 'llama-5' },
+        );
+
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID', detail: 'auto' } };
+        expect(prompt.messages).toContainEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: [{ type: 'text', text: 'Fetched' }, image],
+        });
+        // The request carries text only in the tool role: the image moves to a following user message.
+        expect(convertToOpenAIChatCompletionsMessages(prompt.messages)).toEqual([
+            { role: 'tool', tool_call_id: 'call_1', content: 'Fetched\n[Image 1 attached below]' },
+            { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result call_1:' }, image] },
+        ]);
+    });
+
+    it('replaces a stored tool image with a note when the conversation moves to a text-only model', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID', detail: 'auto' } };
+        const conversation = {
+            _is_openai_chat_completions: true,
+            messages: [
+                {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'fetch', arguments: '{}' } }],
+                },
+                { role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'Fetched' }, image] },
+            ],
+        };
+        const protocol = new TestOpenAIChatCompletionsProtocol({
+            id: 'chat_1',
+            object: 'chat.completion',
+            created: 0,
+            model: 'gpt-oss-120b',
+            choices: [
+                { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop', logprobs: null },
+            ],
+        } as unknown as OpenAIChatCompletionsResponse);
+        await protocol.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages: [] } as unknown as OpenAIChatCompletionsPrompt,
+            {
+                model: 'gpt-oss-120b',
+                conversation,
+                tools: [{ name: 'fetch', input_schema: { type: 'object' } }],
+            },
+        );
+        const payload = protocol.payloads[0];
+
+        expect(payload.messages).toContainEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content:
+                'Fetched\n[attachment omitted: image (image/png) — gpt-oss-120b cannot read this type in a tool result]',
+        });
+        expect(JSON.stringify(payload.messages)).not.toContain('base64');
+        // The stored conversation keeps the image.
+        expect(conversation.messages[1].content).toContainEqual(image);
+    });
+
+    function gptOssProtocol() {
+        return new TestOpenAIChatCompletionsProtocol({
+            id: 'chat_1',
+            object: 'chat.completion',
+            created: 0,
+            model: 'gpt-oss-120b',
+            choices: [
+                { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop', logprobs: null },
+            ],
+        } as unknown as OpenAIChatCompletionsResponse);
+    }
+
+    async function sentMessages(conversation: unknown, messages: unknown[] = []) {
+        const protocol = gptOssProtocol();
+        await protocol.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages } as unknown as OpenAIChatCompletionsPrompt,
+            { model: 'gpt-oss-120b', conversation, tools: [{ name: 'fetch', input_schema: { type: 'object' } }] },
+        );
+        return JSON.stringify(protocol.payloads[0].messages);
+    }
+
+    it('filters a tool image a turn without tools saved before its origin was recorded', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        // The shape a turn without tools stored: tool calls and results written as text, no tool_result_call_id.
+        const conversation = {
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'user', content: 'chart it' },
+                { role: 'assistant', content: '[Tool call: fetch({})]\n[Tool call: fetch({"page":2})]' },
+                { role: 'user', content: '[Tool result: page 1 has no chart]' },
+                {
+                    role: 'user',
+                    content: [{ type: 'text', text: 'Tool result call_2:' }, { type: 'text', text: 'Fetched' }, image],
+                },
+            ],
+        };
+        const sent = await sentMessages(conversation);
+
+        expect(sent).not.toContain('base64');
+        expect(sent).toContain('gpt-oss-120b cannot read this type in a tool result');
+        expect(conversation.messages[3].content).toContainEqual(image);
+    });
+
+    it('keeps a user upload whose caption looks like a flattened tool result', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: 'Send me the chart.' },
+                { role: 'user', content: 'Here it is' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
+
+    it('keeps a new upload captioned like a tool result after an assistant that quotes a tool call', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages(
+            {
+                _is_openai_chat_completions: true,
+                messages: [{ role: 'assistant', content: 'Reply with the output of\n[Tool call: fetch({})]' }],
+            },
+            [{ role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] }],
+        );
+
+        expect(sent).toContain('base64');
+    });
+
+    it('keeps a stored upload after an assistant that quotes a tool call inside its text', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: 'Paste what [Tool call: fetch({})] returned.' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
+
+    it('filters a stored tool image whose flattened tool call kept pretty-printed arguments', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const args = JSON.stringify({ url: 'https://example.com/chart', page: 2 }, null, 2);
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'user', content: 'chart it' },
+                { role: 'assistant', content: `Fetching it.\n[Tool call: fetch(${args})]` },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result call_1:' }, image] },
+            ],
+        });
+
+        expect(sent).not.toContain('base64');
+    });
+
+    it.each([
+        [
+            'prose between two quoted tool calls',
+            '[Tool call: fetch({})] is one way, and\n[Tool call: fetch({"page":2})]',
+        ],
+        ['a quoted tool call followed by prose', '[Tool call: fetch({})]\nthen send me the result (as an image)]'],
+    ])('keeps a stored upload after an assistant message with %s', async (_label, content) => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
+
+    it('filters a stored tool image after flattened calls with truncated and empty arguments', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const truncated = `${JSON.stringify({ q: 'x'.repeat(600) }).slice(0, 500)}...`;
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: `[Tool call: search(${truncated})]\n[Tool call: fetch()]` },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result call_2:' }, image] },
+            ],
+        });
+
+        expect(sent).not.toContain('base64');
+    });
+
+    it('filters a stored tool image after a flattened call whose arguments were malformed JSON', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: '[Tool call: fetch({"page":2,})]' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result call_1:' }, image] },
+            ],
+        });
+
+        expect(sent).not.toContain('base64');
+    });
+
+    it('keeps a stored upload after a quoted tool call followed by prose on the same line', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: 'Try\n[Tool call: fetch({})] and send the output (as a picture)]' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
     });
 });

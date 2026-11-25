@@ -132,9 +132,18 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     readonly provider = Providers.azure_foundry;
     readonly service: OpenAI;
 
-    constructor(service: OpenAI, options: DriverOptions) {
+    constructor(
+        service: OpenAI,
+        options: DriverOptions,
+        private readonly resolveSourceModel: (model: string) => string,
+    ) {
         super({ ...options, resultSchemaMode: 'response_format', toolSchemaMode: 'compatible' });
         this.service = service;
+    }
+
+    /** The model the tool-result attachment rules judge: the source model behind the deployment name. */
+    getAttachmentModel(model: string): string {
+        return this.resolveSourceModel(model);
     }
 
     async _postChatCompletion(
@@ -212,6 +221,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
     private readonly deploymentProtocols = new Map<string, FoundryProtocol>();
     private readonly deploymentSources = new Map<string, string>();
+    /**
+     * The source model of each deployment a Chat Completions request named, read from its composite ID
+     * (`deployment::model`) or the deployment metadata. The Chat Completions adapter sees only the deployment name,
+     * which in API-key mode has no metadata to read the source model back from.
+     */
+    private readonly chatSourceModels = new Map<string, string>();
     private anthropicClient?: AnthropicFoundry;
     private keyFetch?: typeof fetch;
     private readonly endpoint: string;
@@ -348,14 +363,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const explicitImageSource =
             (options.model.includes('::') || this.options.sourceModel !== undefined) &&
             this.isImageModel(options.model);
-        if (
-            !explicitImageSource &&
-            (await this.getDeploymentProtocol(options.model, signal, options.httpTimeout)) === 'messages'
-        ) {
+        const protocol = explicitImageSource
+            ? undefined
+            : await this.getDeploymentProtocol(options.model, signal, options.httpTimeout);
+        if (protocol === 'messages') {
             return formatClaudePrompt(segments, { ...options, model: this.getSourceModel(options.model) }, this.logger);
         }
         return formatOpenAILikeMultimodalPrompt(segments, {
             ...options,
+            logger: this.logger,
+            provider: this.provider,
+            // A bare deployment name says nothing of the model's inputs: judge attachments on the model behind it.
+            attachmentModel: this.getSourceModel(options.model),
+            // A Chat Completions deployment gets this prompt converted to Chat Completions, which takes no PDF.
+            toolResultApi: protocol === 'chat_completions' ? 'openai_chat' : 'openai_responses',
             imageGeneration: this.isImageModel(options.model),
             result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
         });
@@ -447,6 +468,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         this.inferenceProtocolDriver ??= new AzureFoundryInferenceProtocolDriver(
             this.getInferenceClient(),
             this.options,
+            (deploymentName) => this.chatSourceModels.get(deploymentName) ?? this.getSourceModel(deploymentName),
         );
         return this.inferenceProtocolDriver;
     }
@@ -496,11 +518,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return this.getOpenAIProtocolDriver().requestTextCompletion(requireOpenAIPrompt(prompt), options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
-        return this.getInferenceProtocolDriver().requestTextCompletion(
-            chatPrompt,
-            toAzureFoundryChatOptions(options, deploymentName),
-            signal,
-        );
+        return this.getInferenceProtocolDriver().requestTextCompletion(chatPrompt, this.toChatOptions(options), signal);
     }
 
     async requestTextCompletionStream(
@@ -535,7 +553,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
         return this.getInferenceProtocolDriver().requestTextCompletionStream(
             chatPrompt,
-            toAzureFoundryChatOptions(options, deploymentName),
+            this.toChatOptions(options),
             signal,
         );
     }
@@ -570,10 +588,17 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt)),
                 result,
                 toolUse,
-                toAzureFoundryChatOptions(options, deploymentName),
+                this.toChatOptions(options),
             );
         }
         return undefined;
+    }
+
+    /** The options of a Chat Completions request, which names the deployment; its source model is kept beside it. */
+    private toChatOptions(options: ExecutionOptions): ExecutionOptions {
+        const { deploymentName } = parseAzureFoundryModelId(options.model);
+        this.chatSourceModels.set(deploymentName, this.getSourceModel(options.model));
+        return toAzureFoundryChatOptions(options, deploymentName);
     }
 
     validateResult(result: Completion, options: ExecutionOptions): void {
@@ -584,10 +609,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return;
         }
         if (protocol === 'chat_completions') {
-            this.getInferenceProtocolDriver().validateResult(
-                result,
-                toAzureFoundryChatOptions(options, deploymentName),
-            );
+            this.getInferenceProtocolDriver().validateResult(result, this.toChatOptions(options));
             return;
         }
         super.validateResult(result, options);
@@ -794,8 +816,27 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 }
 
+/**
+ * The Chat Completions form of a Responses prompt or stored conversation. It is also what a Chat Completions turn
+ * stores, so attachments are not filtered here. A tool image stays in its tool message, as a Chat Completions turn
+ * stores it: the request moves it to a user message and filters it for the model of each turn, and a user's own
+ * image is never taken for one.
+ */
 function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatCompletionsPrompt {
-    const messages = convertResponseItemsToChatMessages(items).map((message) => {
+    const toolImages = new Map<string, OpenAIChatCompletionsContentPart[]>();
+    const withoutToolImages = items.map((item): ResponseInputItem => {
+        if (item.type !== 'function_call_output' || !item.call_id || !Array.isArray(item.output)) return item;
+        const images = item.output.flatMap((part): OpenAIChatCompletionsContentPart[] =>
+            part.type === 'input_image' && part.image_url
+                ? [{ type: 'image_url', image_url: { url: part.image_url } }]
+                : [],
+        );
+        if (images.length === 0) return item;
+        toolImages.set(item.call_id, images);
+        const output = item.output.filter((part) => part.type !== 'input_image');
+        return { ...item, output: output.length > 0 ? output : '' };
+    });
+    const messages = convertResponseItemsToChatMessages(withoutToolImages).map((message) => {
         switch (message.role) {
             case 'assistant':
                 return {
@@ -809,12 +850,15 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
                         toolCall.type === 'function' ? [toolCall] : [],
                     ),
                 };
-            case 'tool':
+            case 'tool': {
+                const text = typeof message.content === 'string' ? message.content : '';
+                const images = toolImages.get(message.tool_call_id);
                 return {
                     role: message.role,
-                    content: typeof message.content === 'string' ? message.content : '',
+                    content: images ? [...(text ? [{ type: 'text' as const, text }] : []), ...images] : text,
                     tool_call_id: message.tool_call_id,
                 };
+            }
             case 'user':
                 return {
                     role: message.role,

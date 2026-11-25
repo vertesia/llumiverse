@@ -10,6 +10,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    formatOmittedAttachmentNote,
     getConversationMeta,
     incrementConversationTurn,
     isCompleteCutOffToolArguments,
@@ -17,10 +18,12 @@ import {
     isDedicatedInferenceModel,
     isDeepSeekVersionGte,
     isEmbeddingModel,
+    isToolResultAttachmentSupported,
     type JSONObject,
     type JSONSchema,
     type Logger,
     ModelType,
+    normalizeAttachmentMimeType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -50,6 +53,7 @@ import {
     mergeResultSchemaInstructions,
 } from '../shared/result-schema-instruction.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
+import { splitToolResultFiles, withAttachmentNotes } from '../shared/tool-result-attachments.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { NON_OPENAI_ACCOUNT_OPTIONS, OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -89,6 +93,12 @@ export type OpenAIChatCompletionsMessage = {
     /** Provider-native reasoning fields used by OpenAI-compatible APIs for replay. */
     reasoning_content?: string | null;
     reasoning?: string | null;
+    /**
+     * Set on a user message that holds a tool result with images, written when a turn without tools turns tool
+     * messages into text, so its images are still judged as tool-result attachments. Stored only: the request never
+     * carries it.
+     */
+    tool_result_call_id?: string;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -515,6 +525,7 @@ export function convertOpenAIChatCompletionsToolMessagesToText(
                 return {
                     role: 'user',
                     content: [{ type: 'text', text: `Tool result ${message.tool_call_id}:` }, ...message.content],
+                    tool_result_call_id: message.tool_call_id,
                 };
             }
             const output = extractOpenAIChatCompletionsContentText(message.content) || 'No output';
@@ -771,11 +782,134 @@ function replayableChatMessages(
     options: ExecutionOptions,
     provider: string,
     logger: Logger | undefined,
+    attachmentModel: string = options.model,
 ): OpenAIChatCompletionsRequestMessage[] {
     const names = new ReplayedToolNames(options.tools);
-    const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(messages), names);
+    const stored = new Set(storedOpenAIChatCompletionsMessages(options.conversation as OpenAIChatCompletionsPrompt));
+    const readable = omitUnreadableToolImages(messages, stored, attachmentModel, provider, logger);
+    const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(readable), names);
     names.logRewrites(logger, { provider, model: options.model });
     return converted;
+}
+
+/**
+ * A copy of `messages` in which each tool-result image keeps its place only if the model can read it, with a note in
+ * place of each other one. A tool-result image is an image part of a tool message, or of the user message a turn
+ * without tools wrote in its place ({@link OpenAIChatCompletionsMessage.tool_result_call_id}): the origin is recorded,
+ * never read from a caption, so a user's own image is never taken for one. New
+ * tool results are filtered when the prompt is built; this covers the stored conversation, whose tool results were
+ * filtered for the model of the turn that added them, so switching a conversation to a text-only model (gpt-oss, for
+ * example) would otherwise replay its images on every turn. Only the request copy changes. Exception to "preserve
+ * supplied input", logged with the type only.
+ */
+function omitUnreadableToolImages(
+    messages: OpenAIChatCompletionsMessage[],
+    stored: ReadonlySet<OpenAIChatCompletionsMessage>,
+    model: string,
+    provider: string,
+    logger: Logger | undefined,
+): OpenAIChatCompletionsMessage[] {
+    let omitted = 0;
+    const result = messages.map((message, index) => {
+        const fromTool =
+            message.role === 'tool' ||
+            message.tool_result_call_id !== undefined ||
+            (stored.has(message) && isUnmarkedFlattenedToolResult(messages, index));
+        if (!fromTool || !Array.isArray(message.content)) return message;
+        let changed = false;
+        const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
+            if (part.type !== 'image_url') return part;
+            const mimeType = /^data:([^;,]*)/i.exec(part.image_url.url)?.[1];
+            if (mimeType === undefined || isToolResultAttachmentSupported('openai_chat', mimeType, model, provider)) {
+                return part;
+            }
+            changed = true;
+            omitted++;
+            return { type: 'text', text: formatOmittedAttachmentNote({ name: 'image', mime_type: mimeType }, model) };
+        });
+        return changed ? { ...message, content } : message;
+    });
+    if (omitted > 0) {
+        logger?.warn(
+            { model, provider, omitted_images: omitted },
+            '[llumiverse] Replayed tool result images the model cannot read were replaced with a note',
+        );
+    }
+    return result;
+}
+
+/** The caption a turn without tools puts before the parts of a tool result with images. */
+const FLATTENED_TOOL_RESULT_CAPTION = /^Tool result \S+:$/;
+
+/**
+ * A turn without tools wrote each tool call as `[Tool call: name(args)]`, one after another on new lines after the
+ * message's own text, with the arguments as the model sent them: newlines kept, malformed JSON included, cut to 500
+ * characters plus `...`.
+ */
+const FLATTENED_TOOL_CALL_START = '[Tool call: ';
+const FLATTENED_TOOL_CALL_END = ')]';
+
+/**
+ * A tool result with images that a turn without tools turned into a user message before
+ * {@link OpenAIChatCompletionsMessage.tool_result_call_id} was recorded. Such a history keeps no other trace of its
+ * origin, so the whole shape that turn wrote is required, not a caption alone: the message starts with the
+ * `Tool result <id>:` caption, and goes back, over the other tool results of its call, to an assistant message that
+ * ends with its tool calls written as `[Tool call: name(args)]`, each starting a line. Callers apply it to stored
+ * messages only: that shape is never written any more, so a message of the new prompt (a user's upload) is never one.
+ */
+function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[], index: number): boolean {
+    if (!isFlattenedToolResultWithImages(messages[index])) return false;
+    for (let i = index - 1; i >= 0; i--) {
+        const previous = messages[i];
+        if (previous.role === 'assistant') {
+            return (
+                !previous.tool_calls?.length &&
+                typeof previous.content === 'string' &&
+                endsWithFlattenedToolCalls(previous.content)
+            );
+        }
+        const textResult = typeof previous.content === 'string' && previous.content.startsWith('[Tool result: ');
+        if (previous.role !== 'user' || !(textResult || isFlattenedToolResultWithImages(previous))) return false;
+    }
+    return false;
+}
+
+/** Text that, from the first line starting with `[Tool call: ` to its end, holds only tool calls written as text. */
+function endsWithFlattenedToolCalls(text: string): boolean {
+    if (text.startsWith(FLATTENED_TOOL_CALL_START)) return isFlattenedToolCallSequence(text, 0);
+    const line = text.indexOf(`\n${FLATTENED_TOOL_CALL_START}`);
+    return line >= 0 && isFlattenedToolCallSequence(text, line + 1);
+}
+
+/**
+ * Whether `text` holds, from `position` to its end, only `[Tool call: name(args)]` entries joined by newlines. A call
+ * ends at the first `)]` after its name, so the arguments can be anything but that, malformed JSON and newlines
+ * included; what follows must be the next call or the end. Prose after a quoted call is neither, so it never passes.
+ * Arguments that contain `)]` are not recognised, and their images are sent as before.
+ */
+function isFlattenedToolCallSequence(text: string, position: number): boolean {
+    let cursor = position;
+    while (true) {
+        if (!text.startsWith(FLATTENED_TOOL_CALL_START, cursor)) return false;
+        const open = text.indexOf('(', cursor + FLATTENED_TOOL_CALL_START.length);
+        if (open < 0 || text.slice(cursor, open).includes('\n')) return false;
+        const end = text.indexOf(FLATTENED_TOOL_CALL_END, open + 1);
+        if (end < 0) return false;
+        const next = end + FLATTENED_TOOL_CALL_END.length;
+        if (next === text.length) return true;
+        if (text[next] !== '\n') return false;
+        cursor = next + 1;
+    }
+}
+
+function isFlattenedToolResultWithImages(message: OpenAIChatCompletionsMessage): boolean {
+    if (message.role !== 'user' || !Array.isArray(message.content)) return false;
+    const [caption, ...parts] = message.content;
+    return (
+        caption?.type === 'text' &&
+        FLATTENED_TOOL_RESULT_CAPTION.test(caption.text) &&
+        parts.some((part) => part.type === 'image_url')
+    );
 }
 
 export function convertToOpenAIChatCompletionsMessages(
@@ -955,11 +1089,33 @@ function getOpenAIChatDriverLogger(driver: unknown): Logger | undefined {
     return (driver as { logger?: Logger } | undefined)?.logger;
 }
 
+/**
+ * The model the tool-result attachment rules judge: what the driver's `getAttachmentModel` returns (the source model of
+ * a deployment name, for example), else the requested model.
+ */
+function getOpenAIChatDriverAttachmentModel(driver: unknown, model: string): string {
+    const resolve = (driver as { getAttachmentModel?: unknown } | undefined)?.getAttachmentModel;
+    return typeof resolve === 'function' ? (resolve as (model: string) => string).call(driver, model) : model;
+}
+
 function getOpenAIChatDriverProvider(driver: unknown): string {
     if (typeof driver !== 'object' || driver === null || !('provider' in driver)) {
         return Providers.openai_compatible;
     }
     return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
+}
+
+/** The driver's logger, when the protocol runs on a driver that has one. */
+function providerOf(driver: unknown): string | undefined {
+    if (typeof driver !== 'object' || driver === null || !('provider' in driver)) return undefined;
+    const provider = (driver as { provider?: unknown }).provider;
+    return typeof provider === 'string' ? provider : undefined;
+}
+
+function loggerOf(driver: unknown): Pick<Logger, 'warn'> | undefined {
+    if (typeof driver !== 'object' || driver === null || !('logger' in driver)) return undefined;
+    const logger = (driver as { logger?: Pick<Logger, 'warn'> }).logger;
+    return typeof logger?.warn === 'function' ? logger : undefined;
 }
 
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
@@ -970,7 +1126,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     }
 
     async createPrompt(
-        _driver: DriverT,
+        driver: DriverT,
         segments: PromptSegment[],
         _options: PromptOptions,
     ): Promise<OpenAIChatCompletionsPrompt> {
@@ -1015,26 +1171,29 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 }
 
                 const content: OpenAIChatCompletionsContentPart[] = [];
+                // A stored tool result is replayed on every later turn: an attachment the API cannot take (audio,
+                // bmp, …) becomes a note in the tool output instead of failing or vanishing.
+                const { files, notes } = splitToolResultFiles(segment.files, 'openai_chat', _options.model, {
+                    logger: loggerOf(driver),
+                    provider: providerOf(driver),
+                });
+                content.push({ type: 'text', text: withAttachmentNotes(segment.content, notes) });
 
-                if (segment.content) {
-                    content.push({ type: 'text', text: segment.content });
-                } else {
-                    content.push({ type: 'text', text: '' });
-                }
-
-                if (segment.files && segment.files.length > 0) {
-                    for (const file of segment.files) {
-                        if (file.mime_type?.startsWith('image/')) {
+                if (files.length > 0) {
+                    for (const file of files) {
+                        // The same normalised type the filter judged, so a kept `IMAGE/PNG` is not dropped here.
+                        const mimeType = normalizeAttachmentMimeType(file.mime_type);
+                        if (mimeType.startsWith('image/')) {
                             const stream = await file.getStream();
                             const data = await readStreamAsBase64(stream);
                             content.push({
                                 type: 'image_url',
                                 image_url: {
-                                    url: `data:${file.mime_type};base64,${data}`,
+                                    url: `data:${mimeType};base64,${data}`,
                                     detail: 'auto',
                                 },
                             });
-                        } else if (file.mime_type?.startsWith('text/')) {
+                        } else if (mimeType.startsWith('text/')) {
                             const fileStream = await file.getStream();
                             const fileContent = await streamToString(fileStream);
                             content.push({ type: 'text', text: `\n\nFile content:\n${fileContent}` });
@@ -1118,7 +1277,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const provider = getOpenAIChatDriverProvider(driver);
         const logger = getOpenAIChatDriverLogger(driver);
-        const payload = this.buildPayload(conversation, options, false, provider, logger);
+        const payload = this.buildPayload(
+            conversation,
+            options,
+            false,
+            provider,
+            logger,
+            getOpenAIChatDriverAttachmentModel(driver, options.model),
+        );
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1213,7 +1379,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const provider = getOpenAIChatDriverProvider(driver);
         const logger = getOpenAIChatDriverLogger(driver);
-        const payload = this.buildPayload(conversation, options, true, provider, logger);
+        const payload = this.buildPayload(
+            conversation,
+            options,
+            true,
+            provider,
+            logger,
+            getOpenAIChatDriverAttachmentModel(driver, options.model),
+        );
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
@@ -1335,6 +1508,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         stream: boolean,
         provider: string = Providers.openai_compatible,
         logger?: Logger,
+        attachmentModel: string = options.model,
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -1349,7 +1523,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
-            messages: replayableChatMessages(conversation.messages, options, provider, logger),
+            messages: replayableChatMessages(conversation.messages, options, provider, logger, attachmentModel),
             // Compatibility exception: some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,

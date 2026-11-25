@@ -1,11 +1,20 @@
 // This file is used by multiple drivers
 // to format prompts in a way that is compatible with OpenAI's API.
 
-import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
+import {
+    type DataSource,
+    formatOmittedAttachmentNote,
+    isToolResultAttachmentSupported,
+    normalizeAttachmentMimeType,
+    type PromptOptions,
+    PromptRole,
+    type PromptSegment,
+} from '@llumiverse/common';
 import { readStreamAsBase64, readStreamAsString } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 import { buildResultSchemaInstruction } from '../shared/result-schema-instruction.js';
+import { splitToolResultFiles, withAttachmentNotes } from '../shared/tool-result-attachments.js';
 
 // Types for Response API
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -32,7 +41,8 @@ function isResponseInputContent(value: unknown): value is ResponseInputContent {
  * the API rejects outright. A missing mime type keeps the historical image assumption.
  */
 async function fileToInputContent(file: DataSource): Promise<ResponseInputContent | undefined> {
-    const mimeType = file.mime_type;
+    // The same normalised type the tool-result filter judged, so a kept `IMAGE/PNG` is not dropped here.
+    const mimeType = normalizeAttachmentMimeType(file.mime_type);
     if (!mimeType || mimeType.startsWith('image/')) {
         return {
             type: 'input_image',
@@ -134,9 +144,24 @@ export async function formatOpenAILikeMultimodalPrompt(
     for (const msg of segments) {
         const fileParts: ResponseInputContent[] = [];
 
+        // A stored tool result is replayed on every later turn: an attachment the API cannot take (audio, bmp, …)
+        // becomes a note in the tool output instead of failing or vanishing.
+        const { files, notes } =
+            msg.role === PromptRole.tool
+                ? splitToolResultFiles(
+                      msg.files,
+                      opts.toolResultApi ?? 'openai_responses',
+                      opts.attachmentModel ?? opts.model,
+                      {
+                          logger: opts.logger,
+                          provider: opts.provider,
+                      },
+                  )
+                : { files: msg.files, notes: [] };
+
         //generate the parts based on PromptSegment
-        if (msg.files) {
-            for (const file of msg.files) {
+        if (files) {
+            for (const file of files) {
                 const part = await fileToInputContent(file);
                 if (part) fileParts.push(part);
             }
@@ -206,6 +231,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             // conversation, a document it fetched. The Responses API accepts those as a content
             // list on `function_call_output`; emitting only the text would silently drop them and
             // leave the model insisting it cannot see the image it just asked for.
+            const text = withAttachmentNotes(msg.content, notes);
             const toolOutputMsg: OpenAI.Responses.ResponseInputItem.FunctionCallOutput = {
                 type: 'function_call_output',
                 call_id: msg.tool_use_id,
@@ -213,8 +239,8 @@ export async function formatOpenAILikeMultimodalPrompt(
                 // keep the plain-string form the API has always accepted.
                 output:
                     fileParts.length > 0
-                        ? [...(msg.content ? [{ type: 'input_text' as const, text: msg.content }] : []), ...fileParts]
-                        : msg.content || '',
+                        ? [...(text ? [{ type: 'input_text' as const, text }] : []), ...fileParts]
+                        : text,
             };
             others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative) {
@@ -252,7 +278,80 @@ export async function formatOpenAILikeMultimodalPrompt(
     return result;
 }
 
+const DATA_URL_MIME = /^data:([^;,]*)/i;
+
+/** The MIME type a `data:` URL names, or undefined for any other URL or file reference. */
+function dataUrlMimeType(url: string | null | undefined): string | undefined {
+    return url ? DATA_URL_MIME.exec(url)?.[1] : undefined;
+}
+
+/**
+ * A copy of `items` in which each tool output keeps only the attachments `api` can read for `model`, with a note in
+ * place of each other one. New tool results are filtered when the prompt is built; this runs on the request copy of
+ * the stored conversation, whose tool outputs were filtered for the model of the turn that added them, or by an
+ * earlier release. The stored conversation is not changed.
+ *
+ * Exception to "preserve supplied input", as for new tool results: a replayed attachment the model cannot read fails
+ * every later turn. The omission is logged with the file name and type only.
+ */
+export function omitUnreadableToolOutputParts(
+    items: ResponseInputItem[],
+    api: 'openai_responses' | 'openai_chat',
+    model: string,
+    options: { provider?: string; logger?: OpenAIPromptFormatterOptions['logger'] } = {},
+): ResponseInputItem[] {
+    const omitted: Array<{ file_name: string; mime_type: string }> = [];
+    const result = items.map((item) => {
+        if (!('type' in item) || item.type !== 'function_call_output' || !Array.isArray(item.output)) return item;
+        const kept: typeof item.output = [];
+        const notes: string[] = [];
+        for (const part of item.output) {
+            const attachment =
+                part.type === 'input_image'
+                    ? { name: 'image', mime_type: dataUrlMimeType(part.image_url) }
+                    : part.type === 'input_file'
+                      ? { name: part.filename || 'file', mime_type: dataUrlMimeType(part.file_data) }
+                      : undefined;
+            // A part given by URL or file ID names no type: Responses fetches it itself; Chat Completions cannot.
+            const readable =
+                !attachment ||
+                (attachment.mime_type === undefined
+                    ? api === 'openai_responses'
+                    : isToolResultAttachmentSupported(api, attachment.mime_type, model, options.provider));
+            if (readable) {
+                kept.push(part);
+            } else if (attachment) {
+                notes.push(formatOmittedAttachmentNote(attachment, model));
+                omitted.push({
+                    file_name: attachment.name,
+                    mime_type: normalizeAttachmentMimeType(attachment.mime_type),
+                });
+            }
+        }
+        if (notes.length === 0) return item;
+        return { ...item, output: [...kept, { type: 'input_text' as const, text: notes.join('\n') }] };
+    });
+    if (omitted.length > 0) {
+        options.logger?.warn(
+            { model, api, provider: options.provider, omitted_attachments: omitted },
+            '[llumiverse] Replayed tool result attachments the model cannot read were replaced with a note',
+        );
+    }
+    return result;
+}
+
 export interface OpenAIPromptFormatterOptions {
+    /** Receives a warning when a tool result attachment is replaced with a note. */
+    logger?: { warn: (data: Record<string, unknown>, message: string) => void };
+    /** The driver's provider, so tool-result images are not sent to a model known to take none. */
+    provider?: string;
+    /**
+     * The API whose tool-result attachment rules apply: Chat Completions when the prompt is converted to it
+     * (`convertResponseItemsToChatMessages`). Responses by default.
+     */
+    toolResultApi?: 'openai_responses' | 'openai_chat';
+    /** The model the attachment rules judge when it differs from `model`, such as the source model of a deployment. */
+    attachmentModel?: string;
     imageGeneration?: boolean;
     multimodal?: boolean;
     useToolForFormatting?: boolean;
@@ -275,8 +374,17 @@ type ChatCompletionContentPart = OpenAI.Chat.Completions.ChatCompletionContentPa
  */
 export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): ChatCompletionMessageParam[] {
     const messages: ChatCompletionMessageParam[] = [];
+    // A Chat Completions tool message carries text only: the images of consecutive tool outputs follow them in one
+    // user message, so every tool call is still answered right after the assistant message that made it.
+    let toolImages: ChatCompletionContentPart[] = [];
+    const flushToolImages = () => {
+        if (toolImages.length === 0) return;
+        messages.push({ role: 'user', content: toolImages });
+        toolImages = [];
+    };
 
     for (const item of items) {
+        if (!('type' in item && item.type === 'function_call_output')) flushToolImages();
         // Handle EasyInputMessage (has role and content)
         if ('role' in item && 'content' in item) {
             const msg = item as EasyInputMessage;
@@ -360,7 +468,10 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
             messages.push({
                 role: 'tool',
                 tool_call_id: output.call_id ?? output.id ?? '',
-                content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
+                content:
+                    typeof output.output === 'string'
+                        ? output.output
+                        : toolOutputText(output.output, output.call_id, toolImages),
             });
             continue;
         }
@@ -385,5 +496,41 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
         }
     }
 
+    flushToolImages();
     return messages;
+}
+
+/**
+ * The text of a Responses tool output given as content parts, with each image replaced by a reference and moved to
+ * `images`. Any other part (a file, which Chat Completions cannot carry in a tool message) becomes a note: serializing
+ * it as JSON would put its base64 bytes in the tool message. Callers filter with
+ * {@link omitUnreadableToolOutputParts} first, so this is a fallback. The text is never empty, which several
+ * endpoints reject.
+ */
+function toolOutputText(
+    parts: OpenAI.Responses.ResponseInputItem.FunctionCallOutput['output'],
+    callId: string,
+    images: ChatCompletionContentPart[],
+): string {
+    if (!Array.isArray(parts)) return JSON.stringify(parts);
+    const text: string[] = [];
+    let imageIndex = 0;
+    for (const part of parts) {
+        if (part.type === 'input_text') {
+            text.push(part.text);
+        } else if (part.type === 'input_image' && part.image_url) {
+            imageIndex++;
+            images.push(
+                { type: 'text', text: `Image ${imageIndex} from tool result ${callId}:` },
+                { type: 'image_url', image_url: { url: part.image_url } },
+            );
+            text.push(`[Image ${imageIndex} attached below]`);
+        } else if (part.type === 'input_file') {
+            const mimeType = normalizeAttachmentMimeType(dataUrlMimeType(part.file_data)) || 'unknown type';
+            text.push(
+                `[attachment omitted: ${part.filename || 'file'} (${mimeType}) — a Chat Completions tool result cannot carry a file]`,
+            );
+        }
+    }
+    return text.join('\n') || 'No output';
 }

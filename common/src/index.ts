@@ -1,5 +1,6 @@
 export { isBedrockApplicationInferenceProfile } from './capability/bedrock-models.js';
 export * from './capability/model-lifecycle.js';
+export * from './capability/tool-result-attachments.js';
 export * from './capability.js';
 export * from './finish-reasons.js';
 export * from './model-directory.js';

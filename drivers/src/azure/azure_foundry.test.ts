@@ -472,3 +472,263 @@ function modelDeployment(name: string, modelName: string, capabilities: Record<s
         capabilities,
     };
 }
+
+describe('AzureFoundryDriver tool result attachments', () => {
+    function file(name: string, mimeType: string) {
+        return {
+            name,
+            mime_type: mimeType,
+            getStream: vi.fn(
+                async () =>
+                    new ReadableStream({
+                        start(controller) {
+                            controller.enqueue(new Uint8Array([1, 2, 3]));
+                            controller.close();
+                        },
+                    }),
+            ),
+            getURL: vi.fn(),
+            getURI: vi.fn(),
+        };
+    }
+
+    it.each([
+        ['Meta', 'llama-deployment::Llama-4-Maverick-17B-128E-Instruct-FP8', 'a note in place of', false],
+        ['OpenAI', 'gpt-deployment::gpt-5', 'an input_file for', true],
+    ])('a %s deployment gets %s a tool-result PDF', async (publisher, model, _label, keepsPdf) => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: publisher })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        try {
+            const prompt = await driver.createPrompt(
+                [
+                    {
+                        role: PromptRole.tool,
+                        tool_use_id: 'call_1',
+                        content: 'Fetched',
+                        files: [file('report.pdf', 'application/pdf'), file('chart.png', 'image/png')],
+                    },
+                ],
+                { model },
+            );
+
+            const output = (prompt as Array<{ type?: string; output?: unknown }>).find(
+                (item) => item.type === 'function_call_output',
+            )?.output as Array<{ type: string; text?: string }>;
+            expect(output.map((part) => part.type)).toEqual(
+                keepsPdf ? ['input_text', 'input_file', 'input_image'] : ['input_text', 'input_image'],
+            );
+            const text = output.find((part) => part.type === 'input_text')?.text;
+            if (keepsPdf) {
+                expect(text).toBe('Fetched');
+            } else {
+                expect(text).toContain('[attachment omitted: report.pdf (application/pdf)');
+            }
+        } finally {
+            driver.destroy();
+        }
+    });
+});
+
+describe('AzureFoundryDriver Chat Completions tool result replay', () => {
+    function chatDriver(auth: 'entra' | 'api_key' = 'entra') {
+        const driver =
+            auth === 'entra'
+                ? createDriver()
+                : new AzureFoundryDriver({ endpoint: 'https://foundry.example.test', apiKey: 'test-key' });
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'DeepSeek', modelName: 'DeepSeek-V3.2' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        const bodies: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            bodies.push(JSON.parse(String(init?.body)));
+            return new Response(
+                JSON.stringify({
+                    id: 'chat_1',
+                    object: 'chat.completion',
+                    created: 0,
+                    model: 'DeepSeek-V3.2',
+                    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+                }),
+                { headers: { 'content-type': 'application/json' } },
+            );
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        return { driver, bodies };
+    }
+
+    it('judges a bare deployment name on its source model and omits an image for a text-only model', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const options = {
+                model: 'customer-prod',
+                tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                conversation: [{ type: 'function_call', call_id: 'call_1', name: 'fetch', arguments: '{}' }],
+            };
+            const prompt = await driver.createPrompt(
+                [
+                    {
+                        role: PromptRole.tool,
+                        tool_use_id: 'call_1',
+                        content: 'Fetched',
+                        files: [
+                            {
+                                name: 'chart.png',
+                                mime_type: 'image/png',
+                                getStream: vi.fn(),
+                                getURL: vi.fn(),
+                                getURI: vi.fn(),
+                            },
+                        ],
+                    },
+                ],
+                options,
+            );
+            await driver.requestTextCompletion(prompt, options);
+
+            expect(bodies[0].messages.slice(1)).toEqual([
+                {
+                    role: 'tool',
+                    tool_call_id: 'call_1',
+                    content:
+                        'Fetched\n[attachment omitted: chart.png (image/png) — DeepSeek-V3.2 cannot read this type in a tool result]',
+                },
+            ]);
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('replays a stored PDF-only tool output as a note, never as empty content', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const options = {
+                model: 'customer-prod',
+                tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                conversation: [
+                    { type: 'function_call', call_id: 'call_1', name: 'fetch', arguments: '{}' },
+                    {
+                        type: 'function_call_output',
+                        call_id: 'call_1',
+                        output: [
+                            {
+                                type: 'input_file',
+                                filename: 'report.pdf',
+                                file_data: 'data:application/pdf;base64,AQID',
+                            },
+                        ],
+                    },
+                ],
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Summarise it' }], options);
+            await driver.requestTextCompletion(prompt, options);
+
+            expect(bodies[0].messages).toContainEqual({
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content:
+                    '[attachment omitted: report.pdf (application/pdf) — a Chat Completions tool result cannot carry a file]',
+            });
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    const toolImageConversation = (image: string) => [
+        { type: 'function_call', call_id: 'call_1', name: 'fetch', arguments: '{}' },
+        {
+            type: 'function_call_output',
+            call_id: 'call_1',
+            output: [
+                { type: 'input_text', text: 'Fetched' },
+                { type: 'input_image', image_url: image, detail: 'auto' },
+            ],
+        },
+    ];
+    const omittedImage = (model: string) => ({
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: `Fetched\n[attachment omitted: image (image/png) — ${model} cannot read this type in a tool result]`,
+    });
+
+    it.each([
+        ['an Entra deployment named by its bare name', 'entra', 'customer-prod'],
+        ['an API-key deployment named by its composite ID', 'api_key', 'customer-prod::DeepSeek-V3.2'],
+    ] as const)(
+        'filters a saved tool image for %s and keeps it in the returned conversation',
+        async (_label, auth, model) => {
+            const { driver, bodies } = chatDriver(auth);
+            try {
+                const image = 'data:image/png;base64,AQID';
+                const options = {
+                    model,
+                    tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                    conversation: toolImageConversation(image),
+                };
+                const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], options);
+                const completion = await driver.requestTextCompletion(prompt, options);
+
+                expect(JSON.stringify(bodies[0].messages)).not.toContain('base64');
+                expect(bodies[0].messages).toContainEqual(omittedImage('DeepSeek-V3.2'));
+                expect(JSON.stringify(completion.conversation)).toContain(image);
+
+                // The stored conversation keeps the image in its tool message, so the next turn filters it again.
+                const next = { ...options, conversation: completion.conversation };
+                const nextPrompt = await driver.createPrompt([{ role: PromptRole.user, content: 'And now?' }], next);
+                await driver.requestTextCompletion(nextPrompt, next);
+                expect(JSON.stringify(bodies[1].messages)).not.toContain('base64');
+                expect(bodies[1].messages).toContainEqual(omittedImage('DeepSeek-V3.2'));
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
+
+    it('filters a saved tool image on a turn without tools, and again once tools are back', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const image = 'data:image/png;base64,AQID';
+            const tools = [{ name: 'fetch', input_schema: { type: 'object' as const } }];
+            const withoutTools = { model: 'customer-prod', tools: [], conversation: toolImageConversation(image) };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], withoutTools);
+            const completion = await driver.requestTextCompletion(prompt, withoutTools);
+
+            expect(JSON.stringify(bodies[0].messages)).not.toContain('base64');
+            expect(JSON.stringify(bodies[0].messages)).not.toContain('tool_result_call_id');
+            expect(JSON.stringify(completion.conversation)).toContain(image);
+
+            const withTools = { model: 'customer-prod', tools, conversation: completion.conversation };
+            const next = await driver.createPrompt([{ role: PromptRole.user, content: 'And now?' }], withTools);
+            await driver.requestTextCompletion(next, withTools);
+            expect(JSON.stringify(bodies[1].messages)).not.toContain('base64');
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('never takes a user image after a tool-result caption for a tool image', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+            const options = {
+                model: 'customer-prod',
+                conversation: {
+                    _is_openai_chat_completions: true,
+                    messages: [
+                        { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result sample:' }, image] },
+                    ],
+                },
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], options);
+            await driver.requestTextCompletion(prompt, options);
+
+            expect(JSON.stringify(bodies[0].messages)).toContain(image.image_url.url);
+        } finally {
+            driver.destroy();
+        }
+    });
+});
