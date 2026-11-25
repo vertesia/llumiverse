@@ -70,6 +70,10 @@ describe('getModelLifecycleDates', () => {
         expect(getModelLifecycleDates('Phi-4', Providers.azure_foundry)).toEqual({ retirement_date: '2027-01-17' });
     });
 
+    it('resolves xAI models by ID', () => {
+        expect(getModelLifecycleDates('grok-build-0.1', Providers.xai)).toEqual({ retirement_date: '2026-11-19' });
+    });
+
     it('returns nothing for unknown models and providers without a curated table', () => {
         expect(getModelLifecycleDates('gemini-9-future', Providers.vertexai)).toBeUndefined();
         expect(getModelLifecycleDates('claude-sonnet-4-5-20250929', Providers.anthropic)).toBeUndefined();
