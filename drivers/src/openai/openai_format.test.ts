@@ -204,4 +204,17 @@ describe('formatOpenAILikeMultimodalPrompt - tool result attachments the model c
             'Fetched\n[attachment omitted: clip.mp4 (video/mp4) — gpt-5.6 cannot read this type in a tool result]',
         );
     });
+
+    it('sends a kept attachment whose MIME type needs normalising instead of dropping it', async () => {
+        const prompt = await formatOpenAILikeMultimodalPrompt(
+            [toolSegment([source('chart.png', 'IMAGE/PNG'), source('report.pdf', 'application/pdf; charset=utf-8')])],
+            OPTIONS,
+        );
+
+        expect(functionCallOutput(prompt).output).toEqual([
+            { type: 'input_text', text: '{"artifact_path":"out/plot.png"}' },
+            { type: 'input_image', image_url: 'data:image/png;base64,AQID', detail: 'auto' },
+            { type: 'input_file', filename: 'report.pdf', file_data: 'data:application/pdf;base64,AQID' },
+        ]);
+    });
 });

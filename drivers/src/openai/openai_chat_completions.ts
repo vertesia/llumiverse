@@ -21,6 +21,7 @@ import {
     type JSONSchema,
     type Logger,
     ModelType,
+    normalizeAttachmentMimeType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -1035,17 +1036,19 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
 
                 if (files.length > 0) {
                     for (const file of files) {
-                        if (file.mime_type?.startsWith('image/')) {
+                        // The same normalised type the filter judged, so a kept `IMAGE/PNG` is not dropped here.
+                        const mimeType = normalizeAttachmentMimeType(file.mime_type);
+                        if (mimeType.startsWith('image/')) {
                             const stream = await file.getStream();
                             const data = await readStreamAsBase64(stream);
                             content.push({
                                 type: 'image_url',
                                 image_url: {
-                                    url: `data:${file.mime_type};base64,${data}`,
+                                    url: `data:${mimeType};base64,${data}`,
                                     detail: 'auto',
                                 },
                             });
-                        } else if (file.mime_type?.startsWith('text/')) {
+                        } else if (mimeType.startsWith('text/')) {
                             const fileStream = await file.getStream();
                             const fileContent = await streamToString(fileStream);
                             content.push({ type: 'text', text: `\n\nFile content:\n${fileContent}` });

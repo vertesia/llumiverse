@@ -92,8 +92,22 @@ describe('toolResultAttachmentApi', () => {
         ['openai', 'gpt-5.6', 'openai_responses'],
         ['groq', 'llama-5', 'openai_chat'],
         ['mistralai', 'mistral-large', undefined],
+        ['bedrock_mantle', 'anthropic.claude-haiku-5-5', 'claude'],
+        ['bedrock_mantle', 'openai.gpt-5.6', 'openai_responses'],
+        ['bedrock_mantle', 'openai.gpt-oss-120b', 'openai_chat'],
+        ['bedrock_mantle', 'acme.unknown-1', undefined],
     ])('%s %s → %s', (provider, model, expected) => {
         expect(toolResultAttachmentApi(provider, model)).toBe(expected);
+    });
+
+    it('follows the openai_api of an OpenAI-compatible driver, Responses by default as in the factory', () => {
+        expect(toolResultAttachmentApi('openai_compatible', 'my-model')).toBe('openai_responses');
+        expect(toolResultAttachmentApi('openai_compatible', 'my-model', { openaiApi: 'responses' })).toBe(
+            'openai_responses',
+        );
+        expect(toolResultAttachmentApi('openai_compatible', 'my-model', { openaiApi: 'chat_completions' })).toBe(
+            'openai_chat',
+        );
     });
 });
 

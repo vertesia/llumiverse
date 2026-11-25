@@ -10,6 +10,7 @@ import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import {
+    convertToOpenAIChatCompletionsMessages,
     normalizeOpenAIChatCompletionsResponse,
     normalizeOpenAIChatCompletionsStream,
     type OpenAIChatCompletionsPayload,
@@ -1522,5 +1523,32 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
             ],
         });
         expect(audio.getStream).not.toHaveBeenCalled();
+    });
+
+    it('keeps an IMAGE/PNG and sends it in the user message after the text-only tool message', async () => {
+        const prompt = await new TestOpenAIChatCompletionsProtocol().createPrompt(
+            undefined,
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: 'call_1',
+                    content: 'Fetched',
+                    files: [source('chart.png', 'IMAGE/PNG')],
+                } as PromptSegment,
+            ],
+            { model: 'llama-5' },
+        );
+
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID', detail: 'auto' } };
+        expect(prompt.messages).toContainEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: [{ type: 'text', text: 'Fetched' }, image],
+        });
+        // The request carries text only in the tool role: the image moves to a following user message.
+        expect(convertToOpenAIChatCompletionsMessages(prompt.messages)).toEqual([
+            { role: 'tool', tool_call_id: 'call_1', content: 'Fetched\n[Image 1 attached below]' },
+            { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result call_1:' }, image] },
+        ]);
     });
 });

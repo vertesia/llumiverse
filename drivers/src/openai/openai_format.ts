@@ -1,7 +1,13 @@
 // This file is used by multiple drivers
 // to format prompts in a way that is compatible with OpenAI's API.
 
-import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
+import {
+    type DataSource,
+    normalizeAttachmentMimeType,
+    type PromptOptions,
+    PromptRole,
+    type PromptSegment,
+} from '@llumiverse/common';
 import { readStreamAsBase64, readStreamAsString } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
@@ -33,7 +39,8 @@ function isResponseInputContent(value: unknown): value is ResponseInputContent {
  * the API rejects outright. A missing mime type keeps the historical image assumption.
  */
 async function fileToInputContent(file: DataSource): Promise<ResponseInputContent | undefined> {
-    const mimeType = file.mime_type;
+    // The same normalised type the tool-result filter judged, so a kept `IMAGE/PNG` is not dropped here.
+    const mimeType = normalizeAttachmentMimeType(file.mime_type);
     if (!mimeType || mimeType.startsWith('image/')) {
         return {
             type: 'input_image',

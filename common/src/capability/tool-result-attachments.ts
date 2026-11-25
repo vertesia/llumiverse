@@ -1,3 +1,4 @@
+import { getBedrockMantleProtocol } from '../options/bedrock_mantle.js';
 import { getGeminiModelVersion, parseGeminiVersion } from '../options/version-parsing.js';
 
 /**
@@ -83,23 +84,27 @@ export function isToolResultAttachmentSupported(
         case 'openai_responses':
             return COMMON_IMAGE_TYPES.has(type) || type === 'application/pdf' || type.startsWith('text/');
         case 'openai_chat':
+            // A tool message carries text only: the driver moves each image into the user message that follows it.
             return COMMON_IMAGE_TYPES.has(type) || type.startsWith('text/');
     }
 }
 
-const CHAT_COMPLETIONS_PROVIDERS: ReadonlySet<string> = new Set([
-    'openai_compatible',
-    'openrouter',
-    'groq',
-    'togetherai',
-]);
+const CHAT_COMPLETIONS_PROVIDERS: ReadonlySet<string> = new Set(['openrouter', 'groq', 'togetherai']);
+
+/** The wire API an `openai_compatible` driver is configured with (its `openai_api` option). */
+export type ToolResultOpenAICompatibleApi = 'responses' | 'chat_completions';
 
 /**
  * The API whose tool-result rules apply to `model` on `provider`, or undefined when no rule is known (the drivers
  * then send tool-result attachments as they always have). Lets an application tell ahead of a call which attachments
- * a model will not get.
+ * a model will not get. It follows the protocol the driver picks: `openaiApi` for an `openai_compatible` driver
+ * (Responses when omitted, as in the driver factory), and the model's protocol on Bedrock Mantle.
  */
-export function toolResultAttachmentApi(provider: string, model: string): ToolResultAttachmentApi | undefined {
+export function toolResultAttachmentApi(
+    provider: string,
+    model: string,
+    options: { openaiApi?: ToolResultOpenAICompatibleApi } = {},
+): ToolResultAttachmentApi | undefined {
     const name = model.toLowerCase();
     const isClaude = name.includes('claude');
     switch (provider) {
@@ -111,10 +116,23 @@ export function toolResultAttachmentApi(provider: string, model: string): ToolRe
         case 'bedrock':
         case 'azure_foundry':
             return isClaude ? 'claude' : undefined;
+        case 'bedrock_mantle':
+            switch (getBedrockMantleProtocol(model)) {
+                case 'messages':
+                    return 'claude';
+                case 'responses':
+                    return 'openai_responses';
+                case 'chat_completions':
+                    return 'openai_chat';
+                default:
+                    return undefined;
+            }
         case 'openai':
         case 'azure_openai':
         case 'xai':
             return 'openai_responses';
+        case 'openai_compatible':
+            return options.openaiApi === 'chat_completions' ? 'openai_chat' : 'openai_responses';
         default:
             return CHAT_COMPLETIONS_PROVIDERS.has(provider) ? 'openai_chat' : undefined;
     }
