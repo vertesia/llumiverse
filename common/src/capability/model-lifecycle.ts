@@ -70,7 +70,7 @@ const AZURE_LIFECYCLE: readonly ModelLifecycleEntry[] = [
     { id: 'claude-sonnet-4-6', retirement_date: '2027-02-10' },
     { id: 'claude-sonnet-5', retirement_date: '2027-06-30' },
     { id: 'codestral-2501', retirement_date: '2027-02-15' },
-    { id: 'codex-mini', version: '2025-05-16', retirement_date: '2026-11-15' },
+    { id: 'codex-mini', version: '2025-05-16', retirement_date: '2026-11-17' },
     { id: 'cohere-command-a', retirement_date: '2027-02-15' },
     { id: 'cohere-command-a-plus-05-2026', retirement_date: '2026-10-16' },
     { id: 'cohere-embed-v3-english', deprecation_date: '2026-11-15', retirement_date: '2027-02-15' },
@@ -129,7 +129,7 @@ const AZURE_LIFECYCLE: readonly ModelLifecycleEntry[] = [
     { id: 'gpt-chat-latest', version: '2026-05-28', retirement_date: '2026-12-08' },
     { id: 'gpt-chat-latest', version: '2026-06-24', retirement_date: '2026-11-17' },
     { id: 'gpt-chat-latest', version: '2026-08-06', retirement_date: '2027-01-12' },
-    { id: 'gpt-chat-latest', version: '2026-10-07', retirement_date: '2027-05-18' },
+    { id: 'gpt-chat-latest', version: '2026-10-07', retirement_date: '2027-02-02' },
     { id: 'gpt-image-1', version: '2025-04-15', retirement_date: '2026-10-23' },
     { id: 'gpt-image-1-mini', version: '2025-10-06', retirement_date: '2027-04-07' },
     { id: 'gpt-image-1.5', version: '2025-12-16', retirement_date: '2026-12-16' },
@@ -155,9 +155,9 @@ const AZURE_LIFECYCLE: readonly ModelLifecycleEntry[] = [
     { id: 'llama-3.3-70b-instruct', retirement_date: '2027-01-31' },
     { id: 'llama-4-maverick-17b-128e-instruct-fp8', retirement_date: '2026-11-19' },
     { id: 'llama-4-scout-17b-16e-instruct', retirement_date: '2027-01-31' },
-    { id: 'mai-image-2.5', version: '2026-06-02', retirement_date: '2026-10-01' },
-    { id: 'mai-image-2.5-flash', version: '2026-06-02', retirement_date: '2026-10-01' },
-    { id: 'mai-image-2.5-pro', version: '2026-06-19', retirement_date: '2026-10-01' },
+    { id: 'mai-image-2.5', version: '2026-06-02', retirement_date: '2026-11-24' },
+    { id: 'mai-image-2.5-flash', version: '2026-06-02', retirement_date: '2026-11-24' },
+    { id: 'mai-image-2.5-pro', version: '2026-06-19', retirement_date: '2026-11-24' },
     { id: 'ministral-3b', retirement_date: '2026-12-09' },
     { id: 'mistral-document-ai-2512', deprecation_date: '2026-12-15', retirement_date: '2027-02-15' },
     { id: 'mistral-medium-2505', retirement_date: '2026-12-09' },
@@ -188,6 +188,7 @@ const AZURE_LIFECYCLE: readonly ModelLifecycleEntry[] = [
 
 // https://docs.x.ai/docs/release-notes, https://docs.x.ai/developers/migration/imagine-image-quality-nov-2
 const XAI_LIFECYCLE: readonly ModelLifecycleEntry[] = [
+    { id: 'grok-build-0.1', retirement_date: '2026-11-19' },
     { id: 'grok-voice-transcribe-1.0', retirement_date: '2026-10-02' },
     { id: 'grok-imagine-image-quality', deprecation_date: '2026-09-02', retirement_date: '2026-11-02' },
 ];
