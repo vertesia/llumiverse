@@ -10,6 +10,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    formatOmittedAttachmentNote,
     getConversationMeta,
     incrementConversationTurn,
     isCutOffFinishReason,
@@ -17,6 +18,7 @@ import {
     isDeepSeekVersionGte,
     isEmbeddingModel,
     isJSONObjectText,
+    isToolResultAttachmentSupported,
     type JSONObject,
     type JSONSchema,
     type Logger,
@@ -775,9 +777,48 @@ function replayableChatMessages(
     logger: Logger | undefined,
 ): OpenAIChatCompletionsRequestMessage[] {
     const names = new ReplayedToolNames(options.tools);
-    const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(messages), names);
+    const readable = omitUnreadableToolImages(messages, options.model, provider, logger);
+    const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(readable), names);
     names.logRewrites(logger, { provider, model: options.model });
     return converted;
+}
+
+/**
+ * A copy of `messages` in which each tool message keeps only the images the model can read, with a note in place of
+ * each other one. New tool results are filtered when the prompt is built; this covers the stored conversation, whose
+ * tool results were filtered for the model of the turn that added them, so switching a conversation to a text-only
+ * model (gpt-oss, for example) would otherwise replay its images on every turn. The stored conversation is not
+ * changed. Exception to "preserve supplied input", logged with the type only.
+ */
+function omitUnreadableToolImages(
+    messages: OpenAIChatCompletionsMessage[],
+    model: string,
+    provider: string,
+    logger: Logger | undefined,
+): OpenAIChatCompletionsMessage[] {
+    let omitted = 0;
+    const result = messages.map((message) => {
+        if (message.role !== 'tool' || !Array.isArray(message.content)) return message;
+        let changed = false;
+        const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
+            if (part.type !== 'image_url') return part;
+            const mimeType = /^data:([^;,]*)/i.exec(part.image_url.url)?.[1];
+            if (mimeType === undefined || isToolResultAttachmentSupported('openai_chat', mimeType, model, provider)) {
+                return part;
+            }
+            changed = true;
+            omitted++;
+            return { type: 'text', text: formatOmittedAttachmentNote({ name: 'image', mime_type: mimeType }, model) };
+        });
+        return changed ? { ...message, content } : message;
+    });
+    if (omitted > 0) {
+        logger?.warn(
+            { model, provider, omitted_images: omitted },
+            '[llumiverse] Replayed tool result images the model cannot read were replaced with a note',
+        );
+    }
+    return result;
 }
 
 export function convertToOpenAIChatCompletionsMessages(

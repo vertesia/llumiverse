@@ -531,3 +531,107 @@ describe('AzureFoundryDriver tool result attachments', () => {
         }
     });
 });
+
+describe('AzureFoundryDriver Chat Completions tool result replay', () => {
+    function chatDriver() {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'DeepSeek', modelName: 'DeepSeek-V3.2' })) },
+            getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
+        } as unknown as AzureFoundryDriver['service'];
+        const bodies: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
+        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            bodies.push(JSON.parse(String(init?.body)));
+            return new Response(
+                JSON.stringify({
+                    id: 'chat_1',
+                    object: 'chat.completion',
+                    created: 0,
+                    model: 'DeepSeek-V3.2',
+                    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+                }),
+                { headers: { 'content-type': 'application/json' } },
+            );
+        });
+        vi.spyOn(exposePrivate<FoundryInternals>(driver), 'getDriverFetch').mockReturnValue(fetchMock);
+        return { driver, bodies };
+    }
+
+    it('judges a bare deployment name on its source model and omits an image for a text-only model', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const options = {
+                model: 'customer-prod',
+                tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                conversation: [{ type: 'function_call', call_id: 'call_1', name: 'fetch', arguments: '{}' }],
+            };
+            const prompt = await driver.createPrompt(
+                [
+                    {
+                        role: PromptRole.tool,
+                        tool_use_id: 'call_1',
+                        content: 'Fetched',
+                        files: [
+                            {
+                                name: 'chart.png',
+                                mime_type: 'image/png',
+                                getStream: vi.fn(),
+                                getURL: vi.fn(),
+                                getURI: vi.fn(),
+                            },
+                        ],
+                    },
+                ],
+                options,
+            );
+            await driver.requestTextCompletion(prompt, options);
+
+            expect(bodies[0].messages.slice(1)).toEqual([
+                {
+                    role: 'tool',
+                    tool_call_id: 'call_1',
+                    content:
+                        'Fetched\n[attachment omitted: chart.png (image/png) — DeepSeek-V3.2 cannot read this type in a tool result]',
+                },
+            ]);
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('replays a stored PDF-only tool output as a note, never as empty content', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const options = {
+                model: 'customer-prod',
+                tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                conversation: [
+                    { type: 'function_call', call_id: 'call_1', name: 'fetch', arguments: '{}' },
+                    {
+                        type: 'function_call_output',
+                        call_id: 'call_1',
+                        output: [
+                            {
+                                type: 'input_file',
+                                filename: 'report.pdf',
+                                file_data: 'data:application/pdf;base64,AQID',
+                            },
+                        ],
+                    },
+                ],
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Summarise it' }], options);
+            await driver.requestTextCompletion(prompt, options);
+
+            expect(bodies[0].messages).toContainEqual({
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content:
+                    '[attachment omitted: report.pdf (application/pdf) — DeepSeek-V3.2 cannot read this type in a tool result]',
+            });
+        } finally {
+            driver.destroy();
+        }
+    });
+});

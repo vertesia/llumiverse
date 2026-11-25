@@ -69,7 +69,7 @@ import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { canStreamImage, imageDataUrl, imageRequest } from './images.js';
 import { logOpenAIInputTransformations } from './input-transformations.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
-import { formatOpenAILikeMultimodalPrompt, getImageMasks } from './openai_format.js';
+import { formatOpenAILikeMultimodalPrompt, getImageMasks, omitUnreadableToolOutputParts } from './openai_format.js';
 import { openAIResponsesContextManagement, trimOpenAIConversationToCompaction } from './responses-compaction.js';
 import { formatOpenAISchema } from './schema.js';
 import { mapOpenAIImageStreamUsage, mapOpenAIImageUsage, mapOpenAIResponsesUsage } from './usage.js';
@@ -349,7 +349,7 @@ export class OpenAIResponsesProtocol {
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
+            fixOrphanedToolUse(replayableResponsesPrompt(driver, options, prompt)),
         );
 
         const toolDefs = getToolDefinitions(options.tools);
@@ -509,7 +509,7 @@ export class OpenAIResponsesProtocol {
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
+            fixOrphanedToolUse(replayableResponsesPrompt(driver, options, prompt)),
         );
 
         // When no tools are provided but conversation contains function_call/function_call_output
@@ -641,7 +641,7 @@ export class OpenAIResponsesProtocol {
         assertConversationArray(options.conversation, { provider: driver.provider, model: options.model, operation });
         convertRoles(prompt, options.model);
         const conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
+            fixOrphanedToolUse(replayableResponsesPrompt(driver, options, prompt)),
         );
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
         // Compatibility exception: the compact endpoint has no summarization prompt to carry `instructions`, and the
@@ -1727,6 +1727,23 @@ function responsesResultSchemaInstructionText(item: ResponseInputItem): string |
     if (!Array.isArray(content) || content.length !== 1) return undefined;
     const part = content[0] as { type?: string; text?: unknown };
     return part.type === 'input_text' && isResultSchemaInstruction(part.text) ? part.text : undefined;
+}
+
+/**
+ * The stored conversation and the new prompt as one request: tool outputs keep only the attachments the model can
+ * read, judged on the source model of a deployment alias (see {@link omitUnreadableToolOutputParts}).
+ */
+function replayableResponsesPrompt(
+    driver: OpenAIResponsesContext,
+    options: ExecutionOptions,
+    prompt: ResponseInputItem[],
+): ResponseInputItem[] {
+    return omitUnreadableToolOutputParts(
+        mergeResponsesPrompt(options.conversation, prompt, driver.logger),
+        'openai_responses',
+        driver.getPromptCacheSourceModel(options.model),
+        { provider: driver.provider, logger: driver.logger },
+    );
 }
 
 /**

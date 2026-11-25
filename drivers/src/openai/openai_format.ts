@@ -3,6 +3,8 @@
 
 import {
     type DataSource,
+    formatOmittedAttachmentNote,
+    isToolResultAttachmentSupported,
     normalizeAttachmentMimeType,
     type PromptOptions,
     PromptRole,
@@ -146,10 +148,15 @@ export async function formatOpenAILikeMultimodalPrompt(
         // becomes a note in the tool output instead of failing or vanishing.
         const { files, notes } =
             msg.role === PromptRole.tool
-                ? splitToolResultFiles(msg.files, opts.toolResultApi ?? 'openai_responses', opts.model, {
-                      logger: opts.logger,
-                      provider: opts.provider,
-                  })
+                ? splitToolResultFiles(
+                      msg.files,
+                      opts.toolResultApi ?? 'openai_responses',
+                      opts.attachmentModel ?? opts.model,
+                      {
+                          logger: opts.logger,
+                          provider: opts.provider,
+                      },
+                  )
                 : { files: msg.files, notes: [] };
 
         //generate the parts based on PromptSegment
@@ -271,6 +278,68 @@ export async function formatOpenAILikeMultimodalPrompt(
     return result;
 }
 
+const DATA_URL_MIME = /^data:([^;,]*)/i;
+
+/** The MIME type a `data:` URL names, or undefined for any other URL or file reference. */
+function dataUrlMimeType(url: string | null | undefined): string | undefined {
+    return url ? DATA_URL_MIME.exec(url)?.[1] : undefined;
+}
+
+/**
+ * A copy of `items` in which each tool output keeps only the attachments `api` can read for `model`, with a note in
+ * place of each other one. New tool results are filtered when the prompt is built; this runs on the request copy of
+ * the stored conversation, whose tool outputs were filtered for the model of the turn that added them, or by an
+ * earlier release. The stored conversation is not changed.
+ *
+ * Exception to "preserve supplied input", as for new tool results: a replayed attachment the model cannot read fails
+ * every later turn. The omission is logged with the file name and type only.
+ */
+export function omitUnreadableToolOutputParts(
+    items: ResponseInputItem[],
+    api: 'openai_responses' | 'openai_chat',
+    model: string,
+    options: { provider?: string; logger?: OpenAIPromptFormatterOptions['logger'] } = {},
+): ResponseInputItem[] {
+    const omitted: Array<{ file_name: string; mime_type: string }> = [];
+    const result = items.map((item) => {
+        if (!('type' in item) || item.type !== 'function_call_output' || !Array.isArray(item.output)) return item;
+        const kept: typeof item.output = [];
+        const notes: string[] = [];
+        for (const part of item.output) {
+            const attachment =
+                part.type === 'input_image'
+                    ? { name: 'image', mime_type: dataUrlMimeType(part.image_url) }
+                    : part.type === 'input_file'
+                      ? { name: part.filename || 'file', mime_type: dataUrlMimeType(part.file_data) }
+                      : undefined;
+            // A part given by URL or file ID names no type: Responses fetches it itself; Chat Completions cannot.
+            const readable =
+                !attachment ||
+                (attachment.mime_type === undefined
+                    ? api === 'openai_responses'
+                    : isToolResultAttachmentSupported(api, attachment.mime_type, model, options.provider));
+            if (readable) {
+                kept.push(part);
+            } else if (attachment) {
+                notes.push(formatOmittedAttachmentNote(attachment, model));
+                omitted.push({
+                    file_name: attachment.name,
+                    mime_type: normalizeAttachmentMimeType(attachment.mime_type),
+                });
+            }
+        }
+        if (notes.length === 0) return item;
+        return { ...item, output: [...kept, { type: 'input_text' as const, text: notes.join('\n') }] };
+    });
+    if (omitted.length > 0) {
+        options.logger?.warn(
+            { model, api, provider: options.provider, omitted_attachments: omitted },
+            '[llumiverse] Replayed tool result attachments the model cannot read were replaced with a note',
+        );
+    }
+    return result;
+}
+
 export interface OpenAIPromptFormatterOptions {
     /** Receives a warning when a tool result attachment is replaced with a note. */
     logger?: { warn: (data: Record<string, unknown>, message: string) => void };
@@ -281,6 +350,8 @@ export interface OpenAIPromptFormatterOptions {
      * (`convertResponseItemsToChatMessages`). Responses by default.
      */
     toolResultApi?: 'openai_responses' | 'openai_chat';
+    /** The model the attachment rules judge when it differs from `model`, such as the source model of a deployment. */
+    attachmentModel?: string;
     imageGeneration?: boolean;
     multimodal?: boolean;
     useToolForFormatting?: boolean;
@@ -431,8 +502,10 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
 
 /**
  * The text of a Responses tool output given as content parts, with each image replaced by a reference and moved to
- * `images`. Any other part (a file the caller should have filtered out) is dropped: serializing it as JSON would put
- * its base64 bytes in the tool message.
+ * `images`. Any other part (a file, which Chat Completions cannot carry in a tool message) becomes a note: serializing
+ * it as JSON would put its base64 bytes in the tool message. Callers filter with
+ * {@link omitUnreadableToolOutputParts} first, so this is a fallback. The text is never empty, which several
+ * endpoints reject.
  */
 function toolOutputText(
     parts: OpenAI.Responses.ResponseInputItem.FunctionCallOutput['output'],
@@ -452,7 +525,9 @@ function toolOutputText(
                 { type: 'image_url', image_url: { url: part.image_url } },
             );
             text.push(`[Image ${imageIndex} attached below]`);
+        } else if (part.type === 'input_file') {
+            text.push(`[attachment omitted: ${part.filename || 'file'} — cannot be sent in a tool result]`);
         }
     }
-    return text.join('\n');
+    return text.join('\n') || 'No output';
 }

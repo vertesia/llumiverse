@@ -10,7 +10,11 @@
 
 import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
-import { convertResponseItemsToChatMessages, formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import {
+    convertResponseItemsToChatMessages,
+    formatOpenAILikeMultimodalPrompt,
+    omitUnreadableToolOutputParts,
+} from './openai_format.js';
 
 const OPTIONS = { model: 'gpt-5.6' } as unknown as PromptOptions;
 
@@ -237,7 +241,12 @@ describe('convertResponseItemsToChatMessages - tool outputs with attachments', (
         ]);
 
         expect(messages).toEqual([
-            { role: 'tool', tool_call_id: 'call_1', content: 'Fetched\n[Image 1 attached below]' },
+            {
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content:
+                    'Fetched\n[Image 1 attached below]\n[attachment omitted: report.pdf — cannot be sent in a tool result]',
+            },
             { role: 'tool', tool_call_id: 'call_2', content: 'done' },
             {
                 role: 'user',
@@ -260,6 +269,50 @@ describe('formatOpenAILikeMultimodalPrompt - models known to take no image', () 
 
         expect(functionCallOutput(prompt).output).toBe(
             'Fetched\n[attachment omitted: chart.png (image/png) — openai.gpt-oss-120b cannot read this type in a tool result]',
+        );
+    });
+});
+
+describe('omitUnreadableToolOutputParts', () => {
+    const image = { type: 'input_image' as const, image_url: 'data:image/png;base64,AQID', detail: 'auto' as const };
+    const pdf = { type: 'input_file' as const, filename: 'report.pdf', file_data: 'data:application/pdf;base64,AQID' };
+    const items = [
+        {
+            type: 'function_call_output' as const,
+            call_id: 'call_1',
+            output: [{ type: 'input_text' as const, text: 'Fetched' }, image, pdf],
+        },
+    ];
+
+    it('replaces stored parts the model cannot read and leaves the input untouched', () => {
+        const warn = vi.fn();
+        const result = omitUnreadableToolOutputParts(items, 'openai_chat', 'gpt-oss-120b', {
+            provider: 'groq',
+            logger: { warn },
+        });
+
+        expect(result).toEqual([
+            {
+                type: 'function_call_output',
+                call_id: 'call_1',
+                output: [
+                    { type: 'input_text', text: 'Fetched' },
+                    {
+                        type: 'input_text',
+                        text:
+                            '[attachment omitted: image (image/png) — gpt-oss-120b cannot read this type in a tool result]\n' +
+                            '[attachment omitted: report.pdf (application/pdf) — gpt-oss-120b cannot read this type in a tool result]',
+                    },
+                ],
+            },
+        ]);
+        expect(items[0].output).toHaveLength(3);
+        expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it('returns the same items when every part is readable', () => {
+        expect(omitUnreadableToolOutputParts(items, 'openai_responses', 'gpt-5.6', { provider: 'openai' })[0]).toBe(
+            items[0],
         );
     });
 });

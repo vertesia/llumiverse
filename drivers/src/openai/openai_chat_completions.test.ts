@@ -1551,4 +1551,48 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
             { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result call_1:' }, image] },
         ]);
     });
+
+    it('replaces a stored tool image with a note when the conversation moves to a text-only model', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID', detail: 'auto' } };
+        const conversation = {
+            _is_openai_chat_completions: true,
+            messages: [
+                {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'fetch', arguments: '{}' } }],
+                },
+                { role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'Fetched' }, image] },
+            ],
+        };
+        const protocol = new TestOpenAIChatCompletionsProtocol({
+            id: 'chat_1',
+            object: 'chat.completion',
+            created: 0,
+            model: 'gpt-oss-120b',
+            choices: [
+                { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop', logprobs: null },
+            ],
+        } as unknown as OpenAIChatCompletionsResponse);
+        await protocol.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages: [] } as unknown as OpenAIChatCompletionsPrompt,
+            {
+                model: 'gpt-oss-120b',
+                conversation,
+                tools: [{ name: 'fetch', input_schema: { type: 'object' } }],
+            },
+        );
+        const payload = protocol.payloads[0];
+
+        expect(payload.messages).toContainEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content:
+                'Fetched\n[attachment omitted: image (image/png) — gpt-oss-120b cannot read this type in a tool result]',
+        });
+        expect(JSON.stringify(payload.messages)).not.toContain('base64');
+        // The stored conversation keeps the image.
+        expect(conversation.messages[1].content).toContainEqual(image);
+    });
 });

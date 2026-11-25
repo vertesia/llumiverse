@@ -16,6 +16,7 @@ import {
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
+    type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
     type PromptSegment,
@@ -49,6 +50,7 @@ import {
     convertResponseItemsToChatMessages,
     formatOpenAIDebugPrompt,
     formatOpenAILikeMultimodalPrompt,
+    omitUnreadableToolOutputParts,
 } from '../openai/openai_format.js';
 import { claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
@@ -358,11 +360,17 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             ...options,
             logger: this.logger,
             provider: this.provider,
+            // A bare deployment name says nothing of the model's inputs: judge attachments on the model behind it.
+            attachmentModel: this.getSourceModel(options.model),
             // A Chat Completions deployment gets this prompt converted to Chat Completions, which takes no PDF.
             toolResultApi: protocol === 'chat_completions' ? 'openai_chat' : 'openai_responses',
             imageGeneration: this.isImageModel(options.model),
             result_schema: this.isImageModel(options.model) ? undefined : options.result_schema,
         });
+    }
+
+    private getChatTarget(model: string): FoundryChatTarget {
+        return { model: this.getSourceModel(model), provider: this.provider, logger: this.logger };
     }
 
     private getAnthropicClient(): AnthropicFoundry {
@@ -499,10 +507,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         if (protocol === 'responses') {
             return this.getOpenAIProtocolDriver().requestTextCompletion(requireOpenAIPrompt(prompt), options, signal);
         }
-        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
+        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt), this.getChatTarget(options.model));
         return this.getInferenceProtocolDriver().requestTextCompletion(
             chatPrompt,
-            toAzureFoundryChatOptions(options, deploymentName),
+            toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
             signal,
         );
     }
@@ -536,10 +544,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 signal,
             );
         }
-        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
+        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt), this.getChatTarget(options.model));
         return this.getInferenceProtocolDriver().requestTextCompletionStream(
             chatPrompt,
-            toAzureFoundryChatOptions(options, deploymentName),
+            toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
             signal,
         );
     }
@@ -571,10 +579,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
         if (protocol === 'chat_completions') {
             return this.getInferenceProtocolDriver().buildStreamingConversation(
-                toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt)),
+                toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt), this.getChatTarget(options.model)),
                 result,
                 toolUse,
-                toAzureFoundryChatOptions(options, deploymentName),
+                toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
             );
         }
         return undefined;
@@ -590,7 +598,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         if (protocol === 'chat_completions') {
             this.getInferenceProtocolDriver().validateResult(
                 result,
-                toAzureFoundryChatOptions(options, deploymentName),
+                toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
             );
             return;
         }
@@ -798,8 +806,19 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 }
 
-function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatCompletionsPrompt {
-    const messages = convertResponseItemsToChatMessages(items).map((message) => {
+/** Who the Chat Completions request is for: the attachment rules are judged on the deployment's source model. */
+interface FoundryChatTarget {
+    model: string;
+    provider: string;
+    logger?: Logger;
+}
+
+function toAzureFoundryChatPrompt(items: ResponseInputItem[], target: FoundryChatTarget): OpenAIChatCompletionsPrompt {
+    const readable = omitUnreadableToolOutputParts(items, 'openai_chat', target.model, {
+        provider: target.provider,
+        logger: target.logger,
+    });
+    const messages = convertResponseItemsToChatMessages(readable).map((message) => {
         switch (message.role) {
             case 'assistant':
                 return {
@@ -845,12 +864,16 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
     return { _is_openai_chat_completions: true, messages };
 }
 
-function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: string): ExecutionOptions {
+function toAzureFoundryChatOptions(
+    options: ExecutionOptions,
+    deploymentName: string,
+    target: FoundryChatTarget,
+): ExecutionOptions {
     return {
         ...options,
         model: deploymentName,
         conversation: Array.isArray(options.conversation)
-            ? toAzureFoundryChatPrompt(options.conversation as ResponseInputItem[])
+            ? toAzureFoundryChatPrompt(options.conversation as ResponseInputItem[], target)
             : options.conversation,
     };
 }
