@@ -181,6 +181,19 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(completion.tool_use).toBeUndefined();
     });
 
+    it('leaves out a last call that a gateway answered with empty-object arguments on a length stop', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            cutOffResponse('length', [
+                { id: 'call_1', type: 'function', function: { name: 'list_files', arguments: '{}' } },
+                { id: 'call_2', type: 'function', function: { name: 'update_prompt', arguments: '{}' } },
+            ]),
+        );
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.tool_use).toEqual([{ id: 'call_1', tool_name: 'list_files', tool_input: {} }]);
+    });
+
     it('keeps an earlier no-argument call sent with empty arguments: only the last call can be cut off', async () => {
         const model = new TestOpenAIChatCompletionsProtocol(
             cutOffResponse('content_filter', [
