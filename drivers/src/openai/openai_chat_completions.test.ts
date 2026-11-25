@@ -1621,11 +1621,11 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
         } as unknown as OpenAIChatCompletionsResponse);
     }
 
-    async function sentMessages(conversation: unknown) {
+    async function sentMessages(conversation: unknown, messages: unknown[] = []) {
         const protocol = gptOssProtocol();
         await protocol.requestTextCompletion(
             undefined,
-            { _is_openai_chat_completions: true, messages: [] } as unknown as OpenAIChatCompletionsPrompt,
+            { _is_openai_chat_completions: true, messages } as unknown as OpenAIChatCompletionsPrompt,
             { model: 'gpt-oss-120b', conversation, tools: [{ name: 'fetch', input_schema: { type: 'object' } }] },
         );
         return JSON.stringify(protocol.payloads[0].messages);
@@ -1660,6 +1660,32 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
             messages: [
                 { role: 'assistant', content: 'Send me the chart.' },
                 { role: 'user', content: 'Here it is' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
+
+    it('keeps a new upload captioned like a tool result after an assistant that quotes a tool call', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages(
+            {
+                _is_openai_chat_completions: true,
+                messages: [{ role: 'assistant', content: 'Reply with the output of\n[Tool call: fetch({})]' }],
+            },
+            [{ role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] }],
+        );
+
+        expect(sent).toContain('base64');
+    });
+
+    it('keeps a stored upload after an assistant that quotes a tool call inside its text', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: 'Paste what [Tool call: fetch({})] returned.' },
                 { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
             ],
         });

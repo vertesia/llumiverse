@@ -785,7 +785,8 @@ function replayableChatMessages(
     attachmentModel: string = options.model,
 ): OpenAIChatCompletionsRequestMessage[] {
     const names = new ReplayedToolNames(options.tools);
-    const readable = omitUnreadableToolImages(messages, attachmentModel, provider, logger);
+    const stored = new Set(storedOpenAIChatCompletionsMessages(options.conversation as OpenAIChatCompletionsPrompt));
+    const readable = omitUnreadableToolImages(messages, stored, attachmentModel, provider, logger);
     const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(readable), names);
     names.logRewrites(logger, { provider, model: options.model });
     return converted;
@@ -803,6 +804,7 @@ function replayableChatMessages(
  */
 function omitUnreadableToolImages(
     messages: OpenAIChatCompletionsMessage[],
+    stored: ReadonlySet<OpenAIChatCompletionsMessage>,
     model: string,
     provider: string,
     logger: Logger | undefined,
@@ -812,7 +814,7 @@ function omitUnreadableToolImages(
         const fromTool =
             message.role === 'tool' ||
             message.tool_result_call_id !== undefined ||
-            isUnmarkedFlattenedToolResult(messages, index);
+            (stored.has(message) && isUnmarkedFlattenedToolResult(messages, index));
         if (!fromTool || !Array.isArray(message.content)) return message;
         let changed = false;
         const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
@@ -838,14 +840,16 @@ function omitUnreadableToolImages(
 
 /** The caption a turn without tools puts before the parts of a tool result with images. */
 const FLATTENED_TOOL_RESULT_CAPTION = /^Tool result \S+:$/;
-const FLATTENED_TOOL_CALL = '[Tool call: ';
+/** A tool call a turn without tools wrote as text: one whole line, after the message's own text. */
+const FLATTENED_TOOL_CALL = /^\[Tool call: [^\n]*\(.*\)\]$/;
 
 /**
  * A tool result with images that a turn without tools turned into a user message before
  * {@link OpenAIChatCompletionsMessage.tool_result_call_id} was recorded. Such a history keeps no other trace of its
  * origin, so the whole shape that turn wrote is required, not a caption alone: the message starts with the
- * `Tool result <id>:` caption, and goes back, over the other tool results of its call, to an assistant message whose
- * tool calls were written as `[Tool call: …]` text. A user's own upload sits after a user turn, so it never matches.
+ * `Tool result <id>:` caption, and goes back, over the other tool results of its call, to an assistant message that
+ * ends with its tool calls written as whole `[Tool call: name(args)]` lines. Callers apply it to stored messages
+ * only: that shape is never written any more, so a message of the new prompt (a user's upload) is never one.
  */
 function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[], index: number): boolean {
     if (!isFlattenedToolResultWithImages(messages[index])) return false;
@@ -855,13 +859,20 @@ function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[],
             return (
                 !previous.tool_calls?.length &&
                 typeof previous.content === 'string' &&
-                previous.content.includes(FLATTENED_TOOL_CALL)
+                endsWithFlattenedToolCalls(previous.content)
             );
         }
         const textResult = typeof previous.content === 'string' && previous.content.startsWith('[Tool result: ');
         if (previous.role !== 'user' || !(textResult || isFlattenedToolResultWithImages(previous))) return false;
     }
     return false;
+}
+
+/** Text whose lines, from the first `[Tool call: …]` line on, are all tool calls, and that has at least one. */
+function endsWithFlattenedToolCalls(text: string): boolean {
+    const lines = text.split('\n');
+    const first = lines.findIndex((line) => FLATTENED_TOOL_CALL.test(line));
+    return first >= 0 && lines.slice(first).every((line) => FLATTENED_TOOL_CALL.test(line));
 }
 
 function isFlattenedToolResultWithImages(message: OpenAIChatCompletionsMessage): boolean {
