@@ -841,10 +841,11 @@ function omitUnreadableToolImages(
 /** The caption a turn without tools puts before the parts of a tool result with images. */
 const FLATTENED_TOOL_RESULT_CAPTION = /^Tool result \S+:$/;
 /**
- * The tool calls a turn without tools wrote as text, after the message's own text: each `[Tool call: name(args)]`
- * starts a line, and its arguments are kept as given (newlines included, cut after 500 characters).
+ * A turn without tools wrote each tool call as `[Tool call: name(args)]`, one after another on new lines after the
+ * message's own text, with the arguments as given (newlines included) and cut to 500 characters plus `...`.
  */
-const FLATTENED_TOOL_CALLS = /^\[Tool call: [^\n(]*\([\s\S]*\)\]$/;
+const FLATTENED_TOOL_CALL_START = '[Tool call: ';
+const FLATTENED_TOOL_ARGS_LIMIT = 500;
 
 /**
  * A tool result with images that a turn without tools turned into a user message before
@@ -873,8 +874,39 @@ function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[],
 
 /** Text that, from the first line starting with `[Tool call: ` to its end, holds only tool calls written as text. */
 function endsWithFlattenedToolCalls(text: string): boolean {
-    const calls = /(?:^|\n)(\[Tool call: [\s\S]*)$/.exec(text)?.[1];
-    return calls !== undefined && FLATTENED_TOOL_CALLS.test(calls);
+    if (text.startsWith(FLATTENED_TOOL_CALL_START)) return isFlattenedToolCallSequence(text, 0);
+    const line = text.indexOf(`\n${FLATTENED_TOOL_CALL_START}`);
+    return line >= 0 && isFlattenedToolCallSequence(text, line + 1);
+}
+
+/**
+ * Whether `text` holds, from `position` to its end, only `[Tool call: name(args)]` entries joined by newlines. The
+ * arguments may contain `)]` and newlines, so each possible end is tried, and an end counts only where the arguments
+ * are what that turn could have written: empty, JSON, or cut to the limit. Prose between two calls is neither.
+ */
+function isFlattenedToolCallSequence(text: string, position: number): boolean {
+    if (!text.startsWith(FLATTENED_TOOL_CALL_START, position)) return false;
+    const open = text.indexOf('(', position + FLATTENED_TOOL_CALL_START.length);
+    if (open < 0 || text.slice(position, open).includes('\n')) return false;
+    for (let end = text.indexOf(')]', open + 1); end >= 0; end = text.indexOf(')]', end + 1)) {
+        const next = end + 2;
+        const last = next === text.length;
+        if (!last && !text.startsWith(`\n${FLATTENED_TOOL_CALL_START}`, next)) continue;
+        if (!isFlattenedToolArguments(text.slice(open + 1, end))) continue;
+        if (last || isFlattenedToolCallSequence(text, next + 1)) return true;
+    }
+    return false;
+}
+
+function isFlattenedToolArguments(args: string): boolean {
+    if (args === '') return true;
+    if (args.length === FLATTENED_TOOL_ARGS_LIMIT + 3 && args.endsWith('...')) return true;
+    try {
+        JSON.parse(args);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function isFlattenedToolResultWithImages(message: OpenAIChatCompletionsMessage): boolean {

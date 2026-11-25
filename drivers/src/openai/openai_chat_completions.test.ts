@@ -1707,4 +1707,37 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
 
         expect(sent).not.toContain('base64');
     });
+
+    it.each([
+        [
+            'prose between two quoted tool calls',
+            '[Tool call: fetch({})] is one way, and\n[Tool call: fetch({"page":2})]',
+        ],
+        ['a quoted tool call followed by prose', '[Tool call: fetch({})]\nthen send me the result (as an image)]'],
+    ])('keeps a stored upload after an assistant message with %s', async (_label, content) => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
+
+    it('filters a stored tool image after flattened calls with truncated and empty arguments', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const truncated = `${JSON.stringify({ q: 'x'.repeat(600) }).slice(0, 500)}...`;
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: `[Tool call: search(${truncated})]\n[Tool call: fetch()]` },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result call_2:' }, image] },
+            ],
+        });
+
+        expect(sent).not.toContain('base64');
+    });
 });
