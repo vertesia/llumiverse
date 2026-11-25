@@ -628,8 +628,46 @@ describe('AzureFoundryDriver Chat Completions tool result replay', () => {
                 role: 'tool',
                 tool_call_id: 'call_1',
                 content:
-                    '[attachment omitted: report.pdf (application/pdf) — DeepSeek-V3.2 cannot read this type in a tool result]',
+                    '[attachment omitted: report.pdf (application/pdf) — a Chat Completions tool result cannot carry a file]',
             });
+        } finally {
+            driver.destroy();
+        }
+    });
+
+    it('filters a saved tool image for a text-only deployment and keeps it in the returned conversation', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+            // What a Chat Completions turn on a vision deployment stores: the tool image follows its label.
+            const conversation = {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'fetch', arguments: '{}' } }],
+                    },
+                    { role: 'tool', tool_call_id: 'call_1', content: 'Fetched\n[Image 1 attached below]' },
+                    { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result call_1:' }, image] },
+                ],
+            };
+            const options = {
+                model: 'customer-prod',
+                tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                conversation,
+            };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], options);
+            const completion = await driver.requestTextCompletion(prompt, options);
+
+            expect(JSON.stringify(bodies[0].messages)).not.toContain('base64');
+            expect(bodies[0].messages).toContainEqual({
+                role: 'user',
+                content:
+                    'Image 1 from tool result call_1:\n' +
+                    '[attachment omitted: image (image/png) — DeepSeek-V3.2 cannot read this type in a tool result]',
+            });
+            expect(JSON.stringify(completion.conversation)).toContain(image.image_url.url);
         } finally {
             driver.destroy();
         }

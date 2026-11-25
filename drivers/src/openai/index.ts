@@ -349,7 +349,7 @@ export class OpenAIResponsesProtocol {
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(replayableResponsesPrompt(driver, options, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
 
         const toolDefs = getToolDefinitions(options.tools);
@@ -509,7 +509,7 @@ export class OpenAIResponsesProtocol {
         });
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(replayableResponsesPrompt(driver, options, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
 
         // When no tools are provided but conversation contains function_call/function_call_output
@@ -641,7 +641,7 @@ export class OpenAIResponsesProtocol {
         assertConversationArray(options.conversation, { provider: driver.provider, model: options.model, operation });
         convertRoles(prompt, options.model);
         const conversation = fixOrphanedToolResults(
-            fixOrphanedToolUse(replayableResponsesPrompt(driver, options, prompt)),
+            fixOrphanedToolUse(mergeResponsesPrompt(options.conversation, prompt, driver.logger)),
         );
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
         // Compatibility exception: the compact endpoint has no summarization prompt to carry `instructions`, and the
@@ -1657,15 +1657,25 @@ export function sanitizeResponsesToolCallNames(
  * `multi_tool_use.parallel`, dotted) would fail every later turn with a 400, so the request carries a safe
  * name. The stored conversation keeps the emitted name.
  */
+/**
+ * The request input for a conversation. Only the request copy changes; the conversation returned to the caller keeps
+ * what it holds, so a later turn on another model still has every attachment:
+ * - tool calls get names the endpoint accepts;
+ * - tool outputs keep only the attachments the model can read, judged on the source model of a deployment alias
+ *   ({@link omitUnreadableToolOutputParts}).
+ */
 function replayableResponsesInput(
     conversation: ResponseInputItem[],
     options: ExecutionOptions,
-    driver: Pick<OpenAIResponsesContext, 'logger' | 'provider'>,
+    driver: Pick<OpenAIResponsesContext, 'logger' | 'provider' | 'getPromptCacheSourceModel'>,
 ): ResponseInputItem[] {
     const names = new ReplayedToolNames(options.tools);
     const input = sanitizeResponsesToolCallNames(conversation, names);
     names.logRewrites(driver.logger, { provider: driver.provider, model: options.model });
-    return input;
+    return omitUnreadableToolOutputParts(input, 'openai_responses', driver.getPromptCacheSourceModel(options.model), {
+        provider: driver.provider,
+        logger: driver.logger,
+    });
 }
 
 export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
@@ -1727,23 +1737,6 @@ function responsesResultSchemaInstructionText(item: ResponseInputItem): string |
     if (!Array.isArray(content) || content.length !== 1) return undefined;
     const part = content[0] as { type?: string; text?: unknown };
     return part.type === 'input_text' && isResultSchemaInstruction(part.text) ? part.text : undefined;
-}
-
-/**
- * The stored conversation and the new prompt as one request: tool outputs keep only the attachments the model can
- * read, judged on the source model of a deployment alias (see {@link omitUnreadableToolOutputParts}).
- */
-function replayableResponsesPrompt(
-    driver: OpenAIResponsesContext,
-    options: ExecutionOptions,
-    prompt: ResponseInputItem[],
-): ResponseInputItem[] {
-    return omitUnreadableToolOutputParts(
-        mergeResponsesPrompt(options.conversation, prompt, driver.logger),
-        'openai_responses',
-        driver.getPromptCacheSourceModel(options.model),
-        { provider: driver.provider, logger: driver.logger },
-    );
 }
 
 /**

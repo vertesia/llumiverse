@@ -526,7 +526,10 @@ function toolOutputText(
             );
             text.push(`[Image ${imageIndex} attached below]`);
         } else if (part.type === 'input_file') {
-            text.push(`[attachment omitted: ${part.filename || 'file'} — cannot be sent in a tool result]`);
+            const mimeType = normalizeAttachmentMimeType(dataUrlMimeType(part.file_data)) || 'unknown type';
+            text.push(
+                `[attachment omitted: ${part.filename || 'file'} (${mimeType}) — a Chat Completions tool result cannot carry a file]`,
+            );
         }
     }
     return text.join('\n') || 'No output';

@@ -245,7 +245,7 @@ describe('convertResponseItemsToChatMessages - tool outputs with attachments', (
                 role: 'tool',
                 tool_call_id: 'call_1',
                 content:
-                    'Fetched\n[Image 1 attached below]\n[attachment omitted: report.pdf — cannot be sent in a tool result]',
+                    'Fetched\n[Image 1 attached below]\n[attachment omitted: report.pdf (application/pdf) — a Chat Completions tool result cannot carry a file]',
             },
             { role: 'tool', tool_call_id: 'call_2', content: 'done' },
             {

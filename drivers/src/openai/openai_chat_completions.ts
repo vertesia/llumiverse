@@ -775,20 +775,26 @@ function replayableChatMessages(
     options: ExecutionOptions,
     provider: string,
     logger: Logger | undefined,
+    attachmentModel: string = options.model,
 ): OpenAIChatCompletionsRequestMessage[] {
     const names = new ReplayedToolNames(options.tools);
-    const readable = omitUnreadableToolImages(messages, options.model, provider, logger);
+    const readable = omitUnreadableToolImages(messages, attachmentModel, provider, logger);
     const converted = sanitizeChatCompletionsToolCallNames(convertToOpenAIChatCompletionsMessages(readable), names);
     names.logRewrites(logger, { provider, model: options.model });
     return converted;
 }
 
+/** The label a tool image carries once it is moved out of its tool message into the user message that follows. */
+const TOOL_IMAGE_LABEL = /^Image \d+ from tool result .+:$/;
+
 /**
- * A copy of `messages` in which each tool message keeps only the images the model can read, with a note in place of
- * each other one. New tool results are filtered when the prompt is built; this covers the stored conversation, whose
- * tool results were filtered for the model of the turn that added them, so switching a conversation to a text-only
- * model (gpt-oss, for example) would otherwise replay its images on every turn. The stored conversation is not
- * changed. Exception to "preserve supplied input", logged with the type only.
+ * A copy of `messages` in which each tool-result image keeps its place only if the model can read it, with a note in
+ * place of each other one. A tool-result image is an image part of a tool message, or one that follows its
+ * `Image N from tool result <id>:` label in a user message (where a conversion to Chat Completions stores it). New
+ * tool results are filtered when the prompt is built; this covers the stored conversation, whose tool results were
+ * filtered for the model of the turn that added them, so switching a conversation to a text-only model (gpt-oss, for
+ * example) would otherwise replay its images on every turn. Only the request copy changes. Exception to "preserve
+ * supplied input", logged with the type only.
  */
 function omitUnreadableToolImages(
     messages: OpenAIChatCompletionsMessage[],
@@ -798,10 +804,15 @@ function omitUnreadableToolImages(
 ): OpenAIChatCompletionsMessage[] {
     let omitted = 0;
     const result = messages.map((message) => {
-        if (message.role !== 'tool' || !Array.isArray(message.content)) return message;
+        if ((message.role !== 'tool' && message.role !== 'user') || !Array.isArray(message.content)) return message;
         let changed = false;
-        const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
+        const parts = message.content;
+        const content = parts.map((part, index): OpenAIChatCompletionsContentPart => {
             if (part.type !== 'image_url') return part;
+            const previous = parts[index - 1];
+            const fromTool =
+                message.role === 'tool' || (previous?.type === 'text' && TOOL_IMAGE_LABEL.test(previous.text));
+            if (!fromTool) return part;
             const mimeType = /^data:([^;,]*)/i.exec(part.image_url.url)?.[1];
             if (mimeType === undefined || isToolResultAttachmentSupported('openai_chat', mimeType, model, provider)) {
                 return part;
@@ -998,6 +1009,15 @@ function getOpenAIChatDriverLogger(driver: unknown): Logger | undefined {
     return (driver as { logger?: Logger } | undefined)?.logger;
 }
 
+/**
+ * The model the tool-result attachment rules judge: what the driver's `getAttachmentModel` returns (the source model of
+ * a deployment name, for example), else the requested model.
+ */
+function getOpenAIChatDriverAttachmentModel(driver: unknown, model: string): string {
+    const resolve = (driver as { getAttachmentModel?: unknown } | undefined)?.getAttachmentModel;
+    return typeof resolve === 'function' ? (resolve as (model: string) => string).call(driver, model) : model;
+}
+
 function getOpenAIChatDriverProvider(driver: unknown): string {
     if (typeof driver !== 'object' || driver === null || !('provider' in driver)) {
         return Providers.openai_compatible;
@@ -1177,7 +1197,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const provider = getOpenAIChatDriverProvider(driver);
         const logger = getOpenAIChatDriverLogger(driver);
-        const payload = this.buildPayload(conversation, options, false, provider, logger);
+        const payload = this.buildPayload(
+            conversation,
+            options,
+            false,
+            provider,
+            logger,
+            getOpenAIChatDriverAttachmentModel(driver, options.model),
+        );
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1272,7 +1299,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const provider = getOpenAIChatDriverProvider(driver);
         const logger = getOpenAIChatDriverLogger(driver);
-        const payload = this.buildPayload(conversation, options, true, provider, logger);
+        const payload = this.buildPayload(
+            conversation,
+            options,
+            true,
+            provider,
+            logger,
+            getOpenAIChatDriverAttachmentModel(driver, options.model),
+        );
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
@@ -1394,6 +1428,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         stream: boolean,
         provider: string = Providers.openai_compatible,
         logger?: Logger,
+        attachmentModel: string = options.model,
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -1408,7 +1443,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
-            messages: replayableChatMessages(conversation.messages, options, provider, logger),
+            messages: replayableChatMessages(conversation.messages, options, provider, logger, attachmentModel),
             // Compatibility exception: some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,

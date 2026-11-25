@@ -16,7 +16,6 @@ import {
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
-    type Logger,
     ModelType,
     normalizeEmbeddingsOptions,
     type PromptSegment,
@@ -50,7 +49,6 @@ import {
     convertResponseItemsToChatMessages,
     formatOpenAIDebugPrompt,
     formatOpenAILikeMultimodalPrompt,
-    omitUnreadableToolOutputParts,
 } from '../openai/openai_format.js';
 import { claudeApiVersionHeaders } from '../shared/claude-api-version.js';
 import {
@@ -134,9 +132,18 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     readonly provider = Providers.azure_foundry;
     readonly service: OpenAI;
 
-    constructor(service: OpenAI, options: DriverOptions) {
+    constructor(
+        service: OpenAI,
+        options: DriverOptions,
+        private readonly resolveSourceModel: (model: string) => string,
+    ) {
         super({ ...options, resultSchemaMode: 'response_format', toolSchemaMode: 'compatible' });
         this.service = service;
+    }
+
+    /** The model the tool-result attachment rules judge: the source model behind the deployment name. */
+    getAttachmentModel(model: string): string {
+        return this.resolveSourceModel(model);
     }
 
     async _postChatCompletion(
@@ -369,10 +376,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         });
     }
 
-    private getChatTarget(model: string): FoundryChatTarget {
-        return { model: this.getSourceModel(model), provider: this.provider, logger: this.logger };
-    }
-
     private getAnthropicClient(): AnthropicFoundry {
         if (!this.anthropicClient) {
             const url = new URL(this.endpoint);
@@ -459,6 +462,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         this.inferenceProtocolDriver ??= new AzureFoundryInferenceProtocolDriver(
             this.getInferenceClient(),
             this.options,
+            (model) => this.getSourceModel(model),
         );
         return this.inferenceProtocolDriver;
     }
@@ -507,10 +511,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         if (protocol === 'responses') {
             return this.getOpenAIProtocolDriver().requestTextCompletion(requireOpenAIPrompt(prompt), options, signal);
         }
-        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt), this.getChatTarget(options.model));
+        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
         return this.getInferenceProtocolDriver().requestTextCompletion(
             chatPrompt,
-            toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
+            toAzureFoundryChatOptions(options, deploymentName),
             signal,
         );
     }
@@ -544,10 +548,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 signal,
             );
         }
-        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt), this.getChatTarget(options.model));
+        const chatPrompt = toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt));
         return this.getInferenceProtocolDriver().requestTextCompletionStream(
             chatPrompt,
-            toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
+            toAzureFoundryChatOptions(options, deploymentName),
             signal,
         );
     }
@@ -579,10 +583,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
         if (protocol === 'chat_completions') {
             return this.getInferenceProtocolDriver().buildStreamingConversation(
-                toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt), this.getChatTarget(options.model)),
+                toAzureFoundryChatPrompt(requireOpenAIPrompt(prompt)),
                 result,
                 toolUse,
-                toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
+                toAzureFoundryChatOptions(options, deploymentName),
             );
         }
         return undefined;
@@ -598,7 +602,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         if (protocol === 'chat_completions') {
             this.getInferenceProtocolDriver().validateResult(
                 result,
-                toAzureFoundryChatOptions(options, deploymentName, this.getChatTarget(options.model)),
+                toAzureFoundryChatOptions(options, deploymentName),
             );
             return;
         }
@@ -806,19 +810,13 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 }
 
-/** Who the Chat Completions request is for: the attachment rules are judged on the deployment's source model. */
-interface FoundryChatTarget {
-    model: string;
-    provider: string;
-    logger?: Logger;
-}
-
-function toAzureFoundryChatPrompt(items: ResponseInputItem[], target: FoundryChatTarget): OpenAIChatCompletionsPrompt {
-    const readable = omitUnreadableToolOutputParts(items, 'openai_chat', target.model, {
-        provider: target.provider,
-        logger: target.logger,
-    });
-    const messages = convertResponseItemsToChatMessages(readable).map((message) => {
+/**
+ * The Chat Completions form of a Responses prompt or stored conversation. It is also what a Chat Completions turn
+ * stores, so attachments are not filtered here: a tool image moves to a labelled user message, which the Chat
+ * Completions request filters for the model of each turn.
+ */
+function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatCompletionsPrompt {
+    const messages = convertResponseItemsToChatMessages(items).map((message) => {
         switch (message.role) {
             case 'assistant':
                 return {
@@ -864,16 +862,12 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[], target: FoundryCha
     return { _is_openai_chat_completions: true, messages };
 }
 
-function toAzureFoundryChatOptions(
-    options: ExecutionOptions,
-    deploymentName: string,
-    target: FoundryChatTarget,
-): ExecutionOptions {
+function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: string): ExecutionOptions {
     return {
         ...options,
         model: deploymentName,
         conversation: Array.isArray(options.conversation)
-            ? toAzureFoundryChatPrompt(options.conversation as ResponseInputItem[], target)
+            ? toAzureFoundryChatPrompt(options.conversation as ResponseInputItem[])
             : options.conversation,
     };
 }
