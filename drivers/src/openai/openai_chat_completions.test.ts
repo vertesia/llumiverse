@@ -1740,4 +1740,30 @@ describe('OpenAIChatCompletionsProtocol tool result attachments the model cannot
 
         expect(sent).not.toContain('base64');
     });
+
+    it('filters a stored tool image after a flattened call whose arguments were malformed JSON', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: '[Tool call: fetch({"page":2,})]' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result call_1:' }, image] },
+            ],
+        });
+
+        expect(sent).not.toContain('base64');
+    });
+
+    it('keeps a stored upload after a quoted tool call followed by prose on the same line', async () => {
+        const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
+        const sent = await sentMessages({
+            _is_openai_chat_completions: true,
+            messages: [
+                { role: 'assistant', content: 'Try\n[Tool call: fetch({})] and send the output (as a picture)]' },
+                { role: 'user', content: [{ type: 'text', text: 'Tool result sample:' }, image] },
+            ],
+        });
+
+        expect(sent).toContain('base64');
+    });
 });

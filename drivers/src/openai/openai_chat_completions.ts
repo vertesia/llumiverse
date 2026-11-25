@@ -840,20 +840,22 @@ function omitUnreadableToolImages(
 
 /** The caption a turn without tools puts before the parts of a tool result with images. */
 const FLATTENED_TOOL_RESULT_CAPTION = /^Tool result \S+:$/;
+
 /**
  * A turn without tools wrote each tool call as `[Tool call: name(args)]`, one after another on new lines after the
- * message's own text, with the arguments as given (newlines included) and cut to 500 characters plus `...`.
+ * message's own text, with the arguments as the model sent them: newlines kept, malformed JSON included, cut to 500
+ * characters plus `...`.
  */
 const FLATTENED_TOOL_CALL_START = '[Tool call: ';
-const FLATTENED_TOOL_ARGS_LIMIT = 500;
+const FLATTENED_TOOL_CALL_END = ')]';
 
 /**
  * A tool result with images that a turn without tools turned into a user message before
  * {@link OpenAIChatCompletionsMessage.tool_result_call_id} was recorded. Such a history keeps no other trace of its
  * origin, so the whole shape that turn wrote is required, not a caption alone: the message starts with the
  * `Tool result <id>:` caption, and goes back, over the other tool results of its call, to an assistant message that
- * ends with its tool calls written as `[Tool call: name(args)]`, each starting a line. Callers apply it to stored messages
- * only: that shape is never written any more, so a message of the new prompt (a user's upload) is never one.
+ * ends with its tool calls written as `[Tool call: name(args)]`, each starting a line. Callers apply it to stored
+ * messages only: that shape is never written any more, so a message of the new prompt (a user's upload) is never one.
  */
 function isUnmarkedFlattenedToolResult(messages: OpenAIChatCompletionsMessage[], index: number): boolean {
     if (!isFlattenedToolResultWithImages(messages[index])) return false;
@@ -880,32 +882,23 @@ function endsWithFlattenedToolCalls(text: string): boolean {
 }
 
 /**
- * Whether `text` holds, from `position` to its end, only `[Tool call: name(args)]` entries joined by newlines. The
- * arguments may contain `)]` and newlines, so each possible end is tried, and an end counts only where the arguments
- * are what that turn could have written: empty, JSON, or cut to the limit. Prose between two calls is neither.
+ * Whether `text` holds, from `position` to its end, only `[Tool call: name(args)]` entries joined by newlines. A call
+ * ends at the first `)]` after its name, so the arguments can be anything but that, malformed JSON and newlines
+ * included; what follows must be the next call or the end. Prose after a quoted call is neither, so it never passes.
+ * Arguments that contain `)]` are not recognised, and their images are sent as before.
  */
 function isFlattenedToolCallSequence(text: string, position: number): boolean {
-    if (!text.startsWith(FLATTENED_TOOL_CALL_START, position)) return false;
-    const open = text.indexOf('(', position + FLATTENED_TOOL_CALL_START.length);
-    if (open < 0 || text.slice(position, open).includes('\n')) return false;
-    for (let end = text.indexOf(')]', open + 1); end >= 0; end = text.indexOf(')]', end + 1)) {
-        const next = end + 2;
-        const last = next === text.length;
-        if (!last && !text.startsWith(`\n${FLATTENED_TOOL_CALL_START}`, next)) continue;
-        if (!isFlattenedToolArguments(text.slice(open + 1, end))) continue;
-        if (last || isFlattenedToolCallSequence(text, next + 1)) return true;
-    }
-    return false;
-}
-
-function isFlattenedToolArguments(args: string): boolean {
-    if (args === '') return true;
-    if (args.length === FLATTENED_TOOL_ARGS_LIMIT + 3 && args.endsWith('...')) return true;
-    try {
-        JSON.parse(args);
-        return true;
-    } catch {
-        return false;
+    let cursor = position;
+    while (true) {
+        if (!text.startsWith(FLATTENED_TOOL_CALL_START, cursor)) return false;
+        const open = text.indexOf('(', cursor + FLATTENED_TOOL_CALL_START.length);
+        if (open < 0 || text.slice(cursor, open).includes('\n')) return false;
+        const end = text.indexOf(FLATTENED_TOOL_CALL_END, open + 1);
+        if (end < 0) return false;
+        const next = end + FLATTENED_TOOL_CALL_END.length;
+        if (next === text.length) return true;
+        if (text[next] !== '\n') return false;
+        cursor = next + 1;
     }
 }
 
