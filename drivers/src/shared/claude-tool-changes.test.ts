@@ -1,5 +1,5 @@
 import type { Message, MessageParam, RawMessageStreamEvent, Tool } from '@anthropic-ai/sdk/resources/messages.js';
-import { type ExecutionOptions, Providers, type ToolDefinition } from '@llumiverse/core';
+import { conversationDeclaresTools, type ExecutionOptions, Providers, type ToolDefinition } from '@llumiverse/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     buildClaudeStreamingConversation,
@@ -23,6 +23,7 @@ import {
 const MODEL = 'claude-sonnet-5-5';
 /** A platform that takes tool changes by reference only (no inline tools). */
 const BY_REFERENCE = Providers.vertexai;
+const INLINE_PROVIDER = Providers.anthropic;
 const schema = { type: 'object', properties: { q: { type: 'string' } } } as const;
 const tool = (name: string, description = `${name} tool`): ToolDefinition => ({
     name,
@@ -839,6 +840,122 @@ describe('Claude tool changes across turns', () => {
         expect(t3.payload.messages.filter((m) => m.role === 'system')).toEqual([
             { role: 'system', content: [addition('list_items')] },
         ]);
+    });
+});
+
+describe('Claude standby tools', () => {
+    const standby = { standby_tools: [tool('b'), tool('c')] };
+
+    it('declares standby tools deferred after the loaded tools, then offers one by reference only', async () => {
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            BY_REFERENCE,
+            MODEL,
+            standby,
+        );
+        expect(t1.payload.tools).toEqual([
+            tool('a'),
+            { ...tool('b'), defer_loading: true },
+            { ...tool('c'), defer_loading: true },
+        ]);
+        expect(getClaudeToolState(t1.conversation)?.visible).toEqual(['a']);
+        expect(t1.payload.messages.some((m) => m.role === 'system')).toBe(false);
+        // The caller can tell standby tools are no longer read.
+        expect(conversationDeclaresTools(undefined)).toBe(false);
+        expect(conversationDeclaresTools(t1.conversation)).toBe(true);
+
+        // Unlocking b keeps `tools` byte for byte and adds it with a tool_addition block.
+        const t2 = await turn(toolResult('c1'), [tool('a'), tool('b')], t1.conversation, assistantToolUse('c2', 'b'));
+        expect(JSON.stringify(withoutCacheControl(t2.payload.tools))).toBe(
+            JSON.stringify(withoutCacheControl(t1.payload.tools)),
+        );
+        expect(t2.payload.messages.at(-1)).toEqual({ role: 'system', content: [addition('b')] });
+        expect(getClaudeToolState(t2.conversation)?.visible).toEqual(['a', 'b']);
+    });
+
+    it('replays the stored declaration and ignores standby tools on later requests', async () => {
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            BY_REFERENCE,
+            MODEL,
+            standby,
+        );
+        // A rebuilt standby list (e.g. after continue-as-new) must not change the declared tools.
+        const t2 = await turn(
+            toolResult('c1'),
+            [tool('a')],
+            t1.conversation,
+            assistantToolUse('c2', 'a'),
+            BY_REFERENCE,
+            MODEL,
+            {
+                standby_tools: [tool('c'), tool('d')],
+            },
+        );
+        expect(JSON.stringify(withoutCacheControl(t2.payload.tools))).toBe(
+            JSON.stringify(withoutCacheControl(t1.payload.tools)),
+        );
+        const t3 = await turn(toolResult('c2'), [tool('a')], t2.conversation, assistantToolUse('c3', 'a'));
+        expect(JSON.stringify(withoutCacheControl(t3.payload.tools))).toBe(
+            JSON.stringify(withoutCacheControl(t1.payload.tools)),
+        );
+    });
+
+    it('never declares a requested tool as standby, and keeps one definition per name', () => {
+        const declared = applyClaudeToolChanges(start(), [tool('a') as Tool], false, [
+            tool('a', 'standby a') as Tool,
+            tool('b', 'v1') as Tool,
+            { ...tool('b', 'v2'), defer_loading: true, cache_control: { type: 'ephemeral' } } as Tool,
+        ]);
+        expect(getClaudeToolState(declared)).toEqual({
+            declared: [
+                { definition: tool('a'), deferred: false },
+                { definition: tool('b', 'v2'), deferred: true },
+            ],
+            visible: ['a'],
+        });
+    });
+
+    it('declares nothing when the request has no tools, so `tools` is never all deferred', () => {
+        const conversation = applyClaudeToolChanges(start(), [], false, [tool('b') as Tool]);
+        expect(getClaudeToolState(conversation)).toBeUndefined();
+        const later = applyClaudeToolChanges(conversation, [tool('a') as Tool], false, [tool('b') as Tool]);
+        expect(getClaudeToolState(later)?.declared.map((t) => [t.definition.name, t.deferred])).toEqual([
+            ['a', false],
+            ['b', true],
+        ]);
+    });
+
+    it('ignores standby tools with inline tools, which never change `tools`', async () => {
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            INLINE_PROVIDER,
+            MODEL,
+            standby,
+        );
+        expect(t1.payload.tools).toEqual([tool('a')]);
+    });
+
+    it('ignores standby tools on models without tool changes', async () => {
+        const t1 = await turn(
+            firstPrompt,
+            [tool('a')],
+            undefined,
+            assistantToolUse('c1', 'a'),
+            BY_REFERENCE,
+            'claude-sonnet-5',
+            standby,
+        );
+        expect(t1.payload.tools).toEqual([tool('a')]);
     });
 });
 

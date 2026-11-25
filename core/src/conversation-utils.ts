@@ -282,6 +282,16 @@ export function getConversationMeta(conversation: unknown): ConversationMeta {
 const ARRAY_WRAPPER_KEY = '_arrayConversation';
 
 /**
+ * Whether a driver has stored the tools this conversation declared: Claude conversations that track tool changes
+ * (`claude_tools`). Until then, the next request declares the conversation's tools and is the only one that reads
+ * `ExecutionOptions.standby_tools`, so a caller can leave them out of every other request.
+ */
+export function conversationDeclaresTools(conversation: unknown): boolean {
+    const declared = (getConversationMeta(conversation).claude_tools as { declared?: unknown } | undefined)?.declared;
+    return Array.isArray(declared);
+}
+
+/**
  * Set metadata on a conversation object, keeping fields a driver stored there (e.g. Claude's declared tools).
  * Arrays are wrapped in an object to preserve their type through JSON serialization.
  */
