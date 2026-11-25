@@ -688,6 +688,28 @@ describe('AzureFoundryDriver Chat Completions tool result replay', () => {
         },
     );
 
+    it('filters a saved tool image on a turn without tools, and again once tools are back', async () => {
+        const { driver, bodies } = chatDriver();
+        try {
+            const image = 'data:image/png;base64,AQID';
+            const tools = [{ name: 'fetch', input_schema: { type: 'object' as const } }];
+            const withoutTools = { model: 'customer-prod', tools: [], conversation: toolImageConversation(image) };
+            const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], withoutTools);
+            const completion = await driver.requestTextCompletion(prompt, withoutTools);
+
+            expect(JSON.stringify(bodies[0].messages)).not.toContain('base64');
+            expect(JSON.stringify(bodies[0].messages)).not.toContain('tool_result_call_id');
+            expect(JSON.stringify(completion.conversation)).toContain(image);
+
+            const withTools = { model: 'customer-prod', tools, conversation: completion.conversation };
+            const next = await driver.createPrompt([{ role: PromptRole.user, content: 'And now?' }], withTools);
+            await driver.requestTextCompletion(next, withTools);
+            expect(JSON.stringify(bodies[1].messages)).not.toContain('base64');
+        } finally {
+            driver.destroy();
+        }
+    });
+
     it('never takes a user image after a tool-result caption for a tool image', async () => {
         const { driver, bodies } = chatDriver();
         try {

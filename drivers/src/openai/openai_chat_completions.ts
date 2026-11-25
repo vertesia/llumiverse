@@ -93,6 +93,12 @@ export type OpenAIChatCompletionsMessage = {
     /** Provider-native reasoning fields used by OpenAI-compatible APIs for replay. */
     reasoning_content?: string | null;
     reasoning?: string | null;
+    /**
+     * Set on a user message that holds a tool result with images, written when a turn without tools turns tool
+     * messages into text, so its images are still judged as tool-result attachments. Stored only: the request never
+     * carries it.
+     */
+    tool_result_call_id?: string;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -519,6 +525,7 @@ export function convertOpenAIChatCompletionsToolMessagesToText(
                 return {
                     role: 'user',
                     content: [{ type: 'text', text: `Tool result ${message.tool_call_id}:` }, ...message.content],
+                    tool_result_call_id: message.tool_call_id,
                 };
             }
             const output = extractOpenAIChatCompletionsContentText(message.content) || 'No output';
@@ -786,8 +793,9 @@ function replayableChatMessages(
 
 /**
  * A copy of `messages` in which each tool-result image keeps its place only if the model can read it, with a note in
- * place of each other one. A tool-result image is an image part of a tool message: the stored conversation keeps it
- * there, and only the request moves it to a user message, so a user's own image is never taken for one. New
+ * place of each other one. A tool-result image is an image part of a tool message, or of the user message a turn
+ * without tools wrote in its place ({@link OpenAIChatCompletionsMessage.tool_result_call_id}): the origin is recorded,
+ * never read from a caption, so a user's own image is never taken for one. New
  * tool results are filtered when the prompt is built; this covers the stored conversation, whose tool results were
  * filtered for the model of the turn that added them, so switching a conversation to a text-only model (gpt-oss, for
  * example) would otherwise replay its images on every turn. Only the request copy changes. Exception to "preserve
@@ -801,7 +809,8 @@ function omitUnreadableToolImages(
 ): OpenAIChatCompletionsMessage[] {
     let omitted = 0;
     const result = messages.map((message) => {
-        if (message.role !== 'tool' || !Array.isArray(message.content)) return message;
+        const fromTool = message.role === 'tool' || message.tool_result_call_id !== undefined;
+        if (!fromTool || !Array.isArray(message.content)) return message;
         let changed = false;
         const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
             if (part.type !== 'image_url') return part;
