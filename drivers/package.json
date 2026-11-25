@@ -154,7 +154,7 @@
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^3.5.0",
-        "@openrouter/sdk": "^1.5.84",
+        "@openrouter/sdk": "^1.5.111",
         "@vertesia/api-fetch-client": "^1.5.1",
         "eventsource": "^5.1.5",
         "google-auth-library": "catalog:",
@@ -163,7 +163,7 @@
         "node-web-stream-adapters": "^0.2.1",
         "openai": "7.56.0",
         "replicate": "^1.4.0",
-        "together-ai": "^1.1.0"
+        "together-ai": "^1.2.0"
     },
     "gitHead": "902a175a2ee3064428c4ddf820bbc383a5bef94d",
     "releaseIdentity": {
