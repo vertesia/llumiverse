@@ -784,13 +784,10 @@ function replayableChatMessages(
     return converted;
 }
 
-/** The label a tool image carries once it is moved out of its tool message into the user message that follows. */
-const TOOL_IMAGE_LABEL = /^Image \d+ from tool result .+:$/;
-
 /**
  * A copy of `messages` in which each tool-result image keeps its place only if the model can read it, with a note in
- * place of each other one. A tool-result image is an image part of a tool message, or one that follows its
- * `Image N from tool result <id>:` label in a user message (where a conversion to Chat Completions stores it). New
+ * place of each other one. A tool-result image is an image part of a tool message: the stored conversation keeps it
+ * there, and only the request moves it to a user message, so a user's own image is never taken for one. New
  * tool results are filtered when the prompt is built; this covers the stored conversation, whose tool results were
  * filtered for the model of the turn that added them, so switching a conversation to a text-only model (gpt-oss, for
  * example) would otherwise replay its images on every turn. Only the request copy changes. Exception to "preserve
@@ -804,15 +801,10 @@ function omitUnreadableToolImages(
 ): OpenAIChatCompletionsMessage[] {
     let omitted = 0;
     const result = messages.map((message) => {
-        if ((message.role !== 'tool' && message.role !== 'user') || !Array.isArray(message.content)) return message;
+        if (message.role !== 'tool' || !Array.isArray(message.content)) return message;
         let changed = false;
-        const parts = message.content;
-        const content = parts.map((part, index): OpenAIChatCompletionsContentPart => {
+        const content = message.content.map((part): OpenAIChatCompletionsContentPart => {
             if (part.type !== 'image_url') return part;
-            const previous = parts[index - 1];
-            const fromTool =
-                message.role === 'tool' || (previous?.type === 'text' && TOOL_IMAGE_LABEL.test(previous.text));
-            if (!fromTool) return part;
             const mimeType = /^data:([^;,]*)/i.exec(part.image_url.url)?.[1];
             if (mimeType === undefined || isToolResultAttachmentSupported('openai_chat', mimeType, model, provider)) {
                 return part;

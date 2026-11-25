@@ -533,8 +533,11 @@ describe('AzureFoundryDriver tool result attachments', () => {
 });
 
 describe('AzureFoundryDriver Chat Completions tool result replay', () => {
-    function chatDriver() {
-        const driver = createDriver();
+    function chatDriver(auth: 'entra' | 'api_key' = 'entra') {
+        const driver =
+            auth === 'entra'
+                ? createDriver()
+                : new AzureFoundryDriver({ endpoint: 'https://foundry.example.test', apiKey: 'test-key' });
         driver.service = {
             deployments: { get: vi.fn(async () => ({ modelPublisher: 'DeepSeek', modelName: 'DeepSeek-V3.2' })) },
             getOpenAIClient: () => ({ baseURL: 'https://foundry.example.test/openai/v1' }),
@@ -635,39 +638,73 @@ describe('AzureFoundryDriver Chat Completions tool result replay', () => {
         }
     });
 
-    it('filters a saved tool image for a text-only deployment and keeps it in the returned conversation', async () => {
+    const toolImageConversation = (image: string) => [
+        { type: 'function_call', call_id: 'call_1', name: 'fetch', arguments: '{}' },
+        {
+            type: 'function_call_output',
+            call_id: 'call_1',
+            output: [
+                { type: 'input_text', text: 'Fetched' },
+                { type: 'input_image', image_url: image, detail: 'auto' },
+            ],
+        },
+    ];
+    const omittedImage = (model: string) => ({
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: `Fetched\n[attachment omitted: image (image/png) — ${model} cannot read this type in a tool result]`,
+    });
+
+    it.each([
+        ['an Entra deployment named by its bare name', 'entra', 'customer-prod'],
+        ['an API-key deployment named by its composite ID', 'api_key', 'customer-prod::DeepSeek-V3.2'],
+    ] as const)(
+        'filters a saved tool image for %s and keeps it in the returned conversation',
+        async (_label, auth, model) => {
+            const { driver, bodies } = chatDriver(auth);
+            try {
+                const image = 'data:image/png;base64,AQID';
+                const options = {
+                    model,
+                    tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
+                    conversation: toolImageConversation(image),
+                };
+                const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], options);
+                const completion = await driver.requestTextCompletion(prompt, options);
+
+                expect(JSON.stringify(bodies[0].messages)).not.toContain('base64');
+                expect(bodies[0].messages).toContainEqual(omittedImage('DeepSeek-V3.2'));
+                expect(JSON.stringify(completion.conversation)).toContain(image);
+
+                // The stored conversation keeps the image in its tool message, so the next turn filters it again.
+                const next = { ...options, conversation: completion.conversation };
+                const nextPrompt = await driver.createPrompt([{ role: PromptRole.user, content: 'And now?' }], next);
+                await driver.requestTextCompletion(nextPrompt, next);
+                expect(JSON.stringify(bodies[1].messages)).not.toContain('base64');
+                expect(bodies[1].messages).toContainEqual(omittedImage('DeepSeek-V3.2'));
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
+
+    it('never takes a user image after a tool-result caption for a tool image', async () => {
         const { driver, bodies } = chatDriver();
         try {
             const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
-            // What a Chat Completions turn on a vision deployment stores: the tool image follows its label.
-            const conversation = {
-                _is_openai_chat_completions: true,
-                messages: [
-                    {
-                        role: 'assistant',
-                        content: null,
-                        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'fetch', arguments: '{}' } }],
-                    },
-                    { role: 'tool', tool_call_id: 'call_1', content: 'Fetched\n[Image 1 attached below]' },
-                    { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result call_1:' }, image] },
-                ],
-            };
             const options = {
                 model: 'customer-prod',
-                tools: [{ name: 'fetch', input_schema: { type: 'object' as const } }],
-                conversation,
+                conversation: {
+                    _is_openai_chat_completions: true,
+                    messages: [
+                        { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result sample:' }, image] },
+                    ],
+                },
             };
             const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Describe it' }], options);
-            const completion = await driver.requestTextCompletion(prompt, options);
+            await driver.requestTextCompletion(prompt, options);
 
-            expect(JSON.stringify(bodies[0].messages)).not.toContain('base64');
-            expect(bodies[0].messages).toContainEqual({
-                role: 'user',
-                content:
-                    'Image 1 from tool result call_1:\n' +
-                    '[attachment omitted: image (image/png) — DeepSeek-V3.2 cannot read this type in a tool result]',
-            });
-            expect(JSON.stringify(completion.conversation)).toContain(image.image_url.url);
+            expect(JSON.stringify(bodies[0].messages)).toContain(image.image_url.url);
         } finally {
             driver.destroy();
         }
