@@ -48,6 +48,18 @@ describe('OpenAI Responses cut off inside a function call', () => {
         expect(completion.result).toEqual([]);
     });
 
+    it('leaves out a last call with empty-object arguments from an incomplete response', () => {
+        const response = {
+            ...incompleteResponse('max_output_tokens'),
+            output: [{ type: 'function_call', call_id: 'call_2', name: 'update_prompt', arguments: '{}' }],
+        } as unknown as OpenAI.Responses.Response;
+
+        const completion = driver.extractDataFromResponse({ model: 'gpt-test' }, response);
+
+        expect(completion.finish_reason).toBe('length');
+        expect(completion.tool_use).toBeUndefined();
+    });
+
     it('still reports tool_use for a completed response with function calls', () => {
         const completed = {
             ...incompleteResponse('content_filter'),

@@ -278,6 +278,11 @@ export function finalizeStreamingToolUse(
                 parseError ??= error;
             }
         }
+        // Some OpenAI-compatible gateways answer a call cut off before its arguments with `{}`. On a cut-off
+        // response, an empty last call is treated as cut off, as when its buffer is empty.
+        if (cutOff && tool === lastTool && !malformedToolIds.has(tool.id) && isEmptyObject(tool.tool_input)) {
+            malformedToolIds.add(tool.id);
+        }
     }
 
     if (malformedToolIds.size === 0) return toolUseArray;

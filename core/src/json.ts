@@ -42,6 +42,17 @@ export function extractAndParseJSON(text: string): JSONValue {
 }
 
 /**
+ * Whether the arguments of the last tool call of a cut-off response can be trusted. They must be a complete JSON
+ * object with at least one property: some OpenAI-compatible gateways answer a call cut off before its arguments
+ * with `{}`, which parses but is not what the model wrote. A call that really takes no arguments and still ends a
+ * cut-off response is left out too; the caller asks the model to continue, and the call is made again.
+ */
+export function isCompleteCutOffToolArguments(text: unknown): boolean {
+    if (!isJSONObjectText(text)) return false;
+    return Object.keys(JSON.parse(text as string) as object).length > 0;
+}
+
+/**
  * Whether text is a complete JSON object, parsed strictly. Unlike {@link parseJSON} it never repairs the text, so
  * tool-call arguments that were cut off do not count as complete.
  */
