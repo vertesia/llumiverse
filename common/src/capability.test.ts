@@ -142,6 +142,26 @@ describe('supportsToolUse streaming default', () => {
         expect(caps.tool_support).toBeUndefined();
         expect(caps.tool_support_streaming).toBeUndefined();
     });
+
+    it.each([
+        ['my-finetune-v3', Providers.openai_compatible],
+        ['unsloth/some-new-model-GGUF', Providers.openai_compatible],
+        ['future-provider.unknown-chat-v1', Providers.bedrock],
+    ])('sends tools for unknown model %s on %s', (model, provider) => {
+        expect(getModelCapabilities(model, provider).tool_support).toBeUndefined();
+        expect(supportsToolUse(model, provider)).toBe(true);
+        expect(supportsToolUse(model, provider, true)).toBe(true);
+    });
+
+    it.each([
+        ['text-embedding-3-small', Providers.openai],
+        ['gpt-image-1', Providers.openai],
+        ['whisper-1', Providers.openai_compatible],
+        ['tts-1', Providers.openai_compatible],
+    ])('keeps tools off for %s on %s, which the directory marks as not tool-capable', (model, provider) => {
+        expect(supportsToolUse(model, provider)).toBe(false);
+        expect(supportsToolUse(model, provider, true)).toBe(false);
+    });
 });
 
 describe('decision support', () => {

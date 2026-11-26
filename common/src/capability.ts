@@ -55,14 +55,21 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
     };
 }
 
+/**
+ * Whether the driver should send tools for a model. Only an explicit `false` in the model directory opts out: most
+ * models the directory does not know (new releases, local and gateway-served open-weight models) do take tools, and
+ * a request without them leaves the model to write tool calls into its text. A server that rejects tools fails
+ * visibly instead.
+ *
+ * `tool_support_streaming` falls back to `tool_support` when unset, so only an explicit `false` turns tools off
+ * while streaming.
+ */
 export function supportsToolUse(model: string, provider: Providers, streaming: boolean = false): boolean {
     const capabilities = getModelCapabilities(model, provider);
-    if (!streaming) {
-        return !!capabilities.tool_support;
-    }
-    // Unset tool_support_streaming means "same as tool_support" (OpenAI-compatible default).
-    // Only an explicit false opts out of tools-while-streaming.
-    return !!(capabilities.tool_support_streaming ?? capabilities.tool_support);
+    const support = streaming
+        ? (capabilities.tool_support_streaming ?? capabilities.tool_support)
+        : capabilities.tool_support;
+    return support !== false;
 }
 
 /**
