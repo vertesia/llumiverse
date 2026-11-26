@@ -138,17 +138,24 @@ export function mapOpenAIResponsesUsage(
         usage.prompt_tokens_details?.cache_write_tokens ??
         usage.cache_write_tokens;
     const cacheWrite12h = usage.input_tokens_details?.cache_write_tokens_details?.ttl_12h_tokens;
+    const providerCost = usage.is_byok !== true && typeof usage.cost === 'number' ? usage.cost : undefined;
     return {
         ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         ...(cacheWrite12h ? { prompt_cache_write_12h: cacheWrite12h } : {}),
         result: usage.output_tokens,
         total: usage.total_tokens,
         ...(tools ? { tool_usage: tools } : {}),
+        ...(providerCost !== undefined ? { provider_cost_usd: providerCost } : {}),
     };
 }
 
-/** Responses usage plus the fields some OpenAI-compatible Responses endpoints report instead. */
+/**
+ * Responses usage plus the fields some OpenAI-compatible Responses endpoints report instead, and the amount
+ * OpenRouter charged (`cost`, not charged on bring-your-own-key).
+ */
 export type ResponsesUsage = OpenAI.Responses.ResponseUsage & {
+    cost?: number | null;
+    is_byok?: boolean | null;
     cached_tokens?: number | null;
     cache_write_tokens?: number | null;
     prompt_tokens_details?: {

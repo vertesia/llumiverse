@@ -126,6 +126,24 @@ describe('toolResultAttachmentApi', () => {
             'openai_chat',
         );
     });
+
+    it.each([
+        ['openrouter', 'openai_chat'],
+        ['groq', 'openai_chat'],
+        ['togetherai', 'openai_chat'],
+        ['xai', 'openai_responses'],
+    ] as const)('follows the openai_api of %s, %s by default', (provider, defaultApi) => {
+        expect(toolResultAttachmentApi(provider, 'some-model')).toBe(defaultApi);
+        expect(toolResultAttachmentApi(provider, 'some-model', { openaiApi: 'responses' })).toBe('openai_responses');
+        expect(toolResultAttachmentApi(provider, 'some-model', { openaiApi: 'chat_completions' })).toBe('openai_chat');
+    });
+
+    it('ignores openai_api for a provider without the option', () => {
+        expect(toolResultAttachmentApi('openai', 'gpt-5.6', { openaiApi: 'chat_completions' })).toBe(
+            'openai_responses',
+        );
+        expect(toolResultAttachmentApi('mistralai', 'mistral-large', { openaiApi: 'responses' })).toBeUndefined();
+    });
 });
 
 describe('formatOmittedAttachmentNote', () => {
