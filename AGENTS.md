@@ -178,6 +178,14 @@ by name, and a changed tool is replaced in place. The tool state is stored in
 `_llumiverse_meta.claude_tools`, so keep `_llumiverse_meta` with the conversation when storing or editing it.
 Unsupported models receive `tools` as before, without the tool-change blocks.
 
+`ExecutionOptions.standby_tools` lists tools the caller may offer later (for example the tools a skill unlocks). By
+reference, the first request that declares the conversation's tools sends them after `tools` with
+`defer_loading: true`, so offering one later only adds a `tool_addition` block. Appending a tool to `tools` instead
+makes Bedrock re-write the whole cached prefix (measured 2026-11-23 on Claude Haiku 5.5: 0 tokens read on the unlock
+turn without standby tools, the full prefix with them). Later requests replay the stored declaration and ignore the
+option (`conversationDeclaresTools(conversation)` from `@llumiverse/core` tells a caller when it can leave them
+out); inline tools need no standby declaration.
+
 ### Server-Side Compaction
 
 `ExecutionOptions.compaction` asks the provider to summarize a long conversation once its input reaches

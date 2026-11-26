@@ -1638,6 +1638,7 @@ function prepareClaudeConversation(options: ExecutionOptions, prompt: ClaudeProm
               conversation,
               options.tools as Tool[] | undefined,
               usesClaudeInlineTools(options.model, provider, conversation),
+              options.standby_tools as Tool[] | undefined,
           )
         : clearClaudeToolState(conversation);
 }

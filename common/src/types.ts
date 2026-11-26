@@ -755,6 +755,16 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      */
     tools?: ToolDefinition[];
     /**
+     * Tools the caller may offer later in the conversation (for example the tools a skill unlocks), declared up
+     * front so that offering one later does not change the cached prompt prefix. They stay uncallable until a
+     * later request lists them in `tools`, whose definition must then be the same to keep the cache.
+     *
+     * Claude on platforms that change tools by reference (Amazon Bedrock, Vertex AI, Microsoft Foundry): the
+     * first request that declares the conversation's tools sends these after `tools` with `defer_loading: true`;
+     * later requests replay that declaration from the conversation and ignore this option. Ignored elsewhere.
+     */
+    standby_tools?: ToolDefinition[];
+    /**
      * This is an opaque structure that provides a conversation context
      * Each driver implementation will return a conversation property in the execution response
      * that can be passed here to restore the context when a new prompt is sent to the model.

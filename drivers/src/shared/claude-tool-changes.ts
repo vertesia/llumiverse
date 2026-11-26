@@ -232,6 +232,7 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     storedConversation: T,
     requestedTools: Tool[] | undefined,
     inlineTools = false,
+    standbyTools?: Tool[],
 ): T {
     const stored = getClaudeToolState(storedConversation);
     const conversation =
@@ -251,10 +252,17 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
         // deferred, so tools first declared after earlier turns (which ran without tracked tools) change the
         // tools those turns were bound to once. Tool-change blocks without stored state (e.g. a rebuilt
         // conversation that lost its metadata) may name tools this declaration does not include; drop them.
+        // By reference, standby tools are declared deferred after the loaded ones, so offering one later adds a
+        // `tool_addition` block instead of changing `tools` (which rewrites the whole cached prefix). Inline
+        // tools never change `tools`, so they need no standby declaration.
+        const standby = inlineTools ? [] : standbyDeclarations(standbyTools, requested);
         return setClaudeToolState(
             { ...conversation, messages: stripClaudeToolChanges(conversation.messages) },
             {
-                declared: requested.map((definition) => ({ definition, deferred: false })),
+                declared: [
+                    ...requested.map((definition) => ({ definition, deferred: false })),
+                    ...standby.map((definition) => ({ definition, deferred: true })),
+                ],
                 visible: requested.map((tool) => tool.name),
             },
         );
@@ -313,6 +321,20 @@ export function applyClaudeToolChanges<T extends { messages: MessageParam[] }>(
     // trailing assistant turn, and getClaudePayload places any change that still follows one.
     const changeMessage = { role: 'system', content: changes } as unknown as MessageParam;
     return setClaudeToolState({ ...conversation, messages: [...conversation.messages, changeMessage] }, nextState);
+}
+
+/**
+ * The standby tools to declare deferred with the first declaration: one definition per name (a later duplicate
+ * wins), without request-only fields, leaving out the requested tools. Declared only alongside at least one
+ * requested tool (the caller returns earlier without one), since the API rejects a `tools` array whose tools are
+ * all deferred.
+ */
+function standbyDeclarations(standbyTools: Tool[] | undefined, requested: Tool[]): Tool[] {
+    if (!standbyTools?.length) return [];
+    const requestedNames = new Set(requested.map((tool) => tool.name));
+    return [...new Map(standbyTools.map((tool) => [tool.name, withoutRequestFields(tool)])).values()].filter(
+        (tool) => !requestedNames.has(tool.name),
+    );
 }
 
 /**
