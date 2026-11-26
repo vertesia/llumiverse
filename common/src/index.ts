@@ -4,6 +4,7 @@ export * from './capability/tool-result-attachments.js';
 export * from './capability.js';
 export * from './finish-reasons.js';
 export * from './model-directory.js';
+export * from './openai-api.js';
 export * from './options/anthropic.js';
 export * from './options/azure_foundry.js';
 export * from './options/bedrock.js';

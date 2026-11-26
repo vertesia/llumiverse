@@ -106,6 +106,20 @@ describe.each([false, true])('OpenAI Responses usage when streaming=%s', (stream
         });
     });
 
+    it.each([
+        [{ cost: 0.0123 }, 0.0123],
+        [{ cost: 0.0123, is_byok: true }, undefined],
+        [{ cost: null }, undefined],
+        [{}, undefined],
+    ])('reports the cost a gateway charged (%j) as provider_cost_usd %s', async (cost, expected) => {
+        const base = response().usage as unknown as Record<string, unknown>;
+        const { completion } = await complete(
+            response({ usage: { ...base, ...cost } as unknown as OpenAI.Responses.ResponseUsage }),
+            streaming,
+        );
+        expect((completion.token_usage as { provider_cost_usd?: number }).provider_cost_usd).toBe(expected);
+    });
+
     it('keeps hosted tool usage when the model usage is missing', async () => {
         const { completion } = await complete(response({ usage: undefined, tool_usage: toolUsage }), streaming);
         expect(completion.token_usage).toEqual({

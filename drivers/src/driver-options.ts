@@ -7,7 +7,7 @@
 
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import type { TokenCredential } from '@azure/core-auth';
-import type { DriverOptions, ExecutionOptions } from '@llumiverse/core';
+import type { DriverOptions, ExecutionOptions, OpenAIApi } from '@llumiverse/core';
 import type { GoogleAuthOptions } from 'google-auth-library';
 
 export interface AnthropicDriverOptions extends DriverOptions {
@@ -184,7 +184,15 @@ export interface OpenAIResponsesDriverOptions extends DriverOptions {
 }
 
 /** The OpenAI HTTP API an OpenAI-compatible endpoint is called through. */
-export type OpenAICompatibleApi = 'responses' | 'chat_completions';
+export type OpenAICompatibleApi = OpenAIApi;
+
+/**
+ * The factory option that picks the OpenAI API of a provider whose driver can call either one. Omitted means the
+ * provider's default in `OPENAI_API_DEFAULTS`, the API it used before the option existed.
+ */
+export interface OpenAIApiOption {
+    openai_api?: OpenAIApi;
+}
 
 /** The options of an `openai_compatible` driver created through the driver factory. */
 export interface OpenAICompatibleDriverOptions extends OpenAIResponsesDriverOptions {

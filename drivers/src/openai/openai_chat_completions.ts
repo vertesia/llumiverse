@@ -1859,8 +1859,46 @@ export interface OpenAIChatCompletionsDriverConfig extends OpenAIChatCompletions
     default_headers?: Record<string, string>;
 }
 
+/** Chat Completions through the OpenAI SDK client in `service`, for services that implement the OpenAI protocol. */
+export abstract class OpenAISDKChatCompletionsDriverBase<
+    OptionsT extends OpenAIChatCompletionsDriverOptions = OpenAIChatCompletionsDriverOptions,
+> extends OpenAIChatCompletionsDriverBase<OptionsT> {
+    abstract service: OpenAI;
+
+    async _postChatCompletion(
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<OpenAIChatCompletionsResponse> {
+        const request = toOpenAINonStreamingPayload(payload, this.logger);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
+            : await this.service.chat.completions.create(request);
+        return preserveOpenAIChatCompletionsOriginalResponse(
+            normalizeOpenAIChatCompletionsResponse(response),
+            response,
+        );
+    }
+
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ReadableStream> {
+        const request = toOpenAIStreamingPayload(payload, this.logger);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
+            : await this.service.chat.completions.create(request);
+        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
+            stream.controller.abort(),
+        );
+    }
+}
+
 /** Generic driver for services implementing the OpenAI Chat Completions protocol. */
-export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase<OpenAIChatCompletionsDriverConfig> {
+export class OpenAIChatCompletionsDriver extends OpenAISDKChatCompletionsDriverBase<OpenAIChatCompletionsDriverConfig> {
     readonly provider = Providers.openai_compatible;
     service: OpenAI;
 
@@ -1908,37 +1946,6 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             maxRetries: 0,
             timeout: this.getDriverRequestTimeoutMs(),
         });
-    }
-
-    async _postChatCompletion(
-        payload: OpenAIChatCompletionsPayload,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<OpenAIChatCompletionsResponse> {
-        const request = toOpenAINonStreamingPayload(payload, this.logger);
-        const requestOptions = this.getDriverRequestOptions(options, signal);
-        const response = requestOptions
-            ? await this.service.chat.completions.create(request, requestOptions)
-            : await this.service.chat.completions.create(request);
-        return preserveOpenAIChatCompletionsOriginalResponse(
-            normalizeOpenAIChatCompletionsResponse(response),
-            response,
-        );
-    }
-
-    async _postChatCompletionStream(
-        payload: OpenAIChatCompletionsPayload,
-        options: ExecutionOptions,
-        signal?: AbortSignal,
-    ): Promise<ReadableStream> {
-        const request = toOpenAIStreamingPayload(payload, this.logger);
-        const requestOptions = this.getDriverRequestOptions(options, signal);
-        const stream = requestOptions
-            ? await this.service.chat.completions.create(request, requestOptions)
-            : await this.service.chat.completions.create(request);
-        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
-            stream.controller.abort(),
-        );
     }
 
     async listModels(): Promise<AIModel[]> {

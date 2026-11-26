@@ -95,9 +95,9 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
     }
 
     /**
-     * TogetherAI is treated as Chat Completions only. Its Responses API surface is either unsupported
-     * or image-broken for hosted open models, while Chat Completions correctly accepts multimodal
-     * content as OpenAI-style `image_url` parts.
+     * Chat Completions is this driver's API. Together's Responses API, which `TogetherAIResponsesDriver` calls, is
+     * documented for a few hosted open models only and is image-broken for the others, while Chat Completions
+     * accepts multimodal content as OpenAI-style `image_url` parts.
      */
     async validateConnection(): Promise<boolean> {
         try {

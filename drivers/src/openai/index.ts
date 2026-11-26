@@ -281,6 +281,40 @@ export interface OpenAIResponsesPolicy {
     requestsReasoningSummary?(model: string): boolean;
     /** Headers for a request, such as the image-generation deployment Azure needs. */
     requestHeaders?(options: ExecutionOptions): Record<string, string> | undefined;
+    /**
+     * Provider fields for a request body, such as OpenRouter's routing preferences. They go under the caller's
+     * `extra_body` and the fields the driver sets.
+     */
+    requestBody?(options: ExecutionOptions): OpenAIExtraBody | undefined;
+    /** Request fields the endpoint documents as unsupported, left out of every request. */
+    readonly omittedRequestFields?: readonly (keyof OpenAI.Responses.ResponseCreateParams)[];
+}
+
+/** A Responses request with the driver policy's body fields and omissions applied. */
+function buildPolicyResponsesRequest<RequestT extends OpenAI.Responses.ResponseCreateParams>(
+    driver: OpenAIResponsesContext,
+    options: ExecutionOptions,
+    request: RequestT,
+    extraBody: OpenAIExtraBody | undefined,
+): RequestT {
+    const policy = driver.responsesPolicy;
+    const policyBody = policy?.requestBody?.(options);
+    const merged = mergeOpenAIExtraBody(
+        request,
+        policyBody ? { ...policyBody, ...extraBody } : extraBody,
+        driver.logger,
+        options.model,
+    );
+    if (!policy?.omittedRequestFields?.length) return merged;
+    const omitted = policy.omittedRequestFields.filter((field) => merged[field] !== undefined);
+    if (omitted.length === 0) return merged;
+    driver.logger.debug(
+        { model: options.model, provider: driver.provider, fields: omitted },
+        'Responses request fields the endpoint does not support were left out',
+    );
+    const result = { ...merged };
+    for (const field of omitted) delete result[field];
+    return result;
 }
 
 /** What the shared Responses protocol needs from the driver it runs for: transport, model mapping and policy. */
@@ -409,7 +443,9 @@ export class OpenAIResponsesProtocol {
             promptCache.options,
             driver.logger,
         );
-        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
+        const request = buildPolicyResponsesRequest<OpenAI.Responses.ResponseCreateParamsStreaming>(
+            driver,
+            options,
             {
                 stream: true,
                 model: driver.getResponsesRequestModel(options.model),
@@ -440,8 +476,6 @@ export class OpenAIResponsesProtocol {
                 context_management: openAIResponsesContextManagement(options.compaction, driver.logger, options.model),
             },
             model_options?.extra_body,
-            driver.logger,
-            options.model,
         );
         // Compatibility exception: retain historical omissions so saved Chat options do not break Responses callers.
         // Revisit only after reviewing these warnings and agreeing a migration with callers.
@@ -559,7 +593,9 @@ export class OpenAIResponsesProtocol {
             promptCache.options,
             driver.logger,
         );
-        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
+        const request = buildPolicyResponsesRequest<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
+            driver,
+            options,
             {
                 stream: false,
                 model: driver.getResponsesRequestModel(options.model),
@@ -590,8 +626,6 @@ export class OpenAIResponsesProtocol {
                 context_management: openAIResponsesContextManagement(options.compaction, driver.logger, options.model),
             },
             model_options?.extra_body,
-            driver.logger,
-            options.model,
         );
         // Compatibility exception: retain historical omissions so saved Chat options do not break Responses callers.
         // Revisit only after reviewing these warnings and agreeing a migration with callers.
@@ -685,7 +719,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.azure_openai
         | Providers.xai
         | Providers.azure_foundry
-        | Providers.openai_compatible;
+        | Providers.openai_compatible
+        | Providers.openrouter
+        | Providers.groq
+        | Providers.togetherai;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 

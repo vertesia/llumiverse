@@ -11,7 +11,7 @@ export type { OpenAIResponsesDriverOptions } from '../driver-options.js';
  * Family rules for models served by OpenAI-compatible Responses endpoints such as OpenRouter. They apply to any such
  * endpoint serving the model ID, not to one host.
  */
-const OPENAI_COMPATIBLE_RESPONSES_POLICY: OpenAIResponsesPolicy = {
+export const OPENAI_COMPATIBLE_RESPONSES_POLICY: OpenAIResponsesPolicy = {
     // OpenRouter's OpenAI-compatible Responses surface advertises native structured output for GLM 5.3, but the model
     // returns unconstrained prose and downstream validation fails. Keep this generation on the existing prompt-schema
     // fallback; later GLM generations remain eligible for native support unless runtime evidence says otherwise.

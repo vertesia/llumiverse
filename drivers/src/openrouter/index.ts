@@ -269,7 +269,9 @@ function toOpenRouterRequest(
     } as ChatRequest;
 }
 
-function toOpenRouterProviderPreferences(options: ExecutionOptions['model_options']): ProviderPreferences | undefined {
+export function toOpenRouterProviderPreferences(
+    options: ExecutionOptions['model_options'],
+): ProviderPreferences | undefined {
     if (options?._option_id !== 'openrouter-text') return undefined;
     const preferences: ProviderPreferences = {
         sort: options.provider_sort,

@@ -1,4 +1,5 @@
 import { getModelCapabilities } from '../capability.js';
+import { type OpenAIApi, resolveOpenAIApi } from '../openai-api.js';
 import { getBedrockMantleProtocol } from '../options/bedrock_mantle.js';
 import { getGeminiModelVersion, parseGeminiVersion } from '../options/version-parsing.js';
 import type { Providers } from '../types.js';
@@ -111,16 +112,15 @@ export function isToolResultAttachmentSupported(
     }
 }
 
-const CHAT_COMPLETIONS_PROVIDERS: ReadonlySet<string> = new Set(['openrouter', 'groq', 'togetherai']);
-
-/** The wire API an `openai_compatible` driver is configured with (its `openai_api` option). */
-export type ToolResultOpenAICompatibleApi = 'responses' | 'chat_completions';
+/** The wire API a driver is configured with (its `openai_api` option). */
+export type ToolResultOpenAICompatibleApi = OpenAIApi;
 
 /**
  * The API whose tool-result rules apply to `model` on `provider`, or undefined when no rule is known (the drivers
  * then send tool-result attachments as they always have). Lets an application tell ahead of a call which attachments
- * a model will not get. It follows the protocol the driver picks: `openaiApi` for an `openai_compatible` driver
- * (Responses when omitted, as in the driver factory), and the model's protocol on Bedrock Mantle.
+ * a model will not get. It follows the protocol the driver picks: `openaiApi` for a provider in
+ * `OPENAI_API_DEFAULTS` (that provider's default when omitted, as in the driver factory), and the model's
+ * protocol on Bedrock Mantle.
  */
 export function toolResultAttachmentApi(
     provider: string,
@@ -151,12 +151,16 @@ export function toolResultAttachmentApi(
             }
         case 'openai':
         case 'azure_openai':
-        case 'xai':
             return 'openai_responses';
-        case 'openai_compatible':
-            return options.openaiApi === 'chat_completions' ? 'openai_chat' : 'openai_responses';
         default:
-            return CHAT_COMPLETIONS_PROVIDERS.has(provider) ? 'openai_chat' : undefined;
+            switch (resolveOpenAIApi(provider, options.openaiApi)) {
+                case 'responses':
+                    return 'openai_responses';
+                case 'chat_completions':
+                    return 'openai_chat';
+                default:
+                    return undefined;
+            }
     }
 }
 
