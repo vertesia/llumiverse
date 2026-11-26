@@ -311,6 +311,25 @@ describe('image requests', () => {
         expect(request.generate).toMatchObject({ output_format: 'svg', svg });
     });
 
+    it('forwards SVG author settings to edits', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const svg = { reasoning: { effort: 'low' as const } };
+        const reference = [
+            {
+                role: 'user',
+                content: [{ type: 'input_image', image_url: 'data:image/png;base64,YQ==', detail: 'auto' }],
+            },
+        ] as OpenAI.Responses.ResponseInputItem[];
+        const request = await imageRequest(
+            driver.service,
+            reference,
+            'gpt-image-2.6-sunburst',
+            { output_format: 'svg', svg },
+            'gpt-image-2.6-sunburst',
+        );
+        expect(request.edit).toMatchObject({ output_format: 'svg', svg });
+    });
+
     it('leaves omitted 2.6 controls to the provider', async () => {
         const driver = new OpenAIDriver({ apiKey: 'test' });
         const request = await imageRequest(

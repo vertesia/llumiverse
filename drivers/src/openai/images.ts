@@ -117,12 +117,11 @@ export async function imageRequest(
               }),
     };
     if (!images.length) return { generate: common };
-    const { moderation: _moderation, response_format: _format, style: _style, ...editCommon } = common;
+    const { moderation: _moderation, response_format: _format, style: _style, svg: _svg, ...editCommon } = common;
     const edit: OpenAI.Images.ImageEditParamsNonStreaming = {
         ...editCommon,
-        // SVG edits are unsupported, but the requested format is forwarded so the API reports it rather than
-        // llumiverse silently returning a different format.
-        output_format: editCommon.output_format as OpenAI.Images.ImageEditParams['output_format'],
+        // Unlike generations, edits type `svg.model` as optional, so the llumiverse option fits without a cast.
+        svg: legacy ? undefined : gpt?.svg,
         quality: common.quality === 'hd' ? 'standard' : common.quality,
         image: await Promise.all(images.map((image) => imageFile(image, service, requestOptions, fetcher))),
         mask: masks[0] ? await imageFile(masks[0], service, requestOptions, fetcher) : undefined,
