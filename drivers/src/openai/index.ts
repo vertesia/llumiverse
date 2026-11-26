@@ -15,6 +15,7 @@ import {
     type ExecutionOptions,
     type ExecutionResponse,
     getConversationMeta,
+    getModelCapabilities,
     getOpenAIPromptCacheTtls,
     incrementConversationTurn,
     isCompleteCutOffToolArguments,
@@ -1619,8 +1620,8 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
     return items;
 }
 
-//Structured output support is typically aligned with tool use support
-//Not true for realtime models, which do not support structured output, but do support tool use.
+// Native structured output is sent only for models the directory knows to take tools, which typically also take a
+// JSON schema; unknown models get no native schema. Realtime models take tools but not structured output.
 function supportsSchema(model: string, context: Pick<OpenAIResponsesContext, 'provider' | 'responsesPolicy'>): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
@@ -1628,7 +1629,7 @@ function supportsSchema(model: string, context: Pick<OpenAIResponsesContext, 'pr
     }
     const policy = context.responsesPolicy?.supportsSchema?.(model);
     if (policy !== undefined) return policy;
-    return supportsToolUse(model, context.provider);
+    return getModelCapabilities(model, context.provider).tool_support === true;
 }
 
 /**

@@ -54,37 +54,40 @@ describe('createDriver', () => {
             }
         });
 
-        it.each(['responses', 'chat_completions'] as const)(
-            'sends the tools of an Inkling request through %s',
-            async (openai_api) => {
-                const driver = await createDriver('openai_compatible', { ...options, openai_api });
-                const fetch = vi.fn(
-                    async () => new Response(JSON.stringify({ error: { message: 'stub' } }), { status: 400 }),
-                );
-                (driver as unknown as { service: { fetch: typeof globalThis.fetch } }).service.fetch = fetch;
-                try {
-                    await driver
-                        .execute([{ role: PromptRole.user, content: 'Weather in Paris?' }], {
-                            model: 'Inkling-2-Mini-GGUF',
-                            tools: [
-                                {
-                                    name: 'get_weather',
-                                    description: 'Get the weather for a city',
-                                    input_schema: { type: 'object', properties: { city: { type: 'string' } } },
-                                },
-                            ],
-                        })
-                        .catch(() => undefined);
-                    const init = (fetch.mock.calls[0] as unknown[])[1] as RequestInit;
-                    const body = JSON.parse(String(init.body)) as {
-                        tools?: { name?: string; function?: { name: string } }[];
-                    };
-                    expect(body.tools?.map((tool) => tool.name ?? tool.function?.name)).toEqual(['get_weather']);
-                } finally {
-                    driver.destroy();
-                }
-            },
-        );
+        it.each([
+            { model: 'Inkling-2-Mini-GGUF', openai_api: 'responses' as const },
+            { model: 'Inkling-2-Mini-GGUF', openai_api: 'chat_completions' as const },
+            // A model the directory does not know still gets its tools.
+            { model: 'acme-local-chat-v1', openai_api: 'responses' as const },
+            { model: 'acme-local-chat-v1', openai_api: 'chat_completions' as const },
+        ])('sends the tools of a $model request through $openai_api', async ({ model, openai_api }) => {
+            const driver = await createDriver('openai_compatible', { ...options, openai_api });
+            const fetch = vi.fn(
+                async () => new Response(JSON.stringify({ error: { message: 'stub' } }), { status: 400 }),
+            );
+            (driver as unknown as { service: { fetch: typeof globalThis.fetch } }).service.fetch = fetch;
+            try {
+                await driver
+                    .execute([{ role: PromptRole.user, content: 'Weather in Paris?' }], {
+                        model,
+                        tools: [
+                            {
+                                name: 'get_weather',
+                                description: 'Get the weather for a city',
+                                input_schema: { type: 'object', properties: { city: { type: 'string' } } },
+                            },
+                        ],
+                    })
+                    .catch(() => undefined);
+                const init = (fetch.mock.calls[0] as unknown[])[1] as RequestInit;
+                const body = JSON.parse(String(init.body)) as {
+                    tools?: { name?: string; function?: { name: string } }[];
+                };
+                expect(body.tools?.map((tool) => tool.name ?? tool.function?.name)).toEqual(['get_weather']);
+            } finally {
+                driver.destroy();
+            }
+        });
 
         it('rejects an unknown openai_api', async () => {
             await expect(
