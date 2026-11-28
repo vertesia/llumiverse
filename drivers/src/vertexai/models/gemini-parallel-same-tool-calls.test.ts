@@ -194,9 +194,9 @@ describe('Gemini: parallel calls to the same tool', () => {
         expect(responses.map((part) => part.functionResponse)).toEqual(
             NAMES.map((name) => ({ name: 'create_document', response: { created: name } })),
         );
-        // The thought signature travels with the first call's response only, as it was emitted.
-        expect(responses[0].thoughtSignature).toBe('first-signature');
-        expect(responses[1].thoughtSignature).toBeUndefined();
+        // The thought signature stays on the first call, where Gemini emitted it, and never on a response.
+        expect(calls[0].thoughtSignature).toBe('first-signature');
+        for (const response of responses) expect(response).not.toHaveProperty('thoughtSignature');
     });
 
     it("echoes Vertex's call ids on the responses", async () => {

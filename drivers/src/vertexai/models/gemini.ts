@@ -356,7 +356,10 @@ export function getGeminiPayload(
         // the emitted name.
         const replayedToolNames = new ReplayedToolNames(options.tools, GEMINI_TOOL_NAME_RULES);
         payloadContents = stripGeneratedFunctionCallIds(
-            sanitizeGeminiFunctionNames(fixOrphanedToolResults(payloadContents), replayedToolNames),
+            sanitizeGeminiFunctionNames(
+                alignFunctionResponsesWithCalls(fixOrphanedToolResults(payloadContents), logger, options.model),
+                replayedToolNames,
+            ),
         );
         // A tool result stored by an earlier turn may hold an attachment this model cannot read (an older release, or
         // a switch to another model): it would fail or be misread on every turn, so it is replaced with a note.
@@ -770,6 +773,100 @@ export function fixOrphanedToolResults(contents: Content[]): Content[] {
     return result;
 }
 
+/**
+ * Put the function responses that answer a model function-call turn in the order of its calls, and keep thought
+ * signatures on the functionCall parts, without touching the caller's contents.
+ *
+ * Vertex documents that parallel responses go back in one user content, "in the exact same order as the
+ * functionCall parts", and that a thought signature is returned "inside its original Part" — the first functionCall
+ * part of the turn. A response is matched to its call by id, then by name in sequence (how Vertex pairs responses
+ * without ids). Unmatched responses keep their place after the matched ones.
+ *
+ * Compatibility exception: conversations stored by earlier releases copy the signature onto a functionResponse
+ * part. It is removed from that part; when no call of the turn carries a signature, it is put back on the call the
+ * response answers, where Gemini emitted it. Run it after {@link mergeFunctionResponseContents} and
+ * {@link fixOrphanedToolResults}, and before {@link stripGeneratedFunctionCallIds}, while responses still carry the
+ * ids they pair by.
+ */
+export function alignFunctionResponsesWithCalls(contents: Content[], logger?: Logger, model?: string): Content[] {
+    let reordered = 0;
+    let movedSignatures = 0;
+    let droppedSignatures = 0;
+    const result = [...contents];
+    for (let index = 1; index < result.length; index++) {
+        const responseContent = result[index];
+        const callContent = result[index - 1];
+        if (callContent.role !== 'model' || !isFunctionResponseOnlyContent(responseContent)) continue;
+        const callParts = callContent.parts ?? [];
+        const callIndexes = callParts.flatMap((part, partIndex) => (part.functionCall ? [partIndex] : []));
+        if (callIndexes.length === 0) continue;
+
+        // Pair each response with a call: by id first, then by name among the calls still unanswered.
+        const responses = responseContent.parts ?? [];
+        const answered = new Map<number, number>(); // call part index -> response index
+        const callOfResponse = new Map<number, number>(); // response index -> call part index
+        responses.forEach((part, responseIndex) => {
+            const id = part.functionResponse?.id;
+            if (!id) return;
+            const callIndex = callIndexes.find((i) => callParts[i].functionCall?.id === id && !answered.has(i));
+            if (callIndex === undefined) return;
+            answered.set(callIndex, responseIndex);
+            callOfResponse.set(responseIndex, callIndex);
+        });
+        responses.forEach((part, responseIndex) => {
+            if (callOfResponse.has(responseIndex) || part.functionResponse?.id) return;
+            const name = part.functionResponse?.name ?? '';
+            const callIndex = callIndexes.find(
+                (i) => (callParts[i].functionCall?.name ?? '') === name && !answered.has(i),
+            );
+            if (callIndex === undefined) return;
+            answered.set(callIndex, responseIndex);
+            callOfResponse.set(responseIndex, callIndex);
+        });
+
+        const ordered = [
+            ...callIndexes.flatMap((callIndex) => {
+                const responseIndex = answered.get(callIndex);
+                return responseIndex === undefined ? [] : [responseIndex];
+            }),
+            ...responses.flatMap((_part, responseIndex) => (callOfResponse.has(responseIndex) ? [] : [responseIndex])),
+        ];
+        if (ordered.some((responseIndex, position) => responseIndex !== position)) reordered++;
+
+        let newCallParts: Part[] | undefined;
+        const turnHasSignature = callIndexes.some((i) => !!callParts[i].thoughtSignature);
+        const newResponses = ordered.map((responseIndex) => {
+            const part = responses[responseIndex];
+            if (!part.thoughtSignature) return part;
+            const { thoughtSignature, ...withoutSignature } = part;
+            const callIndex = callOfResponse.get(responseIndex);
+            if (!turnHasSignature && callIndex !== undefined && !newCallParts?.some((p) => p.thoughtSignature)) {
+                newCallParts ??= [...callParts];
+                newCallParts[callIndex] = { ...callParts[callIndex], thoughtSignature };
+                movedSignatures++;
+            } else {
+                droppedSignatures++;
+            }
+            return withoutSignature;
+        });
+        const changed = newResponses.some((part, position) => part !== responses[position]);
+        if (changed) result[index] = { ...responseContent, parts: newResponses };
+        if (newCallParts) result[index - 1] = { ...callContent, parts: newCallParts };
+    }
+    if (reordered + movedSignatures + droppedSignatures > 0) {
+        logger?.info(
+            {
+                model,
+                reordered_response_turns: reordered,
+                signatures_moved_to_calls: movedSignatures,
+                signatures_dropped_from_responses: droppedSignatures,
+            },
+            '[VertexAI] Gemini function responses were aligned with their calls',
+        );
+    }
+    return result;
+}
+
 const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
     // The SDK continues long decodes itself; a CONTINUATION left on the final response means it could not resume.
@@ -1078,15 +1175,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 for (const f of files) {
                     responseParts.push(await fileToMediaPart(f, inlineBudget));
                 }
-                // Build functionResponse part with optional thought_signature for Gemini thinking models
+                // Exception to preserving supplied values: `msg.thought_signature` is not sent. Gemini's signature
+                // belongs on the functionCall part it was emitted on, which the stored model turn replays as is;
+                // a copy on the functionResponse part is not part of the documented request shape.
                 const functionResponsePart: Part = {
                     functionResponse: {
                         ...resolveFunctionResponseTarget(msg.tool_use_id, callNamesById),
                         response: withResponseAttachmentNotes(formatFunctionResponse(msg.content || ''), notes),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
-                    // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
-                    thoughtSignature: msg.thought_signature,
                 };
                 contents.push({
                     role: 'user',
